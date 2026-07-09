@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Segment Maturation and Execution System</title>
+  <link rel="stylesheet" href="/static/style.css?v=11">
+</head>
+<body>
+<header class="app-header">
+  <div class="brand-lockup"><span class="rig-mark">♜</span><div><h1>Segment Maturation and Execution System</h1></div></div>
+  <div class="header-actions"><span id="last-refreshed">Not refreshed</span><button id="export-excel">Export to Excel</button></div>
+</header>
+<nav class="tabs" aria-label="Main navigation">
+  <button data-tab="prospect" class="active">Prospect Maturation</button>
+  <button data-tab="bp">Business Plan Execution</button>
+  <button data-tab="portfolio">Portfolio</button>
+  <button data-tab="audit">Audit Trail</button>
+</nav>
+<main>
+  <section id="tab-prospect" class="tab active">
+    <div class="panel page-intro"><h2>Prospect Maturation</h2></div>
+    <div class="panel"><h3>New Lead</h3><form id="create-lead-form" class="create-grid"><input id="new-lead-name" placeholder="Lead Name" required><button>Create Lead</button></form></div>
+    <div class="panel pipeline-panel">
+      <div class="toolbar pipeline-toolbar"><input id="prospect-search" placeholder="Search leads"><select id="prospect-status-filter"></select></div>
+      <div id="prospect-pipeline" class="pipeline-board" aria-live="polite"></div>
+    </div>
+  </section>
+
+  <section id="tab-bp" class="tab">
+    <div class="panel page-intro"><h2>Business Plan Execution</h2></div>
+    <div class="panel"><h3>Add Well</h3><form id="add-well-form" class="create-grid"><input id="new-well-name" placeholder="Well Name" required><select id="new-well-bp-year"></select><span class="create-grid-spacer" aria-hidden="true"></span><button>Add Well</button></form></div>
+    <div class="panel pipeline-panel">
+      <div class="toolbar pipeline-toolbar"><input id="bp-search" placeholder="Search BP wells"><select id="bp-year-filter"></select><select id="bp-status-filter"></select></div>
+      <div id="bp-pipeline" class="pipeline-board" aria-live="polite"></div>
+    </div>
+  </section>
+
+  <section id="tab-portfolio" class="tab">
+    <div class="panel page-intro"><h2>Portfolio</h2></div>
+    <div class="panel portfolio-panel">
+      <div class="toolbar portfolio-toolbar">
+        <select id="portfolio-year-filter" aria-label="Business Plan year filter"></select>
+        <select id="portfolio-activity-filter" aria-label="Well activity filter">
+          <option value="All">All Wells</option>
+          <option value="Active">Active Wells</option>
+          <option value="Non-Active">Non-Active Wells</option>
+        </select>
+      </div>
+      <div id="portfolio-stats" class="portfolio-stats" aria-live="polite"></div>
+      <table id="portfolio-table" class="portfolio-table"></table>
+    </div>
+  </section>
+
+  <section id="detail-shell" class="detail-shell panel hidden" aria-live="polite">
+    <aside class="component-rail"><div class="rail-head"><button id="back-to-overview" class="ghost">← Back to Pipeline</button><h3 id="detail-name">Select Lead / Well</h3><p id="detail-subtitle">Choose a pipeline card to open its components.</p></div><div id="component-list" class="component-list"></div></aside>
+    <section class="component-editor"><div class="editor-head"><span id="component-number" class="component-number">1</span><div><h2 id="component-title">Component</h2><p id="component-stage">Stage</p></div><button id="component-info" class="icon-btn" title="Component-level update" type="button">i</button></div><form id="component-form" class="component-form"><div class="form-row"><label>Assignee<input id="assigned-to" placeholder="Assigned to"></label><label>Status<select id="component-status"></select></label><label>Priority<select id="component-priority"><option>Low</option><option selected>Medium</option><option>High</option></select></label></div><div id="dynamic-fields" class="dynamic-fields"></div><label class="wide-field">Comments<textarea id="comments" placeholder="Comments, assumptions, rationale, or required notes..."></textarea></label><div class="action-row"><button id="open-folder" type="button" class="secondary">Open Folder</button><button id="upload-files" type="button" class="secondary">Upload Files</button><button id="save-component" type="submit">Save Updates</button></div></form></section>
+    <aside class="summary-panel"><div class="summary-card"><h3 id="summary-title">Lead Summary</h3><div id="lead-summary" class="summary-content"></div></div><div class="summary-card"><h3>Completion Progress</h3><div class="progress-ring"><b id="progress-percent">0%</b><span id="progress-count">0 / 0</span></div></div></aside>
+  </section>
+
+  <section id="tab-audit" class="tab">
+    <div class="panel page-intro"><h2>Audit Trail</h2></div>
+    <div class="panel audit-panel"><div class="toolbar audit-toolbar"><select id="audit-project-filter"><option value="">All leads / wells</option></select></div><table id="audit-table"></table></div>
+  </section>
+</main>
+<script defer src="/static/app.js?v=11"></script>
+</body>
+</html>
