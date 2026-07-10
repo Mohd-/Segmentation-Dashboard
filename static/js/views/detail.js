@@ -1,6 +1,6 @@
 import { byId, all, esc, isFilled, range, msg } from '../dom.js';
 import { API } from '../api.js';
-import { CURRENT_USER, Store, resetSelection } from '../state.js';
+import { currentUserName, Store, resetSelection } from '../state.js';
 import { BP_STAGES, PROSPECT_STAGES, DONE, schemaIndex } from '../schema.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { loadComponent } from './detail-form.js';
@@ -191,7 +191,7 @@ export async function renameSelectedProject() {
   if (nextName === null) return;
   if (!nextName) return msg(recordKind + ' name is required.', 'error');
   if (nextName === String(Store.project.project_name || '').trim()) return;
-  API.rename(Store.projectId, { new_name: nextName, changed_by: CURRENT_USER })
+  API.rename(Store.projectId, { new_name: nextName, changed_by: currentUserName() })
     .then(function () { return refreshAfterRecordChange(recordKind + ' renamed.'); })
     .catch(function (error) { msg(error.message, 'error'); });
 }
@@ -217,7 +217,7 @@ export async function deleteSelectedProject() {
 
 export function saveProjectFlags(payload) {
   if (!Store.projectId) return;
-  payload.changed_by = CURRENT_USER;
+  payload.changed_by = currentUserName();
   API.flags(Store.projectId, payload).then(function () {
     return API.detail(Store.projectId);
   }).then(function (detail) {

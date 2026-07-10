@@ -16,12 +16,16 @@ calls in try/except. The mapping:
 Explicit not-found responses (project/task lookups) return their exact strings
 directly from the route.
 
-Identity: POST /api/login stores a display name in the signed Flask session
-(optionally guarded by config.SHARED_PASSCODE); ``actor()`` stamps that name
-into every changed_by, falling back to the client-supplied value for anonymous
-users so the unmodified front-end keeps working. When config.AUTH_REQUIRED is
-on, every /api/* route except /api/health, /api/login, /api/logout and /api/me
-requires a session.
+Identity: POST /api/login matches the supplied name (case-insensitively)
+against the ``users`` table (seeded from config.SEED_USERS) and stores the
+canonical name plus role in the signed Flask session; unknown names are 401.
+The passcode check (config.SHARED_PASSCODE) still applies first when
+configured. ``actor()`` stamps the session name into every changed_by, falling
+back to the client-supplied value for anonymous users so the unmodified
+front-end keeps working. When config.AUTH_REQUIRED is on, every /api/* route
+except /api/health, /api/login, /api/logout, /api/me and /api/users requires a
+session. Role gating: ``current_role()`` / ``require_role()`` (PermissionError
+-> 403 via the centralized handler).
 """
 from __future__ import annotations
 
@@ -107,6 +111,18 @@ def handle_missing_file(exc):
     return error_response(exc, 404)
 
 
+@app.errorhandler(PermissionError)
+def handle_forbidden(exc):
+    """Role-gate failures (require_role) -> 403; the message is user-facing.
+
+    PermissionError is reserved for authorization in this codebase: filesystem
+    permission failures cannot reach here (folder creation is wrapped
+    best-effort in its route), so a 403 always means "your role may not do
+    this".
+    """
+    return error_response(exc, 403)
+
+
 @app.errorhandler(Exception)
 def handle_unexpected_error(exc):
     """Anything else is an internal bug: log the traceback, return a generic 500.
@@ -137,7 +153,40 @@ def add_api_cache_headers(response):
 # Endpoints that must stay reachable without a session even when AUTH_REQUIRED
 # is on: health checks, the login call itself, logout (idempotent, always 200)
 # and /api/me (the front-end probes it to decide whether to show a login form).
-_AUTH_EXEMPT_PATHS = {"/api/health", "/api/login", "/api/logout", "/api/me"}
+# /api/users is also exempt: the login dialog needs the name list to render its
+# dropdown BEFORE a session exists. Tradeoff: user names and roles become
+# enumerable without auth. Accepted -- they are not secrets on the trusted
+# internal network this app targets, and the alternative (free-typed names)
+# reintroduces the typo/casing drift the users table exists to prevent.
+_AUTH_EXEMPT_PATHS = {"/api/health", "/api/login", "/api/logout", "/api/me", "/api/users"}
+
+
+def current_role() -> Optional[str]:
+    """The permission role for the current request.
+
+    Logged-in sessions carry the role stored at login (a pre-WS3 session that
+    somehow has a name but no role degrades to least-privileged 'employee').
+    With no session and AUTH_REQUIRED off (dev/test mode) everything runs as
+    'supervisor' so an open instance behaves exactly as before roles existed.
+    With AUTH_REQUIRED on, an anonymous request never reaches a role check --
+    the before_request gate has already returned 401 -- so the None return is
+    defensive only.
+    """
+    if flask_session.get("name"):
+        return flask_session.get("role") or "employee"
+    if not config.AUTH_REQUIRED:
+        return "supervisor"
+    return None
+
+
+def require_role(*roles: str) -> None:
+    """Raise PermissionError (-> 403) unless the current role is one of ``roles``.
+
+    Not applied to any route yet -- the supervisor-only Approve/Return actions
+    of the next workstream are its first consumers.
+    """
+    if current_role() not in roles:
+        raise PermissionError("Forbidden: requires " + " or ".join(roles) + " role.")
 
 
 @app.before_request
@@ -159,11 +208,14 @@ def require_login_when_enabled():
 
 @app.post("/api/login")
 def login():
-    """Start a session: {"name": ..., "passcode": ...} -> {"ok": true, "name": ...}.
+    """Start a session: {"name": ..., "passcode": ...} -> {"ok", "name", "role"}.
 
     Name is required (trimmed, 1-80 chars). The passcode is only checked when
     config.SHARED_PASSCODE is configured; otherwise login is name-only (see
-    config.py for the trusted-network rationale).
+    config.py for the trusted-network rationale). The name must then match an
+    active row in the ``users`` table (case-insensitive); unknown names get
+    401. The session stores the DB row's canonical casing and role, so audit
+    trails never fork on "alice" vs "Alice".
     """
     payload = request.get_json(silent=True) or {}
     name = str(payload.get("name") or "").strip()
@@ -173,8 +225,12 @@ def login():
         supplied = str(payload.get("passcode") or "")
         if not secrets.compare_digest(supplied, config.SHARED_PASSCODE):
             return error_response("Invalid passcode.", 401)
-    flask_session["name"] = name
-    return json_response({"ok": True, "name": name})
+    user = workflow.find_active_user(db.get_session(), name)
+    if not user:
+        return error_response("Unknown user.", 401)
+    flask_session["name"] = user["name"]
+    flask_session["role"] = user["role"]
+    return json_response({"ok": True, "name": user["name"], "role": user["role"]})
 
 
 @app.post("/api/logout")
@@ -186,9 +242,29 @@ def logout():
 
 @app.get("/api/me")
 def me():
-    """Report the current session identity. Never 401 (even with AUTH_REQUIRED on)."""
+    """Report the current session identity. Never 401 (even with AUTH_REQUIRED on).
+
+    ``role`` is the session-stored role, NOT current_role(): an anonymous
+    request in dev mode reports role None here so the front-end hides the
+    signed-in chip, even though role checks would treat it as supervisor.
+    """
     name: Optional[str] = flask_session.get("name")
-    return json_response({"authenticated": bool(name), "name": name if name else None})
+    return json_response({
+        "authenticated": bool(name),
+        "name": name if name else None,
+        "role": (flask_session.get("role") or "employee") if name else None,
+    })
+
+
+@app.get("/api/users")
+def users():
+    """Active users as [{name, role}] ordered by name (assignee/login dropdowns).
+
+    Exempt from AUTH_REQUIRED -- see the _AUTH_EXEMPT_PATHS comment for the
+    tradeoff.
+    """
+    session = db.get_session()
+    return json_response(workflow.get_active_users(session))
 
 
 @app.get("/")

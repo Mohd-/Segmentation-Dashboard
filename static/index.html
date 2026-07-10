@@ -16,6 +16,8 @@
       </div>
     </div>
     <div class="header-actions">
+      <span id="user-chip" class="user-chip hidden"></span>
+      <button id="sign-out" type="button" class="ghost hidden">Sign out</button>
       <button id="export-excel" type="button">Export to Excel</button>
     </div>
   </header>
@@ -165,6 +167,19 @@
       <div class="app-dialog-actions">
         <button type="button" id="app-dialog-cancel" class="ghost">Cancel</button>
         <button type="submit" id="app-dialog-confirm">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="login-dialog" class="app-dialog">
+    <form id="login-form" class="app-dialog-form">
+      <h3>Sign in</h3>
+      <p>Select your name to continue.</p>
+      <label>Name<select id="login-name" aria-label="Your name"></select></label>
+      <label>Passcode<input id="login-passcode" type="password" autocomplete="current-password" placeholder="Leave blank unless configured"></label>
+      <p id="login-error" class="login-error hidden"></p>
+      <div class="app-dialog-actions">
+        <button type="submit" id="login-submit">Sign in</button>
       </div>
     </form>
   </dialog>

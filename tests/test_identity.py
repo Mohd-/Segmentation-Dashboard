@@ -1,14 +1,20 @@
-"""Tests for the Phase 5 identity capture (session login, actor stamping,
-optional AUTH_REQUIRED enforcement, and the typed StaleRevisionError).
+"""Tests for identity: session login against the users table, roles, actor
+stamping, optional AUTH_REQUIRED enforcement, /api/users, and the typed
+StaleRevisionError.
 
-All additions are strictly non-breaking: with AUTH_REQUIRED off and no login,
-every existing endpoint behaves byte-identically to before.
+Login only accepts names seeded from config.SEED_USERS (the ``users`` table);
+the session stores the row's canonical casing and role. With AUTH_REQUIRED off
+and no login, every data endpoint still behaves exactly as before users
+existed (anonymous changed_by fallback, implicit supervisor role).
 """
 from __future__ import annotations
 
 import pytest
 
-from conftest import create_project, get_tasks
+from conftest import create_project, get_tasks, raw_sqlite_connect
+
+# Seeded by config.SEED_USERS on every bootstrap (see migrations._ensure_base_data).
+SEEDED = [("Employee", "employee"), ("Staff Member", "staff"), ("Supervisor", "supervisor")]
 
 
 # ---------------------------------------------------------------------------
@@ -17,21 +23,21 @@ from conftest import create_project, get_tasks
 
 def test_login_me_logout_round_trip(client):
     me = client.get("/api/me").get_json()
-    assert me == {"authenticated": False, "name": None}
+    assert me == {"authenticated": False, "name": None, "role": None}
 
-    resp = client.post("/api/login", json={"name": "  Alice  "})
+    resp = client.post("/api/login", json={"name": "  Staff Member  "})
     assert resp.status_code == 200
-    assert resp.get_json() == {"ok": True, "name": "Alice"}
+    assert resp.get_json() == {"ok": True, "name": "Staff Member", "role": "staff"}
 
     me = client.get("/api/me").get_json()
-    assert me == {"authenticated": True, "name": "Alice"}
+    assert me == {"authenticated": True, "name": "Staff Member", "role": "staff"}
 
     resp = client.post("/api/logout")
     assert resp.status_code == 200
     assert resp.get_json() == {"ok": True}
 
     me = client.get("/api/me").get_json()
-    assert me == {"authenticated": False, "name": None}
+    assert me == {"authenticated": False, "name": None, "role": None}
 
 
 def test_login_missing_or_bad_name_rejected(client):
@@ -46,6 +52,74 @@ def test_login_missing_or_bad_name_rejected(client):
     assert resp.status_code == 400
 
 
+def test_login_rejects_unknown_name(client):
+    resp = client.post("/api/login", json={"name": "Nobody In Particular"})
+    assert resp.status_code == 401
+    assert resp.get_json()["detail"] == "Unknown user."
+    assert client.get("/api/me").get_json()["authenticated"] is False
+
+
+def test_login_case_insensitive_returns_canonical_name(client):
+    resp = client.post("/api/login", json={"name": "sUpErViSoR"})
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True, "name": "Supervisor", "role": "supervisor"}
+
+    me = client.get("/api/me").get_json()
+    assert me == {"authenticated": True, "name": "Supervisor", "role": "supervisor"}
+
+
+# ---------------------------------------------------------------------------
+# /api/users
+# ---------------------------------------------------------------------------
+
+def test_users_returns_seeded_users_ordered_by_name(client):
+    resp = client.get("/api/users")
+    assert resp.status_code == 200
+    users = resp.get_json()
+    assert users == [{"name": name, "role": role} for name, role in SEEDED]
+    assert [u["name"] for u in users] == sorted(u["name"] for u in users)
+
+
+def test_users_excludes_inactive(client):
+    conn = raw_sqlite_connect(client.db_path)
+    conn.execute("UPDATE users SET is_active = 0 WHERE name = 'Employee'")
+    conn.commit()
+    conn.close()
+
+    names = [u["name"] for u in client.get("/api/users").get_json()]
+    assert "Employee" not in names
+    assert names == ["Staff Member", "Supervisor"]
+
+    # Deactivated users can no longer log in either.
+    resp = client.post("/api/login", json={"name": "Employee"})
+    assert resp.status_code == 401
+    assert resp.get_json()["detail"] == "Unknown user."
+
+
+# ---------------------------------------------------------------------------
+# Role helpers (require_role is first APPLIED to routes in a later phase;
+# here we cover its raw behavior plus current_role()'s dev-mode default)
+# ---------------------------------------------------------------------------
+
+def test_current_role_dev_mode_defaults_to_supervisor(client, monkeypatch):
+    import config
+    import main
+    monkeypatch.setattr(config, "AUTH_REQUIRED", False)
+    with main.app.test_request_context("/api/projects"):
+        assert main.current_role() == "supervisor"
+        main.require_role("supervisor")  # passes: no exception
+        with pytest.raises(PermissionError):
+            main.require_role("staff", "employee")
+
+
+def test_current_role_uses_session_role(client):
+    resp = client.post("/api/login", json={"name": "Employee"})
+    assert resp.status_code == 200
+    with client.session_transaction() as sess:
+        assert sess["role"] == "employee"
+    assert client.get("/api/me").get_json()["role"] == "employee"
+
+
 # ---------------------------------------------------------------------------
 # Shared passcode
 # ---------------------------------------------------------------------------
@@ -54,14 +128,14 @@ def test_login_with_configured_passcode(client, monkeypatch):
     import config
     monkeypatch.setattr(config, "SHARED_PASSCODE", "s3cret")
 
-    resp = client.post("/api/login", json={"name": "Alice", "passcode": "wrong"})
+    resp = client.post("/api/login", json={"name": "Supervisor", "passcode": "wrong"})
     assert resp.status_code == 401
     assert resp.get_json()["detail"] == "Invalid passcode."
     assert client.get("/api/me").get_json()["authenticated"] is False
 
-    resp = client.post("/api/login", json={"name": "Alice", "passcode": "s3cret"})
+    resp = client.post("/api/login", json={"name": "Supervisor", "passcode": "s3cret"})
     assert resp.status_code == 200
-    assert client.get("/api/me").get_json() == {"authenticated": True, "name": "Alice"}
+    assert client.get("/api/me").get_json() == {"authenticated": True, "name": "Supervisor", "role": "supervisor"}
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +143,9 @@ def test_login_with_configured_passcode(client, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_logged_in_identity_overrides_payload_changed_by(client):
-    resp = client.post("/api/login", json={"name": "Alice"})
+    # Login with non-canonical casing on purpose: the audit trail must carry
+    # the users-table spelling, never the typed one.
+    resp = client.post("/api/login", json={"name": "staff member"})
     assert resp.status_code == 200
 
     resp = client.post("/api/projects", json={
@@ -80,7 +156,7 @@ def test_logged_in_identity_overrides_payload_changed_by(client):
 
     events = client.get(f"/api/activity?project_id={pid}").get_json()
     assert len(events) >= 1
-    assert all(e["changed_by"] == "Alice" for e in events)
+    assert all(e["changed_by"] == "Staff Member" for e in events)
 
 
 def test_anonymous_payload_changed_by_still_honored(client):
@@ -107,12 +183,14 @@ def test_auth_required_blocks_api_until_login(client, monkeypatch):
     assert resp.status_code == 401
     assert resp.get_json()["detail"] == "Authentication required."
 
-    # Exempt endpoints stay open.
+    # Exempt endpoints stay open. /api/users must be reachable anonymously:
+    # the login dialog needs the name list before a session exists.
     assert client.get("/api/health").status_code == 200
     assert client.get("/api/me").status_code == 200
+    assert client.get("/api/users").status_code == 200
     assert client.post("/api/logout").status_code == 200
 
-    resp = client.post("/api/login", json={"name": "Alice"})
+    resp = client.post("/api/login", json={"name": "Supervisor"})
     assert resp.status_code == 200
 
     resp = client.get("/api/projects")

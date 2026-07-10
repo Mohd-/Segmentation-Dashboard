@@ -107,6 +107,21 @@ AUTH_REQUIRED = os.environ.get("AUTH_REQUIRED", "false").strip().lower() in {"1"
 # served over TLS so the signed cookie never rides an unencrypted connection.
 SESSION_COOKIE_SECURE = os.environ.get("SEGMENT_TRACKER_COOKIE_SECURE", "false").strip().lower() in {"1", "true", "yes", "on"}
 
+# ---------------------------------------------------------------------------
+# Users
+# ---------------------------------------------------------------------------
+# !!! PLACEHOLDER LIST -- EDIT BEFORE DEPLOYING !!!
+# Replace these entries with the real team members and their roles. Login only
+# accepts names on this list (seeded into the ``users`` table on every startup;
+# seeding is idempotent, so renaming here adds NEW users -- deactivate old rows
+# with ``UPDATE users SET is_active = 0`` rather than deleting them).
+# Roles: 'supervisor' (approve/return), 'staff', 'employee'.
+SEED_USERS = [
+    ("Supervisor", "supervisor"),
+    ("Staff Member", "staff"),
+    ("Employee", "employee"),
+]
+
 
 # ---------------------------------------------------------------------------
 # Windows share roots and directory maps (consumed by folders.py)

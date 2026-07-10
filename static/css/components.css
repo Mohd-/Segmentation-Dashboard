@@ -350,6 +350,7 @@
 .app-dialog-form p { color: var(--text-muted); font-size: var(--text-sm); }
 .app-dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-2); }
 #app-dialog-confirm.danger { background: linear-gradient(180deg, var(--danger-500), var(--danger-700)); }
+.login-error { color: var(--danger-700); font-size: var(--text-sm); }
 
 /* =========================================================================
    Responsive — component level

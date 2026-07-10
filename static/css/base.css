@@ -144,6 +144,7 @@ a { color: var(--brand-700); }
   color: var(--ink-900);
 }
 .header-actions { display: flex; align-items: center; gap: var(--space-4); color: var(--text-faint); font-size: var(--text-sm); }
+.user-chip { white-space: nowrap; }
 
 .tabs {
   height: 54px;

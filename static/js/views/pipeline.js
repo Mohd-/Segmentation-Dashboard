@@ -1,6 +1,6 @@
 import { byId, all, esc, compact, statusChip, priorityChip, fillSelect, range, msg } from '../dom.js';
 import { API } from '../api.js';
-import { CURRENT_USER, Store } from '../state.js';
+import { currentUserName, Store } from '../state.js';
 import { PROSPECT_STAGES, BP_STAGES } from '../schema.js';
 import { openDetail } from './detail.js';
 import { refreshPortfolio } from './portfolio.js';
@@ -75,7 +75,7 @@ export function createLead(event) {
   if (!name) return msg('Lead Name is required.', 'error');
   var submitButton = event.target.querySelector('button[type="submit"]');
   if (submitButton) submitButton.disabled = true;
-  API.create({ project_name: name, pipeline_type: 'prospect', changed_by: CURRENT_USER }).then(function (result) {
+  API.create({ project_name: name, pipeline_type: 'prospect', changed_by: currentUserName() }).then(function (result) {
     byId('create-lead-form').reset();
     msg('Lead created.', 'success');
     refreshAllBoards();
@@ -90,7 +90,7 @@ export function addWell(event) {
   if (!name) return msg('Well Name is required.', 'error');
   var submitButton = event.target.querySelector('button[type="submit"]');
   if (submitButton) submitButton.disabled = true;
-  API.create({ project_name: name, business_plan_enabled: true, business_plan_year: byId('new-well-bp-year').value, pipeline_type: 'bp', changed_by: CURRENT_USER }).then(function (result) {
+  API.create({ project_name: name, business_plan_enabled: true, business_plan_year: byId('new-well-bp-year').value, pipeline_type: 'bp', changed_by: currentUserName() }).then(function (result) {
     byId('add-well-form').reset();
     fillSelect(byId('new-well-bp-year'), range(2026, 2040), false);
     msg('Well added.', 'success');

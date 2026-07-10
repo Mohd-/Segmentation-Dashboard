@@ -20,9 +20,9 @@ static/
   js/
     dom.js                    tiny generic helpers: find elements, escape text, build a <table>, render a status/priority chip
     api.js                    every backend call lives here — one function per endpoint
-    state.js                  the one object holding "what's currently on screen" + the CURRENT_USER constant
+    state.js                  the one object holding "what's currently on screen" + the signed-in user (currentUserName())
     schema.js                 the data that describes each workflow component's form fields (this is the biggest lever for change — see §5)
-    dialog.js                 the confirm/rename popup (replaces the browser's ugly native confirm/prompt)
+    dialog.js                 the confirm/rename popup + the sign-in dialog (replaces the browser's ugly native confirm/prompt)
     main.js                   boots the app: wires up the tab buttons and the four static forms
     views/
       pipeline.js              Prospect Maturation + Business Plan Execution tabs (the kanban-style boards)

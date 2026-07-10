@@ -1,6 +1,6 @@
 import { byId, all, esc, isFilled, truthy, msg, fillSelect } from '../dom.js';
 import { API } from '../api.js';
-import { CURRENT_USER, Store } from '../state.js';
+import { currentUserName, Store } from '../state.js';
 import { SCHEMA, STATUSES } from '../schema.js';
 import { renderDetail, renderRightPanel, chooseInitialTask, tasksForPipeline, parseRepeatableRows } from './detail.js';
 import { refreshAllBoards } from './pipeline.js';
@@ -155,7 +155,7 @@ export function saveComponent(event) {
     priority: byId('component-priority').value,
     fields: fields,
     revision: Store.task.revision,
-    changed_by: CURRENT_USER,
+    changed_by: currentUserName(),
     business_plan_enabled: Number(Store.project.business_plan_enabled || 0) === 1,
     business_plan_year: Store.project.business_plan_year
   }).then(function () {

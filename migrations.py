@@ -36,6 +36,7 @@ from typing import List
 
 from sqlalchemy import inspect
 
+import config
 import db
 import workflow
 from helpers import utc_now_str
@@ -123,6 +124,14 @@ def _ensure_base_data(session) -> None:
         INSERT OR IGNORE INTO business_plan_commitment (commitment_id, last_updated)
         VALUES (1, :now)
     """, {"now": utc_now_str()})
+    # Seed the login users (fresh AND existing databases -- this function runs
+    # on every bootstrap). INSERT OR IGNORE keys on the UNIQUE name, so reruns
+    # and manual role edits in the DB are never clobbered.
+    for name, role in config.SEED_USERS:
+        db.execute(session, """
+            INSERT OR IGNORE INTO users (name, role, created_at)
+            VALUES (:name, :role, :now)
+        """, {"name": name, "role": role, "now": utc_now_str()})
 
 
 # ---------------------------------------------------------------------------

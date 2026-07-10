@@ -239,3 +239,29 @@ class AppSetting(Base):
 
     key = Column(Text, primary_key=True)
     value = Column(Text, nullable=False)
+
+
+class User(Base):
+    """A known application user (login identity + role for permissions).
+
+    Seeded from ``config.SEED_USERS`` on every bootstrap (idempotent INSERT OR
+    IGNORE by name in migrations._ensure_base_data). Login (POST /api/login)
+    only accepts names present here with ``is_active = 1``; the matched row's
+    ``role`` is stored in the session and drives role-gated actions.
+
+    ``Base.metadata.create_all`` runs on every bootstrap (migrations.run), so
+    this table is created automatically for existing databases -- no numbered
+    migration step is needed for a purely additive table.
+    """
+    __tablename__ = "users"
+
+    user_id = Column(Integer, primary_key=True)
+    name = Column(Text, nullable=False, unique=True)
+    role = Column(Text, nullable=False, server_default=text("'employee'"))
+    is_active = Column(Integer, nullable=False, server_default=text("1"))
+    created_at = Column(Text)
+
+    __table_args__ = (
+        CheckConstraint("role IN ('supervisor','staff','employee')"),
+        {"sqlite_autoincrement": True},
+    )

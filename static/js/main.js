@@ -23,9 +23,26 @@ export function showTab(name) {
 
 function safeOn(id, event, handler) { var element = byId(id); if (element) element.addEventListener(event, handler); }
 
+// Header identity chip: "Signed in as <name> (<role>)" + Sign out. Hidden
+// entirely when anonymous (dev mode with AUTH_REQUIRED off). Re-rendered on
+// the 'auth:changed' event the login dialog dispatches after a mid-session
+// sign-in (see dialog.js).
+export function renderUserChip() {
+  var chip = byId('user-chip');
+  var signOutButton = byId('sign-out');
+  if (!chip || !signOutButton) return;
+  chip.textContent = Store.user ? 'Signed in as ' + Store.user.name + ' (' + Store.user.role + ')' : '';
+  chip.classList.toggle('hidden', !Store.user);
+  signOutButton.classList.toggle('hidden', !Store.user);
+}
+
 export function wire() {
   all('.tabs button').forEach(function (button) { button.addEventListener('click', function () { showTab(button.getAttribute('data-tab')); }); });
   safeOn('export-excel', 'click', function () { window.location.href = '/api/export/excel'; });
+  // Reload after sign-out: it resets all in-memory state, and when
+  // AUTH_REQUIRED is on the first API call of the fresh page reopens the
+  // login dialog.
+  safeOn('sign-out', 'click', function () { API.logout().catch(function () {}).then(function () { window.location.reload(); }); });
   safeOn('create-lead-form', 'submit', createLead);
   safeOn('add-well-form', 'submit', addWell);
   safeOn('component-form', 'submit', saveComponent);
@@ -43,11 +60,20 @@ function boot() {
   fillSelect(byId('new-well-bp-year'), range(2026, 2040), false);
   fillSelect(byId('bp-year-filter'), range(2026, 2040), true);
   wire();
+  renderUserChip();
   showTab('prospect');
 }
 
 document.addEventListener('DOMContentLoaded', function () {
-  // Load authoritative stage/status metadata before the first render so boards
-  // coerce cards against server-side stage lists, not the schema.js fallbacks.
-  API.meta().then(function (meta) { Store.meta = meta; }).catch(function () { /* fall back to schema.js constants */ }).finally(boot);
+  document.addEventListener('auth:changed', renderUserChip);
+  // Load authoritative stage/status metadata and the session identity before
+  // the first render: boards coerce cards against server-side stage lists (not
+  // the schema.js fallbacks) and changed_by payloads use the signed-in name.
+  // Both probes tolerate failure so an offline/anonymous boot still renders.
+  // Under AUTH_REQUIRED the meta call 401s, which pops the login dialog (see
+  // api.js) before anything else loads.
+  Promise.all([
+    API.meta().then(function (meta) { Store.meta = meta; }).catch(function () { /* fall back to schema.js constants */ }),
+    API.me().then(function (me) { if (me && me.authenticated) Store.user = { name: me.name, role: me.role }; }).catch(function () { /* stay anonymous */ })
+  ]).then(boot);
 });
