@@ -515,3 +515,33 @@ def test_migration_v18_retires_presence_step_and_renumbers(client):
         ).fetchone()["derisking"] == "42"
     finally:
         conn.close()
+
+
+def test_new_project_on_migrated_db_skips_retired_templates(client):
+    """A migrated DB keeps retired templates (parked at seq 999 for FK
+    integrity); creating a NEW project must not spawn tasks from them.
+
+    Regression: caught live on a v16->v19 migrated copy of the real database,
+    where new leads were created with 32 tasks including the retired
+    "Presence CoS Evaluation" step. Fresh-DB fixtures never see this because
+    seed_templates only inserts the canonical 31.
+    """
+    import workflow
+
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        conn.execute("""
+            INSERT INTO task_templates (sequence_no, task_name, stage_group,
+                                        default_role, default_duration_days, branch_type, mandatory_output)
+            VALUES (999, 'Presence CoS Evaluation', 'Risking', 'Geologist', 2, 'normal', 'retired')
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+    pid = create_project(client, "POST-MIGRATION-LEAD")
+    tasks = get_tasks(client, pid)
+    names = [t["task_name"] for t in tasks]
+    assert "Presence CoS Evaluation" not in names
+    assert len(tasks) == len(workflow.PIPELINE_TEMPLATES)
+    assert sorted(t["sequence_no"] for t in tasks) == list(range(1, len(workflow.PIPELINE_TEMPLATES) + 1))

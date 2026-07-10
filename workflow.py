@@ -167,8 +167,17 @@ _OVERVIEW_ALLOWED_FIELDS = {
 # ---------------------------------------------------------------------------
 
 def get_templates(session) -> List[Dict[str, Any]]:
-    """Return all task templates ordered by sequence."""
-    return db.fetch_all(session, "SELECT * FROM task_templates ORDER BY sequence_no")
+    """Return the live task templates ordered by sequence.
+
+    Filtered to the canonical PIPELINE_TEMPLATES names: a migrated database
+    still carries retired templates (e.g. "Presence CoS Evaluation", parked at
+    sequence_no 999 by the v18 migration so historical task rows keep their
+    template reference), and those must not spawn tasks on new projects.
+    """
+    names = [tpl[1] for tpl in PIPELINE_TEMPLATES]
+    return db.fetch_all(session, """
+        SELECT * FROM task_templates WHERE task_name IN :names ORDER BY sequence_no
+    """, {"names": names})
 
 
 def seed_templates(session) -> None:

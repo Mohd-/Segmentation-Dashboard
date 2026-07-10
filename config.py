@@ -39,7 +39,7 @@ APP_NAME = "Segment Maturation and Execution System"
 # when the schema changes. The two numbers are only coincidentally similar --
 # never derive one from the other. Bump APP_VERSION when a release ships;
 # bump the schema version when a migration is added.
-APP_VERSION = "v16"
+APP_VERSION = "v17"
 
 BASE_DIR = Path(__file__).resolve().parent
 

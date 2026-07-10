@@ -25,9 +25,9 @@ def test_health_ok(client):
     for key in ("ok", "app", "version", "backend", "db"):
         assert key in body
     assert body["ok"] is True
-    # Pin the release label from config.APP_VERSION (v16 release; a product
+    # Pin the release label from config.APP_VERSION (v17 release; a product
     # axis distinct from the database schema version -- see config.py).
-    assert body["version"] == "v16"
+    assert body["version"] == "v17"
 
 
 # ---------------------------------------------------------------------------
