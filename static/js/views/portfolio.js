@@ -1,4 +1,4 @@
-import { byId, table, esc, classChip, msg, stamp } from '../dom.js';
+import { byId, table, esc, classChip, msg } from '../dom.js';
 import { API } from '../api.js';
 
 export function formatNumber(value) {
@@ -30,6 +30,5 @@ export function refreshPortfolio() {
         classChip(row.segment_class || '')
       ];
     }));
-    stamp();
   }).catch(function (error) { msg(error.message, 'error'); });
 }

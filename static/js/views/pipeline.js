@@ -1,4 +1,4 @@
-import { byId, all, esc, compact, statusChip, priorityChip, fillSelect, range, msg, stamp } from '../dom.js';
+import { byId, all, esc, compact, statusChip, priorityChip, fillSelect, range, msg } from '../dom.js';
 import { API } from '../api.js';
 import { CURRENT_USER } from '../state.js';
 import { PROSPECT_STAGES, BP_STAGES } from '../schema.js';
@@ -41,7 +41,6 @@ export function refreshProspect() {
   var query = { search: byId('prospect-search').value, status_filter: byId('prospect-status-filter').value, pipeline_filter: 'prospect' };
   API.projects(query).then(function (rows) {
     renderPipeline(byId('prospect-pipeline'), rows || [], PROSPECT_STAGES, 'prospect');
-    stamp();
   }).catch(function (error) { msg(error.message, 'error'); });
 }
 export function refreshBP() {
@@ -56,7 +55,6 @@ export function refreshBP() {
       return year === 'All' || String(project.business_plan_year || '') === year;
     });
     renderPipeline(byId('bp-pipeline'), rows, BP_STAGES, 'bp');
-    stamp();
   }).catch(function (error) { msg(error.message, 'error'); });
 }
 

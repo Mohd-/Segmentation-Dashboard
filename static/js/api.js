@@ -40,7 +40,6 @@ export var API = {
   saveFields: function (id, fields) { return api('/api/tasks/' + id + '/dynamic-fields', jsonOptions('PATCH', { fields: fields, changed_by: CURRENT_USER })); },
   updateTask: function (id, payload) { return api('/api/tasks/' + id, jsonOptions('PATCH', payload)); },
   priority: function (id, payload) { return api('/api/tasks/' + id + '/priority', jsonOptions('PATCH', payload)); },
-  openFolder: function (id, section) { return api('/api/open-folder?project_id=' + encodeURIComponent(id) + '&section=' + encodeURIComponent(section || 'well')); },
   activity: function (projectId) { return api('/api/activity' + (projectId ? '?project_id=' + encodeURIComponent(projectId) : '')); },
   businessRows: function () { return api('/api/business-plan/rows'); },
   portfolioRows: function (query) {

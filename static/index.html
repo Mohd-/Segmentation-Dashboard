@@ -16,15 +16,14 @@
       </div>
     </div>
     <div class="header-actions">
-      <span id="last-refreshed">Not refreshed</span>
       <button id="export-excel" type="button">Export to Excel</button>
     </div>
   </header>
 
   <nav class="tabs" aria-label="Main navigation" role="tablist">
     <button data-tab="prospect" class="active" role="tab" aria-selected="true" type="button">Prospect Maturation</button>
-    <button data-tab="bp" role="tab" aria-selected="false" type="button">Business Plan Execution</button>
     <button data-tab="portfolio" role="tab" aria-selected="false" type="button">Portfolio</button>
+    <button data-tab="bp" role="tab" aria-selected="false" type="button">Business Plan Execution</button>
     <button data-tab="audit" role="tab" aria-selected="false" type="button">Audit Trail</button>
   </nav>
 
@@ -107,7 +106,6 @@
             <h2 id="component-title">Component</h2>
             <p id="component-stage">Stage</p>
           </div>
-          <span class="icon-btn" title="Component-level update" aria-hidden="true">i</span>
         </div>
         <form id="component-form" class="component-form">
           <div class="form-row">
@@ -124,8 +122,6 @@
           <div id="dynamic-fields" class="dynamic-fields"></div>
           <label class="wide-field">Comments<textarea id="comments" placeholder="Comments, assumptions, rationale, or required notes..."></textarea></label>
           <div class="action-row">
-            <button id="open-folder" type="button" class="secondary">Open Folder</button>
-            <button id="upload-files" type="button" class="secondary">Upload Files</button>
             <button id="save-component" type="submit">Save Updates</button>
           </div>
         </form>

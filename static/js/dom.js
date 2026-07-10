@@ -17,10 +17,6 @@ export function range(start, end) {
 }
 export function isFilled(value) { return value !== null && value !== undefined && String(value).trim() !== ''; }
 export function truthy(value) { return ['1', 'true', 'yes', 'on'].indexOf(String(value || '').toLowerCase()) >= 0; }
-export function stamp() {
-  var el = byId('last-refreshed');
-  if (el) el.textContent = 'Last refreshed: ' + new Date().toLocaleString();
-}
 export function msg(message, type) {
   var el = byId('app-message');
   if (!el) {

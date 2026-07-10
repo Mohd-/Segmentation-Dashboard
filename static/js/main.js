@@ -1,11 +1,10 @@
-import { byId, all, fillSelect, range, msg } from './dom.js';
-import { API } from './api.js';
+import { byId, all, fillSelect, range } from './dom.js';
 import { Store } from './state.js';
 import { STATUSES } from './schema.js';
 import { refreshProspect, refreshBP, createLead, addWell } from './views/pipeline.js';
 import { refreshPortfolio } from './views/portfolio.js';
 import { refreshAudit } from './views/audit.js';
-import { saveComponent, openClientFolderLink } from './views/detail-form.js';
+import { saveComponent } from './views/detail-form.js';
 
 export function showTab(name) {
   all('.tab').forEach(function (tab) { tab.classList.toggle('active', tab.id === 'tab-' + name); });
@@ -30,8 +29,6 @@ export function wire() {
   safeOn('add-well-form', 'submit', addWell);
   safeOn('component-form', 'submit', saveComponent);
   safeOn('back-to-overview', 'click', function () { byId('detail-shell').classList.add('hidden'); byId('tab-' + Store.pipeline).scrollIntoView({ behavior: 'smooth', block: 'start' }); });
-  safeOn('open-folder', 'click', function () { if (Store.projectId) API.openFolder(Store.projectId, 'well').then(openClientFolderLink).catch(function (error) { msg(error.message, 'error'); }); });
-  safeOn('upload-files', 'click', function () { msg('Upload Files button placeholder only. File upload is not enabled yet.', 'info'); });
   ['prospect-search', 'prospect-status-filter'].forEach(function (id) { safeOn(id, 'input', refreshProspect); safeOn(id, 'change', refreshProspect); });
   ['bp-search', 'bp-year-filter', 'bp-status-filter'].forEach(function (id) { safeOn(id, 'input', refreshBP); safeOn(id, 'change', refreshBP); });
   ['portfolio-year-filter', 'portfolio-activity-filter'].forEach(function (id) { safeOn(id, 'change', refreshPortfolio); });

@@ -1,4 +1,4 @@
-import { byId, table, esc, msg, stamp } from '../dom.js';
+import { byId, table, esc, msg } from '../dom.js';
 import { API } from '../api.js';
 
 export function auditChange(row) {
@@ -20,6 +20,5 @@ export function refreshAudit() {
     table(byId('audit-table'), ['When', 'Lead / Well', 'Component', 'Change', 'By'], (rows || []).map(function (row) {
       return [esc(row.changed_at || ''), esc(row.project_name || ''), esc(row.task_name || ''), auditChange(row), esc(row.changed_by || '')];
     }));
-    stamp();
   }).catch(function (error) { msg(error.message, 'error'); });
 }

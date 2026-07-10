@@ -103,7 +103,7 @@ def handle_conflict_error(exc):
 
 @app.errorhandler(FileNotFoundError)
 def handle_missing_file(exc):
-    """Folder/file lookups that fail resolve to 404 (open-folder relies on this)."""
+    """Folder/file lookups that fail resolve to 404."""
     return error_response(exc, 404)
 
 
@@ -370,14 +370,6 @@ def priority(task_id):
     payload = request.get_json(silent=True) or {}
     workflow.set_task_priority(session, task_id, payload.get("priority", payload.get("priority_value", "Medium")), actor(payload))
     return json_response({"ok": True})
-
-
-@app.get("/api/open-folder")
-def open_folder():
-    session = db.get_session()
-    project_id = int(request.args.get("project_id", "0"))  # non-numeric -> ValueError -> 400
-    section = request.args.get("section", "well")
-    return json_response(folders.open_folder(session, project_id, section))
 
 
 @app.get("/api/business-plan/rows")

@@ -352,25 +352,6 @@ def test_activity_filters_by_project_id(client):
 
 
 # ---------------------------------------------------------------------------
-# Open folder
-# ---------------------------------------------------------------------------
-
-def test_open_folder_well_section(client):
-    pid = create_project(client, "FOLDER-1")
-    resp = client.get(f"/api/open-folder?project_id={pid}&section=well")
-    assert resp.status_code == 200
-    body = resp.get_json()
-    for key in ("path", "unc_path", "file_url", "section"):
-        assert key in body
-
-
-def test_open_folder_unknown_section(client):
-    pid = create_project(client, "FOLDER-2")
-    resp = client.get(f"/api/open-folder?project_id={pid}&section=bogus")
-    assert resp.status_code == 400
-
-
-# ---------------------------------------------------------------------------
 # Excel export
 # ---------------------------------------------------------------------------
 

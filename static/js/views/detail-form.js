@@ -174,16 +174,6 @@ export function saveComponent(event) {
     if (submitButton) submitButton.disabled = false;
   });
 }
-export function openClientFolderLink(info) {
-  var fileUrl = (info || {}).file_url || '';
-  var path = (info || {}).unc_path || (info || {}).path || '';
-  if (fileUrl) {
-    window.location.href = fileUrl;
-    msg('Folder link opened. If blocked, copy the folder path from the summary.', 'info');
-  } else {
-    msg(path ? 'Folder path: ' + path : 'Folder path placeholder not configured.', 'info');
-  }
-}
 export function repeatableInputMarkup(field, row, rowIndex) {
   var cols = field.columns || [];
   return '<div class="repeatable-row" data-repeatable-row="' + rowIndex + '">' + cols.map(function (col) {

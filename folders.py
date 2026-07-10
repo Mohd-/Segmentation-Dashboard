@@ -121,22 +121,6 @@ def get_open_folder_path(session, project_id: int, section_key: str = "well") ->
     return path / section if section else path
 
 
-def get_client_folder_link(session, project_id: int, section_key: str = "well") -> Dict[str, str]:
-    """Return the Windows/UNC link (+ file URL) a browser button opens."""
-    project = _project_row(session, project_id)
-    if not project:
-        raise ValueError("Well not found.")
-    if section_key not in config.WELL_OVERVIEW_DIRECTORY_MAP:
-        raise ValueError(f"Unknown folder section: {section_key}")
-    root = (config.WINDOWS_LEAD_WORKFLOW_SHARE_ROOT if section_key in config.LEAD_WORKFLOW_SECTION_KEYS
-            else config.WINDOWS_WELL_SHARE_ROOT)
-    section = config.WELL_OVERVIEW_DIRECTORY_MAP.get(section_key, "")
-    field_name, well_name = parse_field_and_well(project.get("project_name") or "")
-    unc_path = _windows_join(root, field_name, well_name, section)
-    return {"path": unc_path, "unc_path": unc_path,
-            "file_url": _windows_path_to_file_url(unc_path), "section": section_key}
-
-
 def get_component_folder_link(session, project_id: int, task_id: int) -> Dict[str, object]:
     """Return the supporting-files folder link for one component (task)."""
     project = _project_row(session, project_id)
@@ -188,8 +172,3 @@ def ensure_well_folders(session, project_id: int) -> str:
         except Exception:
             pass
     return str(get_open_folder_path(session, project_id, "well"))
-
-
-def open_folder(session, project_id: int, section_key: str = "well") -> Dict[str, str]:
-    """Resolve the client folder link the ``/api/open-folder`` endpoint returns."""
-    return get_client_folder_link(session, project_id, section_key)
