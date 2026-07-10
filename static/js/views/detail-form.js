@@ -6,7 +6,7 @@ import { confirmDialog } from '../dialog.js';
 import { renderDetail, renderRightPanel, chooseInitialTask, tasksForPipeline, parseRepeatableRows, refreshAfterRecordChange } from './detail.js';
 import { refreshAllBoards } from './pipeline.js';
 
-function ensureUsers() {
+export function ensureUsers() {
   if (Store.users) return Promise.resolve(Store.users);
   return API.users().then(function (users) {
     Store.users = users || [];
@@ -61,7 +61,6 @@ export function loadComponent(task) {
   all('.component-item').forEach(function (button) { button.classList.toggle('active', Number(button.getAttribute('data-task-id')) === task.task_id); });
   byId('component-number').textContent = String(task.sequence_no || '');
   byId('component-title').textContent = task.task_name;
-  byId('component-stage').textContent = task.stage_group;
   renderStatusChip(task.status);
   renderAssigneeSelect(task);
   renderActionButtons(task);
@@ -297,7 +296,8 @@ export function renderComponentFolder(info) {
   var card = document.createElement('div');
   card.id = 'component-folder-card';
   card.className = 'folder-card';
-  card.innerHTML = '<b>Component File Location</b><p>' + esc(info.unc_path || 'Folder path placeholder not configured.') + '</p><button type="button" class="secondary" id="copy-component-folder">Copy Folder Link</button>';
+  card.innerHTML = '<b>Component File Location</b><p>' + esc(info.unc_path || 'Folder path placeholder not configured.') + '</p>' +
+    '<button type="button" class="icon-btn" id="copy-component-folder" title="Copy folder link" aria-label="Copy folder link">⧉</button>';
   var container = byId('dynamic-fields');
   container.parentNode.insertBefore(card, container.nextSibling);
   byId('copy-component-folder').addEventListener('click', function () { copyText(info.unc_path || ''); });

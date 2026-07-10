@@ -222,12 +222,15 @@ input:focus, select:focus, textarea:focus {
 }
 input::placeholder { color: var(--text-faint); }
 
+/* Buttons: the gradient default is reserved for primary actions (Create Lead,
+   Add Well, Save Updates, Submit/Approve). Everything supportive should carry
+   .secondary (flat) or .ghost (outline) instead. */
 button {
   font: inherit;
-  font-weight: 700;
+  font-weight: 600;
   font-size: var(--text-sm);
   border-radius: var(--radius-sm);
-  padding: 10px 16px;
+  padding: 8px 14px;
   border: 1px solid transparent;
   cursor: pointer;
   transition: filter var(--transition), box-shadow var(--transition), transform var(--transition);
@@ -240,7 +243,8 @@ button:active { transform: translateY(1px); }
 button:disabled { opacity: .6; cursor: not-allowed; filter: none; transform: none; }
 button:focus-visible, [role="tab"]:focus-visible, a:focus-visible { outline: 2px solid var(--brand-500); outline-offset: 2px; }
 
-button.secondary { background: var(--gray-700); }
+button.secondary { background: var(--gray-100); color: var(--ink-800); border-color: var(--border-strong); box-shadow: none; }
+button.secondary:hover { background: var(--gray-200); filter: none; }
 button.ghost { background: var(--surface); border-color: var(--border-strong); color: var(--ink-800); box-shadow: none; }
 button.ghost:hover { background: var(--gray-050); }
 button.danger { background: linear-gradient(180deg, var(--danger-500), var(--danger-700)); }
@@ -248,6 +252,9 @@ button.danger { background: linear-gradient(180deg, var(--danger-500), var(--dan
 .icon-btn {
   width: 30px;
   height: 30px;
+  padding: 0; /* neutralize button padding when used on a <button> */
+  border: none;
+  box-shadow: none;
   border-radius: var(--radius-pill);
   display: inline-flex;
   align-items: center;
@@ -255,8 +262,9 @@ button.danger { background: linear-gradient(180deg, var(--danger-500), var(--dan
   background: var(--brand-100);
   color: var(--brand-700);
   font-weight: 800;
-  font-size: var(--text-sm);
+  font-size: var(--text-base);
 }
+button.icon-btn:hover { background: var(--brand-100); filter: brightness(.97); }
 
 .create-grid, .toolbar, .form-row {
   display: grid;

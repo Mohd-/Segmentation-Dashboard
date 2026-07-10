@@ -1,10 +1,10 @@
-import { byId, all, fillSelect, range } from './dom.js';
+import { byId, all, esc, fillSelect, range } from './dom.js';
 import { Store } from './state.js';
 import { API } from './api.js';
 import { refreshProspect, refreshBP, createLead, addWell } from './views/pipeline.js';
 import { refreshPortfolio } from './views/portfolio.js';
 import { refreshAudit } from './views/audit.js';
-import { saveComponent, assignComponent, transitionComponent } from './views/detail-form.js';
+import { saveComponent, assignComponent, transitionComponent, ensureUsers } from './views/detail-form.js';
 
 // The board status filters act on projects.overall_status, which only ever
 // holds these two values -- filling them with task statuses made the filter
@@ -55,10 +55,21 @@ export function wire() {
   safeOn('approve-component', 'click', function () { transitionComponent('approve'); });
   safeOn('return-component', 'click', function () { transitionComponent('return'); });
   safeOn('back-to-overview', 'click', function () { byId('detail-shell').classList.add('hidden'); byId('tab-' + Store.pipeline).scrollIntoView({ behavior: 'smooth', block: 'start' }); });
-  ['prospect-search', 'prospect-status-filter'].forEach(function (id) { safeOn(id, 'input', refreshProspect); safeOn(id, 'change', refreshProspect); });
-  ['bp-search', 'bp-year-filter', 'bp-status-filter'].forEach(function (id) { safeOn(id, 'input', refreshBP); safeOn(id, 'change', refreshBP); });
+  ['prospect-search', 'prospect-status-filter', 'prospect-assignee-filter'].forEach(function (id) { safeOn(id, 'input', refreshProspect); safeOn(id, 'change', refreshProspect); });
+  ['bp-search', 'bp-year-filter', 'bp-status-filter', 'bp-assignee-filter'].forEach(function (id) { safeOn(id, 'input', refreshBP); safeOn(id, 'change', refreshBP); });
   ['portfolio-year-filter', 'portfolio-activity-filter'].forEach(function (id) { safeOn(id, 'change', refreshPortfolio); });
   safeOn('audit-project-filter', 'change', refreshAudit);
+}
+
+// Board assignee filters: value '' = All assignees (pipeline.js maps '' to the
+// backend's 'All'). Options are the active users, matching current_owner names.
+function fillAssigneeFilter(select, users) {
+  if (!select) return;
+  var previous = select.value;
+  select.innerHTML = '<option value="">All assignees</option>' + users.map(function (user) {
+    return '<option>' + esc(user.name) + '</option>';
+  }).join('');
+  select.value = previous || '';
 }
 
 function boot() {
@@ -67,6 +78,10 @@ function boot() {
   fillSelect(byId('portfolio-year-filter'), range(2026, 2040), true);
   fillSelect(byId('new-well-bp-year'), range(2026, 2040), false);
   fillSelect(byId('bp-year-filter'), range(2026, 2040), true);
+  ensureUsers().then(function (users) {
+    fillAssigneeFilter(byId('prospect-assignee-filter'), users || []);
+    fillAssigneeFilter(byId('bp-assignee-filter'), users || []);
+  });
   wire();
   renderUserChip();
   showTab('prospect');

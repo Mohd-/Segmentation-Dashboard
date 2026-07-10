@@ -38,13 +38,35 @@ export function openDetail(projectId, pipeline) {
     byId('detail-shell').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }).catch(function (error) { msg(error.message, 'error'); });
 }
+// Monochrome stage glyphs for the rail headers (must read at ~14px).
+// \uFE0E (variation selector-15) forces text presentation so no color emoji
+// sneak in. Keys match the stage_group values from workflow.py / /api/meta;
+// unknown stages fall back to a plain bullet.
+var STAGE_ICONS = {
+  'Lead Identification': '\u25CE',      // ◎ bullseye
+  'Risking': '\u2696\uFE0E',             // ⚖ scales
+  'Segmentation': '\u25A6',             // ▦ grid
+  'Pre-Well Delivery': '\u26F3\uFE0E',   // ⛳ flag
+  'Well Delivery': '\u2692\uFE0E',       // ⚒ hammer and pick
+  'Post-Drilling': '\u26CF\uFE0E',       // ⛏ pick
+  'Post-Testing': '\u2713'              // ✓ check
+};
+
 export function renderDetail() {
   var tasks = tasksForPipeline(Store.pipeline);
   byId('detail-name').textContent = Store.project.project_name || 'Lead / Well';
   byId('detail-subtitle').textContent = Store.pipeline === 'bp' ? 'Business Plan Execution' : 'Prospect Maturation';
   byId('back-to-overview').textContent = '← Back to ' + (Store.pipeline === 'bp' ? 'Business Plan Execution' : 'Prospect Maturation');
+  // Tasks arrive ordered by sequence_no, so a stage header is emitted exactly
+  // when stage_group changes between consecutive items.
+  var lastStage = null;
   byId('component-list').innerHTML = tasks.map(function (task) {
-    return '<button type="button" class="component-item ' + (DONE[task.status] ? 'done' : '') + '" data-task-id="' + task.task_id + '"><span>' + esc(task.sequence_no) + '</span><b>' + esc(task.task_name) + '</b><small>' + esc(task.status || 'Not Assigned') + '</small></button>';
+    var head = '';
+    if (task.stage_group !== lastStage) {
+      lastStage = task.stage_group;
+      head = '<div class="rail-stage-head"><span class="stage-icon" aria-hidden="true">' + (STAGE_ICONS[task.stage_group] || '•') + '</span><span>' + esc(task.stage_group) + '</span></div>';
+    }
+    return head + '<button type="button" class="component-item ' + (DONE[task.status] ? 'done' : '') + '" data-task-id="' + task.task_id + '"><span>' + esc(task.sequence_no) + '</span><b>' + esc(task.task_name) + '</b><small>' + esc(task.status || 'Not Assigned') + '</small></button>';
   }).join('') || '<div class="empty-state">No components in this pipeline.</div>';
   all('.component-item').forEach(function (button) {
     button.addEventListener('click', function () {

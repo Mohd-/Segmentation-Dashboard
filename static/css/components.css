@@ -54,7 +54,7 @@
    Pipeline board (kanban-style columns for prospect + BP tabs)
    ========================================================================= */
 .pipeline-panel { overflow: hidden; padding: var(--space-4); }
-.pipeline-toolbar { grid-template-columns: minmax(220px, 2fr) minmax(170px, 1fr) minmax(170px, 1fr); }
+.pipeline-toolbar { grid-template-columns: minmax(220px, 2fr) repeat(3, minmax(150px, 1fr)); }
 .pipeline-board {
   display: grid;
   grid-auto-flow: column;
@@ -124,14 +124,43 @@
   grid-template-columns: 280px minmax(420px, 1fr) minmax(360px, 400px);
   gap: var(--space-4);
   align-items: start;
+  /* scrollIntoView target: land below the sticky header (72px) + tab bar
+     (54px) with breathing room instead of overshooting behind them. */
+  scroll-margin-top: 140px;
 }
 .component-rail, .component-editor, .summary-panel { min-width: 0; }
+
+/* The rail and summary panel pin below the sticky header stack (72 + 54 +
+   12px gap) and scroll internally, so long step lists fit any viewport. */
+.component-rail {
+  position: sticky;
+  top: 138px;
+  max-height: calc(100vh - 150px);
+  display: flex;
+  flex-direction: column;
+}
 
 .rail-head { border-bottom: 1px solid var(--border); padding-bottom: var(--space-3); margin-bottom: var(--space-3); }
 .rail-head h3 { margin: var(--space-3) 0 4px; font-size: var(--text-base); color: var(--ink-800); }
 .rail-head p { color: var(--text-faint); font-size: var(--text-sm); }
 
-.component-list { display: flex; flex-direction: column; gap: var(--space-2); }
+.component-list { display: flex; flex-direction: column; gap: var(--space-2); overflow-y: auto; flex: 1; min-height: 0; padding-right: 2px; }
+
+.rail-stage-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 2px;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--gray-100);
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+.rail-stage-head:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.stage-icon { color: var(--text-faint); font-size: var(--text-base); line-height: 1; }
 .component-item {
   display: grid;
   grid-template-columns: 32px 1fr;
@@ -173,19 +202,19 @@
   background: var(--gray-100);
   color: var(--brand-700);
   border-radius: var(--radius-pill);
-  width: 38px;
-  height: 38px;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-weight: 800;
+  font-weight: 700;
+  font-size: var(--text-sm);
 }
-.editor-head h2 { font-size: var(--text-lg); letter-spacing: .04em; text-transform: uppercase; color: var(--ink-900); }
-.editor-head p { margin-top: 2px; color: var(--text-faint); font-size: var(--text-sm); }
+.editor-head h2 { font-size: var(--text-lg); color: var(--ink-900); }
 .editor-status-chip { margin-left: auto; }
 
 .component-form { display: flex; flex-direction: column; gap: var(--space-4); }
-.dynamic-fields { display: grid; grid-template-columns: repeat(3, minmax(160px, 1fr)); gap: var(--space-3); }
+.dynamic-fields { display: grid; grid-template-columns: repeat(3, minmax(160px, 1fr)); gap: var(--space-3); align-items: start; }
 .wide-field { grid-column: 1 / -1; }
 .conditional.hidden { display: none !important; }
 
@@ -198,6 +227,10 @@
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   padding: 10px 12px;
+  /* Bottom-align the checkbox card with neighboring inputs so rows mixing
+     checkboxes with label+input columns keep a straight baseline. */
+  align-self: end;
+  min-height: 42px;
 }
 .check-label input { width: auto; }
 
@@ -226,7 +259,9 @@
   color: var(--text-muted);
 }
 .summary-box b, .folder-card b { color: var(--ink-800); }
-.folder-card p { font-family: var(--font-mono); font-size: var(--text-sm); word-break: break-all; color: var(--text-muted); margin: var(--space-2) 0 0; }
+.folder-card { position: relative; }
+.folder-card .icon-btn { position: absolute; top: var(--space-3); right: var(--space-3); }
+.folder-card p { font-family: var(--font-mono); font-size: var(--text-sm); word-break: break-all; color: var(--text-muted); margin: var(--space-2) 32px 0 0; }
 .summary-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: grid; gap: var(--space-2); }
 .summary-list li { display: grid; grid-template-columns: 1.2fr 1fr; gap: var(--space-2); border-top: 1px solid var(--gray-100); padding-top: var(--space-2); }
 .summary-list span { color: var(--text-faint); }
@@ -260,7 +295,18 @@
 /* =========================================================================
    Summary panel (right-hand rail)
    ========================================================================= */
-.summary-panel { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.summary-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  /* Same sticky treatment as .component-rail: pin below the header stack and
+     scroll the panel internally when it outgrows the viewport. */
+  position: sticky;
+  top: 138px;
+  max-height: calc(100vh - 150px);
+  overflow-y: auto;
+}
 .summary-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--space-4); overflow: hidden; max-width: 100%; }
 .summary-card h3 { margin-bottom: var(--space-3); color: var(--brand-700); text-transform: uppercase; letter-spacing: .05em; font-size: var(--text-sm); }
 .summary-content { min-width: 0; }
@@ -372,6 +418,8 @@
   .summary-panel { order: 3; }
   .component-rail { order: 1; }
   .component-editor { order: 2; }
+  /* Single-column collapse: sticky pinning off, panels back to natural flow. */
+  .component-rail, .summary-panel { position: static; max-height: none; overflow-y: visible; }
   .dynamic-fields { grid-template-columns: 1fr; }
   .repeatable-row { grid-template-columns: repeat(2, minmax(160px, 1fr)); }
 }
@@ -379,6 +427,7 @@
   .pipeline-board { grid-auto-columns: minmax(230px, 86vw); }
   .pipeline-card { padding: var(--space-3); }
   .create-grid-spacer { display: none; }
+  .detail-shell { scroll-margin-top: 126px; } /* 62px header + 50px tabs + room */
   .detail-shell.panel { padding: var(--space-3); }
   .summary-card { padding: var(--space-3); }
   .summary-grid { grid-template-columns: 1fr; }

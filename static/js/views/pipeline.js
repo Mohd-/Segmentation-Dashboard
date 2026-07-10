@@ -42,8 +42,21 @@ export function renderPipeline(element, projects, stages, pipeline) {
   });
 }
 
+// The assignee filters use value '' for "All assignees"; the backend's
+// owner_filter treats the literal 'All' as no-filter (any other value matches
+// current_owner exactly), so '' maps to 'All' here.
+function assigneeFilterValue(id) {
+  var select = byId(id);
+  return (select && select.value) || 'All';
+}
+
 export function refreshProspect() {
-  var query = { search: byId('prospect-search').value, status_filter: byId('prospect-status-filter').value, pipeline_filter: 'prospect' };
+  var query = {
+    search: byId('prospect-search').value,
+    status_filter: byId('prospect-status-filter').value,
+    owner_filter: assigneeFilterValue('prospect-assignee-filter'),
+    pipeline_filter: 'prospect'
+  };
   API.projects(query).then(function (rows) {
     renderPipeline(byId('prospect-pipeline'), rows || [], prospectStages(), 'prospect');
   }).catch(function (error) { msg(error.message, 'error'); });
@@ -52,6 +65,7 @@ export function refreshBP() {
   var query = {
     search: byId('bp-search').value,
     status_filter: byId('bp-status-filter').value,
+    owner_filter: assigneeFilterValue('bp-assignee-filter'),
     pipeline_filter: 'bp'
   };
   API.projects(query).then(function (projects) {
