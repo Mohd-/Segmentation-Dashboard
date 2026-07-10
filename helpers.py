@@ -2,8 +2,7 @@
 
 What belongs here:
 - Pure date/number/text utilities used by more than one module (timestamp
-  strings, ISO date parsing, day-difference math, the target-date health label,
-  numeric coercion).
+  strings, ISO date parsing, the target-date health label, numeric coercion).
 
 What does NOT belong here:
 - Anything that touches the database, Flask, SQLAlchemy, or business rules. If a

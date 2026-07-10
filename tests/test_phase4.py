@@ -130,3 +130,63 @@ def test_migration_v15_to_v16_backfills_and_is_idempotent(client):
     assert row["completed_at"] == "2025-01-02 03:04:05"
     assert conn.execute("SELECT value FROM app_settings WHERE key = 'schema_version'").fetchone()[0] == "16"
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Reporting functions kept for the Excel export (their HTTP routes were
+# removed in the API trim; the v16 bug fixes stay covered at function level)
+# ---------------------------------------------------------------------------
+
+def test_dashboard_metrics_function_excludes_archived_projects(client):
+    import db as dbmod
+    import reporting
+
+    pid = create_project(client, "METRICS-ARCHIVED-1")
+    task = get_tasks(client, pid)[0]
+    resp = client.patch(f"/api/tasks/{task['task_id']}", json={
+        "status": "Under Review", "revision": task["revision"],
+    })
+    assert resp.status_code == 200
+
+    session = dbmod.new_session()
+    try:
+        metrics, _stages, _owners = reporting.dashboard_metrics(session)
+        assert metrics["Components Under Review"] == 1
+    finally:
+        session.close()
+
+    assert client.delete(f"/api/projects/{pid}").status_code == 200  # archives
+
+    session = dbmod.new_session()
+    try:
+        metrics, _stages, _owners = reporting.dashboard_metrics(session)
+        assert metrics["Components Under Review"] == 0
+    finally:
+        session.close()
+
+
+def test_monthly_completed_wells_function_buckets_by_completed_at(client):
+    import db as dbmod
+    import reporting
+    from conftest import raw_sqlite_connect
+
+    pid = create_project(client, "MONTHLY-BUCKET-1")
+    _approve_all_prospect_tasks(client, pid)
+    project = client.get(f"/api/projects/{pid}").get_json()
+    completed_month = project["completed_at"][:7]
+
+    # Simulate a much later edit: only last_updated moves; the completion
+    # must stay bucketed in its completed_at month.
+    conn = raw_sqlite_connect(client.db_path)
+    conn.execute("UPDATE projects SET last_updated = '2030-12-31 00:00:00' WHERE project_id = ?", (pid,))
+    conn.commit()
+    conn.close()
+
+    session = dbmod.new_session()
+    try:
+        monthly = reporting.monthly_progress_metrics(session, limit=12)
+    finally:
+        session.close()
+    by_month = {row["month"]: row["wells_completed"] for row in monthly}
+    assert by_month.get(completed_month) == 1
+    assert by_month.get("2030-12") is None
