@@ -17,9 +17,9 @@ Adoption rules (behavior preserved from the old bootstrap):
 - An existing database below the latest version: run the ported "consolidate to
   v15" step, which reproduces the old ``apply_workflow_updates`` exactly.
 
-Current latest version is 18 (v18 retires the "Presence CoS Evaluation" step
-and renumbers the workflow to 1-31; see ``_upgrade_to_v18``. ``_upgrade_to_v16``
-remains the template to copy when adding future numbered steps).
+Current latest version is 19 (v19 backfills well-level SARH formation rows from
+the legacy quicklook/final task fields; see ``_upgrade_to_v19``.
+``_upgrade_to_v16`` remains the template to copy when adding future steps).
 
 Concurrency guard: ``run`` acquires the database write lock UPFRONT via
 ``db.begin_write`` (SQLite ``BEGIN IMMEDIATE``) before the ensure/seed writes
@@ -42,7 +42,7 @@ import workflow
 from helpers import utc_now_str
 from models import Base
 
-LATEST_SCHEMA_VERSION = 18
+LATEST_SCHEMA_VERSION = 19
 
 
 # ---------------------------------------------------------------------------
@@ -457,6 +457,88 @@ def _upgrade_to_v18(session) -> None:
         workflow.refresh_project_state(session, project["project_id"])
 
 
+# Legacy per-SARH task field key -> project_formations column, per phase.
+# These are the pre-WS6 'Quicklook Logs Interpretation' / 'Final Log Analysis'
+# dynamic-field keys (verified against the pre-WS6 schema.js).
+_V19_LEGACY_FORMATION_KEYS = {
+    "quicklook": {
+        "top_tvdss_ft": "quicklook_top_sarah_tvdss_ft",
+        "base_tvdss_ft": "quicklook_base_sarah_tvdss_ft",
+        "thickness_ft": "quicklook_formation_thickness_ft",
+        "porosity_pct": "quicklook_average_porosity_pct",
+        "swt_pct": "quicklook_average_swt_pct",
+        "pay_ft": "quicklook_pay_thickness_ft",
+        "ngr_pct": "quicklook_ngr_pct",
+        "fluid": "quicklook_fluid_type",
+    },
+    "final": {
+        "top_tvdss_ft": "final_top_sarah_tvdss_ft",
+        "base_tvdss_ft": "final_base_sarah_tvdss_ft",
+        "thickness_ft": "final_formation_thickness_ft",
+        "porosity_pct": "final_average_porosity_pct",
+        "swt_pct": "final_average_swt_pct",
+        "pay_ft": "final_pay_thickness_ft",
+        "ngr_pct": "final_ngr_pct",
+        "fluid": "final_fluid_type",
+    },
+}
+
+_V19_PHASE_TASK_NAMES = {
+    # "Quicklook Logs" is the pre-v15 legacy task name; some databases still
+    # carry deactivated rows under it with field data.
+    "quicklook": ["Quicklook Logs Interpretation", "Quicklook Logs"],
+    "final": ["Final Log Analysis"],
+}
+
+
+def _upgrade_to_v19(session) -> None:
+    """Schema v19 (first slice): backfill SARH formation rows from legacy fields.
+
+    WS6 moved formation interpretation values off the quicklook/final steps'
+    scattered task dynamic fields into the well-level ``project_formations``
+    table (created by create_all -- no DDL needed here). This step seeds a SARH
+    row per phase from the legacy field keys whenever any legacy value exists.
+
+    INSERT OR IGNORE keys off UNIQUE(project_id, formation, phase), so the step
+    is idempotent and never overwrites a row the user has since edited. The
+    legacy task fields themselves are left untouched (historical record).
+
+    NOTE: v19 gains MORE content in a later workstream (portfolio columns).
+    Append new idempotent steps below this backfill; keep each self-contained.
+    """
+    now = utc_now_str()
+    projects = db.fetch_all(session, "SELECT project_id FROM projects")
+    for project in projects:
+        project_id = project["project_id"]
+        for phase, key_map in _V19_LEGACY_FORMATION_KEYS.items():
+            legacy_keys = list(key_map.values())
+            rows = db.fetch_all(session, """
+                SELECT tdf.field_key, tdf.field_value
+                FROM project_tasks pt
+                JOIN task_dynamic_fields tdf ON tdf.task_id = pt.task_id
+                WHERE pt.project_id = :project_id AND pt.task_name IN :task_names
+                  AND tdf.field_key IN :field_keys
+                ORDER BY pt.is_active, pt.task_id
+            """, {"project_id": project_id,
+                  "task_names": _V19_PHASE_TASK_NAMES[phase],
+                  "field_keys": legacy_keys})
+            # Later rows win in this dict; the ORDER BY puts active tasks last
+            # so their values take precedence over deactivated legacy rows.
+            found = {row["field_key"]: (row["field_value"] or "").strip() for row in rows}
+            if not any(found.get(key) for key in legacy_keys):
+                continue
+            params = {column: found.get(legacy_key, "")
+                      for column, legacy_key in key_map.items()}
+            params.update({"project_id": project_id, "phase": phase, "now": now})
+            db.execute(session, """
+                INSERT OR IGNORE INTO project_formations (
+                    project_id, formation, phase, top_tvdss_ft, base_tvdss_ft, thickness_ft,
+                    porosity_pct, swt_pct, pay_ft, ngr_pct, fluid, updated_at, updated_by
+                ) VALUES (:project_id, 'SARH', :phase, :top_tvdss_ft, :base_tvdss_ft, :thickness_ft,
+                          :porosity_pct, :swt_pct, :pay_ft, :ngr_pct, :fluid, :now, 'System Migration')
+            """, params)
+
+
 # List of (version, fn). Each step upgrades a database from below ``version`` to
 # ``version``. Add new steps here with the next integer version.
 MIGRATIONS: List = [
@@ -464,6 +546,7 @@ MIGRATIONS: List = [
     (16, _upgrade_to_v16),
     (17, _upgrade_to_v17),
     (18, _upgrade_to_v18),
+    (19, _upgrade_to_v19),
 ]
 
 

@@ -80,6 +80,17 @@ PROSPECT_STAGES = ["Lead Identification", "Risking", "Segmentation", "Pre-Well D
 BP_EXECUTION_STAGES = ["Well Delivery", "Post-Drilling", "Post-Testing"]
 BOARD_STAGE_ORDER = STAGE_ORDER[:]
 
+# Well-level formation interpretation (project_formations). Fixed formation
+# list -- users never create formations. Rows are keyed by
+# (project, formation, phase); ``phase`` says which interpretation step the
+# values came from.
+FORMATIONS = ["SARH", "QASM", "QWRH"]
+FORMATION_PHASES = ["quicklook", "final"]
+FORMATION_VALUE_FIELDS = [
+    "top_tvdss_ft", "base_tvdss_ft", "thickness_ft", "porosity_pct",
+    "swt_pct", "pay_ft", "ngr_pct", "fluid",
+]
+
 # Template tuple: id, component, stage, role, duration, depends_on, branch_type, output
 PIPELINE_TEMPLATES = [
     (1, "Reservoir Area Definition", "Lead Identification", "Lead Owner", 3, None, "normal", "Reservoir area defined"),
@@ -685,6 +696,94 @@ def get_project_dynamic_field_map(session, project_id: int):
         if row["field_key"]:
             data[name][row["field_key"]] = row["field_value"] or ""
     return data
+
+
+# ---------------------------------------------------------------------------
+# Well-level formation data (project_formations)
+# ---------------------------------------------------------------------------
+
+def get_project_formations(session, project_id: int):
+    """Return all formation rows for a project, ordered by phase then the
+    canonical formation order (SARH, QASM, QWRH)."""
+    rows = db.fetch_all(session, """
+        SELECT * FROM project_formations
+        WHERE project_id = :project_id
+    """, {"project_id": project_id})
+    order = {name: index for index, name in enumerate(FORMATIONS)}
+    rows.sort(key=lambda r: (r["phase"], order.get(r["formation"], 99)))
+    return rows
+
+
+def upsert_project_formations(session, project_id, phase, rows, changed_by="Web User", source_task_id=None):
+    """Upsert formation rows for one phase; return the fresh full list.
+
+    Each row is a full replacement for its (project_id, formation, phase) slot:
+    absent value fields are stored as ''. Validation is strict -- an unknown
+    phase, formation or field key raises ValueError (-> 400) rather than being
+    silently dropped, so client typos never lose data quietly.
+
+    When ``source_task_id`` is provided, ONE "Formation Data Updated" history
+    event is logged against that task listing the formations touched. No role
+    gate here: step-level assignment governs who edits. No commit -- runs in
+    its own write transaction like the other mutators.
+    """
+    phase = str(phase or "").strip().lower()
+    if phase not in FORMATION_PHASES:
+        raise ValueError("Unknown phase. Use one of: " + ", ".join(FORMATION_PHASES) + ".")
+    rows = rows or []
+    if not isinstance(rows, list):
+        raise ValueError("rows must be a list of formation objects.")
+
+    clean_rows = []
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("Each formation row must be an object.")
+        formation = str(row.get("formation") or "").strip().upper()
+        if formation not in FORMATIONS:
+            raise ValueError("Unknown formation. Use one of: " + ", ".join(FORMATIONS) + ".")
+        unknown = [k for k in row if k not in FORMATION_VALUE_FIELDS and k != "formation"]
+        if unknown:
+            raise ValueError("Unknown formation fields: " + ", ".join(sorted(unknown)) + ".")
+        values = {field: ("" if row.get(field) is None else str(row.get(field)).strip())
+                  for field in FORMATION_VALUE_FIELDS}
+        clean_rows.append((formation, values))
+
+    with db.write_transaction(session):
+        project = get_project(session, project_id)
+        if not project:
+            raise ValueError("Lead / well not found.")
+        now = utc_now_str()
+        for formation, values in clean_rows:
+            params = {"project_id": project_id, "formation": formation, "phase": phase,
+                      "source_task_id": source_task_id, "now": now, "changed_by": changed_by}
+            params.update(values)
+            db.execute(session, """
+                INSERT INTO project_formations (
+                    project_id, formation, phase, top_tvdss_ft, base_tvdss_ft, thickness_ft,
+                    porosity_pct, swt_pct, pay_ft, ngr_pct, fluid, source_task_id, updated_at, updated_by
+                ) VALUES (:project_id, :formation, :phase, :top_tvdss_ft, :base_tvdss_ft, :thickness_ft,
+                          :porosity_pct, :swt_pct, :pay_ft, :ngr_pct, :fluid, :source_task_id, :now, :changed_by)
+                ON CONFLICT(project_id, formation, phase) DO UPDATE SET
+                    top_tvdss_ft = excluded.top_tvdss_ft,
+                    base_tvdss_ft = excluded.base_tvdss_ft,
+                    thickness_ft = excluded.thickness_ft,
+                    porosity_pct = excluded.porosity_pct,
+                    swt_pct = excluded.swt_pct,
+                    pay_ft = excluded.pay_ft,
+                    ngr_pct = excluded.ngr_pct,
+                    fluid = excluded.fluid,
+                    source_task_id = excluded.source_task_id,
+                    updated_at = excluded.updated_at,
+                    updated_by = excluded.updated_by
+            """, params)
+        if clean_rows and source_task_id is not None:
+            task = get_task(session, source_task_id)
+            if task:
+                touched = ", ".join(formation for formation, _values in clean_rows)
+                log_task_event(session, task["task_id"], project_id, task["task_name"],
+                               "Formation Data Updated", None, None, changed_by,
+                               f"Updated formation data ({phase}): {touched}.")
+    return get_project_formations(session, project_id)
 
 
 # ---------------------------------------------------------------------------

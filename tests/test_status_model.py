@@ -403,6 +403,7 @@ def test_migration_v17_collapses_legacy_statuses(client):
 
 def test_migration_v18_retires_presence_step_and_renumbers(client):
     import db as dbmod
+    import migrations
     import workflow
 
     pid = create_project(client, "MIGRATE-V18-1")
@@ -484,7 +485,7 @@ def test_migration_v18_retires_presence_step_and_renumbers(client):
             "SELECT derisking FROM project_overview WHERE project_id = ?", (pid,)
         ).fetchone()["derisking"] == "42"
         assert conn.execute(
-            "SELECT value FROM app_settings WHERE key = 'schema_version'").fetchone()[0] == "18"
+            "SELECT value FROM app_settings WHERE key = 'schema_version'").fetchone()[0] == str(migrations.LATEST_SCHEMA_VERSION)
 
         snapshot = conn.execute("""
             SELECT task_id, task_name, sequence_no, is_active, status FROM project_tasks

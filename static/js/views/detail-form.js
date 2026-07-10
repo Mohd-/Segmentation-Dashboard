@@ -1,7 +1,7 @@
 import { byId, all, esc, isFilled, truthy, msg } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName, currentRole, canManageAssignments, Store } from '../state.js';
-import { SCHEMA } from '../schema.js';
+import { SCHEMA, FORMATIONS, FORMATION_METRICS } from '../schema.js';
 import { confirmDialog } from '../dialog.js';
 import { renderDetail, renderRightPanel, chooseInitialTask, tasksForPipeline, parseRepeatableRows, refreshAfterRecordChange } from './detail.js';
 import { refreshAllBoards } from './pipeline.js';
@@ -127,6 +127,90 @@ export function commentPlaceholder(componentName) {
   if (componentName === 'Approval To Drill') return 'Include the requirement for the Approval to Drill letter';
   return 'Comments, assumptions, rationale, or required notes...';
 }
+// ---------------------------------------------------------------------------
+// Formations mini-sheet (type: 'formations')
+// ---------------------------------------------------------------------------
+// Well-level formation values (Store.formations) edited per phase through a
+// formation dropdown + one aligned sheet of metric inputs. Edits are kept
+// per-formation in a local buffer (write-through on input) and PUT to
+// /api/projects/<id>/formations on Save when the phase was touched.
+
+var formationEdits = {}; // phase -> { SARH: {metric: value}, ... }
+var formationDirty = {}; // phase -> true when any input changed since load
+
+function seedFormationEdits(phase) {
+  var buffer = {};
+  FORMATIONS.forEach(function (name) {
+    var saved = (Store.formations || []).find(function (row) {
+      return row.phase === phase && row.formation === name;
+    }) || {};
+    var values = {};
+    FORMATION_METRICS.forEach(function (metric) {
+      values[metric.key] = saved[metric.key] == null ? '' : String(saved[metric.key]);
+    });
+    buffer[name] = values;
+  });
+  formationEdits[phase] = buffer;
+  formationDirty[phase] = false;
+}
+
+export function formationRowsForSave(phase) {
+  var buffer = formationEdits[phase] || {};
+  return FORMATIONS.map(function (name) {
+    return Object.assign({ formation: name }, buffer[name] || {});
+  });
+}
+
+function renderFormationsField(field) {
+  var phase = field.phase || 'quicklook';
+  seedFormationEdits(phase);
+  var picker = '<select data-formation-picker aria-label="Formation">' + FORMATIONS.map(function (name) {
+    return '<option>' + esc(name) + '</option>';
+  }).join('') + '</select>';
+  var sheet = FORMATION_METRICS.map(function (metric) {
+    if (metric.type === 'select') {
+      return '<label>' + esc(metric.label) + '<select data-formation-metric="' + esc(metric.key) + '">' +
+        (metric.options || []).map(function (option) { return '<option>' + esc(option) + '</option>'; }).join('') +
+        '</select></label>';
+    }
+    return '<label>' + esc(metric.label) + '<input type="number" step="any" data-formation-metric="' + esc(metric.key) + '"></label>';
+  }).join('');
+  return '<div class="repeatable-field wide-field formations-field" data-formations-phase="' + esc(phase) + '" data-current-formation="' + esc(FORMATIONS[0]) + '">' +
+    '<div class="repeatable-heading"><b>' + esc(field.label) + '</b>' + picker + '</div>' +
+    '<div class="repeatable-row formation-sheet">' + sheet + '</div></div>';
+}
+
+function loadFormationIntoInputs(container, formation) {
+  var phase = container.getAttribute('data-formations-phase');
+  var values = (formationEdits[phase] || {})[formation] || {};
+  all('[data-formation-metric]', container).forEach(function (element) {
+    element.value = values[element.getAttribute('data-formation-metric')] || '';
+  });
+  container.setAttribute('data-current-formation', formation);
+}
+
+function bindFormationFields() {
+  all('.formations-field', byId('dynamic-fields')).forEach(function (container) {
+    var phase = container.getAttribute('data-formations-phase');
+    var picker = container.querySelector('[data-formation-picker]');
+    loadFormationIntoInputs(container, picker.value || FORMATIONS[0]);
+    picker.addEventListener('change', function () {
+      // Write-through editing keeps the buffer current, so switching just
+      // loads the chosen formation's values.
+      loadFormationIntoInputs(container, picker.value);
+    });
+    all('[data-formation-metric]', container).forEach(function (element) {
+      function sync() {
+        var current = container.getAttribute('data-current-formation');
+        formationEdits[phase][current][element.getAttribute('data-formation-metric')] = element.value;
+        formationDirty[phase] = true;
+      }
+      element.addEventListener('input', sync);
+      element.addEventListener('change', sync);
+    });
+  });
+}
+
 export function renderFields(componentName, values) {
   var fields = SCHEMA[componentName] || [];
   var html = '';
@@ -141,7 +225,9 @@ export function renderFields(componentName, values) {
     var value = values[field.key] != null ? values[field.key] : fallback;
     var hidden = field.showIf && !truthy(values[field.showIf]);
     var classes = (hidden ? ' conditional hidden' : ' conditional') + (field.type === 'text' ? ' wide-field' : '');
-    if (field.type === 'repeatable') {
+    if (field.type === 'formations') {
+      html += renderFormationsField(field);
+    } else if (field.type === 'repeatable') {
       html += renderRepeatableField(field, value);
     } else if (field.readonly) {
       html += '<label class="calculated-output' + classes + '" data-show-if="' + esc(field.showIf || '') + '">' + esc(field.label) + '<output>' + (isFilled(value) ? esc(value) + '%' : 'Calculated on save') + '</output></label>';
@@ -170,12 +256,22 @@ export function renderFields(componentName, values) {
     element.addEventListener('input', syncPreview);
   });
   bindRepeatableFields();
+  bindFormationFields();
   updateConditionalVisibility();
 }
 export function val(component, key) {
   var value = ((Store.allFields || {})[component] || {})[key];
   return isFilled(value) ? value : '';
 }
+// Latest mean-PIIP precedence (newest assessment first). Shared with the well
+// summary in detail.js -- keep the two lists in sync.
+export var LATEST_PIIP_SOURCES = [
+  ['Resource Assessment Update', 'resource_update_gas_mean'],
+  ['Post-Drilling Resource Assessment', 'post_drill_piip_gas_mean'],
+  ['Pre-Drilling Resource Assessment', 'pre_drill_piip_gas_mean'],
+  ['Lead Resource Assessment', 'lead_piip_gas_mean']
+];
+
 export function autoSummaryHtml(componentName) {
   if (componentName !== 'Resource Assessment Update') return '';
   var rows = [];
@@ -183,7 +279,14 @@ export function autoSummaryHtml(componentName) {
     if (isFilled(value)) rows.push('<li><span>' + esc(label) + '</span><b>' + esc(value) + '</b></li>');
   }
   add('Dynamic OGIP (BCF)', val('Flowback Results', 'flowback_dynamic_ogip_bcf'));
-  add('Post-Drilling Mean PIIP Gas (BCF)', val('Post-Drilling Resource Assessment', 'post_drill_piip_gas_mean'));
+  // Same latest-first precedence as the well summary.
+  for (var i = 0; i < LATEST_PIIP_SOURCES.length; i += 1) {
+    var latest = val(LATEST_PIIP_SOURCES[i][0], LATEST_PIIP_SOURCES[i][1]);
+    if (isFilled(latest)) {
+      add('Latest Mean PIIP Gas (BCF) — ' + LATEST_PIIP_SOURCES[i][0], latest);
+      break;
+    }
+  }
   return rows.length ? '<ul class="summary-list">' + rows.join('') + '</ul>' : '';
 }
 
@@ -252,6 +355,9 @@ export function saveComponent(event) {
   event.preventDefault();
   if (!Store.task) return;
   var fields = getFields();
+  // A component with a formations mini-sheet also PUTs the touched phase's
+  // well-level rows alongside the dynamic-field save.
+  var formationsField = (SCHEMA[Store.task.task_name] || []).find(function (item) { return item.type === 'formations'; });
   var submitButton = event.target.querySelector('button[type="submit"]');
   if (submitButton) submitButton.disabled = true;
   // No status / assigned_to keys: Save only persists inputs. Status moves via
@@ -266,6 +372,16 @@ export function saveComponent(event) {
     business_plan_enabled: Number(Store.project.business_plan_enabled || 0) === 1,
     business_plan_year: Store.project.business_plan_year
   }).then(function () {
+    if (formationsField && formationDirty[formationsField.phase]) {
+      return API.saveFormations(Store.projectId, {
+        phase: formationsField.phase,
+        rows: formationRowsForSave(formationsField.phase),
+        changed_by: currentUserName(),
+        source_task_id: Store.task.task_id
+      });
+    }
+    return null;
+  }).then(function () {
     return API.detail(Store.projectId);
   }).then(function (detail) {
     var selectedTaskId = Store.task.task_id;
@@ -274,6 +390,7 @@ export function saveComponent(event) {
     Store.allFields = detail.fields || {};
     Store.leadSummary = detail.lead_summary || null;
     Store.overview = detail.overview || null;
+    Store.formations = detail.formations || [];
     renderDetail();
     loadComponent(Store.tasks.find(function (task) { return task.task_id === selectedTaskId; }) || chooseInitialTask(tasksForPipeline(Store.pipeline)));
     refreshAllBoards();

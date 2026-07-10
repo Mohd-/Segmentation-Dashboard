@@ -206,6 +206,47 @@ class TaskDynamicField(Base):
     )
 
 
+class ProjectFormation(Base):
+    """Per-well formation interpretation values (SARH / QASM / QWRH).
+
+    One row per (project, formation, phase). Formation data belongs to the
+    WELL, not to a workflow step: the quicklook and final interpretation
+    components edit these rows through the formations mini-sheet, and
+    ``source_task_id`` records which component last wrote them (also the anchor
+    for the "Formation Data Updated" history event).
+
+    Value columns are TEXT to match the app-wide convention (task_dynamic_fields
+    et al. store user inputs as entered). ``Base.metadata.create_all`` runs on
+    every bootstrap, so this purely additive table needs no numbered migration
+    (same pattern as ``users``); the v19 step only backfills legacy SARH values.
+    """
+    __tablename__ = "project_formations"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.project_id", ondelete="CASCADE"), nullable=False)
+    formation = Column(Text, nullable=False)
+    phase = Column(Text, nullable=False)
+    top_tvdss_ft = Column(Text)
+    base_tvdss_ft = Column(Text)
+    thickness_ft = Column(Text)
+    porosity_pct = Column(Text)
+    swt_pct = Column(Text)
+    pay_ft = Column(Text)
+    ngr_pct = Column(Text)
+    fluid = Column(Text)
+    source_task_id = Column(Integer)
+    updated_at = Column(Text)
+    updated_by = Column(Text)
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "formation", "phase"),
+        CheckConstraint("formation IN ('SARH','QASM','QWRH')"),
+        CheckConstraint("phase IN ('quicklook','final')"),
+        Index("idx_project_formations_project", "project_id"),
+        {"sqlite_autoincrement": True},
+    )
+
+
 class LeadSummarySnapshot(Base):
     """Frozen JSON of a lead's Prospect-stage inputs captured at BP promotion."""
     __tablename__ = "lead_summary_snapshots"

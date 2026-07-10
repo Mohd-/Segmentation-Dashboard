@@ -9,6 +9,7 @@ export const Store = {
   allFields: {},
   leadSummary: null,
   overview: null, // project_overview row from /detail (derived values, e.g. derisking)
+  formations: [], // well-level formation rows from /detail (SARH/QASM/QWRH x phase)
   pipeline: 'prospect'
 };
 
@@ -40,4 +41,5 @@ export function resetSelection() {
   Store.allFields = {};
   Store.leadSummary = null;
   Store.overview = null;
+  Store.formations = [];
 }

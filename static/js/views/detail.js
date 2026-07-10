@@ -3,7 +3,7 @@ import { API } from '../api.js';
 import { currentUserName, Store, resetSelection } from '../state.js';
 import { BP_STAGES, PROSPECT_STAGES, DONE, schemaIndex } from '../schema.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
-import { loadComponent } from './detail-form.js';
+import { loadComponent, LATEST_PIIP_SOURCES } from './detail-form.js';
 import { refreshAllBoards } from './pipeline.js';
 import { refreshAudit } from './audit.js';
 
@@ -32,6 +32,7 @@ export function openDetail(projectId, pipeline) {
     Store.allFields = detail.fields || {};
     Store.leadSummary = detail.lead_summary || null;
     Store.overview = detail.overview || null;
+    Store.formations = detail.formations || [];
     renderDetail();
     loadComponent(chooseInitialTask(tasksForPipeline(Store.pipeline)));
     byId('detail-shell').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -95,6 +96,23 @@ export function curatedOverviewMarkup(fieldMap) {
   var finalOrQuick = function (finalKey, quickKey) {
     return summaryValue([['Final Log Analysis', finalKey], ['Quicklook Logs Interpretation', quickKey]], sourceMap);
   };
+  // WS6: formation-derived values prefer the well-level SARH row ('final'
+  // phase first, then 'quicklook'), falling back to the legacy task fields for
+  // old projects. A lead-summary snapshot (fieldMap passed) renders only its
+  // captured values -- no live formation reads.
+  function sarhFormationVal(metric) {
+    if (fieldMap) return null;
+    var phases = [['final', 'Final Log Analysis'], ['quicklook', 'Quicklook Logs Interpretation']];
+    for (var i = 0; i < phases.length; i += 1) {
+      var phase = phases[i][0];
+      var row = (Store.formations || []).find(function (r) { return r.phase === phase && r.formation === 'SARH'; });
+      if (row && isFilled(row[metric])) return { value: row[metric], source: phases[i][1] + ' (SARH)' };
+    }
+    return null;
+  }
+  function formationOrLegacy(metric, finalKey, quickKey) {
+    return sarhFormationVal(metric) || { value: finalOrQuick(finalKey, quickKey), source: 'Final / Quicklook Logs' };
+  }
   add('P90 Area (km²)', sourceVal('Reservoir Area Definition', 'p90_area_km2'), 'Reservoir Area Definition');
   add('P10 Area (km²)', sourceVal('Reservoir Area Definition', 'p10_area_km2'), 'Reservoir Area Definition');
   add('Sarah Formation Thickness (ft)', sourceVal('Thickness Estimation', 'formation_thickness_ft'), 'Thickness Estimation');
@@ -109,17 +127,28 @@ export function curatedOverviewMarkup(fieldMap) {
     ? sourceVal('Presence CoS Evaluation', 'presence_cos')
     : ((Store.overview && Store.overview.derisking) || '');
   add('Total Chance of Success (%)', totalChance, 'Derived');
-  add('Mean PIIP Gas (BCF) — Lead Phase', sourceVal('Lead Resource Assessment', 'lead_piip_gas_mean'), 'Lead Resource Assessment');
-  add('Mean PIIP Gas (BCF) — Pre-Drilling', sourceVal('Pre-Drilling Resource Assessment', 'pre_drill_piip_gas_mean'), 'Pre-Drilling Resource Assessment');
-  add('Mean PIIP Gas (BCF) — Post-Drilling', sourceVal('Post-Drilling Resource Assessment', 'post_drill_piip_gas_mean'), 'Post-Drilling Resource Assessment');
+  // Item 13: ONE latest-PIIP row instead of the stale Lead/Pre/Post trio. The
+  // small label names the step that supplied the value.
+  var latestPiip = { value: '', source: '' };
+  for (var p = 0; p < LATEST_PIIP_SOURCES.length; p += 1) {
+    var candidate = sourceVal(LATEST_PIIP_SOURCES[p][0], LATEST_PIIP_SOURCES[p][1]);
+    if (isFilled(candidate)) { latestPiip = { value: candidate, source: LATEST_PIIP_SOURCES[p][0] }; break; }
+  }
+  add('Mean PIIP Gas (BCF) — Latest', latestPiip.value, latestPiip.source);
   add('SARH Formation Prognosis — Pre-Drill', sourceVal('Well Proposal', 'sarh_formation_prognosis_pre_drill'), 'Well Proposal');
-  add('SARH Formation Prognosis — Post-Drill', finalOrQuick('final_top_sarah_tvdss_ft', 'quicklook_top_sarah_tvdss_ft'), 'Final / Quicklook Logs');
+  var prognosisPost = formationOrLegacy('top_tvdss_ft', 'final_top_sarah_tvdss_ft', 'quicklook_top_sarah_tvdss_ft');
+  add('SARH Formation Prognosis — Post-Drill', prognosisPost.value, prognosisPost.source);
   add('SARH Formation Thickness (ft) — Pre-Drill', sourceVal('Thickness Estimation', 'formation_thickness_ft'), 'Thickness Estimation');
-  add('SARH Formation Thickness (ft) — Post-Drill', finalOrQuick('final_formation_thickness_ft', 'quicklook_formation_thickness_ft'), 'Final / Quicklook Logs');
-  add('Pay Thickness (ft)', finalOrQuick('final_pay_thickness_ft', 'quicklook_pay_thickness_ft'), 'Final / Quicklook Logs');
-  add('PHIT (%)', finalOrQuick('final_average_porosity_pct', 'quicklook_average_porosity_pct'), 'Final / Quicklook Logs');
-  add('SWT (%)', finalOrQuick('final_average_swt_pct', 'quicklook_average_swt_pct'), 'Final / Quicklook Logs');
-  add('Fluid Type', finalOrQuick('final_fluid_type', 'quicklook_fluid_type'), 'Final / Quicklook Logs');
+  var thicknessPost = formationOrLegacy('thickness_ft', 'final_formation_thickness_ft', 'quicklook_formation_thickness_ft');
+  add('SARH Formation Thickness (ft) — Post-Drill', thicknessPost.value, thicknessPost.source);
+  var pay = formationOrLegacy('pay_ft', 'final_pay_thickness_ft', 'quicklook_pay_thickness_ft');
+  add('Pay Thickness (ft)', pay.value, pay.source);
+  var phit = formationOrLegacy('porosity_pct', 'final_average_porosity_pct', 'quicklook_average_porosity_pct');
+  add('PHIT (%)', phit.value, phit.source);
+  var swt = formationOrLegacy('swt_pct', 'final_average_swt_pct', 'quicklook_average_swt_pct');
+  add('SWT (%)', swt.value, swt.source);
+  var fluid = formationOrLegacy('fluid', 'final_fluid_type', 'quicklook_fluid_type');
+  add('Fluid Type', fluid.value, fluid.source);
   var flowback = sourceMap['Flowback Results'] || {};
   var flowbackMeta = schemaIndex('Flowback Results');
   Object.keys(flowbackMeta).forEach(function (key) {
@@ -186,6 +215,7 @@ export function refreshAfterRecordChange(message) {
       Store.allFields = detail.fields || {};
       Store.leadSummary = detail.lead_summary || null;
     Store.overview = detail.overview || null;
+    Store.formations = detail.formations || [];
       renderDetail();
       loadComponent(Store.tasks.find(function (task) { return task.task_id === currentTaskId; }) || chooseInitialTask(tasksForPipeline(Store.pipeline)));
       refreshAllBoards();
@@ -234,6 +264,7 @@ export function saveProjectFlags(payload) {
     Store.allFields = detail.fields || {};
     Store.leadSummary = detail.lead_summary || null;
     Store.overview = detail.overview || null;
+    Store.formations = detail.formations || [];
     Store.pipeline = String(Store.project.pipeline_type || '').toLowerCase() === 'bp' ? 'bp' : 'prospect';
     renderDetail();
     loadComponent(chooseInitialTask(tasksForPipeline(Store.pipeline)));

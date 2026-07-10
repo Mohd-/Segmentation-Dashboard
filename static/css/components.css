@@ -251,6 +251,12 @@
 }
 .remove-repeatable-row { white-space: nowrap; height: fit-content; }
 
+/* Formations mini-sheet (well-level SARH/QASM/QWRH values; detail-form.js).
+   Reuses the repeatable-field frame; the sheet is a fixed 4-column grid so the
+   eight metrics stay aligned instead of scattering. */
+.formations-field [data-formation-picker] { max-width: 160px; }
+.formation-sheet { grid-template-columns: repeat(4, minmax(140px, 1fr)); }
+
 /* =========================================================================
    Summary panel (right-hand rail)
    ========================================================================= */

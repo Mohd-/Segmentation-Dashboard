@@ -356,7 +356,32 @@ def project_detail(project_id):
         # Derived per-project values (e.g. derisking = Total Chance of Success,
         # maintained by recalculate_presence_cos since the step's removal).
         "overview": workflow.get_project_overview(session, project_id),
+        # Well-level formation rows (SARH/QASM/QWRH x quicklook/final).
+        "formations": workflow.get_project_formations(session, project_id),
     })
+
+
+@app.get("/api/projects/<int:project_id>/formations")
+def get_formations(project_id):
+    session = db.get_session()
+    if not workflow.get_project(session, project_id):
+        return error_response("Lead / well not found", 404)
+    return json_response(workflow.get_project_formations(session, project_id))
+
+
+@app.put("/api/projects/<int:project_id>/formations")
+def put_formations(project_id):
+    """Upsert well-level formation rows for one phase.
+
+    No role gate: step-level assignment governs who edits formation data.
+    """
+    session = db.get_session()
+    payload = request.get_json(silent=True) or {}
+    formations = workflow.upsert_project_formations(
+        session, project_id, payload.get("phase", ""), payload.get("rows"),
+        actor(payload), payload.get("source_task_id"),
+    )
+    return json_response({"ok": True, "formations": formations})
 
 
 @app.patch("/api/projects/<int:project_id>/rename")

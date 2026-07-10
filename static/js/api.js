@@ -53,6 +53,8 @@ export var API = {
   flags: function (id, payload) { return api('/api/projects/' + id + '/flags', jsonOptions('PATCH', payload)); },
   tasks: function (id) { return api('/api/projects/' + id + '/tasks'); },
   projectFields: function (id) { return api('/api/projects/' + id + '/dynamic-fields'); },
+  formations: function (id) { return api('/api/projects/' + id + '/formations'); },
+  saveFormations: function (id, payload) { return api('/api/projects/' + id + '/formations', jsonOptions('PUT', payload)); },
   componentFolder: function (projectId, taskId) { return api('/api/projects/' + projectId + '/component-folder/' + taskId); },
   fields: function (id) { return api('/api/tasks/' + id + '/dynamic-fields'); },
   saveFields: function (id, fields) { return api('/api/tasks/' + id + '/dynamic-fields', jsonOptions('PATCH', { fields: fields, changed_by: currentUserName() })); },

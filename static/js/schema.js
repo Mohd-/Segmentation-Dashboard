@@ -20,21 +20,23 @@ export function piip(prefix) {
     { key: prefix + '_liquid_p10', label: 'P10 Liquid (MMSTB)', type: 'number', showIf: prefix + '_has_liquid' }
   ];
 }
-export var quickNew = [
-  { key: 'quicklook_add_new_formation', label: 'Add a new formation', type: 'checkbox' },
-  { key: 'quicklook_new_formation_name', label: 'New Formation Name', type: 'text', showIf: 'quicklook_add_new_formation' },
-  { key: 'quicklook_new_formation_thickness_ft', label: 'New Formation Thickness (ft)', type: 'number', showIf: 'quicklook_add_new_formation' },
-  { key: 'quicklook_top_new_formation_tvdss_ft', label: 'Top New Formation TVDSS (ft)', type: 'number', showIf: 'quicklook_add_new_formation' },
-  { key: 'quicklook_new_top_reservoir_tvdss_ft', label: 'Top Reservoir TVDSS (ft)', type: 'number', showIf: 'quicklook_add_new_formation' },
-  { key: 'quicklook_new_base_reservoir_tvdss_ft', label: 'Base Reservoir TVDSS (ft)', type: 'number', showIf: 'quicklook_add_new_formation' },
-  { key: 'quicklook_base_new_formation_tvdss_ft', label: 'Base New Formation TVDSS (ft)', type: 'number', showIf: 'quicklook_add_new_formation' },
-  { key: 'quicklook_new_average_porosity_pct', label: 'Average Porosity (%)', type: 'number', showIf: 'quicklook_add_new_formation' },
-  { key: 'quicklook_new_average_swt_pct', label: 'Average Swt (%)', type: 'number', showIf: 'quicklook_add_new_formation' },
-  { key: 'quicklook_new_pay_thickness_ft', label: 'Pay Thickness (ft)', type: 'number', showIf: 'quicklook_add_new_formation' },
-  { key: 'quicklook_new_ngr_pct', label: 'NGR (%)', type: 'number', showIf: 'quicklook_add_new_formation' }
-];
-export var finalNew = quickNew.map(function (field) { var clone = Object.assign({}, field); clone.key = clone.key.replace('quicklook', 'final'); if (clone.showIf) clone.showIf = clone.showIf.replace('quicklook', 'final'); return clone; });
 export var FLUID_TYPES = ['', 'Gas', 'Gas over Water', 'Wet', 'Tight'];
+// WS6: formation data is well-level (project_formations via /api/projects/<id>/
+// formations), not step-level. Fixed list -- users never create formations; the
+// old "add new formation" clone mechanism (quickNew/finalNew) is gone. Legacy
+// per-SARH task fields remain readable in old data (see FORMATION_METRICS'
+// legacy fallbacks in detail.js) but are no longer rendered as inputs.
+export var FORMATIONS = ['SARH', 'QASM', 'QWRH'];
+export var FORMATION_METRICS = [
+  { key: 'top_tvdss_ft', label: 'Top TVDSS (ft)', type: 'number' },
+  { key: 'base_tvdss_ft', label: 'Base TVDSS (ft)', type: 'number' },
+  { key: 'thickness_ft', label: 'Thickness (ft)', type: 'number' },
+  { key: 'porosity_pct', label: 'Porosity (%)', type: 'number' },
+  { key: 'swt_pct', label: 'Swt (%)', type: 'number' },
+  { key: 'pay_ft', label: 'Pay (ft)', type: 'number' },
+  { key: 'ngr_pct', label: 'NGR (%)', type: 'number' },
+  { key: 'fluid', label: 'Fluid', type: 'select', options: FLUID_TYPES }
+];
 export var RESERVOIR_COS_COLUMNS = [
   { key: 'seismic_volume_ar_number', label: 'Seismic Volume AR Number', type: 'text' },
   { key: 'amplitude_ratio', label: 'Amplitude Ratio', type: 'number' },
@@ -71,7 +73,17 @@ export var SCHEMA = {
   // orphans stored data); only the label dropped "(Pre-Drill)".
   'Well Proposal': [{ key: 'sarh_formation_prognosis_pre_drill', label: 'SARH Formation Prognosis', type: 'text' }, { key: 'vsp_required', label: 'VSP Required?', type: 'select', options: ['', 'No', 'Yes'] }, { key: 'vsp_request_link', label: 'New Request Placeholder', type: 'link', value: '#' }, { key: 'urinsight_link', label: 'URINSIGHT', type: 'link', value: 'https://urinsight/', linkText: 'Create the well proposal in URINSIGHT' }],
   'GHEER': [{ key: 'gheer_base_map', label: 'Base Map', type: 'checkbox' }, { key: 'gheer_offset_wells', label: 'Offset Wells', type: 'checkbox' }, { key: 'gheer_target_polygon', label: 'Target Drilling Polygon (50x50 m)', type: 'checkbox' }, { key: 'gheer_prognosis_tops', label: 'Prognosis Tops', type: 'checkbox' }, { key: 'gheer_depth_top_sarah_grid', label: 'Depth Top Sarah Formation Grid', type: 'checkbox' }, { key: 'gheer_drilling_hazards', label: 'Drilling Hazards', type: 'checkbox' }, { key: 'gheer_pore_pressure_fracture_gradient', label: 'Pore Pressure Gradient and Fracture Gradient', type: 'checkbox' }, { key: 'gheer_wellbore_stability', label: 'Wellbore Stability', type: 'checkbox' }],
-  'Quicklook Logs Interpretation': [{ key: 'quicklook_formation_thickness_ft', label: 'Sarah Formation Thickness (ft)', type: 'number' }, { key: 'quicklook_top_sarah_tvdss_ft', label: 'Top Sarah TVDSS (ft)', type: 'number' }, { key: 'quicklook_top_reservoir_tvdss_ft', label: 'Top Reservoir TVDSS (ft)', type: 'number' }, { key: 'quicklook_base_reservoir_tvdss_ft', label: 'Base Reservoir TVDSS (ft)', type: 'number' }, { key: 'quicklook_base_sarah_tvdss_ft', label: 'Base Sarah TVDSS (ft)', type: 'number' }, { key: 'quicklook_average_porosity_pct', label: 'Average Porosity (%)', type: 'number' }, { key: 'quicklook_average_swt_pct', label: 'Average Swt (%)', type: 'number' }, { key: 'quicklook_pay_thickness_ft', label: 'Pay Thickness (ft)', type: 'number' }, { key: 'quicklook_ngr_pct', label: 'NGR (%)', type: 'number' }, { key: 'quicklook_fluid_type', label: 'Fluid Type', type: 'select', options: FLUID_TYPES }, { key: 'quicklook_pdf', label: 'Logs in PDF', type: 'checkbox' }, { key: 'quicklook_las', label: 'Logs as LAS', type: 'checkbox' }].concat(quickNew),
+  // WS6: per-SARH scalar fields + the quickNew clone block are replaced by the
+  // well-level formations mini-sheet; reservoir depths and file checkboxes stay
+  // as normal task fields.
+  'Quicklook Logs Interpretation': [
+    { key: 'quicklook_formations', label: 'Formation Interpretation (Quicklook)', type: 'formations', phase: 'quicklook' },
+    { key: 'quicklook_top_reservoir_tvdss_ft', label: 'Top Reservoir TVDSS (ft)', type: 'number' },
+    { key: 'quicklook_base_reservoir_tvdss_ft', label: 'Base Reservoir TVDSS (ft)', type: 'number' },
+    { key: 'quicklook_fluid_type', label: 'Fluid Type', type: 'select', options: FLUID_TYPES },
+    { key: 'quicklook_pdf', label: 'Logs in PDF', type: 'checkbox' },
+    { key: 'quicklook_las', label: 'Logs as LAS', type: 'checkbox' }
+  ],
   'Aramco Picks': [],
   'Post-Drilling Resource Assessment': piip('post_drill_piip'),
   'SAD Model': [],
@@ -79,7 +91,15 @@ export var SCHEMA = {
   'URED Update': [],
   'Flowback Results': [{ key: 'flowback_gas_rate_mmscfd', label: 'Gas Rate (MMSCFD)', type: 'number' }, { key: 'flowback_water_rate_bwpd', label: 'Water Rate (BWPD)', type: 'number' }, { key: 'flowback_choke_size_in', label: 'Choke Size (in)', type: 'number' }, { key: 'flowback_fwhp_psi', label: 'FWHP (psi)', type: 'number' }, { key: 'flowback_dynamic_area_km2', label: 'Dynamic Reservoir Area (km²)', type: 'number' }, { key: 'flowback_dynamic_ogip_bcf', label: 'Dynamic OGIP (BCF)', type: 'number' }, { key: 'flowback_sheet', label: 'Flowback Sheet', type: 'checkbox' }, { key: 'flowback_slide', label: 'Flowback Slide', type: 'checkbox' }],
   'SAD Update': [],
-  'Final Log Analysis': [{ key: 'final_formation_thickness_ft', label: 'Sarah Formation Thickness (ft)', type: 'number' }, { key: 'final_top_sarah_tvdss_ft', label: 'Top Sarah TVDSS (ft)', type: 'number' }, { key: 'final_top_reservoir_tvdss_ft', label: 'Top Reservoir TVDSS (ft)', type: 'number' }, { key: 'final_base_reservoir_tvdss_ft', label: 'Base Reservoir TVDSS (ft)', type: 'number' }, { key: 'final_base_sarah_tvdss_ft', label: 'Base Sarah TVDSS (ft)', type: 'number' }, { key: 'final_average_porosity_pct', label: 'Average Porosity (%)', type: 'number' }, { key: 'final_average_swt_pct', label: 'Average Swt (%)', type: 'number' }, { key: 'final_pay_thickness_ft', label: 'Pay Thickness (ft)', type: 'number' }, { key: 'final_ngr_pct', label: 'NGR (%)', type: 'number' }, { key: 'final_fluid_type', label: 'Fluid Type', type: 'select', options: FLUID_TYPES }, { key: 'final_pdf', label: 'Logs in PDF', type: 'checkbox' }, { key: 'final_las', label: 'Logs as LAS', type: 'checkbox' }, { key: 'final_petrel', label: 'Logs in Petrel', type: 'checkbox' }].concat(finalNew),
+  'Final Log Analysis': [
+    { key: 'final_formations', label: 'Formation Interpretation (Final)', type: 'formations', phase: 'final' },
+    { key: 'final_top_reservoir_tvdss_ft', label: 'Top Reservoir TVDSS (ft)', type: 'number' },
+    { key: 'final_base_reservoir_tvdss_ft', label: 'Base Reservoir TVDSS (ft)', type: 'number' },
+    { key: 'final_fluid_type', label: 'Fluid Type', type: 'select', options: FLUID_TYPES },
+    { key: 'final_pdf', label: 'Logs in PDF', type: 'checkbox' },
+    { key: 'final_las', label: 'Logs as LAS', type: 'checkbox' },
+    { key: 'final_petrel', label: 'Logs in Petrel', type: 'checkbox' }
+  ],
   'PVAD Structural MTR': [{ key: 'pvad_mtr_link', label: 'Hyperlink Placeholder', type: 'text' }],
   'Resource Assessment Update': piip('resource_update').concat([{ key: 'resource_update_note', label: '', type: 'summary' }]),
   'Prospect Evaluation Presentation': [], 'Well Creation': [], 'BP Execution Gate': [], 'Site Preparation': [], 'Post-Well Outcome & Decision Gate': [], 'Executive Summary Final': [], 'PDA': [], 'Approval To Drill': []
