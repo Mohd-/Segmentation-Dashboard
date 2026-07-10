@@ -353,6 +353,9 @@ def project_detail(project_id):
         "completion": {"percent": workflow.project_completion_percent(session, project_id)},
         "fields": workflow.get_project_dynamic_field_map(session, project_id),
         "lead_summary": workflow.get_lead_summary_snapshot(session, project_id),
+        # Derived per-project values (e.g. derisking = Total Chance of Success,
+        # maintained by recalculate_presence_cos since the step's removal).
+        "overview": workflow.get_project_overview(session, project_id),
     })
 
 

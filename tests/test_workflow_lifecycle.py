@@ -17,13 +17,14 @@ PROSPECT_STAGES = {"Lead Identification", "Risking", "Segmentation", "Pre-Well D
 # Initial seeding
 # ---------------------------------------------------------------------------
 
-def test_new_prospect_project_has_32_tasks_all_not_assigned(client):
+def test_new_prospect_project_has_31_tasks_all_not_assigned(client):
     # v17 lifecycle: every step (including the first) starts Not Assigned;
     # assignment is what moves a step to In Progress. The first step still
     # carries the planned dates, and current_task still anchors on it.
+    # (31 tasks since v18 removed the Presence CoS Evaluation step.)
     pid = create_project(client, "SEED-PROSPECT-1")
     tasks = get_tasks(client, pid)
-    assert len(tasks) == 32
+    assert len(tasks) == 31
 
     first = tasks[0]
     assert first["task_name"] == "Reservoir Area Definition"
@@ -150,7 +151,7 @@ def test_optimistic_locking_stale_revision_rejected(client):
 # ---------------------------------------------------------------------------
 
 def test_completion_percent_excludes_not_applicable_from_denominator(client):
-    # A fresh BP project has all 13 Prospect-stage tasks marked Not Applicable,
+    # A fresh BP project has all 12 Prospect-stage tasks marked Not Applicable,
     # leaving 19 applicable tasks (Well Delivery + Post-Drilling + Post-Testing).
     pid = create_project(
         client, "COMPLETION-BP-1", pipeline_type="bp",
@@ -173,19 +174,19 @@ def test_completion_percent_excludes_not_applicable_from_denominator(client):
 
 def test_completion_percent_known_arithmetic_for_prospect(client):
     # Completion is scoped to the operating pipeline's stages: a prospect is
-    # measured against its 13 Prospect-stage tasks only, not all 32 (the
+    # measured against its 12 Prospect-stage tasks only, not all 31 (the
     # BP-stage tasks belong to a pipeline it has not entered).
     pid = create_project(client, "COMPLETION-PROSPECT-1")
     tasks = get_tasks(client, pid)
-    assert len(tasks) == 32
+    assert len(tasks) == 31
     prospect_tasks = [t for t in tasks if t["stage_group"] in PROSPECT_STAGES]
-    assert len(prospect_tasks) == 13
+    assert len(prospect_tasks) == 12
     for task in prospect_tasks[:5]:
         client.patch(f"/api/tasks/{task['task_id']}", json={
             "status": "Approved", "revision": task["revision"],
         })
     resp = client.get(f"/api/projects/{pid}/completion")
-    assert resp.get_json() == {"percent": round(5 / 13 * 100, 1)}
+    assert resp.get_json() == {"percent": round(5 / 12 * 100, 1)}
 
 
 # ---------------------------------------------------------------------------

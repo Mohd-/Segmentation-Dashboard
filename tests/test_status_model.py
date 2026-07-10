@@ -216,8 +216,9 @@ def test_assign_cascade_covers_subsequent_not_assigned_prospect_steps_only(clien
     assert resp.status_code == 200
     _assign(client, by_seq[6]["task_id"], "Employee", by_seq[6]["revision"])
 
-    # Assign step 3 with cascade: steps 3..13 that are still Not Assigned all
-    # go In Progress with the same assignee.
+    # Assign step 3 with cascade: steps 3..12 (the prospect pipeline since the
+    # v18 renumbering) that are still Not Assigned all go In Progress with the
+    # same assignee.
     _assign(client, by_seq[3]["task_id"], "Staff Member", by_seq[3]["revision"], cascade=True)
 
     after = {t["sequence_no"]: t for t in get_tasks(client, pid)}
@@ -226,7 +227,7 @@ def test_assign_cascade_covers_subsequent_not_assigned_prospect_steps_only(clien
         assert after[seq]["status"] == "Not Assigned"
         assert after[seq]["assigned_to"] is None
     # Target + subsequent Not Assigned prospect steps cascade.
-    for seq in (3, 4, 7, 8, 9, 10, 11, 12, 13):
+    for seq in (3, 4, 7, 8, 9, 10, 11, 12):
         assert after[seq]["status"] == "In Progress", seq
         assert after[seq]["assigned_to"] == "Staff Member", seq
         assert after[seq]["revision"] == by_seq[seq]["revision"] + 1, seq
@@ -392,5 +393,124 @@ def test_migration_v17_collapses_legacy_statuses(client):
                 "SELECT status FROM project_tasks WHERE project_id = ? ORDER BY task_id", (pid,))
         ]
         assert statuses_after_second_run == statuses_after_first_run
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Migration v18: Presence CoS Evaluation step removal + 1-31 renumbering
+# ---------------------------------------------------------------------------
+
+def test_migration_v18_retires_presence_step_and_renumbers(client):
+    import db as dbmod
+    import workflow
+
+    pid = create_project(client, "MIGRATE-V18-1")
+
+    # Reshape the freshly-bootstrapped DB into a pre-v18 database: re-insert
+    # the retired "Presence CoS Evaluation" step at its old slot (sequence 8,
+    # Risking), shift every later step up by one (the old 1-32 numbering),
+    # anchor the project on the doomed step, and stamp schema_version 17.
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        conn.execute("UPDATE task_templates SET sequence_no = sequence_no + 1 WHERE sequence_no >= 8")
+        conn.execute("""
+            INSERT INTO task_templates (template_id, sequence_no, task_name, stage_group,
+                                        default_role, default_duration_days, branch_type, mandatory_output)
+            VALUES (500, 8, 'Presence CoS Evaluation', 'Risking', 'Geologist', 2, 'normal', 'Presence CoS entered')
+        """)
+        conn.execute(
+            "UPDATE project_tasks SET sequence_no = sequence_no + 1 WHERE project_id = ? AND sequence_no >= 8",
+            (pid,))
+        cursor = conn.execute("""
+            INSERT INTO project_tasks (project_id, template_id, sequence_no, task_name, stage_group,
+                                       status, priority, is_active, last_updated)
+            VALUES (?, 500, 8, 'Presence CoS Evaluation', 'Risking', 'In Progress', 'Medium', 1, datetime('now'))
+        """, (pid,))
+        presence_task_id = cursor.lastrowid
+        conn.execute("""
+            INSERT INTO task_dynamic_fields (task_id, field_key, field_value, updated_at)
+            VALUES (?, 'presence_cos', '42', datetime('now'))
+        """, (presence_task_id,))
+        conn.execute("UPDATE project_overview SET derisking = '42' WHERE project_id = ?", (pid,))
+        conn.execute(
+            "UPDATE projects SET current_task = 'Presence CoS Evaluation', current_stage = 'Risking' WHERE project_id = ?",
+            (pid,))
+        conn.execute("UPDATE app_settings SET value = '17' WHERE key = 'schema_version'")
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Re-bootstrap the same file: migration 18 must run.
+    dbmod.reset_for_tests()
+    dbmod.init_db(str(client.db_path))
+
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        # The retired step's row survives, deactivated; its data is untouched.
+        presence = conn.execute(
+            "SELECT is_active FROM project_tasks WHERE project_id = ? AND task_name = 'Presence CoS Evaluation'",
+            (pid,)).fetchone()
+        assert presence is not None
+        assert presence["is_active"] == 0
+        kept_field = conn.execute(
+            "SELECT field_value FROM task_dynamic_fields WHERE task_id = ?",
+            (presence_task_id,)).fetchone()
+        assert kept_field["field_value"] == "42"
+
+        # Active tasks renumbered to a contiguous 1-31 in the new order.
+        rows = conn.execute("""
+            SELECT task_name, sequence_no FROM project_tasks
+            WHERE project_id = ? AND is_active = 1 ORDER BY sequence_no
+        """, (pid,)).fetchall()
+        assert [r["sequence_no"] for r in rows] == list(range(1, 32))
+        assert [r["task_name"] for r in rows] == [t[1] for t in workflow.PIPELINE_TEMPLATES]
+
+        # Templates: retired one parked at 999, the rest 1-31.
+        assert conn.execute(
+            "SELECT sequence_no FROM task_templates WHERE task_name = 'Presence CoS Evaluation'"
+        ).fetchone()["sequence_no"] == 999
+        template_seqs = [r["sequence_no"] for r in conn.execute(
+            "SELECT sequence_no FROM task_templates WHERE task_name != 'Presence CoS Evaluation' ORDER BY sequence_no"
+        ).fetchall()]
+        assert template_seqs == list(range(1, 32))
+
+        # Project state re-anchored off the removed step; derisking preserved.
+        project = conn.execute(
+            "SELECT current_task, current_stage FROM projects WHERE project_id = ?", (pid,)).fetchone()
+        assert project["current_task"] == "Reservoir Area Definition"
+        assert project["current_stage"] == "Lead Identification"
+        assert conn.execute(
+            "SELECT derisking FROM project_overview WHERE project_id = ?", (pid,)
+        ).fetchone()["derisking"] == "42"
+        assert conn.execute(
+            "SELECT value FROM app_settings WHERE key = 'schema_version'").fetchone()[0] == "18"
+
+        snapshot = conn.execute("""
+            SELECT task_id, task_name, sequence_no, is_active, status FROM project_tasks
+            WHERE project_id = ? ORDER BY task_id
+        """, (pid,)).fetchall()
+        snapshot_first = [tuple(r) for r in snapshot]
+    finally:
+        conn.close()
+
+    # Idempotency: force the step to replay against already-migrated data.
+    conn = raw_sqlite_connect(client.db_path)
+    conn.execute("UPDATE app_settings SET value = '17' WHERE key = 'schema_version'")
+    conn.commit()
+    conn.close()
+    dbmod.reset_for_tests()
+    dbmod.init_db(str(client.db_path))
+
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        snapshot_second = [tuple(r) for r in conn.execute("""
+            SELECT task_id, task_name, sequence_no, is_active, status FROM project_tasks
+            WHERE project_id = ? ORDER BY task_id
+        """, (pid,)).fetchall()]
+        assert snapshot_second == snapshot_first
+        assert conn.execute(
+            "SELECT derisking FROM project_overview WHERE project_id = ?", (pid,)
+        ).fetchone()["derisking"] == "42"
     finally:
         conn.close()

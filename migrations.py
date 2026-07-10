@@ -17,10 +17,9 @@ Adoption rules (behavior preserved from the old bootstrap):
 - An existing database below the latest version: run the ported "consolidate to
   v15" step, which reproduces the old ``apply_workflow_updates`` exactly.
 
-Current latest version is 17 (v17 collapses the legacy 9-status vocabulary to
-the 4-state lifecycle and re-anchors derived project state; see
-``_upgrade_to_v17``. ``_upgrade_to_v16`` remains the template to copy when
-adding future numbered steps).
+Current latest version is 18 (v18 retires the "Presence CoS Evaluation" step
+and renumbers the workflow to 1-31; see ``_upgrade_to_v18``. ``_upgrade_to_v16``
+remains the template to copy when adding future numbered steps).
 
 Concurrency guard: ``run`` acquires the database write lock UPFRONT via
 ``db.begin_write`` (SQLite ``BEGIN IMMEDIATE``) before the ensure/seed writes
@@ -43,7 +42,7 @@ import workflow
 from helpers import utc_now_str
 from models import Base
 
-LATEST_SCHEMA_VERSION = 17
+LATEST_SCHEMA_VERSION = 18
 
 
 # ---------------------------------------------------------------------------
@@ -399,12 +398,72 @@ def _upgrade_to_v17(session) -> None:
         workflow.refresh_project_state(session, project["project_id"])
 
 
+def _upgrade_to_v18(session) -> None:
+    """Schema v18: retire the "Presence CoS Evaluation" step; renumber to 1-31.
+
+    Presence CoS is derived (final Reservoir x Trap x Seal), not user-entered,
+    so it is removed as a visible workflow step. What this migration does:
+
+    1. Deactivates every "Presence CoS Evaluation" project_tasks row
+       (``is_active = 0``). The rows -- and their dynamic fields and history --
+       are preserved, never deleted.
+    2. Parks the retired template at ``sequence_no`` 999. Its task_templates
+       row must survive because the deactivated task rows still reference its
+       template_id.
+    3. Resequences task_templates AND project_tasks rows to the new contiguous
+       1-31 numbering, keyed by task_name against the current
+       workflow.PIPELINE_TEMPLATES (the name-keyed loop shape of
+       ``_consolidate_to_v15``). template_id primary keys are never changed;
+       project_tasks.template_id is re-pointed by name for consistency.
+    4. Re-runs ``refresh_project_state`` for every project, fixing any
+       ``current_task`` that pointed at the removed step.
+
+    Idempotent: every UPDATE converges (the deactivation, the 999 park, the
+    name-keyed resequence and the state refresh all produce the same result on
+    a second run). The computed Presence value lives on as
+    ``project_overview.derisking``, maintained by recalculate_presence_cos.
+    """
+    now = utc_now_str()
+    db.execute(session, """
+        UPDATE project_tasks SET is_active = 0, last_updated = :now
+        WHERE task_name = 'Presence CoS Evaluation' AND is_active = 1
+    """, {"now": now})
+    db.execute(session, """
+        UPDATE task_templates SET sequence_no = 999
+        WHERE task_name = 'Presence CoS Evaluation'
+    """)
+    for sequence_no, tpl in enumerate(workflow.PIPELINE_TEMPLATES, start=1):
+        task_name = tpl[1]
+        template = db.fetch_one(session,
+                                "SELECT template_id FROM task_templates WHERE task_name = :name",
+                                {"name": task_name})
+        if not template:
+            # A v17 database always carries these templates (seeded/consolidated
+            # earlier); nothing to renumber otherwise.
+            continue
+        db.execute(session, """
+            UPDATE task_templates SET sequence_no = :sequence_no
+            WHERE template_id = :template_id
+        """, {"sequence_no": sequence_no, "template_id": template["template_id"]})
+        db.execute(session, """
+            UPDATE project_tasks
+            SET sequence_no = :sequence_no, template_id = :template_id, last_updated = COALESCE(last_updated, :now)
+            WHERE task_name = :task_name
+        """, {"sequence_no": sequence_no, "template_id": template["template_id"],
+              "now": now, "task_name": task_name})
+
+    projects = db.fetch_all(session, "SELECT project_id FROM projects")
+    for project in projects:
+        workflow.refresh_project_state(session, project["project_id"])
+
+
 # List of (version, fn). Each step upgrades a database from below ``version`` to
 # ``version``. Add new steps here with the next integer version.
 MIGRATIONS: List = [
     (15, _consolidate_to_v15),
     (16, _upgrade_to_v16),
     (17, _upgrade_to_v17),
+    (18, _upgrade_to_v18),
 ]
 
 

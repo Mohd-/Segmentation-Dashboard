@@ -159,10 +159,14 @@ def test_project_detail_shape(client):
     resp = client.get(f"/api/projects/{pid}/detail")
     assert resp.status_code == 200
     body = resp.get_json()
-    for key in ("project", "tasks", "completion", "fields", "lead_summary"):
+    for key in ("project", "tasks", "completion", "fields", "lead_summary", "overview"):
         assert key in body
     assert "percent" in body["completion"]
     assert body["lead_summary"] is None  # never promoted
+    # overview is the project_overview row (guaranteed since the v16 backfill);
+    # derisking carries the derived Total Chance of Success.
+    assert isinstance(body["overview"], dict)
+    assert "derisking" in body["overview"]
 
 
 # ---------------------------------------------------------------------------

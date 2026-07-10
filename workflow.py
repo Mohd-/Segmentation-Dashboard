@@ -89,31 +89,34 @@ PIPELINE_TEMPLATES = [
     (5, "Reservoir CoS", "Risking", "Reservoir Engineer", 3, None, "normal", "Reservoir CoS entered"),
     (6, "Trap CoS", "Risking", "Geologist", 3, None, "normal", "Trap CoS entered"),
     (7, "Seal CoS", "Risking", "Geologist", 3, None, "normal", "Seal CoS entered"),
-    (8, "Presence CoS Evaluation", "Risking", "Geologist", 2, None, "normal", "Presence CoS entered"),
-    (9, "Prospect Evaluation Presentation", "Segmentation", "Lead Owner", 2, None, "normal", "Presentation prepared"),
-    (10, "Well Creation", "Pre-Well Delivery", "Well Planner", 3, None, "normal", "Well created"),
-    (11, "Pre-Drilling Resource Assessment", "Pre-Well Delivery", "Reservoir Engineer", 3, None, "normal", "Pre-drilling resources assessed"),
-    (12, "Staking Moving Tolerance", "Pre-Well Delivery", "Geologist", 2, None, "normal", "Moving tolerance recorded"),
-    (13, "Approval to Stake", "Pre-Well Delivery", "Stakeholder", 2, None, "normal", "Approval to stake complete"),
-    (14, "BP Execution Gate", "Well Delivery", "Portfolio Team", 1, None, "normal", "BP execution gate complete"),
-    (15, "Well Proposal", "Well Delivery", "Drilling Engineer", 3, None, "normal", "Well proposal complete"),
-    (16, "Site Preparation", "Well Delivery", "Field Team", 4, None, "normal", "Site preparation complete"),
-    (17, "Approval To Drill", "Well Delivery", "Approver", 2, None, "normal", "Approval to drill complete"),
-    (18, "GHEER", "Well Delivery", "HSE / Review Team", 2, None, "normal", "GHEER complete"),
-    (19, "Quicklook Logs Interpretation", "Post-Drilling", "Petrophysicist", 2, None, "normal", "Quicklook logs interpreted"),
-    (20, "Aramco Picks", "Post-Drilling", "Geologist", 2, None, "normal", "Aramco picks complete"),
-    (21, "Post-Drilling Resource Assessment", "Post-Drilling", "Reservoir Engineer", 3, None, "normal", "Post-drilling resources assessed"),
-    (22, "SAD Model", "Post-Drilling", "PDA Owner", 3, None, "normal", "SAD model complete"),
-    (23, "Executive Summary", "Post-Drilling", "Manager", 2, None, "normal", "Executive summary complete"),
-    (24, "URED Update", "Post-Drilling", "Reservoir Engineer", 2, None, "normal", "URED update complete"),
-    (25, "Post-Well Outcome & Decision Gate", "Post-Drilling", "Portfolio Team", 3, None, "normal", "Outcome decision complete"),
-    (26, "Flowback Results", "Post-Testing", "Analyst", 3, None, "normal", "Flowback results captured"),
-    (27, "SAD Update", "Post-Testing", "PDA Owner", 3, None, "normal", "SAD update complete"),
-    (28, "Executive Summary Final", "Post-Testing", "Manager", 2, None, "normal", "Final executive summary complete"),
-    (29, "Final Log Analysis", "Post-Testing", "Petrophysicist", 2, None, "normal", "Final log analysis complete"),
-    (30, "PVAD Structural MTR", "Post-Testing", "Reporting Owner", 2, None, "normal", "PVAD structural MTR complete"),
-    (31, "Resource Assessment Update", "Post-Testing", "Reservoir Engineer", 2, None, "normal", "Resource assessment updated"),
-    (32, "PDA", "Post-Testing", "PDA Owner", 2, None, "normal", "PDA complete"),
+    # v18: "Presence CoS Evaluation" (formerly step 8) was removed as a visible
+    # step -- its value is derived (Reservoir x Trap x Seal), computed by
+    # recalculate_presence_cos and surfaced as project_overview.derisking.
+    # The remaining steps renumber to a clean 1-31.
+    (8, "Prospect Evaluation Presentation", "Segmentation", "Lead Owner", 2, None, "normal", "Presentation prepared"),
+    (9, "Well Creation", "Pre-Well Delivery", "Well Planner", 3, None, "normal", "Well created"),
+    (10, "Pre-Drilling Resource Assessment", "Pre-Well Delivery", "Reservoir Engineer", 3, None, "normal", "Pre-drilling resources assessed"),
+    (11, "Staking Moving Tolerance", "Pre-Well Delivery", "Geologist", 2, None, "normal", "Moving tolerance recorded"),
+    (12, "Approval to Stake", "Pre-Well Delivery", "Stakeholder", 2, None, "normal", "Approval to stake complete"),
+    (13, "BP Execution Gate", "Well Delivery", "Portfolio Team", 1, None, "normal", "BP execution gate complete"),
+    (14, "Well Proposal", "Well Delivery", "Drilling Engineer", 3, None, "normal", "Well proposal complete"),
+    (15, "Site Preparation", "Well Delivery", "Field Team", 4, None, "normal", "Site preparation complete"),
+    (16, "Approval To Drill", "Well Delivery", "Approver", 2, None, "normal", "Approval to drill complete"),
+    (17, "GHEER", "Well Delivery", "HSE / Review Team", 2, None, "normal", "GHEER complete"),
+    (18, "Quicklook Logs Interpretation", "Post-Drilling", "Petrophysicist", 2, None, "normal", "Quicklook logs interpreted"),
+    (19, "Aramco Picks", "Post-Drilling", "Geologist", 2, None, "normal", "Aramco picks complete"),
+    (20, "Post-Drilling Resource Assessment", "Post-Drilling", "Reservoir Engineer", 3, None, "normal", "Post-drilling resources assessed"),
+    (21, "SAD Model", "Post-Drilling", "PDA Owner", 3, None, "normal", "SAD model complete"),
+    (22, "Executive Summary", "Post-Drilling", "Manager", 2, None, "normal", "Executive summary complete"),
+    (23, "URED Update", "Post-Drilling", "Reservoir Engineer", 2, None, "normal", "URED update complete"),
+    (24, "Post-Well Outcome & Decision Gate", "Post-Drilling", "Portfolio Team", 3, None, "normal", "Outcome decision complete"),
+    (25, "Flowback Results", "Post-Testing", "Analyst", 3, None, "normal", "Flowback results captured"),
+    (26, "SAD Update", "Post-Testing", "PDA Owner", 3, None, "normal", "SAD update complete"),
+    (27, "Executive Summary Final", "Post-Testing", "Manager", 2, None, "normal", "Final executive summary complete"),
+    (28, "Final Log Analysis", "Post-Testing", "Petrophysicist", 2, None, "normal", "Final log analysis complete"),
+    (29, "PVAD Structural MTR", "Post-Testing", "Reporting Owner", 2, None, "normal", "PVAD structural MTR complete"),
+    (30, "Resource Assessment Update", "Post-Testing", "Reservoir Engineer", 2, None, "normal", "Resource assessment updated"),
+    (31, "PDA", "Post-Testing", "PDA Owner", 2, None, "normal", "PDA complete"),
 ]
 
 WORKFLOW_TASK_RENAMES = {
@@ -129,7 +132,8 @@ DYNAMIC_FIELD_OVERVIEW_MAP = {
     "pre_drill_piip_gas_mean": "pre_drill_estimation",
     "post_drill_piip_gas_mean": "post_drill_estimation",
     "resource_update_gas_mean": "post_drill_estimation",
-    "presence_cos": "derisking",
+    # v18: no "presence_cos" entry -- recalculate_presence_cos writes
+    # project_overview.derisking directly (the Presence step was removed).
     "quicklook_pay_thickness_ft": "quick_look_pay",
     "quicklook_average_porosity_pct": "quick_look_porosity",
     "quicklook_average_swt_pct": "quick_look_swt",
@@ -203,7 +207,7 @@ def find_active_user(session, name: str) -> Optional[Dict[str, Any]]:
 
 def add_project(session, project_name, start_date=None, target_date=None, changed_by="System", lead_x=None, lead_y=None,
                 business_plan_year=None, business_plan_enabled=False, active_well_enabled=False, pipeline_type="prospect"):
-    """Create a project and materialize its 32 workflow tasks; return project_id."""
+    """Create a project and materialize its 31 workflow tasks; return project_id."""
     project_name = (project_name or '').strip()
     if not project_name:
         raise ValueError("Lead / well name is required.")
@@ -652,6 +656,17 @@ def update_project_overview_fields(session, project_id, fields):
     assignments = ", ".join([f"{k} = :{k}" for k in clean]) + ", last_updated = :now"
     db.execute(session, f"UPDATE project_overview SET {assignments} WHERE project_id = :project_id",
                dict(clean, now=utc_now_str(), project_id=project_id))
+
+
+def get_project_overview(session, project_id: int):
+    """Return the project_overview row as a dict (pure read; {} if missing).
+
+    Every project is guaranteed an overview row since the v16 backfill, so the
+    empty-dict fallback only guards freshly-deleted edge cases.
+    """
+    return db.fetch_one(session,
+                        "SELECT * FROM project_overview WHERE project_id = :project_id",
+                        {"project_id": project_id}) or {}
 
 
 def get_project_dynamic_field_map(session, project_id: int):
@@ -1316,38 +1331,36 @@ def _final_reservoir_cos_value(session, project_id):
 
 
 def recalculate_presence_cos(session, project_id, changed_by="System"):
-    """Persist the automatic Presence CoS reading for one project.
+    """Recompute the automatic Presence CoS (Total Chance of Success).
 
-    The final Reservoir CoS is the last completed row in Reservoir CoS. Presence
-    CoS is read-only in the UI and always equals Reservoir x Trap x Seal. No
-    commit here -- the caller's transaction owns the commit.
+    The final Reservoir CoS is the last completed row in Reservoir CoS;
+    Presence CoS always equals Reservoir x Trap x Seal. Since v18 the value has
+    no workflow step of its own: it is written ONLY to
+    ``project_overview.derisking`` (surfaced in the detail payload's
+    ``overview``), never to task dynamic fields. On change, the history event
+    is logged against the project's Seal CoS task -- the final input of the
+    formula. No commit here -- the caller's transaction owns the commit.
     """
-    target = db.fetch_one(session, """
-        SELECT task_id FROM project_tasks
-        WHERE project_id = :project_id AND task_name = 'Presence CoS Evaluation'
-        ORDER BY task_id DESC LIMIT 1
-    """, {"project_id": project_id})
-    if not target:
-        return {}
     reservoir = _final_reservoir_cos_value(session, project_id)
     trap = _task_field_value(session, project_id, "Trap CoS", "trap_cos_pct")
     seal = _task_field_value(session, project_id, "Seal CoS", "seal_cos_pct")
     values = cos.calculate_presence_cos(reservoir, trap, seal)
-    now = utc_now_str()
-    existing = get_task_dynamic_fields(session, target["task_id"])
-    changed = any(str(existing.get(k, "")) != str(v) for k, v in values.items())
-    for key, value in values.items():
-        db.execute(session, """
-            INSERT INTO task_dynamic_fields (task_id, field_key, field_value, updated_at)
-            VALUES (:task_id, :field_key, :field_value, :now)
-            ON CONFLICT(task_id, field_key) DO UPDATE SET
-                field_value = excluded.field_value, updated_at = excluded.updated_at
-        """, {"task_id": target["task_id"], "field_key": key, "field_value": str(value), "now": now})
-    update_project_overview_fields(session, project_id, {"derisking": values.get("presence_cos", "")})
-    if changed:
-        note = "Automatically recalculated from final Reservoir CoS x Trap CoS x Seal CoS."
-        log_task_event(session, target["task_id"], project_id, "Presence CoS Evaluation",
-                       "Presence CoS Calculated", None, None, changed_by, note)
+    new_value = str(values.get("presence_cos", "") or "")
+    previous = db.fetch_one(session,
+                            "SELECT derisking FROM project_overview WHERE project_id = :project_id",
+                            {"project_id": project_id})
+    old_value = "" if not previous or previous["derisking"] is None else str(previous["derisking"])
+    update_project_overview_fields(session, project_id, {"derisking": new_value})
+    if new_value != old_value:
+        seal_task = db.fetch_one(session, """
+            SELECT task_id FROM project_tasks
+            WHERE project_id = :project_id AND task_name = 'Seal CoS' AND is_active = 1
+            ORDER BY task_id DESC LIMIT 1
+        """, {"project_id": project_id})
+        if seal_task:
+            note = "Total Chance of Success automatically recalculated from final Reservoir CoS x Trap CoS x Seal CoS."
+            log_task_event(session, seal_task["task_id"], project_id, "Seal CoS",
+                           "Presence CoS Calculated", None, None, changed_by, note)
     return values
 
 

@@ -73,9 +73,14 @@ export function createLead(event) {
   event.preventDefault();
   var name = byId('new-lead-name').value.trim();
   if (!name) return msg('Lead Name is required.', 'error');
+  // X/Y are UI-required only (the backend accepts leads without them); they
+  // seed lead_x/lead_y, which also prefill the Staking well location fields.
+  var leadX = byId('new-lead-x').value.trim();
+  var leadY = byId('new-lead-y').value.trim();
+  if (!leadX || !leadY) return msg('Lead X and Y locations are required.', 'error');
   var submitButton = event.target.querySelector('button[type="submit"]');
   if (submitButton) submitButton.disabled = true;
-  API.create({ project_name: name, pipeline_type: 'prospect', changed_by: currentUserName() }).then(function (result) {
+  API.create({ project_name: name, lead_x: leadX, lead_y: leadY, pipeline_type: 'prospect', changed_by: currentUserName() }).then(function (result) {
     byId('create-lead-form').reset();
     msg('Lead created.', 'success');
     refreshAllBoards();

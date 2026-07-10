@@ -131,7 +131,14 @@ export function renderFields(componentName, values) {
   var fields = SCHEMA[componentName] || [];
   var html = '';
   fields.forEach(function (field) {
-    var value = values[field.key] != null ? values[field.key] : (field.value || '');
+    // Precedence: saved value ?? Store.project[field.defaultFrom] ?? field.value ?? ''.
+    // defaultFrom prefills from a project column (e.g. Staking well X/Y from
+    // lead_x/lead_y); the prefill persists as a normal dynamic field on save.
+    var fallback = field.value || '';
+    if (field.defaultFrom && Store.project && Store.project[field.defaultFrom] != null) {
+      fallback = Store.project[field.defaultFrom];
+    }
+    var value = values[field.key] != null ? values[field.key] : fallback;
     var hidden = field.showIf && !truthy(values[field.showIf]);
     var classes = (hidden ? ' conditional hidden' : ' conditional') + (field.type === 'text' ? ' wide-field' : '');
     if (field.type === 'repeatable') {
@@ -145,7 +152,7 @@ export function renderFields(componentName, values) {
     } else if (field.type === 'text') {
       html += '<label class="' + classes + '" data-show-if="' + esc(field.showIf || '') + '">' + esc(field.label) + '<input data-field="' + esc(field.key) + '" value="' + esc(value) + '"></label>';
     } else if (field.type === 'link') {
-      html += '<div class="summary-box' + classes + '"><b>' + esc(field.label) + '</b><p><a href="' + esc(field.value || '#') + '" target="_blank" rel="noreferrer">New Request</a></p></div>';
+      html += '<div class="summary-box' + classes + '"><b>' + esc(field.label) + '</b><p><a href="' + esc(field.value || '#') + '" target="_blank" rel="noreferrer">' + esc(field.linkText || 'New Request') + '</a></p></div>';
     } else if (field.type === 'summary') {
       var summaryHtml = autoSummaryHtml(componentName);
       if (summaryHtml) html += '<div class="summary-box' + classes + '">' + summaryHtml + '</div>';
@@ -266,6 +273,7 @@ export function saveComponent(event) {
     Store.tasks = detail.tasks || [];
     Store.allFields = detail.fields || {};
     Store.leadSummary = detail.lead_summary || null;
+    Store.overview = detail.overview || null;
     renderDetail();
     loadComponent(Store.tasks.find(function (task) { return task.task_id === selectedTaskId; }) || chooseInitialTask(tasksForPipeline(Store.pipeline)));
     refreshAllBoards();

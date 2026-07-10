@@ -168,10 +168,11 @@ LEAD_WORKFLOW_SECTION_KEYS = {
 # Components where users typically need a physical/share location for supporting files.
 # The app automatically generates: ROOT / Field / Well / Component Files / Component Name
 COMPONENT_FILE_SECTIONS = {
-    # First nine Prospect Maturation components require generated file locations.
+    # First eight Prospect Maturation components require generated file
+    # locations. (v18 removed the Presence CoS Evaluation step.)
     "Reservoir Area Definition", "Thickness Estimation", "Lead Resource Assessment",
     "Seismic Signature Validation", "Reservoir CoS", "Trap CoS", "Seal CoS",
-    "Presence CoS Evaluation", "Prospect Evaluation Presentation",
+    "Prospect Evaluation Presentation",
     # Additional components with supporting-file requirements.
     "Approval to Stake", "Well Proposal", "GHEER", "Quicklook Logs Interpretation", "Quicklook Logs", "SAD Model",
     "Executive Summary", "URED Update", "Aramco Picks", "Aramco Approved Picks", "Flowback Results",

@@ -8,6 +8,7 @@ export const Store = {
   task: null,
   allFields: {},
   leadSummary: null,
+  overview: null, // project_overview row from /detail (derived values, e.g. derisking)
   pipeline: 'prospect'
 };
 
@@ -38,4 +39,5 @@ export function resetSelection() {
   Store.task = null;
   Store.allFields = {};
   Store.leadSummary = null;
+  Store.overview = null;
 }

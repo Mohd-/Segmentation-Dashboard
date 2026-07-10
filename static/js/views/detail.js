@@ -31,6 +31,7 @@ export function openDetail(projectId, pipeline) {
     Store.tasks = detail.tasks || [];
     Store.allFields = detail.fields || {};
     Store.leadSummary = detail.lead_summary || null;
+    Store.overview = detail.overview || null;
     renderDetail();
     loadComponent(chooseInitialTask(tasksForPipeline(Store.pipeline)));
     byId('detail-shell').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -101,7 +102,13 @@ export function curatedOverviewMarkup(fieldMap) {
   add('Reservoir CoS (%)', reservoirCosSummary(sourceMap), 'Reservoir CoS');
   add('Trap CoS (%)', sourceVal('Trap CoS', 'trap_cos_pct'), 'Trap CoS');
   add('Seal CoS (%)', sourceVal('Seal CoS', 'seal_cos_pct'), 'Seal CoS');
-  add('Presence CoS (%)', sourceVal('Presence CoS Evaluation', 'presence_cos'), 'Presence CoS Evaluation');
+  // v18: the derived Presence value has no step of its own. Live view reads
+  // overview.derisking; a lead-summary snapshot (fieldMap passed) keeps
+  // reading the legacy 'Presence CoS Evaluation' fields captured at the time.
+  var totalChance = fieldMap
+    ? sourceVal('Presence CoS Evaluation', 'presence_cos')
+    : ((Store.overview && Store.overview.derisking) || '');
+  add('Total Chance of Success (%)', totalChance, 'Derived');
   add('Mean PIIP Gas (BCF) — Lead Phase', sourceVal('Lead Resource Assessment', 'lead_piip_gas_mean'), 'Lead Resource Assessment');
   add('Mean PIIP Gas (BCF) — Pre-Drilling', sourceVal('Pre-Drilling Resource Assessment', 'pre_drill_piip_gas_mean'), 'Pre-Drilling Resource Assessment');
   add('Mean PIIP Gas (BCF) — Post-Drilling', sourceVal('Post-Drilling Resource Assessment', 'post_drill_piip_gas_mean'), 'Post-Drilling Resource Assessment');
@@ -178,6 +185,7 @@ export function refreshAfterRecordChange(message) {
       Store.tasks = detail.tasks || [];
       Store.allFields = detail.fields || {};
       Store.leadSummary = detail.lead_summary || null;
+    Store.overview = detail.overview || null;
       renderDetail();
       loadComponent(Store.tasks.find(function (task) { return task.task_id === currentTaskId; }) || chooseInitialTask(tasksForPipeline(Store.pipeline)));
       refreshAllBoards();
@@ -225,6 +233,7 @@ export function saveProjectFlags(payload) {
     Store.tasks = detail.tasks || [];
     Store.allFields = detail.fields || {};
     Store.leadSummary = detail.lead_summary || null;
+    Store.overview = detail.overview || null;
     Store.pipeline = String(Store.project.pipeline_type || '').toLowerCase() === 'bp' ? 'bp' : 'prospect';
     renderDetail();
     loadComponent(chooseInitialTask(tasksForPipeline(Store.pipeline)));
