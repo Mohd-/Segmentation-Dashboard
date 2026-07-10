@@ -1,6 +1,3 @@
-<<<<<<< HEAD
-.venv/
-=======
 # Live application data — never version the database.
 # To back up: stop the app and copy pipeline_tracker.db (plus -wal/-shm if present).
 pipeline_tracker.db
@@ -15,4 +12,3 @@ __pycache__/
 
 # Approved model binary is deployed out-of-band, not versioned.
 RF_model.joblib
->>>>>>> 3df64ed (Refactor backend onto SQLAlchemy: modular, tested, documented (v16))
