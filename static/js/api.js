@@ -23,6 +23,7 @@ export function api(path, options) {
 }
 
 export var API = {
+  meta: function () { return api('/api/meta'); },
   projects: function (query) {
     var qs = new URLSearchParams(query || {}).toString();
     return api('/api/projects' + (qs ? '?' + qs : ''));

@@ -234,6 +234,73 @@ def test_approving_all_bp_tasks_completes_bp_well_anchored_on_pda(client):
     assert completion == {"percent": 100.0}
 
 
+def _deactivate_stage_tasks(db_path, project_id, stages):
+    """Force the `final_done is None` fallback: mark every applicable-stage task
+    inactive so refresh_project_state finds no rows to anchor on."""
+    import sqlite3
+    conn = sqlite3.connect(str(db_path))
+    try:
+        placeholders = ",".join("?" for _ in stages)
+        conn.execute(
+            f"UPDATE project_tasks SET is_active = 0 "
+            f"WHERE project_id = ? AND stage_group IN ({placeholders})",
+            [project_id, *stages],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _refresh(app_modules, project_id):
+    """Call workflow.refresh_project_state in its own committed transaction."""
+    _, db = app_modules
+    import workflow
+    session = db.new_session()
+    try:
+        db.begin_write(session)
+        workflow.refresh_project_state(session, project_id)
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_prospect_completion_fallback_anchors_on_prospect_not_pda(client, app_modules):
+    # Regression: the completed-with-no-active-rows fallback previously hardcoded
+    # the BP-only literals "PDA"/"Post-Testing" regardless of pipeline_type,
+    # mis-stamping prospect leads. It must derive the prospect anchors instead.
+    pid = create_project(client, "FALLBACK-PROSPECT-1")
+    _deactivate_stage_tasks(
+        client.db_path, pid,
+        ["Lead Identification", "Risking", "Segmentation", "Pre-Well Delivery"],
+    )
+    _refresh(app_modules, pid)
+
+    project = client.get(f"/api/projects/{pid}").get_json()
+    assert project["overall_status"] == "Completed"
+    assert project["current_task"] == "Approval to Stake"
+    assert project["current_stage"] == "Pre-Well Delivery"
+    assert project["current_task"] != "PDA"
+    assert project["current_stage"] != "Post-Testing"
+
+
+def test_bp_completion_fallback_still_anchors_on_pda(client, app_modules):
+    # The BP branch of the same fallback must keep anchoring on its own final
+    # step, PDA / Post-Testing.
+    pid = create_project(
+        client, "FALLBACK-BP-1", pipeline_type="bp",
+        business_plan_enabled=True, business_plan_year=2029,
+    )
+    _deactivate_stage_tasks(
+        client.db_path, pid, ["Well Delivery", "Post-Drilling", "Post-Testing"],
+    )
+    _refresh(app_modules, pid)
+
+    project = client.get(f"/api/projects/{pid}").get_json()
+    assert project["overall_status"] == "Completed"
+    assert project["current_task"] == "PDA"
+    assert project["current_stage"] == "Post-Testing"
+
+
 def test_activity_log_order_is_deterministic_within_same_second(client):
     # Several history rows are written within the same changed_at second here;
     # history_id must break the tie so the log reads newest-insert-first.

@@ -1,6 +1,7 @@
 export const CURRENT_USER = 'Web User';
 
 export const Store = {
+  meta: null,
   projectId: null,
   project: null,
   tasks: [],

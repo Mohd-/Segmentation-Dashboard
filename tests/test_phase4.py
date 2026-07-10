@@ -87,8 +87,15 @@ def test_completed_at_set_on_completion_and_cleared_on_reopen(client):
 
 def test_migration_v15_to_v16_backfills_and_is_idempotent(client):
     import db as dbmod
+    import migrations
+
+    latest = str(migrations.LATEST_SCHEMA_VERSION)
 
     pid = create_project(client, "MIGRATE-V15-1")
+    # Genuinely complete the project so the v17 repair pass (which re-runs
+    # refresh_project_state for every project) is a true no-op here: an already
+    # -completed project stays completed and its completed_at stamp is preserved.
+    _approve_all_prospect_tasks(client, pid)
 
     # Reshape the freshly-bootstrapped DB into a v15 database: no completed_at
     # column (where SQLite supports DROP COLUMN), a Completed project without a
@@ -118,17 +125,17 @@ def test_migration_v15_to_v16_backfills_and_is_idempotent(client):
     row = conn.execute("SELECT completed_at FROM projects WHERE project_id = ?", (pid,)).fetchone()
     assert row["completed_at"] == "2025-01-02 03:04:05"  # backfilled from last_updated
     assert conn.execute("SELECT 1 FROM project_overview WHERE project_id = ?", (pid,)).fetchone() is not None
-    assert conn.execute("SELECT value FROM app_settings WHERE key = 'schema_version'").fetchone()[0] == "16"
+    assert conn.execute("SELECT value FROM app_settings WHERE key = 'schema_version'").fetchone()[0] == latest
     conn.close()
 
-    # Second bootstrap over the already-16 DB: clean no-op, values unchanged.
+    # Second bootstrap over the already-migrated DB: clean no-op, values unchanged.
     dbmod.reset_for_tests()
     dbmod.init_db(str(client.db_path))
     conn = sqlite3.connect(str(client.db_path))
     conn.row_factory = sqlite3.Row
     row = conn.execute("SELECT completed_at FROM projects WHERE project_id = ?", (pid,)).fetchone()
     assert row["completed_at"] == "2025-01-02 03:04:05"
-    assert conn.execute("SELECT value FROM app_settings WHERE key = 'schema_version'").fetchone()[0] == "16"
+    assert conn.execute("SELECT value FROM app_settings WHERE key = 'schema_version'").fetchone()[0] == latest
     conn.close()
 
 

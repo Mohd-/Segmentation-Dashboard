@@ -1,5 +1,6 @@
 import { byId, all, fillSelect, range } from './dom.js';
 import { Store } from './state.js';
+import { API } from './api.js';
 import { STATUSES } from './schema.js';
 import { refreshProspect, refreshBP, createLead, addWell } from './views/pipeline.js';
 import { refreshPortfolio } from './views/portfolio.js';
@@ -35,7 +36,7 @@ export function wire() {
   safeOn('audit-project-filter', 'change', refreshAudit);
 }
 
-document.addEventListener('DOMContentLoaded', function () {
+function boot() {
   fillSelect(byId('prospect-status-filter'), STATUSES, true);
   fillSelect(byId('bp-status-filter'), STATUSES, true);
   fillSelect(byId('portfolio-year-filter'), range(2026, 2040), true);
@@ -43,4 +44,10 @@ document.addEventListener('DOMContentLoaded', function () {
   fillSelect(byId('bp-year-filter'), range(2026, 2040), true);
   wire();
   showTab('prospect');
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  // Load authoritative stage/status metadata before the first render so boards
+  // coerce cards against server-side stage lists, not the schema.js fallbacks.
+  API.meta().then(function (meta) { Store.meta = meta; }).catch(function () { /* fall back to schema.js constants */ }).finally(boot);
 });

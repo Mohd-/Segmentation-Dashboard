@@ -31,6 +31,22 @@ def test_health_ok(client):
 
 
 # ---------------------------------------------------------------------------
+# /api/meta
+# ---------------------------------------------------------------------------
+
+def test_meta_shape_matches_workflow_constants(client):
+    import workflow
+    resp = client.get("/api/meta")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["prospect_stages"] == workflow.PROSPECT_STAGES
+    assert body["bp_stages"] == workflow.BP_EXECUTION_STAGES
+    assert body["stage_order"] == workflow.STAGE_ORDER
+    assert body["statuses"] == workflow.STATUSES
+    assert body["roles"] == ["supervisor", "staff", "employee"]
+
+
+# ---------------------------------------------------------------------------
 # POST /api/projects
 # ---------------------------------------------------------------------------
 

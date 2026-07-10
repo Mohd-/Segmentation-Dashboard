@@ -41,7 +41,7 @@ import workflow
 from helpers import utc_now_str
 from models import Base
 
-LATEST_SCHEMA_VERSION = 16
+LATEST_SCHEMA_VERSION = 17
 
 
 # ---------------------------------------------------------------------------
@@ -332,11 +332,32 @@ def _upgrade_to_v16(session) -> None:
     """, {"now": now})
 
 
+def _upgrade_to_v17(session) -> None:
+    """Schema v17: re-anchor stale project state.
+
+    Before the pipeline-aware fallback fix in ``refresh_project_state``, a
+    completed project with no surviving active rows was hardcoded onto the
+    BP-only literals "PDA" / "Post-Testing" regardless of pipeline_type. That
+    stamped prospect leads with a BP-only component and dropped them in the
+    wrong board column. This repair pass simply re-runs ``refresh_project_state``
+    for every project so any stale anchor is recomputed from the corrected
+    logic. Idempotent: refresh_project_state is a pure recompute of derived
+    state, so re-running it changes nothing once state is already correct.
+
+    NOTE: v17 gains MORE content in a later workstream (status collapse). Append
+    new idempotent steps below this repair loop; keep each step self-contained.
+    """
+    projects = db.fetch_all(session, "SELECT project_id FROM projects")
+    for project in projects:
+        workflow.refresh_project_state(session, project["project_id"])
+
+
 # List of (version, fn). Each step upgrades a database from below ``version`` to
 # ``version``. Add new steps here with the next integer version.
 MIGRATIONS: List = [
     (15, _consolidate_to_v15),
     (16, _upgrade_to_v16),
+    (17, _upgrade_to_v17),
 ]
 
 

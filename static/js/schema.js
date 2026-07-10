@@ -1,3 +1,6 @@
+// PROSPECT_STAGES/BP_STAGES/STATUSES here are boot fallbacks only. GET /api/meta
+// (Store.meta) is authoritative at runtime; its source of truth is workflow.py
+// STAGE_ORDER / PROSPECT_STAGES / BP_EXECUTION_STAGES / STATUSES.
 export var PROSPECT_STAGES = ['Lead Identification', 'Risking', 'Segmentation', 'Pre-Well Delivery'];
 export var BP_STAGES = ['Well Delivery', 'Post-Drilling', 'Post-Testing'];
 export var STATUSES = ['Not Assigned', 'Assigned', 'In Progress', 'Ready for Review', 'Under Review', 'Ready for Approval', 'Returned for Update', 'Approved', 'Not Applicable'];

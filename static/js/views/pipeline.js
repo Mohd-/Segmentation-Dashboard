@@ -1,14 +1,19 @@
 import { byId, all, esc, compact, statusChip, priorityChip, fillSelect, range, msg } from '../dom.js';
 import { API } from '../api.js';
-import { CURRENT_USER } from '../state.js';
+import { CURRENT_USER, Store } from '../state.js';
 import { PROSPECT_STAGES, BP_STAGES } from '../schema.js';
 import { openDetail } from './detail.js';
 import { refreshPortfolio } from './portfolio.js';
 
+function prospectStages() { return (Store.meta && Store.meta.prospect_stages) || PROSPECT_STAGES; }
+function bpStages() { return (Store.meta && Store.meta.bp_stages) || BP_STAGES; }
+
 export function pipelineStageForProject(project, pipeline) {
   var current = project.current_stage || '';
-  if (pipeline === 'bp') return BP_STAGES.indexOf(current) >= 0 ? current : BP_STAGES[0];
-  return PROSPECT_STAGES.indexOf(current) >= 0 ? current : PROSPECT_STAGES[PROSPECT_STAGES.length - 1];
+  // Unrecognized stage coerces to the FIRST column for both pipelines, never
+  // the most-advanced one (that misplaced fresh/legacy cards).
+  var stages = pipeline === 'bp' ? bpStages() : prospectStages();
+  return stages.indexOf(current) >= 0 ? current : stages[0];
 }
 export function renderPipeline(element, projects, stages, pipeline) {
   if (!element) return;
@@ -40,7 +45,7 @@ export function renderPipeline(element, projects, stages, pipeline) {
 export function refreshProspect() {
   var query = { search: byId('prospect-search').value, status_filter: byId('prospect-status-filter').value, pipeline_filter: 'prospect' };
   API.projects(query).then(function (rows) {
-    renderPipeline(byId('prospect-pipeline'), rows || [], PROSPECT_STAGES, 'prospect');
+    renderPipeline(byId('prospect-pipeline'), rows || [], prospectStages(), 'prospect');
   }).catch(function (error) { msg(error.message, 'error'); });
 }
 export function refreshBP() {
@@ -54,7 +59,7 @@ export function refreshBP() {
     var rows = (projects || []).filter(function (project) {
       return year === 'All' || String(project.business_plan_year || '') === year;
     });
-    renderPipeline(byId('bp-pipeline'), rows, BP_STAGES, 'bp');
+    renderPipeline(byId('bp-pipeline'), rows, bpStages(), 'bp');
   }).catch(function (error) { msg(error.message, 'error'); });
 }
 

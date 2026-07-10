@@ -1197,8 +1197,15 @@ def refresh_project_state(session, project_id):
                 ORDER BY sequence_no DESC
                 LIMIT 1
             """, {"project_id": project_id, "stages": applicable_stages})
-            final_task_name = final_done["task_name"] if final_done else "PDA"
-            final_stage = final_done["stage_group"] if final_done else "Post-Testing"
+            # Fallback anchor when no active rows survive: derive from the
+            # pipeline templates rather than hardcoding names. The last template
+            # whose stage belongs to this pipeline is the true final step
+            # ("Approval to Stake"/"Pre-Well Delivery" for prospect, "PDA"/
+            # "Post-Testing" for bp). Deriving keeps this correct if a later
+            # workstream removes/renumbers a step.
+            fallback = next((t for t in reversed(PIPELINE_TEMPLATES) if t[2] in applicable_stages), None)
+            final_task_name = final_done["task_name"] if final_done else (fallback[1] if fallback else None)
+            final_stage = final_done["stage_group"] if final_done else (fallback[2] if fallback else applicable_stages[-1])
             params = {"stage": final_stage, "task": final_task_name, "overall_status": overall_status,
                       "today": today_str(), "now": utc_now_str(), "project_id": project_id}
             if newly_completed:

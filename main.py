@@ -196,6 +196,21 @@ def index():
     return send_from_directory(STATIC_DIR, "index.html")
 
 
+@app.get("/api/meta")
+def meta():
+    """Authoritative stage/status/role lists so the frontend never hardcodes them.
+
+    Source of truth is workflow.py; the schema.js arrays are boot fallbacks only.
+    """
+    return json_response({
+        "prospect_stages": workflow.PROSPECT_STAGES,
+        "bp_stages": workflow.BP_EXECUTION_STAGES,
+        "stage_order": workflow.STAGE_ORDER,
+        "statuses": workflow.STATUSES,
+        "roles": ["supervisor", "staff", "employee"],
+    })
+
+
 @app.get("/api/health")
 def health():
     return json_response({"ok": True, "app": config.APP_NAME, "version": config.APP_VERSION,

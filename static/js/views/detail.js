@@ -8,8 +8,12 @@ import { refreshAllBoards } from './pipeline.js';
 import { refreshAudit } from './audit.js';
 
 export function tasksForPipeline(pipeline) {
-  if (pipeline === 'bp') return Store.tasks.filter(function (task) { return BP_STAGES.indexOf(task.stage_group) >= 0; });
-  if (pipeline === 'prospect') return Store.tasks.filter(function (task) { return PROSPECT_STAGES.indexOf(task.stage_group) >= 0; });
+  // Prefer the authoritative stage lists from /api/meta (Store.meta); the
+  // schema.js arrays are only boot fallbacks.
+  var bp = (Store.meta && Store.meta.bp_stages) || BP_STAGES;
+  var prospect = (Store.meta && Store.meta.prospect_stages) || PROSPECT_STAGES;
+  if (pipeline === 'bp') return Store.tasks.filter(function (task) { return bp.indexOf(task.stage_group) >= 0; });
+  if (pipeline === 'prospect') return Store.tasks.filter(function (task) { return prospect.indexOf(task.stage_group) >= 0; });
   return Store.tasks.slice();
 }
 export function chooseInitialTask(tasks) {
