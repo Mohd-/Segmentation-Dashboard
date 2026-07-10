@@ -1,22 +1,61 @@
+"""Flask application entrypoint and HTTP routes.
+
+Thin layer only: each route opens the per-request SQLAlchemy session (bound to
+``flask.g`` in db.py) and delegates to the domain modules -- workflow (lifecycle),
+reporting (dashboards), folders (share links) and export_excel. The JSON shapes,
+status codes and error ``detail`` strings are the public API contract.
+
+Error handling is CENTRALIZED in the errorhandlers below -- routes do not wrap
+calls in try/except. The mapping:
+- ValueError                  -> 400 (validation messages are user-facing; verbatim)
+- workflow.StaleRevisionError -> 409 (optimistic-lock conflict; exact message)
+- FileNotFoundError           -> 404
+- anything else (incl. other RuntimeErrors) -> 500 with a GENERIC detail; the
+  real traceback goes to the server log only. Internal exception text must
+  never reach the client.
+Explicit not-found responses (project/task lookups) return their exact strings
+directly from the route.
+
+Identity: POST /api/login stores a display name in the signed Flask session
+(optionally guarded by config.SHARED_PASSCODE); ``actor()`` stamps that name
+into every changed_by, falling back to the client-supplied value for anonymous
+users so the unmodified front-end keeps working. When config.AUTH_REQUIRED is
+on, every /api/* route except /api/health, /api/login, /api/logout and /api/me
+requires a session.
+"""
 from __future__ import annotations
 
 import os
+import secrets
 from datetime import date
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from typing import Optional
 
 from flask import Flask, jsonify, request, send_file, send_from_directory
+from flask import session as flask_session
+from werkzeug.exceptions import HTTPException
 
-from dependencies import close_db, get_db, init_db, DB_PATH
+import config
+import db
+import export_excel
+import folders
+import reporting
+import workflow
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
-APP_NAME = "Segment Maturation and Execution System"
 
 app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
+app.secret_key = config.SECRET_KEY
+# The session cookie only carries the display name; keep it script-inaccessible
+# and same-site.
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = config.SESSION_COOKIE_SECURE
 # Bootstrap schema/migrations once when the application process starts.
-init_db(DB_PATH)
-app.teardown_appcontext(close_db)
+db.init_db()
+app.teardown_appcontext(db.remove_session)
 
 
 def json_response(data, status=200):
@@ -29,6 +68,58 @@ def error_response(message, status=400):
     return json_response({"detail": str(message) if message else "Request failed"}, status)
 
 
+def actor(payload) -> str:
+    """The name to record as changed_by for the current request.
+
+    A logged-in session identity always wins (users cannot spoof someone else
+    via the request body). Anonymous requests fall back to the client-supplied
+    ``changed_by`` exactly as before -- byte-identical legacy behavior.
+    """
+    name = flask_session.get("name")
+    if name:
+        return name
+    return (payload or {}).get("changed_by", "Web User")
+
+
+# ---------------------------------------------------------------------------
+# Centralized error handling (the ONLY place exceptions become HTTP responses)
+# ---------------------------------------------------------------------------
+
+@app.errorhandler(ValueError)
+def handle_validation_error(exc):
+    """Domain validation failures; their messages are written for end users."""
+    return error_response(exc, 400)
+
+
+@app.errorhandler(workflow.StaleRevisionError)
+def handle_conflict_error(exc):
+    """Optimistic-lock conflicts -> 409 (message shown to the user verbatim).
+
+    Deliberately NOT plain RuntimeError: other RuntimeErrors are internal
+    failures and fall through to the generic 500 handler.
+    """
+    return error_response(exc, 409)
+
+
+@app.errorhandler(FileNotFoundError)
+def handle_missing_file(exc):
+    """Folder/file lookups that fail resolve to 404 (open-folder relies on this)."""
+    return error_response(exc, 404)
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(exc):
+    """Anything else is an internal bug: log the traceback, return a generic 500.
+
+    No exception text ever reaches the client from this path.
+    """
+    if isinstance(exc, HTTPException):
+        # Let Flask's own 404/405/... responses pass through untouched.
+        return exc
+    app.logger.exception("Unhandled error on %s %s", request.method, request.path)
+    return error_response("Internal server error.", 500)
+
+
 @app.after_request
 def add_api_cache_headers(response):
     # API data must not be stale. Static assets retain normal browser caching.
@@ -39,6 +130,67 @@ def add_api_cache_headers(response):
     return response
 
 
+# ---------------------------------------------------------------------------
+# Identity (session login) + optional API-wide enforcement
+# ---------------------------------------------------------------------------
+
+# Endpoints that must stay reachable without a session even when AUTH_REQUIRED
+# is on: health checks, the login call itself, logout (idempotent, always 200)
+# and /api/me (the front-end probes it to decide whether to show a login form).
+_AUTH_EXEMPT_PATHS = {"/api/health", "/api/login", "/api/logout", "/api/me"}
+
+
+@app.before_request
+def require_login_when_enabled():
+    """Return 401 for /api/* requests without a session when AUTH_REQUIRED is on.
+
+    config.AUTH_REQUIRED is read here at request time (not captured at import)
+    so tests can monkeypatch it. Static files and the index page stay open.
+    """
+    if not config.AUTH_REQUIRED:
+        return None
+    path = request.path
+    if not path.startswith("/api/") or path in _AUTH_EXEMPT_PATHS:
+        return None
+    if flask_session.get("name"):
+        return None
+    return error_response("Authentication required.", 401)
+
+
+@app.post("/api/login")
+def login():
+    """Start a session: {"name": ..., "passcode": ...} -> {"ok": true, "name": ...}.
+
+    Name is required (trimmed, 1-80 chars). The passcode is only checked when
+    config.SHARED_PASSCODE is configured; otherwise login is name-only (see
+    config.py for the trusted-network rationale).
+    """
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get("name") or "").strip()
+    if not name or len(name) > 80:
+        raise ValueError("Name must be 1 to 80 characters.")
+    if config.SHARED_PASSCODE:
+        supplied = str(payload.get("passcode") or "")
+        if not secrets.compare_digest(supplied, config.SHARED_PASSCODE):
+            return error_response("Invalid passcode.", 401)
+    flask_session["name"] = name
+    return json_response({"ok": True, "name": name})
+
+
+@app.post("/api/logout")
+def logout():
+    """End the session. Idempotent: always 200, even with no active session."""
+    flask_session.clear()
+    return json_response({"ok": True})
+
+
+@app.get("/api/me")
+def me():
+    """Report the current session identity. Never 401 (even with AUTH_REQUIRED on)."""
+    name: Optional[str] = flask_session.get("name")
+    return json_response({"authenticated": bool(name), "name": name if name else None})
+
+
 @app.get("/")
 def index():
     return send_from_directory(STATIC_DIR, "index.html")
@@ -46,13 +198,15 @@ def index():
 
 @app.get("/api/health")
 def health():
-    return json_response({"ok": True, "app": APP_NAME, "version": "v12", "backend": "Flask", "db": str(DB_PATH)})
+    return json_response({"ok": True, "app": config.APP_NAME, "version": config.APP_VERSION,
+                          "backend": "Flask", "db": db.current_display()})
 
 
 @app.get("/api/projects")
 def list_projects():
-    db = get_db()
-    return json_response(db.get_projects(
+    session = db.get_session()
+    return json_response(workflow.get_projects(
+        session,
         request.args.get("search", ""),
         request.args.get("stage_filter", "All"),
         request.args.get("status_filter", "All"),
@@ -65,30 +219,32 @@ def list_projects():
 
 @app.post("/api/projects")
 def create_project():
+    session = db.get_session()
     payload = request.get_json(silent=True) or {}
+    project_id = workflow.add_project(
+        session,
+        payload.get("project_name", ""),
+        payload.get("start_date", ""),
+        payload.get("target_date", ""),
+        actor(payload),
+        # Coordinates are no longer collected in the UI; old API callers remain compatible.
+        payload.get("lead_x"), payload.get("lead_y"),
+        payload.get("business_plan_year"), bool(payload.get("business_plan_enabled")),
+        bool(payload.get("active_well_enabled")), payload.get("pipeline_type", "prospect"),
+    )
+    # Folder creation is best-effort by design: an unavailable share must never
+    # fail project creation. Documented exception to the no-try/except rule.
     try:
-        project_id = get_db().add_project(
-            payload.get("project_name", ""),
-            payload.get("start_date", ""),
-            payload.get("target_date", ""),
-            payload.get("changed_by", "Web User"),
-            # Coordinates are no longer collected in the UI; old API callers remain compatible.
-            payload.get("lead_x"), payload.get("lead_y"),
-            payload.get("business_plan_year"), bool(payload.get("business_plan_enabled")),
-            bool(payload.get("active_well_enabled")), payload.get("pipeline_type", "prospect"),
-        )
-        try:
-            folder_path = get_db().ensure_well_folders(project_id)
-        except Exception:
-            folder_path = None
-        return json_response({"project_id": project_id, "folder_path": folder_path}, 201)
-    except Exception as exc:
-        return error_response(exc, 400)
+        folder_path = folders.ensure_well_folders(session, project_id)
+    except Exception:
+        folder_path = None
+    return json_response({"project_id": project_id, "folder_path": folder_path}, 201)
 
 
 @app.get("/api/projects/<int:project_id>")
 def get_project(project_id):
-    project = get_db().get_project(project_id)
+    session = db.get_session()
+    project = workflow.get_project(session, project_id)
     if not project:
         return error_response("Lead / well not found", 404)
     return json_response(project)
@@ -96,119 +252,78 @@ def get_project(project_id):
 
 @app.get("/api/projects/<int:project_id>/detail")
 def project_detail(project_id):
-    db = get_db()
-    project = db.get_project(project_id)
+    session = db.get_session()
+    project = workflow.get_project(session, project_id)
     if not project:
         return error_response("Lead / well not found", 404)
     return json_response({
         "project": project,
-        "tasks": db.get_project_tasks(project_id),
-        "completion": {"percent": db.project_completion_percent(project_id)},
-        "fields": db.get_project_dynamic_field_map(project_id),
-        "lead_summary": db.get_lead_summary_snapshot(project_id),
+        "tasks": workflow.get_project_tasks(session, project_id),
+        "completion": {"percent": workflow.project_completion_percent(session, project_id)},
+        "fields": workflow.get_project_dynamic_field_map(session, project_id),
+        "lead_summary": workflow.get_lead_summary_snapshot(session, project_id),
     })
 
 
 @app.patch("/api/projects/<int:project_id>/rename")
 def rename_project(project_id):
+    session = db.get_session()
     payload = request.get_json(silent=True) or {}
-    try:
-        get_db().update_project_name(
-            project_id, payload.get("new_name", ""), payload.get("changed_by", "Web User"),
-            payload.get("lead_x"), payload.get("lead_y"), payload.get("business_plan_year"),
-            payload.get("business_plan_enabled") if "business_plan_enabled" in payload else None,
-            payload.get("active_well_enabled") if "active_well_enabled" in payload else None,
-        )
-        return json_response({"ok": True})
-    except Exception as exc:
-        return error_response(exc, 400)
-
-
-@app.patch("/api/projects/<int:project_id>/archive")
-def archive_project(project_id):
-    payload = request.get_json(silent=True) or {}
-    try:
-        get_db().archive_project(project_id, payload.get("changed_by", "Web User"))
-        return json_response({"ok": True})
-    except Exception as exc:
-        return error_response(exc, 400)
+    workflow.update_project_name(
+        session, project_id, payload.get("new_name", ""), actor(payload),
+        payload.get("lead_x"), payload.get("lead_y"), payload.get("business_plan_year"),
+        payload.get("business_plan_enabled") if "business_plan_enabled" in payload else None,
+        payload.get("active_well_enabled") if "active_well_enabled" in payload else None,
+    )
+    return json_response({"ok": True})
 
 
 @app.delete("/api/projects/<int:project_id>")
 def delete_project(project_id):
     """Archive by default so components, inputs and history remain recoverable."""
-    try:
-        get_db().archive_project(project_id, "Web User")
-        return json_response({"ok": True, "archived": True})
-    except Exception as exc:
-        return error_response(exc, 400)
+    session = db.get_session()
+    workflow.archive_project(session, project_id, actor(None))
+    return json_response({"ok": True, "archived": True})
 
 
 @app.patch("/api/projects/<int:project_id>/restore")
 def restore_project(project_id):
+    session = db.get_session()
     payload = request.get_json(silent=True) or {}
-    try:
-        get_db().restore_project(project_id, payload.get("changed_by", "Web User"))
-        return json_response({"ok": True, "archived": False})
-    except Exception as exc:
-        return error_response(exc, 400)
+    workflow.restore_project(session, project_id, actor(payload))
+    return json_response({"ok": True, "archived": False})
 
 
 @app.get("/api/projects/<int:project_id>/completion")
 def completion(project_id):
-    return json_response({"percent": get_db().project_completion_percent(project_id)})
-
-
-@app.patch("/api/projects/<int:project_id>/location")
-def location(project_id):
-    payload = request.get_json(silent=True) or {}
-    get_db().update_project_location(project_id, payload.get("location", ""))
-    return json_response({"ok": True})
-
-
-@app.patch("/api/projects/<int:project_id>/lead-folder")
-def lead_folder(project_id):
-    payload = request.get_json(silent=True) or {}
-    try:
-        path = get_db().update_project_lead_folder(project_id, payload.get("lead_folder_path", ""))
-        return json_response({"ok": True, "lead_folder_path": path})
-    except Exception as exc:
-        return error_response(exc, 400)
-
-
-@app.patch("/api/projects/<int:project_id>/business-plan")
-def business_plan(project_id):
-    payload = request.get_json(silent=True) or {}
-    try:
-        get_db().set_business_plan(project_id, bool(payload.get("enabled")), payload.get("year"), payload.get("changed_by", "Web User"))
-        return json_response({"ok": True})
-    except Exception as exc:
-        return error_response(exc, 400)
+    session = db.get_session()
+    return json_response({"percent": workflow.project_completion_percent(session, project_id)})
 
 
 @app.patch("/api/projects/<int:project_id>/flags")
 def project_flags(project_id):
+    session = db.get_session()
     payload = request.get_json(silent=True) or {}
-    try:
-        get_db().update_project_flags(
-            project_id,
-            payload.get("business_plan_enabled") if "business_plan_enabled" in payload else None,
-            payload.get("active_well_enabled") if "active_well_enabled" in payload else None,
-            payload.get("business_plan_year"), payload.get("changed_by", "Web User"),
-        )
-        return json_response({"ok": True})
-    except Exception as exc:
-        return error_response(exc, 400)
+    workflow.update_project_flags(
+        session,
+        project_id,
+        payload.get("business_plan_enabled") if "business_plan_enabled" in payload else None,
+        payload.get("active_well_enabled") if "active_well_enabled" in payload else None,
+        payload.get("business_plan_year"), actor(payload),
+    )
+    return json_response({"ok": True})
 
 
 @app.get("/api/projects/<int:project_id>/tasks")
 def tasks(project_id):
-    return json_response(get_db().get_project_tasks(project_id))
+    session = db.get_session()
+    return json_response(workflow.get_project_tasks(session, project_id))
 
 
 @app.get("/api/tasks/<int:task_id>")
 def task(task_id):
-    item = get_db().get_task(task_id)
+    session = db.get_session()
+    item = workflow.get_task(session, task_id)
     if not item:
         return error_response("Task not found", 404)
     return json_response(item)
@@ -216,164 +331,101 @@ def task(task_id):
 
 @app.patch("/api/tasks/<int:task_id>")
 def update_task(task_id):
+    session = db.get_session()
     payload = request.get_json(silent=True) or {}
-    try:
-        task_after_save = get_db().save_task(task_id, payload, payload.get("changed_by", "Web User"))
-        return json_response({"ok": True, "task": task_after_save})
-    except RuntimeError as exc:
-        return error_response(exc, 409)
-    except Exception as exc:
-        return error_response(exc, 400)
+    task_after_save = workflow.save_task(session, task_id, payload, actor(payload))
+    return json_response({"ok": True, "task": task_after_save})
 
 
 @app.get("/api/tasks/<int:task_id>/dynamic-fields")
 def get_task_dynamic_fields(task_id):
-    try:
-        return json_response(get_db().get_task_dynamic_fields(task_id))
-    except Exception as exc:
-        return error_response(exc, 400)
+    session = db.get_session()
+    return json_response(workflow.get_task_dynamic_fields(session, task_id))
 
 
 @app.patch("/api/tasks/<int:task_id>/dynamic-fields")
 def save_task_dynamic_fields(task_id):
+    session = db.get_session()
     payload = request.get_json(silent=True) or {}
-    try:
-        fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else payload
-        get_db().save_task_dynamic_fields(task_id, fields or {}, payload.get("changed_by", "Web User"))
-        return json_response({"ok": True})
-    except Exception as exc:
-        return error_response(exc, 400)
+    fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else payload
+    workflow.save_task_dynamic_fields(session, task_id, fields or {}, actor(payload))
+    return json_response({"ok": True})
 
 
 @app.get("/api/projects/<int:project_id>/dynamic-fields")
 def project_dynamic_fields(project_id):
-    try:
-        return json_response(get_db().get_project_dynamic_field_map(project_id))
-    except Exception as exc:
-        return error_response(exc, 400)
+    session = db.get_session()
+    return json_response(workflow.get_project_dynamic_field_map(session, project_id))
 
 
 @app.get("/api/projects/<int:project_id>/component-folder/<int:task_id>")
 def component_folder(project_id, task_id):
-    try:
-        return json_response(get_db().get_component_folder_link(project_id, task_id))
-    except Exception as exc:
-        return error_response(exc, 400)
+    session = db.get_session()
+    return json_response(folders.get_component_folder_link(session, project_id, task_id))
 
 
 @app.patch("/api/tasks/<int:task_id>/priority")
 def priority(task_id):
+    session = db.get_session()
     payload = request.get_json(silent=True) or {}
-    try:
-        get_db().set_task_priority(task_id, payload.get("priority", payload.get("priority_value", "Medium")), payload.get("changed_by", "Web User"))
-        return json_response({"ok": True})
-    except Exception as exc:
-        return error_response(exc, 400)
-
-
-@app.get("/api/projects/<int:project_id>/next-task")
-def next_task(project_id):
-    return json_response(get_db().get_first_open_task(project_id) or {})
-
-
-@app.get("/api/projects/<int:project_id>/overview")
-def overview(project_id):
-    return json_response(get_db().get_project_overview(project_id))
-
-
-@app.get("/api/overview/all")
-def overview_all():
-    return json_response(get_db().get_well_overview_rows())
+    workflow.set_task_priority(session, task_id, payload.get("priority", payload.get("priority_value", "Medium")), actor(payload))
+    return json_response({"ok": True})
 
 
 @app.get("/api/open-folder")
 def open_folder():
-    try:
-        project_id = int(request.args.get("project_id", "0"))
-        section = request.args.get("section", "well")
-        return json_response(get_db().open_folder(project_id, section))
-    except FileNotFoundError as exc:
-        return error_response(exc, 404)
-    except Exception as exc:
-        return error_response(exc, 400)
-
-
-@app.get("/api/dashboard/metrics")
-def metrics():
-    try:
-        threshold_days = int(request.args.get("threshold_days", "14"))
-    except ValueError:
-        threshold_days = 14
-    db = get_db()
-    metrics_data, stage_counts, owner_workload = db.dashboard_metrics()
-    return json_response({"metrics": metrics_data, "stage_counts": stage_counts, "owner_workload": owner_workload,
-                          "bottlenecks": db.bottleneck_rows(threshold_days), "attention": db.attention_rows()})
-
-
-@app.get("/api/dashboard/monthly")
-def monthly():
-    return json_response(get_db().monthly_progress_metrics(limit=12))
+    session = db.get_session()
+    project_id = int(request.args.get("project_id", "0"))  # non-numeric -> ValueError -> 400
+    section = request.args.get("section", "well")
+    return json_response(folders.open_folder(session, project_id, section))
 
 
 @app.get("/api/business-plan/rows")
 def business_rows():
-    return json_response(get_db().get_business_plan_rows())
+    session = db.get_session()
+    return json_response(reporting.get_business_plan_rows(session))
 
 
 @app.get("/api/portfolio/rows")
 def portfolio_rows():
-    try:
-        return json_response(get_db().get_portfolio_rows(request.args.get("year", "All"), request.args.get("activity", "All")))
-    except Exception as exc:
-        return error_response(exc, 400)
-
-
-@app.get("/api/business-plan/commitment")
-def commitment():
-    return json_response(get_db().get_business_plan_commitment())
-
-
-@app.post("/api/business-plan/commitment")
-def save_commitment():
-    get_db().update_business_plan_commitment(request.get_json(silent=True) or {})
-    return json_response({"ok": True})
+    session = db.get_session()
+    return json_response(reporting.get_portfolio_rows(session, request.args.get("year", "All"), request.args.get("activity", "All")))
 
 
 @app.get("/api/activity")
 def activity():
+    session = db.get_session()
     project_id = request.args.get("project_id")
     try:
         project_id_int = int(project_id) if project_id else None
     except ValueError:
         project_id_int = None
-    return json_response(get_db().get_activity_log(project_id=project_id_int, limit=500))
-
-
-@app.get("/api/owners")
-def owners():
-    return json_response(get_db().get_distinct_owners())
+    return json_response(reporting.get_activity_log(session, project_id=project_id_int, limit=500))
 
 
 @app.get("/api/export/excel")
-def export_excel():
-    tmp_path = None
+def export_excel_route():
+    session = db.get_session()
+    filename = f"Segment_Maturation_and_Execution_System_{date.today().isoformat()}.xlsx"
+    tmp = NamedTemporaryFile(delete=False, suffix=".xlsx")
+    tmp_path = tmp.name
+    tmp.close()
+    # Cleanup-then-reraise: the temp file must not leak when export fails; the
+    # re-raised exception reaches the centralized 500 handler. Documented
+    # exception to the no-try/except rule.
     try:
-        filename = f"Segment_Maturation_and_Execution_System_{date.today().isoformat()}.xlsx"
-        tmp = NamedTemporaryFile(delete=False, suffix=".xlsx")
-        tmp_path = tmp.name
-        tmp.close()
-        get_db().export_to_excel(tmp_path)
-        response = send_file(tmp_path, as_attachment=True, download_name=filename,
-                             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        response.call_on_close(lambda: os.path.exists(tmp_path) and os.unlink(tmp_path))
-        return response
-    except Exception as exc:
-        if tmp_path and os.path.exists(tmp_path):
+        export_excel.export_to_excel(session, tmp_path)
+    except Exception:
+        if os.path.exists(tmp_path):
             try:
                 os.unlink(tmp_path)
             except OSError:
                 pass
-        return error_response(exc, 500)
+        raise
+    response = send_file(tmp_path, as_attachment=True, download_name=filename,
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    response.call_on_close(lambda: os.path.exists(tmp_path) and os.unlink(tmp_path))
+    return response
 
 
 if __name__ == "__main__":
