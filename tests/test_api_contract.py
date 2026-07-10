@@ -250,6 +250,78 @@ def test_save_task_stale_revision_conflict(client):
 
 
 # ---------------------------------------------------------------------------
+# POST /api/tasks/<id>/assign
+# ---------------------------------------------------------------------------
+
+def test_assign_task_shape_and_canonical_casing(client):
+    pid = create_project(client, "ASSIGN-CONTRACT-1")
+    task = get_tasks(client, pid)[0]
+    # Lowercase on purpose: the response must carry the users-table casing.
+    resp = client.post(f"/api/tasks/{task['task_id']}/assign", json={
+        "assignee": "supervisor", "cascade": False, "revision": task["revision"],
+    })
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["ok"] is True
+    assert body["task"]["assigned_to"] == "Supervisor"
+    assert body["task"]["status"] == "In Progress"
+    assert body["task"]["revision"] == task["revision"] + 1
+
+
+def test_assign_task_stale_revision_conflict(client):
+    pid = create_project(client, "ASSIGN-CONTRACT-2")
+    task = get_tasks(client, pid)[0]
+    resp = client.post(f"/api/tasks/{task['task_id']}/assign", json={
+        "assignee": "Supervisor", "revision": task["revision"] + 5,
+    })
+    assert resp.status_code == 409
+    assert "detail" in resp.get_json()
+
+
+def test_assign_task_unknown_assignee(client):
+    pid = create_project(client, "ASSIGN-CONTRACT-3")
+    task = get_tasks(client, pid)[0]
+    resp = client.post(f"/api/tasks/{task['task_id']}/assign", json={
+        "assignee": "Nobody In Particular", "revision": task["revision"],
+    })
+    assert resp.status_code == 400
+    assert resp.get_json()["detail"] == "Unknown or inactive user."
+
+
+# ---------------------------------------------------------------------------
+# POST /api/tasks/<id>/transition
+# ---------------------------------------------------------------------------
+
+def test_transition_task_shape(client):
+    pid = create_project(client, "TRANSITION-CONTRACT-1")
+    task = get_tasks(client, pid)[0]
+    assigned = client.post(f"/api/tasks/{task['task_id']}/assign", json={
+        "assignee": "Supervisor", "cascade": False, "revision": task["revision"],
+    }).get_json()["task"]
+    resp = client.post(f"/api/tasks/{task['task_id']}/transition", json={
+        "action": "submit", "revision": assigned["revision"],
+    })
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["ok"] is True
+    assert body["task"]["status"] == "Ready"
+    assert body["task"]["revision"] == assigned["revision"] + 1
+
+
+def test_transition_task_stale_revision_conflict(client):
+    pid = create_project(client, "TRANSITION-CONTRACT-2")
+    task = get_tasks(client, pid)[0]
+    assigned = client.post(f"/api/tasks/{task['task_id']}/assign", json={
+        "assignee": "Supervisor", "cascade": False, "revision": task["revision"],
+    }).get_json()["task"]
+    resp = client.post(f"/api/tasks/{task['task_id']}/transition", json={
+        "action": "submit", "revision": assigned["revision"] + 5,
+    })
+    assert resp.status_code == 409
+    assert "detail" in resp.get_json()
+
+
+# ---------------------------------------------------------------------------
 # GET /api/tasks/<id>
 # ---------------------------------------------------------------------------
 

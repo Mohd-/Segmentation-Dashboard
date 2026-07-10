@@ -108,11 +108,13 @@
             <h2 id="component-title">Component</h2>
             <p id="component-stage">Stage</p>
           </div>
+          <span id="component-status-chip" class="status not-assigned editor-status-chip">Not Assigned</span>
         </div>
         <form id="component-form" class="component-form">
           <div class="form-row">
-            <label>Assignee<input id="assigned-to" placeholder="Assigned to"></label>
-            <label>Status<select id="component-status"></select></label>
+            <label>Assignee
+              <select id="assigned-to" aria-label="Assignee"></select>
+            </label>
             <label>Priority
               <select id="component-priority">
                 <option>Low</option>
@@ -124,6 +126,9 @@
           <div id="dynamic-fields" class="dynamic-fields"></div>
           <label class="wide-field">Comments<textarea id="comments" placeholder="Comments, assumptions, rationale, or required notes..."></textarea></label>
           <div class="action-row">
+            <button id="return-component" type="button" class="ghost hidden">Return for Update</button>
+            <button id="submit-component" type="button" class="secondary hidden">Submit for Approval</button>
+            <button id="approve-component" type="button" class="hidden">Approve</button>
             <button id="save-component" type="submit">Save Updates</button>
           </div>
         </form>

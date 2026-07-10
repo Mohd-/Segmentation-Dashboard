@@ -150,15 +150,17 @@ def test_dashboard_metrics_function_excludes_archived_projects(client):
 
     pid = create_project(client, "METRICS-ARCHIVED-1")
     task = get_tasks(client, pid)[0]
+    # v17 lifecycle: 'Ready' is the awaiting-approval state (the metric formerly
+    # counted 'Under Review').
     resp = client.patch(f"/api/tasks/{task['task_id']}", json={
-        "status": "Under Review", "revision": task["revision"],
+        "status": "Ready", "revision": task["revision"],
     })
     assert resp.status_code == 200
 
     session = dbmod.new_session()
     try:
         metrics, _stages, _owners = reporting.dashboard_metrics(session)
-        assert metrics["Components Under Review"] == 1
+        assert metrics["Components Ready"] == 1
     finally:
         session.close()
 
@@ -167,7 +169,7 @@ def test_dashboard_metrics_function_excludes_archived_projects(client):
     session = dbmod.new_session()
     try:
         metrics, _stages, _owners = reporting.dashboard_metrics(session)
-        assert metrics["Components Under Review"] == 0
+        assert metrics["Components Ready"] == 0
     finally:
         session.close()
 

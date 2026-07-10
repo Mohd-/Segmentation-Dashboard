@@ -17,9 +17,10 @@ Adoption rules (behavior preserved from the old bootstrap):
 - An existing database below the latest version: run the ported "consolidate to
   v15" step, which reproduces the old ``apply_workflow_updates`` exactly.
 
-Current latest version is 16 (v16 adds projects.completed_at and backfills
-missing project_overview rows; see ``_upgrade_to_v16``, which is the template
-to copy when adding future numbered steps).
+Current latest version is 17 (v17 collapses the legacy 9-status vocabulary to
+the 4-state lifecycle and re-anchors derived project state; see
+``_upgrade_to_v17``. ``_upgrade_to_v16`` remains the template to copy when
+adding future numbered steps).
 
 Concurrency guard: ``run`` acquires the database write lock UPFRONT via
 ``db.begin_write`` (SQLite ``BEGIN IMMEDIATE``) before the ensure/seed writes
@@ -342,20 +343,57 @@ def _upgrade_to_v16(session) -> None:
 
 
 def _upgrade_to_v17(session) -> None:
-    """Schema v17: re-anchor stale project state.
+    """Schema v17: status-model collapse + project-state re-anchor repair.
 
-    Before the pipeline-aware fallback fix in ``refresh_project_state``, a
-    completed project with no surviving active rows was hardcoded onto the
-    BP-only literals "PDA" / "Post-Testing" regardless of pipeline_type. That
-    stamped prospect leads with a BP-only component and dropped them in the
-    wrong board column. This repair pass simply re-runs ``refresh_project_state``
-    for every project so any stale anchor is recomputed from the corrected
-    logic. Idempotent: refresh_project_state is a pure recompute of derived
-    state, so re-running it changes nothing once state is already correct.
+    Step 1 -- status collapse. The 9-status vocabulary is replaced by the
+    4-state implicit lifecycle (Not Assigned / In Progress / Ready / Approved,
+    plus internal-only Not Applicable). Mapping for ``project_tasks.status``:
 
-    NOTE: v17 gains MORE content in a later workstream (status collapse). Append
-    new idempotent steps below this repair loop; keep each step self-contained.
+    - 'Assigned'            -> 'In Progress' when an assignee exists,
+                               otherwise 'Not Assigned'
+    - 'Ready for Review',
+      'Under Review',
+      'Ready for Approval'  -> 'Ready'
+    - 'Returned for Update' -> 'In Progress'
+    - 'Not Assigned' / 'In Progress' / 'Approved' / 'Not Applicable' unchanged
+
+    ``task_history.old_status``/``new_status`` follow the same table except
+    'Assigned' -> 'In Progress' unconditionally: history rows carry no assignee
+    context, and they are audit labels rather than live state.
+
+    Step 2 -- state repair. Re-runs ``refresh_project_state`` for every project
+    AFTER the collapse (order matters: refresh evaluates the new vocabulary).
+    This also repairs the pre-v17 completion-fallback bug that stamped prospect
+    leads with the BP-only "PDA" / "Post-Testing" anchor.
+
+    Idempotent: none of the source statuses survive a first run, and
+    refresh_project_state is a pure recompute of derived state. Append future
+    idempotent steps below the repair loop; keep each step self-contained.
     """
+    # -- Step 1: collapse legacy statuses (style: _normalize_legacy_statuses).
+    db.execute(session, """
+        UPDATE project_tasks SET status = 'In Progress'
+        WHERE status = 'Assigned' AND COALESCE(TRIM(assigned_to), '') != ''
+    """)
+    db.execute(session, "UPDATE project_tasks SET status = 'Not Assigned' WHERE status = 'Assigned'")
+    collapse_map = {
+        'Ready for Review': 'Ready',
+        'Under Review': 'Ready',
+        'Ready for Approval': 'Ready',
+        'Returned for Update': 'In Progress',
+    }
+    for old, new in collapse_map.items():
+        db.execute(session, "UPDATE project_tasks SET status = :new WHERE status = :old",
+                   {"new": new, "old": old})
+    history_map = dict(collapse_map)
+    history_map['Assigned'] = 'In Progress'  # audit label; no assignee context on history rows
+    for old, new in history_map.items():
+        db.execute(session, "UPDATE task_history SET old_status = :new WHERE old_status = :old",
+                   {"new": new, "old": old})
+        db.execute(session, "UPDATE task_history SET new_status = :new WHERE new_status = :old",
+                   {"new": new, "old": old})
+
+    # -- Step 2: re-anchor derived project state under the new vocabulary.
     projects = db.fetch_all(session, "SELECT project_id FROM projects")
     for project in projects:
         workflow.refresh_project_state(session, project["project_id"])

@@ -57,6 +57,8 @@ export var API = {
   fields: function (id) { return api('/api/tasks/' + id + '/dynamic-fields'); },
   saveFields: function (id, fields) { return api('/api/tasks/' + id + '/dynamic-fields', jsonOptions('PATCH', { fields: fields, changed_by: currentUserName() })); },
   updateTask: function (id, payload) { return api('/api/tasks/' + id, jsonOptions('PATCH', payload)); },
+  assign: function (id, payload) { return api('/api/tasks/' + id + '/assign', jsonOptions('POST', payload)); },
+  transition: function (id, payload) { return api('/api/tasks/' + id + '/transition', jsonOptions('POST', payload)); },
   priority: function (id, payload) { return api('/api/tasks/' + id + '/priority', jsonOptions('PATCH', payload)); },
   activity: function (projectId) { return api('/api/activity' + (projectId ? '?project_id=' + encodeURIComponent(projectId) : '')); },
   businessRows: function () { return api('/api/business-plan/rows'); },

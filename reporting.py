@@ -35,12 +35,14 @@ def dashboard_metrics(session):
     """)
     metrics = {
         "Completed Wells": sum(1 for row in rows if row["overall_status"] == "Completed"),
-        "Components Under Review": db.fetch_one(session,
+        # v17 lifecycle: 'Ready' is the awaiting-approval state (formerly the
+        # Ready for Review / Under Review / Ready for Approval trio).
+        "Components Ready": db.fetch_one(session,
             """
             SELECT COUNT(*) AS c
             FROM project_tasks pt
             JOIN projects p ON p.project_id = pt.project_id
-            WHERE pt.is_active = 1 AND pt.status = 'Under Review'
+            WHERE pt.is_active = 1 AND pt.status = 'Ready'
               AND COALESCE(p.archived, 0) = 0
             """)["c"],
     }

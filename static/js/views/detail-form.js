@@ -1,9 +1,59 @@
-import { byId, all, esc, isFilled, truthy, msg, fillSelect } from '../dom.js';
+import { byId, all, esc, isFilled, truthy, msg } from '../dom.js';
 import { API } from '../api.js';
-import { currentUserName, Store } from '../state.js';
-import { SCHEMA, STATUSES } from '../schema.js';
-import { renderDetail, renderRightPanel, chooseInitialTask, tasksForPipeline, parseRepeatableRows } from './detail.js';
+import { currentUserName, currentRole, canManageAssignments, Store } from '../state.js';
+import { SCHEMA } from '../schema.js';
+import { confirmDialog } from '../dialog.js';
+import { renderDetail, renderRightPanel, chooseInitialTask, tasksForPipeline, parseRepeatableRows, refreshAfterRecordChange } from './detail.js';
 import { refreshAllBoards } from './pipeline.js';
+
+function ensureUsers() {
+  if (Store.users) return Promise.resolve(Store.users);
+  return API.users().then(function (users) {
+    Store.users = users || [];
+    return Store.users;
+  }).catch(function () { return []; });
+}
+
+function renderStatusChip(status) {
+  var chip = byId('component-status-chip');
+  if (!chip) return;
+  var value = status || 'Not Assigned';
+  chip.textContent = value;
+  chip.className = 'status editor-status-chip ' + String(value).toLowerCase().replace(/\s+/g, '-');
+}
+
+function renderAssigneeSelect(task) {
+  var select = byId('assigned-to');
+  if (!select) return;
+  ensureUsers().then(function (users) {
+    var current = task.assigned_to || '';
+    var names = users.map(function (user) { return user.name; });
+    // Keep a legacy/deactivated assignee visible even if no longer selectable
+    // as a new choice.
+    if (current && names.indexOf(current) < 0) names.push(current);
+    select.innerHTML = '<option value="">Unassigned</option>' + names.map(function (name) {
+      return '<option ' + (name === current ? 'selected' : '') + '>' + esc(name) + '</option>';
+    }).join('');
+    select.value = current;
+    // Only supervisors/staff assign (anonymous dev mode acts as supervisor,
+    // matching the backend's current_role()).
+    select.disabled = !canManageAssignments();
+  });
+}
+
+function renderActionButtons(task) {
+  var status = task.status || 'Not Assigned';
+  var role = currentRole();
+  var manage = canManageAssignments();
+  var isAssignee = !!(Store.user && Store.user.name &&
+    String(Store.user.name).toLowerCase() === String(task.assigned_to || '').toLowerCase());
+  var submitButton = byId('submit-component');
+  var approveButton = byId('approve-component');
+  var returnButton = byId('return-component');
+  if (submitButton) submitButton.classList.toggle('hidden', !(status === 'In Progress' && (manage || isAssignee)));
+  if (approveButton) approveButton.classList.toggle('hidden', !(status === 'Ready' && role === 'supervisor'));
+  if (returnButton) returnButton.classList.toggle('hidden', !(status === 'Ready' && role === 'supervisor'));
+}
 
 export function loadComponent(task) {
   if (!task) return;
@@ -12,9 +62,9 @@ export function loadComponent(task) {
   byId('component-number').textContent = String(task.sequence_no || '');
   byId('component-title').textContent = task.task_name;
   byId('component-stage').textContent = task.stage_group;
-  byId('assigned-to').value = task.assigned_to || '';
-  fillSelect(byId('component-status'), STATUSES, false);
-  byId('component-status').value = task.status || 'Not Assigned';
+  renderStatusChip(task.status);
+  renderAssigneeSelect(task);
+  renderActionButtons(task);
   byId('component-priority').value = task.priority || 'Medium';
   byId('comments').placeholder = commentPlaceholder(task.task_name);
   byId('comments').value = task.comments || '';
@@ -22,6 +72,55 @@ export function loadComponent(task) {
     renderFields(task.task_name, results[0] || {});
     renderComponentFolder(results[1] || {});
     renderRightPanel(tasksForPipeline(Store.pipeline));
+  }).catch(function (error) { msg(error.message, 'error'); });
+}
+
+// Assignment posts immediately on select change (not deferred to Save): the
+// confirm dialog decides whether the same assignee also cascades to every
+// later still-unassigned step of this pipeline.
+export function assignComponent() {
+  if (!Store.task) return;
+  var select = byId('assigned-to');
+  var assignee = select.value;
+  var previous = Store.task.assigned_to || '';
+  if (!assignee || assignee === previous) {
+    select.value = previous; // clearing is not an /assign action; snap back
+    return;
+  }
+  confirmDialog({
+    title: 'Assign component',
+    message: 'Assign remaining steps to ' + assignee + ' as well?',
+    confirmLabel: 'Yes, assign following steps',
+    cancelLabel: 'Only this step'
+  }).then(function (cascade) {
+    return API.assign(Store.task.task_id, {
+      assignee: assignee,
+      cascade: !!cascade,
+      revision: Store.task.revision,
+      changed_by: currentUserName()
+    });
+  }).then(function () {
+    return refreshAfterRecordChange('Component assigned to ' + assignee + '.');
+  }).catch(function (error) {
+    select.value = previous;
+    msg(error.message, 'error');
+  });
+}
+
+var TRANSITION_MESSAGES = {
+  submit: 'Component submitted for approval.',
+  approve: 'Component approved.',
+  return: 'Component returned for update.'
+};
+
+export function transitionComponent(action) {
+  if (!Store.task) return;
+  API.transition(Store.task.task_id, {
+    action: action,
+    revision: Store.task.revision,
+    changed_by: currentUserName()
+  }).then(function () {
+    return refreshAfterRecordChange(TRANSITION_MESSAGES[action] || 'Component updated.');
   }).catch(function (error) { msg(error.message, 'error'); });
 }
 export function commentPlaceholder(componentName) {
@@ -148,9 +247,10 @@ export function saveComponent(event) {
   var fields = getFields();
   var submitButton = event.target.querySelector('button[type="submit"]');
   if (submitButton) submitButton.disabled = true;
+  // No status / assigned_to keys: Save only persists inputs. Status moves via
+  // /transition and assignment via /assign; the backend preserves both when
+  // the keys are absent.
   API.updateTask(Store.task.task_id, {
-    status: byId('component-status').value,
-    assigned_to: byId('assigned-to').value,
     comments: byId('comments').value,
     priority: byId('component-priority').value,
     fields: fields,

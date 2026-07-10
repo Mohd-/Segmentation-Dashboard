@@ -182,8 +182,8 @@ def current_role() -> Optional[str]:
 def require_role(*roles: str) -> None:
     """Raise PermissionError (-> 403) unless the current role is one of ``roles``.
 
-    Not applied to any route yet -- the supervisor-only Approve/Return actions
-    of the next workstream are its first consumers.
+    Consumers: POST /api/tasks/<id>/assign (supervisor, staff) and the
+    approve/return actions of POST /api/tasks/<id>/transition (supervisor).
     """
     if current_role() not in roles:
         raise PermissionError("Forbidden: requires " + " or ".join(roles) + " role.")
@@ -426,6 +426,42 @@ def update_task(task_id):
     payload = request.get_json(silent=True) or {}
     task_after_save = workflow.save_task(session, task_id, payload, actor(payload))
     return json_response({"ok": True, "task": task_after_save})
+
+
+@app.post("/api/tasks/<int:task_id>/assign")
+def assign_task(task_id):
+    """Assign a component (supervisor/staff only); cascade defaults to true."""
+    require_role("supervisor", "staff")
+    session = db.get_session()
+    payload = request.get_json(silent=True) or {}
+    cascade = payload.get("cascade")
+    task_after = workflow.assign_task(
+        session, task_id, payload.get("assignee", ""),
+        True if cascade is None else bool(cascade),
+        actor(payload), payload.get("revision"),
+    )
+    return json_response({"ok": True, "task": task_after})
+
+
+@app.post("/api/tasks/<int:task_id>/transition")
+def transition_task(task_id):
+    """Lifecycle actions: submit (assignee/staff/supervisor), approve/return (supervisor).
+
+    The approve/return supervisor gate lives here (require_role); the
+    employee-must-be-assignee rule for submit needs the task row, so it is
+    enforced in workflow.transition_task using the session identity passed in.
+    """
+    payload = request.get_json(silent=True) or {}
+    action = str(payload.get("action") or "").strip().lower()
+    if action in {"approve", "return"}:
+        require_role("supervisor")
+    session = db.get_session()
+    task_after = workflow.transition_task(
+        session, task_id, action, actor(payload),
+        expected_revision=payload.get("revision"),
+        actor_role=current_role(), actor_name=flask_session.get("name"),
+    )
+    return json_response({"ok": True, "task": task_after})
 
 
 @app.get("/api/tasks/<int:task_id>/dynamic-fields")

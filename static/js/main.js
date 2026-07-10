@@ -1,11 +1,15 @@
 import { byId, all, fillSelect, range } from './dom.js';
 import { Store } from './state.js';
 import { API } from './api.js';
-import { STATUSES } from './schema.js';
 import { refreshProspect, refreshBP, createLead, addWell } from './views/pipeline.js';
 import { refreshPortfolio } from './views/portfolio.js';
 import { refreshAudit } from './views/audit.js';
-import { saveComponent } from './views/detail-form.js';
+import { saveComponent, assignComponent, transitionComponent } from './views/detail-form.js';
+
+// The board status filters act on projects.overall_status, which only ever
+// holds these two values -- filling them with task statuses made the filter
+// dead for every other option.
+var PROJECT_STATUSES = ['In Progress', 'Completed'];
 
 export function showTab(name) {
   all('.tab').forEach(function (tab) { tab.classList.toggle('active', tab.id === 'tab-' + name); });
@@ -46,6 +50,10 @@ export function wire() {
   safeOn('create-lead-form', 'submit', createLead);
   safeOn('add-well-form', 'submit', addWell);
   safeOn('component-form', 'submit', saveComponent);
+  safeOn('assigned-to', 'change', assignComponent);
+  safeOn('submit-component', 'click', function () { transitionComponent('submit'); });
+  safeOn('approve-component', 'click', function () { transitionComponent('approve'); });
+  safeOn('return-component', 'click', function () { transitionComponent('return'); });
   safeOn('back-to-overview', 'click', function () { byId('detail-shell').classList.add('hidden'); byId('tab-' + Store.pipeline).scrollIntoView({ behavior: 'smooth', block: 'start' }); });
   ['prospect-search', 'prospect-status-filter'].forEach(function (id) { safeOn(id, 'input', refreshProspect); safeOn(id, 'change', refreshProspect); });
   ['bp-search', 'bp-year-filter', 'bp-status-filter'].forEach(function (id) { safeOn(id, 'input', refreshBP); safeOn(id, 'change', refreshBP); });
@@ -54,8 +62,8 @@ export function wire() {
 }
 
 function boot() {
-  fillSelect(byId('prospect-status-filter'), STATUSES, true);
-  fillSelect(byId('bp-status-filter'), STATUSES, true);
+  fillSelect(byId('prospect-status-filter'), PROJECT_STATUSES, true);
+  fillSelect(byId('bp-status-filter'), PROJECT_STATUSES, true);
   fillSelect(byId('portfolio-year-filter'), range(2026, 2040), true);
   fillSelect(byId('new-well-bp-year'), range(2026, 2040), false);
   fillSelect(byId('bp-year-filter'), range(2026, 2040), true);

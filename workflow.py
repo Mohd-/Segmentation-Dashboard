@@ -51,20 +51,20 @@ class StaleRevisionError(RuntimeError):
 # Domain constants
 # ---------------------------------------------------------------------------
 
+# The 4-state implicit lifecycle (v17): Not Assigned -> In Progress (via
+# assignment) -> Ready (submit) -> Approved (supervisor). "Not Applicable" is
+# INTERNAL-only: seeding/promotion/pipeline-scoping still use it, but it is
+# never offered or accepted through the API (save_task rejects it).
 STATUSES = [
     "Not Assigned",
-    "Assigned",
     "In Progress",
-    "Ready for Review",
-    "Under Review",
-    "Ready for Approval",
-    "Returned for Update",
+    "Ready",
     "Approved",
     "Not Applicable",
 ]
 
 DONE_STATUSES = {"Approved", "Not Applicable", "Complete"}
-ACTIVE_STATUSES = {"Assigned", "In Progress", "Ready for Review", "Under Review", "Ready for Approval", "Returned for Update"}
+ACTIVE_STATUSES = {"In Progress", "Ready"}
 
 STAGE_ORDER = [
     "Lead Identification",
@@ -286,10 +286,10 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
             is_bp_stage = row["stage_group"] in BP_EXECUTION_STAGES
             if pipeline_type == "bp" and not is_bp_stage:
                 initial_status = "Not Applicable"
-            elif pipeline_type == "prospect" and is_bp_stage:
-                initial_status = "Not Assigned"
             else:
-                initial_status = "Assigned" if row["sequence_no"] == first_sequence else "Not Assigned"
+                # v17 lifecycle: every step starts Not Assigned (the first step
+                # still carries planned dates); assignment moves it In Progress.
+                initial_status = "Not Assigned"
             planned_start = start_dt.isoformat() if row["sequence_no"] == first_sequence else None
             planned_finish = ((start_dt + timedelta(days=row["default_duration_days"])).isoformat()
                               if row["sequence_no"] == first_sequence else None)
@@ -593,7 +593,7 @@ def reconcile_project_flow(session, project_id):
     # time, portably across dialects. Never build "?,?,?" strings by hand.
     row = db.fetch_one(session, """
         SELECT * FROM project_tasks
-        WHERE project_id = :project_id AND is_active = 1 AND status IN ('Assigned','In Progress','Ready for Review','Under Review','Ready for Approval','Returned for Update')
+        WHERE project_id = :project_id AND is_active = 1 AND status IN ('In Progress','Ready')
           AND stage_group IN :stages
         ORDER BY sequence_no
         LIMIT 1
@@ -611,9 +611,14 @@ def reconcile_project_flow(session, project_id):
         """, {"project_id": project_id, "task_name": current_task})
         current_seq = seq_row["sequence_no"] if seq_row else 0
 
+    # >= (not >): with the v17 lifecycle a project can sit entirely in
+    # "Not Assigned" (no active rows at all), and the current task itself is
+    # then still the open one -- skipping it would wrongly anchor on the NEXT
+    # step. A done current task is excluded by the status predicate anyway, so
+    # advancement past completed steps is unchanged.
     row = db.fetch_one(session, """
         SELECT * FROM project_tasks
-        WHERE project_id = :project_id AND is_active = 1 AND status NOT IN ('Approved','Not Applicable','Complete') AND sequence_no > :current_seq
+        WHERE project_id = :project_id AND is_active = 1 AND status NOT IN ('Approved','Not Applicable','Complete') AND sequence_no >= :current_seq
           AND stage_group IN :stages
         ORDER BY sequence_no
         LIMIT 1
@@ -730,19 +735,17 @@ def _move_lead_to_bp_execution(session, project_id: int, year_val: int, changed_
     if not bp_tasks:
         raise RuntimeError("Business Plan workflow is not available for this lead.")
     now = utc_now_str()
-    has_existing_bp_work = any((task["status"] or "") not in {"Not Applicable", "Not Assigned"} for task in bp_tasks)
-    for index, task in enumerate(bp_tasks):
+    for task in bp_tasks:
         old_status = task["status"] or "Not Assigned"
-        # A promoted prospect normally has BP tasks in Not Assigned state. Activate
-        # the first BP task exactly once; leave any existing BP progress untouched.
-        should_activate_first = index == 0 and not has_existing_bp_work and old_status in {"Not Applicable", "Not Assigned"}
-        if old_status == "Not Applicable" or should_activate_first:
-            next_status = "Assigned" if should_activate_first else "Not Assigned"
+        # v17 lifecycle: promotion opens Not Applicable BP tasks as Not Assigned
+        # (assignment is what moves a step to In Progress). Any existing BP
+        # progress is left untouched.
+        if old_status == "Not Applicable":
             db.execute(session, """
                 UPDATE project_tasks
-                SET status = :status, business_plan_enabled = 1, business_plan_year = :year, last_updated = :now, revision = COALESCE(revision, 0) + 1
+                SET status = 'Not Assigned', business_plan_enabled = 1, business_plan_year = :year, last_updated = :now, revision = COALESCE(revision, 0) + 1
                 WHERE task_id = :task_id
-            """, {"status": next_status, "year": year_val, "now": now, "task_id": task["task_id"]})
+            """, {"year": year_val, "now": now, "task_id": task["task_id"]})
         else:
             db.execute(session, """
                 UPDATE project_tasks
@@ -977,20 +980,32 @@ def save_task(session, task_id, payload, changed_by="Web User"):
     payload = payload or {}
     fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
     expected_revision = payload.get("revision")
-    status = str(payload.get("status") or "Not Assigned")
+    # ``status`` is optional (the v17 UI drives status via /assign and
+    # /transition; Save only persists inputs). When supplied it must be one of
+    # the user-facing STATUSES -- "Not Applicable" is internal-only and is
+    # rejected at the API boundary alongside legacy names.
+    status_supplied = payload.get("status") is not None
+    status = str(payload.get("status") or "").strip() if status_supplied else None
+    if status_supplied and (status not in STATUSES or status == "Not Applicable"):
+        raise ValueError("Invalid component status.")
+    assigned_to_supplied = "assigned_to" in payload
     assigned_to = str(payload.get("assigned_to") or "").strip()
     comments = str(payload.get("comments") or "").strip()
     priority = str(payload.get("priority") or "Medium").strip().title()
     if priority not in {"Low", "Medium", "High"}:
         priority = "Medium"
-    if status not in STATUSES:
-        raise ValueError("Invalid component status.")
 
     result: Dict[str, Any] = {}
     with db.write_transaction(session):
         task = get_task(session, task_id)
         if not task:
             raise ValueError("Component not found.")
+        if not status_supplied:
+            status = task.get("status") or "Not Assigned"
+        if not assigned_to_supplied:
+            # Assignment is managed by assign_task; a Save without the key must
+            # not clear the assignee.
+            assigned_to = (task.get("assigned_to") or "").strip()
         current_revision = int(task.get("revision") or 0)
         if expected_revision is not None:
             try:
@@ -1083,6 +1098,183 @@ def save_task(session, task_id, payload, changed_by="Web User"):
         refresh_project_state(session, current["project_id"])
         db.execute(session, "UPDATE projects SET revision = revision + 1 WHERE project_id = :project_id",
                    {"project_id": current["project_id"]})
+        result = get_task(session, task_id) or {}
+    return result
+
+
+def _check_expected_revision(task, expected_revision):
+    """Shared optimistic-lock precheck: mirror save_task's semantics exactly.
+
+    None means "no check requested". A non-integer -> ValueError (400); a
+    mismatch -> StaleRevisionError (409).
+    """
+    if expected_revision is None:
+        return
+    current_revision = int(task.get("revision") or 0)
+    try:
+        supplied = int(expected_revision)
+    except (TypeError, ValueError):
+        raise ValueError("Invalid component revision.")
+    if supplied != current_revision:
+        raise StaleRevisionError("This component was updated by someone else. Refresh and review the latest values.")
+
+
+def assign_task(session, task_id, assignee, cascade=True, changed_by="Web User", expected_revision=None):
+    """Assign a component to an active user; optionally cascade to later steps.
+
+    The v17 lifecycle has no manual status field: assignment IS the act that
+    moves a step from "Not Assigned" to "In Progress".
+
+    - ``assignee`` must match an active row in the users table
+      (case-insensitive); the canonical casing from the table is stored.
+    - Target task: assigned_to is set; a "Not Assigned" status becomes
+      "In Progress" (other statuses are a pure reassignment and keep their
+      status).
+    - ``cascade``: every SUBSEQUENT (sequence_no greater than the target's)
+      active task in the project's applicable pipeline stages that is still
+      "Not Assigned" receives the same assignee and moves to "In Progress".
+      Rows already In Progress / Ready / Approved / Not Applicable are never
+      touched.
+    - Optimistic locking: ``expected_revision`` is checked against the TARGET
+      task only (StaleRevisionError -> 409). Every changed row gets a revision
+      bump and one "Component Assigned" history event.
+
+    Returns the fresh target task row (same shape as save_task) so the UI can
+    adopt the new revision.
+    """
+    result: Dict[str, Any] = {}
+    with db.write_transaction(session):
+        task = get_task(session, task_id)
+        if not task:
+            raise ValueError("Component not found.")
+        user = find_active_user(session, assignee)
+        if not user:
+            raise ValueError("Unknown or inactive user.")
+        canonical_name = user["name"]
+        _check_expected_revision(task, expected_revision)
+
+        project = get_project(session, task["project_id"]) or {}
+        applicable_stages = BP_EXECUTION_STAGES if str(project.get("pipeline_type") or "prospect").lower() == "bp" else PROSPECT_STAGES
+        now = utc_now_str()
+        today = today_str()
+
+        targets = [task]
+        if cascade:
+            targets += db.fetch_all(session, """
+                SELECT * FROM project_tasks
+                WHERE project_id = :project_id AND is_active = 1
+                  AND sequence_no > :sequence_no AND stage_group IN :stages
+                  AND status = 'Not Assigned'
+                ORDER BY sequence_no
+            """, {"project_id": task["project_id"], "sequence_no": task["sequence_no"],
+                  "stages": applicable_stages})
+
+        for row in targets:
+            old_status = row["status"] or "Not Assigned"
+            new_status = "In Progress" if old_status == "Not Assigned" else old_status
+            # Same stamping rule as save_task: a task entering In Progress gets
+            # actual_start today (never overwriting an existing date).
+            actual_start = row.get("actual_start") or (today if new_status == "In Progress" else None)
+            db.execute(session, """
+                UPDATE project_tasks
+                SET assigned_to = :assignee, status = :status, actual_start = :actual_start,
+                    last_updated = :now, revision = COALESCE(revision, 0) + 1
+                WHERE task_id = :task_id
+            """, {"assignee": canonical_name, "status": new_status, "actual_start": actual_start,
+                  "now": now, "task_id": row["task_id"]})
+            log_task_event(session, row["task_id"], row["project_id"], row["task_name"],
+                           "Component Assigned", old_status, new_status, changed_by,
+                           f"Assigned to {canonical_name}.")
+
+        refresh_project_state(session, task["project_id"])
+        db.execute(session, "UPDATE projects SET revision = revision + 1 WHERE project_id = :project_id",
+                   {"project_id": task["project_id"]})
+        result = get_task(session, task_id) or {}
+    return result
+
+
+# action -> (required current status, resulting status)
+TASK_TRANSITIONS = {
+    "submit": ("In Progress", "Ready"),
+    "approve": ("Ready", "Approved"),
+    "return": ("Ready", "In Progress"),
+}
+
+_TRANSITION_EVENTS = {
+    "submit": "Component Submitted",
+    "approve": "Component Approved",
+    "return": "Component Returned",
+}
+
+
+def transition_task(session, task_id, action, changed_by="Web User", expected_revision=None,
+                    actor_role=None, actor_name=None):
+    """Advance a component through the v17 lifecycle: submit / approve / return.
+
+    - ``submit``: "In Progress" -> "Ready". Supervisors/staff may submit any
+      component; an 'employee' may only submit a component assigned to them
+      (case-insensitive name match against ``actor_name`` -> PermissionError
+      / 403 otherwise). The supervisor-only gates for approve/return live in
+      the route (require_role).
+    - ``approve``: "Ready" -> "Approved" (stamps actual_finish, backfills
+      actual_start like save_task does for done statuses).
+    - ``return``: "Ready" -> "In Progress" (clears actual_finish if set).
+
+    Wrong from-state or an unknown action -> ValueError (400). Optimistic
+    locking mirrors save_task (StaleRevisionError -> 409). One history event is
+    logged with the old/new status; project state is refreshed. Returns the
+    fresh task row.
+    """
+    action_key = str(action or "").strip().lower()
+    if action_key not in TASK_TRANSITIONS:
+        raise ValueError("Unknown action. Use one of: submit, approve, return.")
+    required_status, new_status = TASK_TRANSITIONS[action_key]
+
+    result: Dict[str, Any] = {}
+    with db.write_transaction(session):
+        task = get_task(session, task_id)
+        if not task:
+            raise ValueError("Component not found.")
+        if action_key == "submit" and actor_role == "employee":
+            assigned = (task.get("assigned_to") or "").strip().lower()
+            if assigned != (actor_name or "").strip().lower():
+                raise PermissionError("Forbidden: you can only submit components assigned to you.")
+        _check_expected_revision(task, expected_revision)
+
+        old_status = task.get("status") or "Not Assigned"
+        if old_status != required_status:
+            raise ValueError(
+                f'Cannot {action_key} a component in status "{old_status}" -- it must be "{required_status}".')
+
+        today = today_str()
+        now = utc_now_str()
+        actual_start = task.get("actual_start")
+        actual_finish = task.get("actual_finish")
+        if new_status in DONE_STATUSES:
+            actual_finish = today
+            if not actual_start:
+                actual_start = today
+        else:
+            actual_finish = None
+
+        current_revision = int(task.get("revision") or 0)
+        update_result = db.execute(session, """
+            UPDATE project_tasks
+            SET status = :status, actual_start = :actual_start, actual_finish = :actual_finish,
+                last_updated = :now, revision = revision + 1
+            WHERE task_id = :task_id AND revision = :expected_revision
+        """, {"status": new_status, "actual_start": actual_start, "actual_finish": actual_finish,
+              "now": now, "task_id": task_id, "expected_revision": current_revision})
+        if update_result.rowcount != 1:
+            raise StaleRevisionError("This component was updated by someone else. Refresh and review the latest values.")
+
+        log_task_event(session, task_id, task["project_id"], task["task_name"],
+                       _TRANSITION_EVENTS[action_key], old_status, new_status, changed_by,
+                       f"Status moved from {old_status} to {new_status}.")
+
+        refresh_project_state(session, task["project_id"])
+        db.execute(session, "UPDATE projects SET revision = revision + 1 WHERE project_id = :project_id",
+                   {"project_id": task["project_id"]})
         result = get_task(session, task_id) or {}
     return result
 

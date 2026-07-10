@@ -32,8 +32,10 @@ def test_promotion_sets_pipeline_type_and_captures_lead_summary(client):
     assert lead_summary is not None
     assert lead_summary["fields"]["Lead Resource Assessment"]["lead_piip_gas_mean"] == "12.5"
 
+    # v17 lifecycle: promotion opens the BP pipeline but no longer auto-assigns
+    # its first step -- assignment (not promotion) moves a step to In Progress.
     gate = get_task_by_name(client, pid, "BP Execution Gate")
-    assert gate["status"] == "Assigned"
+    assert gate["status"] == "Not Assigned"
 
 
 def test_promotion_year_validation(client):

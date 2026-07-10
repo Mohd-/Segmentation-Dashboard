@@ -17,14 +17,17 @@ PROSPECT_STAGES = {"Lead Identification", "Risking", "Segmentation", "Pre-Well D
 # Initial seeding
 # ---------------------------------------------------------------------------
 
-def test_new_prospect_project_has_32_tasks_with_first_assigned(client):
+def test_new_prospect_project_has_32_tasks_all_not_assigned(client):
+    # v17 lifecycle: every step (including the first) starts Not Assigned;
+    # assignment is what moves a step to In Progress. The first step still
+    # carries the planned dates, and current_task still anchors on it.
     pid = create_project(client, "SEED-PROSPECT-1")
     tasks = get_tasks(client, pid)
     assert len(tasks) == 32
 
     first = tasks[0]
     assert first["task_name"] == "Reservoir Area Definition"
-    assert first["status"] == "Assigned"
+    assert first["status"] == "Not Assigned"
     assert first["planned_start"] is not None
     assert first["planned_finish"] is not None
 
