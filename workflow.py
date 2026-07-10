@@ -1262,8 +1262,9 @@ def assign_task(session, task_id, assignee, cascade=True, changed_by="Web User",
       Rows already In Progress / Ready / Approved / Not Applicable are never
       touched.
     - Optimistic locking: ``expected_revision`` is checked against the TARGET
-      task only (StaleRevisionError -> 409). Every changed row gets a revision
-      bump and one "Component Assigned" history event.
+      task only, and the target's UPDATE is itself revision-guarded like
+      save_task/transition_task (StaleRevisionError -> 409). Every changed row
+      gets a revision bump and one "Component Assigned" history event.
 
     Returns the fresh target task row (same shape as save_task) so the UI can
     adopt the new revision.
@@ -1301,13 +1302,29 @@ def assign_task(session, task_id, assignee, cascade=True, changed_by="Web User",
             # Same stamping rule as save_task: a task entering In Progress gets
             # actual_start today (never overwriting an existing date).
             actual_start = row.get("actual_start") or (today if new_status == "In Progress" else None)
-            db.execute(session, """
+            # The TARGET row's update is guarded on the revision read in this
+            # transaction (same WHERE revision + rowcount pattern as save_task /
+            # transition_task). Under SQLite this is belt-and-braces -- BEGIN
+            # IMMEDIATE already serializes writers -- but it keeps all three
+            # mutation paths on one pattern for a Postgres future, where MVCC
+            # would allow a concurrent commit between our read and this write.
+            # Cascade rows stay unguarded: they were selected inside this same
+            # transaction and carry no client-supplied revision to honor.
+            is_target = row["task_id"] == task["task_id"]
+            sql = """
                 UPDATE project_tasks
                 SET assigned_to = :assignee, status = :status, actual_start = :actual_start,
                     last_updated = :now, revision = COALESCE(revision, 0) + 1
                 WHERE task_id = :task_id
-            """, {"assignee": canonical_name, "status": new_status, "actual_start": actual_start,
-                  "now": now, "task_id": row["task_id"]})
+            """
+            params = {"assignee": canonical_name, "status": new_status, "actual_start": actual_start,
+                      "now": now, "task_id": row["task_id"]}
+            if is_target:
+                sql += " AND COALESCE(revision, 0) = :current_revision"
+                params["current_revision"] = int(row.get("revision") or 0)
+            update_result = db.execute(session, sql, params)
+            if is_target and update_result.rowcount != 1:
+                raise StaleRevisionError("This component was updated by someone else. Refresh and review the latest values.")
             log_task_event(session, row["task_id"], row["project_id"], row["task_name"],
                            "Component Assigned", old_status, new_status, changed_by,
                            f"Assigned to {canonical_name}.")

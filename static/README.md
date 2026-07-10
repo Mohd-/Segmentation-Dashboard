@@ -86,7 +86,7 @@ Where things live:
 
 - `base.css` — tokens (`:root`), reset, header/tabs/page shell, forms/inputs/buttons, generic
   tables, the toast message. Anything that isn't specific to one screen.
-- `components.css` — status/priority/well-class chips, the pipeline board + cards, the detail
+- `components.css` — status/priority chips, the pipeline board + cards, the detail
   panel (component rail, form, summary panel, repeatable rows), portfolio stats, audit table,
   the dialog popup. Organized in sections with a banner comment per section — if you're
   restyling "the thing that shows a lead's tasks," search for its section header, not `Ctrl+F`
@@ -114,7 +114,7 @@ Field object reference (`detail-form.js`'s `renderFields()` is what reads these)
 |---|---|
 | `key` | the field's storage key — must be unique within that component, becomes the payload key sent to the backend |
 | `label` | the visible field label |
-| `type` | `number` \| `text` \| `checkbox` \| `select` \| `repeatable` \| `link` \| `summary` — controls which input renders |
+| `type` | `number` \| `text` \| `checkbox` \| `select` \| `repeatable` \| `formations` \| `link` \| `summary` — controls which input renders (`formations` renders the well-level formation mini-sheet; see `renderFormationsField()`) |
 | `options` | for `type: 'select'`, the dropdown choices |
 | `columns` | for `type: 'repeatable'`, the column definitions of each row (see `Reservoir CoS` in schema.js for a full example) |
 | `readonly` | true for a calculated/backend-computed value — renders as a read-only output, not an input |
@@ -123,9 +123,9 @@ Field object reference (`detail-form.js`'s `renderFields()` is what reads these)
 A brand-new field with none of `readonly`/`showIf`/`options` set is the common case — just
 `key`, `label`, `type`. **You do not need to touch any other file** for a plain new field:
 `renderFields()` renders it, `getFields()` collects it on save, and the backend receives it
-through the existing generic `fields` payload (confirm the backend's `dynamic_fields` table
-accepts arbitrary keys for that task before relying on this — check `database.py` if unsure,
-since the backend is a separate system this guide doesn't cover).
+through the existing generic `fields` payload (the backend's `task_dynamic_fields` table
+accepts arbitrary keys for a task — see `workflow.py` if unsure, since the backend is a
+separate system this guide doesn't cover).
 
 Note: the right-hand summary panel (`views/detail.js`'s `curatedOverviewMarkup()`) does **not**
 auto-pick-up new fields — it's a hand-curated list, not schema-driven. See the next paragraph.
@@ -201,7 +201,7 @@ The front end talks to the backend purely through the endpoints already defined 
 `static/js/api.js` / `main.py`. If a change needs new data the backend doesn't currently
 store or expose (a new column, a new endpoint, a new computed value), that's a backend change
 first — this guide, and the front-end code it describes, is a separate layer from
-`main.py`/`database.py` and doesn't cover editing those.
+`main.py`/`workflow.py` and doesn't cover editing those.
 
 ## 10. Quick sanity check after any change
 

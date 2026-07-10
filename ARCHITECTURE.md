@@ -13,8 +13,10 @@ of what belongs in it.
   SQL, Flask objects or business logic here.
 
 - **models.py** — SQLAlchemy `declarative_base` table definitions mirroring the
-  production schema exactly; doubles as schema documentation. Used only by
-  `create_all` for brand-new databases. No queries, no business logic.
+  production schema exactly; doubles as schema documentation. Applied via
+  `create_all` on every bootstrap, which also creates newly added tables
+  (e.g. `users`, `project_formations`) on existing databases; column-level
+  changes still need a migration. No queries, no business logic.
 
 - **db.py** — engine creation (SQLite pragmas, WAL), the session factory,
   Flask per-request session (`get_session` bound to `flask.g`), the one-time
@@ -49,7 +51,8 @@ of what belongs in it.
 
 - **main.py** — Flask routes and centralized error handlers; parses the
   request, calls one domain function, returns JSON. Identity (login/logout/me,
-  `actor()` stamping) lives here because it is HTTP-session state.
+  `actor()` stamping) and the role gates (`current_role()` / `require_role()`)
+  live here because they are HTTP-session state.
 
 ## The request path
 
@@ -69,8 +72,9 @@ under WAL a read-then-write transaction that races another writer fails
 immediately with SQLITE_BUSY_SNAPSHOT, which `busy_timeout` cannot retry;
 locking first serializes writers safely (full rationale in `db.py`'s
 `begin_write` docstring). Errors propagate to the handlers in main.py:
-`ValueError` → 400, `workflow.StaleRevisionError` → 409, `FileNotFoundError` →
-404, everything else → generic 500 + server-side log.
+`ValueError` → 400, `PermissionError` (role gates) → 403,
+`workflow.StaleRevisionError` → 409, `FileNotFoundError` → 404, everything
+else → generic 500 + server-side log.
 
 ## The data model, in domain terms
 
@@ -79,7 +83,7 @@ locking first serializes writers safely (full rationale in `db.py`'s
   Business Plan Execution stages). `business_plan_enabled` only controls
   Portfolio reporting inclusion. `revision` powers optimistic locking;
   `completed_at` is stamped when the project completes.
-- **task_templates / project_tasks** — the canonical 32-component workflow and
+- **task_templates / project_tasks** — the canonical 31-component workflow and
   its per-project instances ("components" in the UI). Retired components stay
   as `is_active = 0` rows so their inputs and history survive.
 - **task_dynamic_fields** — key/value inputs attached to a task (the component
@@ -91,6 +95,10 @@ locking first serializes writers safely (full rationale in `db.py`'s
 - **lead_summary_snapshots** — a frozen JSON copy of all Prospect-stage inputs,
   captured at the moment a lead is promoted to BP Execution (refreshed on
   re-promotion, kept on demotion).
+- **users** — login identities and roles (`supervisor`/`staff`/`employee`),
+  seeded idempotently from `config.SEED_USERS`; login only accepts active rows.
+- **project_formations** — well-level formation interpretation values
+  (formation × phase), edited via the mini-sheet on the logs components.
 - **business_plan_commitment / app_settings** — single-row commitment totals;
   key/value settings including `schema_version`.
 

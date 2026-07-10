@@ -62,8 +62,8 @@ Recipes for the changes you will actually be asked to make. Read
    renames live rows (the rename loop at the top of `_consolidate_to_v15` is
    the template — it preserves task ids, inputs and history).
 6. Tests: assert the new component appears for a fresh project (see
-   `test_new_prospect_project_has_32_tasks_with_first_assigned` — the 32 counts
-   in `tests/test_workflow_lifecycle.py` will need the explicit bump to 33),
+   `test_new_prospect_project_has_31_tasks_all_not_assigned` — the 31 counts
+   in `tests/test_workflow_lifecycle.py` will need the explicit bump to 32),
    and a migration test per recipe 5.
 
 ## Recipe 2: Add a dynamic input field to a component

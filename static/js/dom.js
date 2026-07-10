@@ -62,7 +62,3 @@ export function priorityChip(priority) {
   var value = priority || 'Medium';
   return '<span class="priority priority-' + String(value).toLowerCase() + '">' + esc(value) + '</span>';
 }
-export function classChip(value) {
-  if (!value) return '';
-  return '<span class="class-chip ' + String(value).toLowerCase().replace(/\s+/g, '-') + '">' + esc(value) + '</span>';
-}

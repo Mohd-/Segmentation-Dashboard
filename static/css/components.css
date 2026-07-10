@@ -1,5 +1,5 @@
 /* =========================================================================
-   Chips — status / priority / well class
+   Chips — status / priority
    ========================================================================= */
 .status {
   display: inline-flex;
@@ -33,22 +33,6 @@
 .priority-low { color: var(--text-faint); }
 .priority-medium { background: var(--info-100); color: var(--info-700); border-color: var(--info-500); }
 .priority-high { background: var(--warning-100); color: var(--warning-700); border-color: var(--warning-500); }
-
-.class-chip {
-  display: inline-flex;
-  align-items: center;
-  border-radius: var(--radius-pill);
-  padding: 4px 10px;
-  font-size: var(--text-xs);
-  font-weight: 800;
-  border: 1px solid var(--border-strong);
-  background: var(--gray-100);
-  color: var(--text-muted);
-}
-.class-chip.super-star { background: var(--success-100); color: var(--success-700); border-color: var(--success-500); }
-.class-chip.risk-taker { background: var(--warning-100); color: var(--warning-700); border-color: var(--warning-500); }
-.class-chip.value-hunter { background: var(--info-100); color: var(--info-700); border-color: var(--info-500); }
-.class-chip.dog { background: var(--gray-100); color: var(--text-faint); }
 
 /* =========================================================================
    Pipeline board (kanban-style columns for prospect + BP tabs)

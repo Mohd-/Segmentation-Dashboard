@@ -2,7 +2,7 @@
 
 A dashboard for tracking unconventional gas wells from lead identification
 through risking, segmentation and business-plan execution. Each lead/well moves
-through a fixed 32-component workflow with per-component technical inputs
+through a fixed 31-component workflow with per-component technical inputs
 (Chance-of-Success calculations, resource estimates), an audit trail, and
 portfolio-level reporting. The backend is Flask + SQLite (SQLAlchemy underneath);
 the front-end is vanilla JS served from `static/`.
@@ -38,7 +38,7 @@ There is no other config file.
 | `SEGMENT_TRACKER_RF_MODEL_PATH` | `./RF_model.joblib` | Location of the approved Reservoir-CoS RandomForest model. |
 | `SEGMENT_TRACKER_SECRET_KEY` | dev-only insecure default | Flask session-cookie signing key. Set a real value for any shared deployment. |
 | `SEGMENT_TRACKER_PASSCODE` | unset | When set, `POST /api/login` requires this shared passcode. Unset = name-only login (trusted internal network). |
-| `AUTH_REQUIRED` | `false` | When true (`1`/`true`/`yes`/`on`), every `/api/*` endpoint except `/api/health`, `/api/login`, `/api/logout` and `/api/me` requires a logged-in session. |
+| `AUTH_REQUIRED` | `false` | When true (`1`/`true`/`yes`/`on`), every `/api/*` endpoint except `/api/health`, `/api/login`, `/api/logout`, `/api/me` and `/api/users` requires a logged-in session (`/api/users` stays open because the login dialog needs the name list before a session exists; names/roles are not secrets on the trusted internal network). |
 | `SEGMENT_TRACKER_COOKIE_SECURE` | `false` | Marks the session cookie `Secure` (HTTPS-only). Enable once the app is served over TLS. |
 
 ## The Reservoir CoS model
@@ -66,17 +66,29 @@ executes code, so only the approved, governance-controlled model may be used.
 
 By default the API is open: anyone on the network can read and write, and each
 change records whatever `changed_by` name the client sends (the front-end sends
-"Web User"). Optionally, users can identify themselves:
+"Web User" when nobody is signed in). Known users live in the `users` table,
+seeded from the `SEED_USERS` placeholder list in `config.py` (edit it before
+deploying); each user has a role — `supervisor`, `staff` or `employee` — that
+gates assignment and approve/return actions.
 
-- `POST /api/login` `{"name": "...", "passcode": "..."}` — starts a session;
-  the passcode is only required when `SEGMENT_TRACKER_PASSCODE` is set.
-- `GET /api/me` — `{"authenticated": bool, "name": ...}`; never returns 401.
+- `POST /api/login` `{"name": "...", "passcode": "..."}` — starts a session.
+  The name must match an active `users` row (case-insensitive; 401 `Unknown
+  user.` otherwise); the session stores the row's canonical casing and role,
+  and the response returns both. The passcode is only required when
+  `SEGMENT_TRACKER_PASSCODE` is set.
+- `GET /api/me` — `{"authenticated": bool, "name": ..., "role": ...}`; never
+  returns 401.
+- `GET /api/users` — active users as `[{name, role}]` (login and assignee
+  dropdowns).
 - `POST /api/logout` — ends the session; always 200.
 
 While a session is active, every change is stamped with the session name —
 the client-sent `changed_by` is ignored. Setting `AUTH_REQUIRED=1` makes a
-session mandatory for all other API calls. Note: the front-end has no login
-screen yet, so enforcement is intended for after that lands.
+session mandatory for all other API calls. The front-end supports this: any
+401 response opens a sign-in dialog (name dropdown filled from `/api/users`,
+plus an optional passcode field) and retries the failed request once after a
+successful login; a "Signed in as name (role)" chip and Sign out button appear
+in the header while a session is active.
 
 ## Data & backups
 
@@ -113,7 +125,7 @@ instance, let it finish migrating, then scale out.
 .venv/bin/pytest tests/ -q
 ```
 
-The suite (98 tests) covers the HTTP API contract, the workflow lifecycle,
+The pytest suite covers the HTTP API contract, the workflow lifecycle,
 promotion/demotion, the CoS math, migrations, error handling and identity.
 
 ## Version history
@@ -172,3 +184,20 @@ v16 also ships a full backend refactor:
 - Completed wells now carry an explicit `completed_at` timestamp, so monthly "wells completed" reporting no longer shifts when a completed well is edited later.
 - New identity endpoints (`/api/login`, `/api/logout`, `/api/me`) let users sign their changes; an optional `AUTH_REQUIRED` mode can enforce login API-wide.
 - Removed unused API surface after auditing the web front-end (the API's sole consumer; re-verified against the redesigned `static/js/` modules): `PATCH /api/projects/<id>/archive`, `PATCH /api/projects/<id>/location`, `PATCH /api/projects/<id>/lead-folder`, `PATCH /api/projects/<id>/business-plan`, `GET /api/projects/<id>/next-task`, `GET /api/projects/<id>/overview`, `GET /api/overview/all`, `GET/POST /api/business-plan/commitment`, `GET /api/dashboard/metrics`, `GET /api/dashboard/monthly`, `GET /api/owners`.
+
+### v17: Users, roles, and the 4-status lifecycle
+
+- Component statuses collapse to an implicit 4-state lifecycle — **Not Assigned → In Progress** (assignment) **→ Ready** (submit) **→ Approved** (supervisor) — with Return sending Ready back to In Progress. "Not Applicable" remains internal-only. Existing databases migrate their old status vocabulary automatically.
+- New `users` table with roles (`supervisor` / `staff` / `employee`), seeded from the `SEED_USERS` list in `config.py`. Login now requires a known active user (see Authentication above); approve/return are supervisor-only and an employee may only submit components assigned to them.
+- Front-end: sign-in dialog with automatic 401 retry, header identity chip, assignee dropdowns and per-board assignee filters fed by `/api/users`.
+- New endpoints: `GET /api/meta` (authoritative stage/status/role lists), `GET /api/users`, `POST /api/tasks/<id>/assign` (with optional cascade to later unassigned steps), `POST /api/tasks/<id>/transition` (submit/approve/return). Removed: `GET /api/open-folder` (the per-component folder card remains).
+
+### v18: 31-step workflow
+
+- The "Presence CoS Evaluation" step is retired as a visible component — the value is derived automatically (final Reservoir CoS × Trap CoS × Seal CoS) — and the workflow is renumbered to a contiguous 1–31. Retired rows, their inputs and history are preserved, never deleted.
+- New leads capture X/Y at creation; the values prefill the Staking step's well location fields.
+
+### v19: Formations and the Portfolio rework
+
+- Formation interpretation values (SARH/QASM/QWRH, quicklook and final phases) move off scattered step fields into a well-level `project_formations` table, edited through a mini-sheet on the logs steps. Legacy SARH values are backfilled once. New endpoints: `GET`/`PUT /api/projects/<id>/formations`.
+- The Portfolio tab becomes an 8-column mature-prospect analysis table: Well Name, Gas Field, Seismic Block (mapped via `SEISMIC_BLOCK_NAMES` in `config.py`), Classification, BP Year, Fluid, Mean OGIP, Total CoS.
