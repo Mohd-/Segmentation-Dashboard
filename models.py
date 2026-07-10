@@ -186,6 +186,9 @@ class ProjectOverview(Base):
     quick_look_pay = Column(Text)
     quick_look_porosity = Column(Text)
     quick_look_swt = Column(Text)
+    # WS7: mirrored from the GHEER step's gheer_classification select
+    # (Development / Appraisal / Exploration); shown in the Portfolio table.
+    classification = Column(Text)
     last_updated = Column(Text)
 
 

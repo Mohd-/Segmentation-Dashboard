@@ -124,6 +124,19 @@ SEED_USERS = [
 
 
 # ---------------------------------------------------------------------------
+# Seismic block dictionary (consumed by reporting.get_portfolio_rows)
+# ---------------------------------------------------------------------------
+# !!! PLACEHOLDER DICT -- EDIT BEFORE DEPLOYING !!!
+# Maps seismic volume AR numbers (format "AR-XXXXXXX", as entered in the
+# Reservoir CoS evaluations) to the human-readable field names shown in the
+# Portfolio "Seismic Block" column. AR numbers not found here fall back to
+# displaying the raw AR number, so an incomplete dictionary degrades gracefully.
+SEISMIC_BLOCK_NAMES = {
+    "AR-0000001": "JOHN 4",  # placeholder example -- replace with real entries
+}
+
+
+# ---------------------------------------------------------------------------
 # Windows share roots and directory maps (consumed by folders.py)
 # ---------------------------------------------------------------------------
 # Shared/root directories only. Do NOT put a field name or well name here.

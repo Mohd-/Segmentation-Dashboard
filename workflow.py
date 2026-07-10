@@ -149,6 +149,8 @@ DYNAMIC_FIELD_OVERVIEW_MAP = {
     "quicklook_average_porosity_pct": "quick_look_porosity",
     "quicklook_average_swt_pct": "quick_look_swt",
     "flowback_gas_rate_mmscfd": "flowback_results",
+    # WS7: the Classification entered in the GHEER step feeds the Portfolio.
+    "gheer_classification": "classification",
 }
 
 _OVERVIEW_ALLOWED_FIELDS = {
@@ -156,6 +158,7 @@ _OVERVIEW_ALLOWED_FIELDS = {
     "post_drill_estimation", "reservoir_pressure", "reservoir_gradient",
     "flowback_results", "pay", "porosity", "swt",
     "quick_look_pay", "quick_look_porosity", "quick_look_swt",
+    "classification",
 }
 
 
@@ -1411,22 +1414,32 @@ def _task_field_value(session, project_id, task_name, field_key):
     return "" if not row or row["field_value"] is None else str(row["field_value"]).strip()
 
 
-def _final_reservoir_cos_value(session, project_id):
-    """Return the last completed Reservoir CoS row value (the final Reservoir CoS)."""
-    raw = _task_field_value(session, project_id, "Reservoir CoS", "reservoir_cos_rows")
-    if not raw:
+def last_reservoir_cos_row_value(raw_rows_json, key):
+    """Return the LAST non-empty ``key`` value from a reservoir_cos_rows JSON.
+
+    Pure parsing helper shared by the final-Reservoir-CoS lookup (key
+    'reservoir_cos_pct') and the Portfolio seismic-block column (key
+    'seismic_volume_ar_number'). Malformed/absent JSON yields ''.
+    """
+    if not raw_rows_json:
         return ""
     try:
-        rows = json.loads(raw)
+        rows = json.loads(raw_rows_json)
     except (TypeError, json.JSONDecodeError):
         return ""
     if not isinstance(rows, list):
         return ""
     for row in reversed(rows):
-        value = (row or {}).get("reservoir_cos_pct")
+        value = (row or {}).get(key)
         if value is not None and str(value).strip() != "":
             return str(value).strip()
     return ""
+
+
+def _final_reservoir_cos_value(session, project_id):
+    """Return the last completed Reservoir CoS row value (the final Reservoir CoS)."""
+    raw = _task_field_value(session, project_id, "Reservoir CoS", "reservoir_cos_rows")
+    return last_reservoir_cos_row_value(raw, "reservoir_cos_pct")
 
 
 def recalculate_presence_cos(session, project_id, changed_by="System"):

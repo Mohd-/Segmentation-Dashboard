@@ -414,6 +414,12 @@ def test_business_plan_rows_and_portfolio_rows(client):
     assert "summary" in body
     assert "business_plan_wells" in body["summary"]
     assert "cumulative_ogip" in body["summary"]
+    # WS7: every row carries exactly the 8 analysis columns (plus internals).
+    assert len(body["rows"]) == 1
+    row = body["rows"][0]
+    for key in ("well_name", "gas_field", "seismic_block", "classification",
+                "year", "fluid", "mean_ogip", "total_cos"):
+        assert key in row, key
 
 
 def test_portfolio_rows_invalid_year(client):

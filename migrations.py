@@ -107,6 +107,7 @@ def _ensure_columns(session) -> None:
     _ensure_column(session, "project_overview", "quick_look_pay", "TEXT")
     _ensure_column(session, "project_overview", "quick_look_porosity", "TEXT")
     _ensure_column(session, "project_overview", "quick_look_swt", "TEXT")
+    _ensure_column(session, "project_overview", "classification", "TEXT")
     _ensure_column(session, "project_overview", "last_updated", "TEXT")
     _ensure_column(session, "projects", "revision", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(session, "project_tasks", "revision", "INTEGER NOT NULL DEFAULT 0")
@@ -503,8 +504,11 @@ def _upgrade_to_v19(session) -> None:
     is idempotent and never overwrites a row the user has since edited. The
     legacy task fields themselves are left untouched (historical record).
 
-    NOTE: v19 gains MORE content in a later workstream (portfolio columns).
-    Append new idempotent steps below this backfill; keep each self-contained.
+    NOTE (WS7, second v19 slice): the Portfolio rework needed only one new
+    column -- project_overview.classification -- which is added by
+    ``_ensure_columns`` (empty column, no data transform), so no additional
+    numbered step lives here. Append any future idempotent v19 steps below
+    this backfill; keep each self-contained.
     """
     now = utc_now_str()
     projects = db.fetch_all(session, "SELECT project_id FROM projects")

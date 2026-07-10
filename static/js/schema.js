@@ -20,7 +20,9 @@ export function piip(prefix) {
     { key: prefix + '_liquid_p10', label: 'P10 Liquid (MMSTB)', type: 'number', showIf: prefix + '_has_liquid' }
   ];
 }
-export var FLUID_TYPES = ['', 'Gas', 'Gas over Water', 'Wet', 'Tight'];
+// WS7 vocabulary. Legacy stored values ('Wet'/'Tight') simply render
+// unselected on old projects; the stored data is untouched.
+export var FLUID_TYPES = ['', 'Not Drilled Yet', 'Dry', 'Gas', 'Water', 'Condensate', 'Liquid', 'Gas over Water'];
 // WS6: formation data is well-level (project_formations via /api/projects/<id>/
 // formations), not step-level. Fixed list -- users never create formations; the
 // old "add new formation" clone mechanism (quickNew/finalNew) is gone. Legacy
@@ -72,7 +74,7 @@ export var SCHEMA = {
   // sarh_formation_prognosis_pre_drill keeps its key (renaming EAV keys
   // orphans stored data); only the label dropped "(Pre-Drill)".
   'Well Proposal': [{ key: 'sarh_formation_prognosis_pre_drill', label: 'SARH Formation Prognosis', type: 'text' }, { key: 'vsp_required', label: 'VSP Required?', type: 'select', options: ['', 'No', 'Yes'] }, { key: 'vsp_request_link', label: 'New Request Placeholder', type: 'link', value: '#' }, { key: 'urinsight_link', label: 'URINSIGHT', type: 'link', value: 'https://urinsight/', linkText: 'Create the well proposal in URINSIGHT' }],
-  'GHEER': [{ key: 'gheer_base_map', label: 'Base Map', type: 'checkbox' }, { key: 'gheer_offset_wells', label: 'Offset Wells', type: 'checkbox' }, { key: 'gheer_target_polygon', label: 'Target Drilling Polygon (50x50 m)', type: 'checkbox' }, { key: 'gheer_prognosis_tops', label: 'Prognosis Tops', type: 'checkbox' }, { key: 'gheer_depth_top_sarah_grid', label: 'Depth Top Sarah Formation Grid', type: 'checkbox' }, { key: 'gheer_drilling_hazards', label: 'Drilling Hazards', type: 'checkbox' }, { key: 'gheer_pore_pressure_fracture_gradient', label: 'Pore Pressure Gradient and Fracture Gradient', type: 'checkbox' }, { key: 'gheer_wellbore_stability', label: 'Wellbore Stability', type: 'checkbox' }],
+  'GHEER': [{ key: 'gheer_classification', label: 'Classification', type: 'select', options: ['', 'Development', 'Appraisal', 'Exploration'] }, { key: 'gheer_base_map', label: 'Base Map', type: 'checkbox' }, { key: 'gheer_offset_wells', label: 'Offset Wells', type: 'checkbox' }, { key: 'gheer_target_polygon', label: 'Target Drilling Polygon (50x50 m)', type: 'checkbox' }, { key: 'gheer_prognosis_tops', label: 'Prognosis Tops', type: 'checkbox' }, { key: 'gheer_depth_top_sarah_grid', label: 'Depth Top Sarah Formation Grid', type: 'checkbox' }, { key: 'gheer_drilling_hazards', label: 'Drilling Hazards', type: 'checkbox' }, { key: 'gheer_pore_pressure_fracture_gradient', label: 'Pore Pressure Gradient and Fracture Gradient', type: 'checkbox' }, { key: 'gheer_wellbore_stability', label: 'Wellbore Stability', type: 'checkbox' }],
   // WS6: per-SARH scalar fields + the quickNew clone block are replaced by the
   // well-level formations mini-sheet; reservoir depths and file checkboxes stay
   // as normal task fields.

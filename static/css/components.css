@@ -330,10 +330,12 @@
 .portfolio-stat b { display: block; margin-top: 6px; color: var(--ink-900); font-size: 24px; }
 .portfolio-table tbody tr { cursor: default; }
 .portfolio-table tbody tr:hover { background: var(--surface); }
-.portfolio-table th:nth-child(1), .portfolio-table td:nth-child(1) { width: 95px; }
-.portfolio-table th:nth-child(2), .portfolio-table td:nth-child(2) { min-width: 180px; }
-.portfolio-table th:nth-child(3), .portfolio-table th:nth-child(4), .portfolio-table th:nth-child(5),
-.portfolio-table td:nth-child(3), .portfolio-table td:nth-child(4), .portfolio-table td:nth-child(5) { text-align: right; white-space: nowrap; }
+/* WS7 columns: 1 Well Name, 2 Gas Field, 3 Seismic Block, 4 Classification,
+   5 BP Year, 6 Fluid, 7 Mean OGIP (numeric), 8 Total CoS (numeric). */
+.portfolio-table th:nth-child(1), .portfolio-table td:nth-child(1) { min-width: 160px; }
+.portfolio-table th:nth-child(5), .portfolio-table td:nth-child(5) { width: 90px; }
+.portfolio-table th:nth-child(7), .portfolio-table th:nth-child(8),
+.portfolio-table td:nth-child(7), .portfolio-table td:nth-child(8) { text-align: right; white-space: nowrap; }
 
 /* =========================================================================
    Audit tab

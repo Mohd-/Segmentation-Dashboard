@@ -1,4 +1,4 @@
-import { byId, table, esc, classChip, msg } from '../dom.js';
+import { byId, table, esc, msg } from '../dom.js';
 import { API } from '../api.js';
 
 export function formatNumber(value) {
@@ -20,14 +20,17 @@ export function refreshPortfolio() {
   API.portfolioRows({ year: year, activity: activity }).then(function (payload) {
     var rows = (payload && payload.rows) || [];
     renderPortfolioStats((payload && payload.summary) || {});
-    table(byId('portfolio-table'), ['Year', 'Well', 'Pre-Drill OGIP (BCF)', 'Post-Drill OGIP (BCF)', 'Chance of Success (%)', 'Class'], rows.map(function (row) {
+    // WS7: exactly the 8 analysis columns, in this order.
+    table(byId('portfolio-table'), ['Well Name', 'Gas Field', 'Seismic Block', 'Classification', 'BP Year', 'Fluid', 'Mean OGIP (BCF)', 'Total CoS (%)'], rows.map(function (row) {
       return [
-        esc(row.year || ''),
         esc(row.well_name || ''),
-        esc(row.pre_drill_ogip || ''),
-        esc(row.post_drill_ogip || ''),
-        esc(row.chance_of_success || ''),
-        classChip(row.segment_class || '')
+        esc(row.gas_field || ''),
+        esc(row.seismic_block || ''),
+        esc(row.classification || ''),
+        esc(row.year || ''),
+        esc(row.fluid || ''),
+        esc(row.mean_ogip || ''),
+        esc(row.total_cos || '')
       ];
     }));
   }).catch(function (error) { msg(error.message, 'error'); });
