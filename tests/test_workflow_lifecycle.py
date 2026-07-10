@@ -169,15 +169,20 @@ def test_completion_percent_excludes_not_applicable_from_denominator(client):
 
 
 def test_completion_percent_known_arithmetic_for_prospect(client):
+    # Completion is scoped to the operating pipeline's stages: a prospect is
+    # measured against its 13 Prospect-stage tasks only, not all 32 (the
+    # BP-stage tasks belong to a pipeline it has not entered).
     pid = create_project(client, "COMPLETION-PROSPECT-1")
     tasks = get_tasks(client, pid)
     assert len(tasks) == 32
-    for task in tasks[:5]:
+    prospect_tasks = [t for t in tasks if t["stage_group"] in PROSPECT_STAGES]
+    assert len(prospect_tasks) == 13
+    for task in prospect_tasks[:5]:
         client.patch(f"/api/tasks/{task['task_id']}", json={
             "status": "Approved", "revision": task["revision"],
         })
     resp = client.get(f"/api/projects/{pid}/completion")
-    assert resp.get_json() == {"percent": round(5 / 32 * 100, 1)}
+    assert resp.get_json() == {"percent": round(5 / 13 * 100, 1)}
 
 
 # ---------------------------------------------------------------------------
@@ -196,15 +201,51 @@ def test_approving_all_prospect_tasks_completes_project(client):
 
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["overall_status"] == "Completed"
-    # Pinning actual (surprising) behavior: refresh_project_state() hardcodes the
-    # "final" task/stage to the PDA component regardless of its own status once
-    # overall_status flips to Completed for a prospect whose only approved work
-    # was the Prospect-stage tasks. The BP-stage tasks (including PDA itself)
-    # remain "Not Assigned" -- completion percent does NOT reach 100% here
-    # because it counts across all is_active tasks, not just the tasks in the
-    # pipeline's currently-applicable stages.
-    assert project["current_task"] == "PDA"
-    assert project["current_stage"] == "Post-Testing"
+    # A completed project anchors on the final (highest-sequence) task of its
+    # OWN pipeline: "Approval to Stake" / Pre-Well Delivery for a prospect
+    # (a completed BP well anchors on PDA / Post-Testing), and completion
+    # percent reads 100% because it is scoped to the pipeline's own stages.
+    assert project["current_task"] == "Approval to Stake"
+    assert project["current_stage"] == "Pre-Well Delivery"
 
     completion = client.get(f"/api/projects/{pid}/completion").get_json()
-    assert completion == {"percent": round(13 / 32 * 100, 1)}
+    assert completion == {"percent": 100.0}
+
+
+def test_approving_all_bp_tasks_completes_bp_well_anchored_on_pda(client):
+    # The other pipeline branch of the completion anchor: a BP well that
+    # finishes every BP-stage task anchors on its own final task, PDA.
+    pid = create_project(
+        client, "COMPLETE-ALL-BP-1", pipeline_type="bp",
+        business_plan_enabled=True, business_plan_year=2029,
+    )
+    for task in get_tasks(client, pid):
+        if task["status"] not in ("Approved", "Not Applicable"):
+            resp = client.patch(f"/api/tasks/{task['task_id']}", json={
+                "status": "Approved", "revision": task["revision"],
+            })
+            assert resp.status_code == 200, resp.get_json()
+
+    project = client.get(f"/api/projects/{pid}").get_json()
+    assert project["overall_status"] == "Completed"
+    assert project["current_task"] == "PDA"
+    assert project["current_stage"] == "Post-Testing"
+    completion = client.get(f"/api/projects/{pid}/completion").get_json()
+    assert completion == {"percent": 100.0}
+
+
+def test_activity_log_order_is_deterministic_within_same_second(client):
+    # Several history rows are written within the same changed_at second here;
+    # history_id must break the tie so the log reads newest-insert-first.
+    pid = create_project(client, "ACTIVITY-ORDER-1")
+    tasks = get_tasks(client, pid)
+    for task in tasks[:4]:
+        resp = client.patch(f"/api/tasks/{task['task_id']}", json={
+            "status": "In Progress", "revision": task["revision"],
+        })
+        assert resp.status_code == 200, resp.get_json()
+
+    rows = client.get(f"/api/activity?project_id={pid}").get_json()
+    assert len(rows) >= 5  # creation event + one per status change
+    keys = [(row["changed_at"], row["history_id"]) for row in rows]
+    assert keys == sorted(keys, reverse=True)

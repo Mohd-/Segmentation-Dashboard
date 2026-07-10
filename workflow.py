@@ -430,14 +430,23 @@ def get_task(session, task_id):
 
 
 def project_completion_percent(session, project_id):
-    """Percent of applicable (non-Not-Applicable) active tasks that are done."""
+    """Percent of the current pipeline's applicable tasks that are done.
+
+    Scoped to the stages of the project's operating pipeline (Prospect
+    Maturation stages for prospects, BP Execution stages for BP wells) so the
+    figure agrees with the overall_status logic in refresh_project_state: a
+    prospect that has approved every Prospect-stage task reads 100% even though
+    its BP-stage tasks are untouched. Not Applicable tasks never count.
+    """
+    project = get_project(session, project_id) or {}
+    stages = BP_EXECUTION_STAGES if str(project.get("pipeline_type") or "prospect").lower() == "bp" else PROSPECT_STAGES
     row = db.fetch_one(session, """
         SELECT
             SUM(CASE WHEN status != 'Not Applicable' THEN 1 ELSE 0 END) AS applicable_total,
             SUM(CASE WHEN status IN ('Approved', 'Complete') THEN 1 ELSE 0 END) AS done
         FROM project_tasks
-        WHERE project_id = :project_id AND is_active = 1
-    """, {"project_id": project_id})
+        WHERE project_id = :project_id AND is_active = 1 AND stage_group IN :stages
+    """, {"project_id": project_id, "stages": stages})
     total = int(row["applicable_total"] or 0)
     done = int(row["done"] or 0)
     return round((done / total) * 100, 1) if total else 0.0
@@ -1136,7 +1145,8 @@ def refresh_project_state(session, project_id):
 
     Uses reconcile_project_flow to find the active task; when none remain in the
     applicable pipeline stages the project is marked Completed and anchored on
-    the hardcoded final PDA / Post-Testing position (a preserved quirk).
+    the final (highest-sequence) task of its own pipeline -- "Approval to Stake"
+    for a completed prospect, "PDA" for a completed BP well.
 
     ``completed_at`` bookkeeping (schema v16): stamped with the current UTC time
     exactly when overall_status TRANSITIONS to 'Completed'; cleared (NULL) when
@@ -1181,11 +1191,12 @@ def refresh_project_state(session, project_id):
         if overall_status == "Completed":
             newly_completed = not was_completed
             final_done = db.fetch_one(session, """
-                SELECT task_name, stage_group, assigned_to
+                SELECT task_name, stage_group
                 FROM project_tasks
-                WHERE project_id = :project_id AND task_name = 'PDA'
+                WHERE project_id = :project_id AND is_active = 1 AND stage_group IN :stages
+                ORDER BY sequence_no DESC
                 LIMIT 1
-            """, {"project_id": project_id})
+            """, {"project_id": project_id, "stages": applicable_stages})
             final_task_name = final_done["task_name"] if final_done else "PDA"
             final_stage = final_done["stage_group"] if final_done else "Post-Testing"
             params = {"stage": final_stage, "task": final_task_name, "overall_status": overall_status,

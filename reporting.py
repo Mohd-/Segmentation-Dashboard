@@ -176,17 +176,23 @@ def get_portfolio_rows(session, year="All", activity="All"):
 
 
 def get_activity_log(session, project_id=None, limit=500):
-    """Return recent task_history rows (optionally filtered to one project)."""
+    """Return recent task_history rows (optionally filtered to one project).
+
+    history_id breaks ties for events sharing the same changed_at second, so
+    the log order is deterministic (newest insert first) instead of depending
+    on the database's whim.
+    """
     if project_id:
         return db.fetch_all(session, """
             SELECT th.*, p.project_name
             FROM task_history th
             LEFT JOIN projects p ON p.project_id = th.project_id
-            WHERE th.project_id = :project_id ORDER BY th.changed_at DESC LIMIT :limit
+            WHERE th.project_id = :project_id
+            ORDER BY th.changed_at DESC, th.history_id DESC LIMIT :limit
         """, {"project_id": project_id, "limit": limit})
     return db.fetch_all(session, """
         SELECT th.*, p.project_name
         FROM task_history th
         LEFT JOIN projects p ON p.project_id = th.project_id
-        ORDER BY th.changed_at DESC LIMIT :limit
+        ORDER BY th.changed_at DESC, th.history_id DESC LIMIT :limit
     """, {"limit": limit})
