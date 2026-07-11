@@ -33,18 +33,18 @@ def test_get_projects_no_duplicate_row_for_legacy_quicklook_task(client):
     conn = sqlite3.connect(str(client.db_path))
     conn.row_factory = sqlite3.Row
     try:
-        template_row = conn.execute(
-            "SELECT template_id, sequence_no, stage_group FROM project_tasks WHERE task_id = ?",
+        source_row = conn.execute(
+            "SELECT sequence_no, stage_group FROM project_tasks WHERE task_id = ?",
             (interpretation_task["task_id"],),
         ).fetchone()
         conn.execute(
             """
             INSERT INTO project_tasks
-                (project_id, template_id, sequence_no, task_name, stage_group,
+                (project_id, sequence_no, task_name, stage_group,
                  status, priority, is_active, last_updated)
-            VALUES (?, ?, ?, 'Quicklook Logs', ?, 'Not Assigned', 'Medium', 1, datetime('now'))
+            VALUES (?, ?, 'Quicklook Logs', ?, 'Not Assigned', 'Medium', 1, datetime('now'))
             """,
-            (pid, template_row["template_id"], template_row["sequence_no"], template_row["stage_group"]),
+            (pid, source_row["sequence_no"], source_row["stage_group"]),
         )
         new_task_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.execute(

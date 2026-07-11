@@ -5,7 +5,7 @@ What belongs here:
   foreign_keys/busy_timeout on connect, WAL + synchronous=NORMAL at bootstrap).
 - The session factory and Flask request integration (a session bound to
   ``flask.g`` with teardown).
-- ``bootstrap()`` -- create tables + run migrations + seed templates, guarded so
+- ``bootstrap()`` -- create tables + seed base data (migrations.run), guarded so
   it runs once per process but is re-armable for tests via ``reset_for_tests()``.
 - The SQLAlchemy version guard.
 - The shared SQL execution helpers (``fetch_one``/``fetch_all``/``execute``/
@@ -148,7 +148,7 @@ def bootstrap(db_path_or_url: Optional[str] = None) -> None:
             with engine.connect() as connection:
                 connection.exec_driver_sql("PRAGMA journal_mode = WAL")
                 connection.exec_driver_sql("PRAGMA synchronous = NORMAL")
-        # Imported lazily to avoid an import cycle (migrations -> workflow -> db).
+        # Imported lazily to avoid an import cycle (migrations -> db).
         import migrations
         session = _SessionFactory()
         try:

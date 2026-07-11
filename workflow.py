@@ -1,10 +1,11 @@
 """Project and task lifecycle domain logic -- the heart of the application.
 
 What belongs here:
-- The workflow domain constants (statuses, stage ordering, the pipeline
-  templates, task renames, the dynamic-field -> overview mirror map).
+- The workflow domain constants (statuses, stage ordering, the
+  ``PIPELINE_TEMPLATES`` step list -- the single source of truth for the
+  31-step workflow -- and the dynamic-field -> overview mirror map).
 - Every project/task create/read/update operation ported from the old
-  ``Database`` class: seeding, project CRUD, task saves, BP promotion/demotion,
+  ``Database`` class: project CRUD, task saves, BP promotion/demotion,
   lead-summary snapshots, presence-CoS recalculation, history logging, overview
   and business-plan-commitment access.
 
@@ -94,43 +95,52 @@ FORMATION_VALUE_FIELDS = [
 # is a free-text description and stays TEXT.
 FORMATION_NUMERIC_FIELDS = [f for f in FORMATION_VALUE_FIELDS if f != "fluid"]
 
-# Template tuple: id, component, stage, role, duration, depends_on, branch_type, output
+# The 31-step pipeline definition: (sequence_no, task_name, stage_group).
+# This list is the SINGLE SOURCE OF TRUTH for the workflow -- there is no
+# task_templates table; project creation materializes project_tasks rows
+# straight from these tuples.
+#
+# Pre-deployment, editing this list only affects NEW projects (existing dev
+# databases are throwaway -- delete the .db and restart; see migrations.py).
+# POST-deployment, changing it requires a numbered data migration for existing
+# project_tasks rows: resequencing by task_name, and deactivating retired
+# steps (is_active = 0) so their inputs and audit trail survive.
 PIPELINE_TEMPLATES = [
-    (1, "Reservoir Area Definition", "Lead Identification", "Lead Owner", 3, None, "normal", "Reservoir area defined"),
-    (2, "Thickness Estimation", "Lead Identification", "Lead Owner", 3, None, "normal", "Thickness estimated"),
-    (3, "Lead Resource Assessment", "Lead Identification", "Reservoir Engineer", 3, None, "normal", "Lead resources assessed"),
-    (4, "Seismic Signature Validation", "Risking", "Geologist", 2, None, "normal", "Seismic signature validated"),
-    (5, "Reservoir CoS", "Risking", "Reservoir Engineer", 3, None, "normal", "Reservoir CoS entered"),
-    (6, "Trap CoS", "Risking", "Geologist", 3, None, "normal", "Trap CoS entered"),
-    (7, "Seal CoS", "Risking", "Geologist", 3, None, "normal", "Seal CoS entered"),
+    (1, "Reservoir Area Definition", "Lead Identification"),
+    (2, "Thickness Estimation", "Lead Identification"),
+    (3, "Lead Resource Assessment", "Lead Identification"),
+    (4, "Seismic Signature Validation", "Risking"),
+    (5, "Reservoir CoS", "Risking"),
+    (6, "Trap CoS", "Risking"),
+    (7, "Seal CoS", "Risking"),
     # v18: "Presence CoS Evaluation" (formerly step 8) was removed as a visible
     # step -- its value is derived (Reservoir x Trap x Seal), computed by
     # recalculate_presence_cos and surfaced as project_overview.derisking.
     # The remaining steps renumber to a clean 1-31.
-    (8, "Prospect Evaluation Presentation", "Segmentation", "Lead Owner", 2, None, "normal", "Presentation prepared"),
-    (9, "Well Creation", "Pre-Well Delivery", "Well Planner", 3, None, "normal", "Well created"),
-    (10, "Pre-Drilling Resource Assessment", "Pre-Well Delivery", "Reservoir Engineer", 3, None, "normal", "Pre-drilling resources assessed"),
-    (11, "Staking Moving Tolerance", "Pre-Well Delivery", "Geologist", 2, None, "normal", "Moving tolerance recorded"),
-    (12, "Approval to Stake", "Pre-Well Delivery", "Stakeholder", 2, None, "normal", "Approval to stake complete"),
-    (13, "BP Execution Gate", "Well Delivery", "Portfolio Team", 1, None, "normal", "BP execution gate complete"),
-    (14, "Well Proposal", "Well Delivery", "Drilling Engineer", 3, None, "normal", "Well proposal complete"),
-    (15, "Site Preparation", "Well Delivery", "Field Team", 4, None, "normal", "Site preparation complete"),
-    (16, "Approval To Drill", "Well Delivery", "Approver", 2, None, "normal", "Approval to drill complete"),
-    (17, "GHEER", "Well Delivery", "HSE / Review Team", 2, None, "normal", "GHEER complete"),
-    (18, "Quicklook Logs Interpretation", "Post-Drilling", "Petrophysicist", 2, None, "normal", "Quicklook logs interpreted"),
-    (19, "Aramco Picks", "Post-Drilling", "Geologist", 2, None, "normal", "Aramco picks complete"),
-    (20, "Post-Drilling Resource Assessment", "Post-Drilling", "Reservoir Engineer", 3, None, "normal", "Post-drilling resources assessed"),
-    (21, "SAD Model", "Post-Drilling", "PDA Owner", 3, None, "normal", "SAD model complete"),
-    (22, "Executive Summary", "Post-Drilling", "Manager", 2, None, "normal", "Executive summary complete"),
-    (23, "URED Update", "Post-Drilling", "Reservoir Engineer", 2, None, "normal", "URED update complete"),
-    (24, "Post-Well Outcome & Decision Gate", "Post-Drilling", "Portfolio Team", 3, None, "normal", "Outcome decision complete"),
-    (25, "Flowback Results", "Post-Testing", "Analyst", 3, None, "normal", "Flowback results captured"),
-    (26, "SAD Update", "Post-Testing", "PDA Owner", 3, None, "normal", "SAD update complete"),
-    (27, "Executive Summary Final", "Post-Testing", "Manager", 2, None, "normal", "Final executive summary complete"),
-    (28, "Final Log Analysis", "Post-Testing", "Petrophysicist", 2, None, "normal", "Final log analysis complete"),
-    (29, "PVAD Structural MTR", "Post-Testing", "Reporting Owner", 2, None, "normal", "PVAD structural MTR complete"),
-    (30, "Resource Assessment Update", "Post-Testing", "Reservoir Engineer", 2, None, "normal", "Resource assessment updated"),
-    (31, "PDA", "Post-Testing", "PDA Owner", 2, None, "normal", "PDA complete"),
+    (8, "Prospect Evaluation Presentation", "Segmentation"),
+    (9, "Well Creation", "Pre-Well Delivery"),
+    (10, "Pre-Drilling Resource Assessment", "Pre-Well Delivery"),
+    (11, "Staking Moving Tolerance", "Pre-Well Delivery"),
+    (12, "Approval to Stake", "Pre-Well Delivery"),
+    (13, "BP Execution Gate", "Well Delivery"),
+    (14, "Well Proposal", "Well Delivery"),
+    (15, "Site Preparation", "Well Delivery"),
+    (16, "Approval To Drill", "Well Delivery"),
+    (17, "GHEER", "Well Delivery"),
+    (18, "Quicklook Logs Interpretation", "Post-Drilling"),
+    (19, "Aramco Picks", "Post-Drilling"),
+    (20, "Post-Drilling Resource Assessment", "Post-Drilling"),
+    (21, "SAD Model", "Post-Drilling"),
+    (22, "Executive Summary", "Post-Drilling"),
+    (23, "URED Update", "Post-Drilling"),
+    (24, "Post-Well Outcome & Decision Gate", "Post-Drilling"),
+    (25, "Flowback Results", "Post-Testing"),
+    (26, "SAD Update", "Post-Testing"),
+    (27, "Executive Summary Final", "Post-Testing"),
+    (28, "Final Log Analysis", "Post-Testing"),
+    (29, "PVAD Structural MTR", "Post-Testing"),
+    (30, "Resource Assessment Update", "Post-Testing"),
+    (31, "PDA", "Post-Testing"),
 ]
 
 DYNAMIC_FIELD_OVERVIEW_MAP = {
@@ -155,45 +165,6 @@ _OVERVIEW_ALLOWED_FIELDS = {
     "quick_look_pay", "quick_look_porosity", "quick_look_swt",
     "classification",
 }
-
-
-# ---------------------------------------------------------------------------
-# Templates + seeding
-# ---------------------------------------------------------------------------
-
-def get_templates(session) -> List[Dict[str, Any]]:
-    """Return the live task templates ordered by sequence.
-
-    Filtered to the canonical PIPELINE_TEMPLATES names: a database can carry
-    retired templates left parked at a high sequence_no (kept only so old task
-    rows retain a valid template_id reference), and those must not spawn tasks
-    on new projects.
-    """
-    names = [tpl[1] for tpl in PIPELINE_TEMPLATES]
-    return db.fetch_all(session, """
-        SELECT * FROM task_templates WHERE task_name IN :names ORDER BY sequence_no
-    """, {"names": names})
-
-
-def seed_templates(session) -> None:
-    """Insert the canonical PIPELINE_TEMPLATES if the templates table is empty."""
-    count = db.fetch_one(session, "SELECT COUNT(*) AS c FROM task_templates")["c"]
-    if count:
-        return
-    db.execute_many(session, """
-        INSERT INTO task_templates (
-            template_id, sequence_no, task_name, stage_group, default_role,
-            default_duration_days, depends_on_template_id, branch_type, mandatory_output
-        ) VALUES (:template_id, :sequence_no, :task_name, :stage_group, :default_role,
-                  :default_duration_days, :depends_on_template_id, :branch_type, :mandatory_output)
-    """, [
-        {
-            "template_id": t[0], "sequence_no": idx + 1, "task_name": t[1],
-            "stage_group": t[2], "default_role": t[3], "default_duration_days": t[4],
-            "depends_on_template_id": t[5], "branch_type": t[6], "mandatory_output": t[7],
-        }
-        for idx, t in enumerate(PIPELINE_TEMPLATES)
-    ])
 
 
 # ---------------------------------------------------------------------------
@@ -256,15 +227,15 @@ def add_project(session, project_name, start_date=None, target_date=None, change
     if duplicate:
         raise ValueError("A lead / well with this name already exists.")
 
-    templates = list(get_templates(session))
-    if not templates:
-        raise RuntimeError("Workflow templates are not available.")
-    first_template = next((t for t in templates if t["stage_group"] in BP_EXECUTION_STAGES), templates[0]) if pipeline_type == "bp" else templates[0]
+    # The workflow definition lives in code (PIPELINE_TEMPLATES); the project
+    # anchors on its pipeline's first step.
+    first_template = (next((t for t in PIPELINE_TEMPLATES if t[2] in BP_EXECUTION_STAGES), PIPELINE_TEMPLATES[0])
+                      if pipeline_type == "bp" else PIPELINE_TEMPLATES[0])
 
     try:
         return _insert_project_with_tasks(session, project_name, start_date, target_date, changed_by,
                                           lead_x, lead_y, year_val, bp_enabled, active_well_enabled,
-                                          pipeline_type, templates, first_template, now)
+                                          pipeline_type, first_template, now)
     except IntegrityError as exc:
         # UNIQUE(project_name) race lost to a concurrent insert.
         if "unique" in str(getattr(exc, "orig", None) or exc).lower():
@@ -273,9 +244,10 @@ def add_project(session, project_name, start_date=None, target_date=None, change
 
 
 def _insert_project_with_tasks(session, project_name, start_date, target_date, changed_by, lead_x, lead_y,
-                               year_val, bp_enabled, active_well_enabled, pipeline_type, templates,
+                               year_val, bp_enabled, active_well_enabled, pipeline_type,
                                first_template, now):
-    """Insert the project row plus its per-template tasks in one locked transaction."""
+    """Insert the project row plus one task per PIPELINE_TEMPLATES step in one locked transaction."""
+    first_sequence, first_task_name, first_stage = first_template
     with db.write_transaction(session):
         result = db.execute(session, """
             INSERT INTO projects (
@@ -289,7 +261,7 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
                       :active_well_enabled, :pipeline_type)
         """, {
             "project_name": project_name, "overall_status": "In Progress",
-            "current_stage": first_template["stage_group"], "current_task": first_template["task_name"],
+            "current_stage": first_stage, "current_task": first_task_name,
             "current_owner": None, "start_date": start_date,
             "target_date": target_date, "stage_started_at": start_date, "last_updated": now,
             "lead_folder_path": folders.default_lead_folder_path(project_name),
@@ -299,9 +271,8 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
         })
         project_id = result.lastrowid  # PG: use RETURNING when on Postgres
         first_task_id = None
-        first_sequence = first_template["sequence_no"]
-        for row in templates:
-            is_bp_stage = row["stage_group"] in BP_EXECUTION_STAGES
+        for sequence_no, task_name, stage_group in PIPELINE_TEMPLATES:
+            is_bp_stage = stage_group in BP_EXECUTION_STAGES
             if pipeline_type == "bp" and not is_bp_stage:
                 initial_status = "Not Applicable"
             else:
@@ -310,23 +281,23 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
                 initial_status = "Not Assigned"
             task_result = db.execute(session, """
                 INSERT INTO project_tasks (
-                    project_id, template_id, sequence_no, task_name, stage_group, assigned_to,
+                    project_id, sequence_no, task_name, stage_group, assigned_to,
                     status, actual_start, actual_finish, comments, priority, business_plan_enabled,
                     business_plan_year, is_active, last_updated
-                ) VALUES (:project_id, :template_id, :sequence_no, :task_name, :stage_group, :assigned_to,
+                ) VALUES (:project_id, :sequence_no, :task_name, :stage_group, :assigned_to,
                           :status, :actual_start, :actual_finish, :comments, :priority, :business_plan_enabled,
                           :business_plan_year, 1, :last_updated)
             """, {
-                "project_id": project_id, "template_id": row["template_id"],
-                "sequence_no": row["sequence_no"], "task_name": row["task_name"],
-                "stage_group": row["stage_group"], "assigned_to": None,
+                "project_id": project_id,
+                "sequence_no": sequence_no, "task_name": task_name,
+                "stage_group": stage_group, "assigned_to": None,
                 "status": initial_status,
                 "actual_start": None, "actual_finish": None,
                 "comments": None, "priority": "Medium",
                 "business_plan_enabled": bp_enabled, "business_plan_year": year_val,
                 "last_updated": now,
             })
-            if row["sequence_no"] == first_sequence:
+            if sequence_no == first_sequence:
                 first_task_id = task_result.lastrowid  # PG: use RETURNING when on Postgres
 
         db.execute(session,
@@ -339,7 +310,7 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
                 session,
                 task_id=first_task_id,
                 project_id=project_id,
-                task_name=first_template["task_name"],
+                task_name=first_task_name,
                 action_type=action,
                 old_status=None,
                 new_status="Created",

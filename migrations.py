@@ -2,11 +2,12 @@
 
 What belongs here:
 - Creating a fresh schema (via ``models.Base.metadata.create_all``), seeding
-  templates and base data, and stamping ``schema_version``.
+  base data (users, the commitment row), and stamping ``schema_version``.
 
 What does NOT belong here:
-- Runtime domain logic (workflow.py) -- although bootstrap may call domain
-  helpers (e.g. ``workflow.seed_templates``) to populate base data.
+- Runtime domain logic (workflow.py). The workflow definition itself lives in
+  code (``workflow.PIPELINE_TEMPLATES``) -- there is no templates table to
+  seed.
 
 Pre-deployment policy: nothing is deployed yet, so the database is throwaway.
 There is no data to preserve across a schema change -- ``models.py`` IS the
@@ -33,7 +34,6 @@ from sqlalchemy import inspect
 
 import config
 import db
-import workflow
 from helpers import utc_now_str
 from models import Base
 
@@ -111,6 +111,5 @@ def run(session, engine) -> None:
     # a Postgres advisory lock would slot into begin_write).
     db.begin_write(session)
     _ensure_base_data(session)
-    workflow.seed_templates(session)
     _set_schema_version(session, LATEST_SCHEMA_VERSION)
     session.commit()

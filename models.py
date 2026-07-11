@@ -39,25 +39,6 @@ from sqlalchemy.orm import declarative_base
 Base = declarative_base()
 
 
-class TaskTemplate(Base):
-    """Canonical workflow component definitions (the 32-step pipeline).
-
-    Seeded from ``workflow.PIPELINE_TEMPLATES``. Each project materializes one
-    ``project_tasks`` row per template.
-    """
-    __tablename__ = "task_templates"
-
-    template_id = Column(Integer, primary_key=True)
-    sequence_no = Column(Integer, nullable=False)
-    task_name = Column(Text, nullable=False, unique=True)
-    stage_group = Column(Text, nullable=False)
-    default_role = Column(Text)
-    default_duration_days = Column(Integer, server_default=text("3"))
-    depends_on_template_id = Column(Integer)
-    branch_type = Column(Text, server_default=text("'normal'"))
-    mandatory_output = Column(Text)
-
-
 class Project(Base):
     """A lead or well tracked through the maturation/execution pipeline.
 
@@ -101,14 +82,15 @@ class Project(Base):
 class ProjectTask(Base):
     """One workflow component instance for a project (the working task rows).
 
-    Retired components stay as ``is_active = 0`` records so their inputs and
-    audit trail survive. ``revision`` powers optimistic locking on save.
+    Materialized from ``workflow.PIPELINE_TEMPLATES`` (the in-code workflow
+    definition -- there is no templates table) at project creation. Retired
+    components stay as ``is_active = 0`` records so their inputs and audit
+    trail survive. ``revision`` powers optimistic locking on save.
     """
     __tablename__ = "project_tasks"
 
     task_id = Column(Integer, primary_key=True)
     project_id = Column(Integer, ForeignKey("projects.project_id", ondelete="CASCADE"), nullable=False)
-    template_id = Column(Integer, ForeignKey("task_templates.template_id"), nullable=False)
     sequence_no = Column(Integer, nullable=False)
     task_name = Column(Text, nullable=False)
     stage_group = Column(Text, nullable=False)
