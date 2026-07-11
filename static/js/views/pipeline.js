@@ -1,4 +1,4 @@
-import { byId, all, esc, compact, statusChip, priorityChip, fillSelect, range, msg } from '../dom.js';
+import { byId, all, esc, compact, statusChip, priorityChip, msg } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName, Store } from '../state.js';
 import { PROSPECT_STAGES, BP_STAGES } from '../schema.js';
@@ -96,25 +96,12 @@ export function createLead(event) {
   if (submitButton) submitButton.disabled = true;
   API.create({ project_name: name, lead_x: leadX, lead_y: leadY, pipeline_type: 'prospect', changed_by: currentUserName() }).then(function (result) {
     byId('create-lead-form').reset();
+    // Collapse the New Lead disclosure on success (main.js listens); keeps the
+    // toggle-state logic out of pipeline.js.
+    document.dispatchEvent(new CustomEvent('lead:created'));
     msg('Lead created.', 'success');
     refreshAllBoards();
     if (result.project_id) openDetail(result.project_id, 'prospect');
-  }).catch(function (error) { msg(error.message, 'error'); }).finally(function () {
-    if (submitButton) submitButton.disabled = false;
-  });
-}
-export function addWell(event) {
-  event.preventDefault();
-  var name = byId('new-well-name').value.trim();
-  if (!name) return msg('Well Name is required.', 'error');
-  var submitButton = event.target.querySelector('button[type="submit"]');
-  if (submitButton) submitButton.disabled = true;
-  API.create({ project_name: name, business_plan_enabled: true, business_plan_year: byId('new-well-bp-year').value, pipeline_type: 'bp', changed_by: currentUserName() }).then(function (result) {
-    byId('add-well-form').reset();
-    fillSelect(byId('new-well-bp-year'), range(2026, 2040), false);
-    msg('Well added.', 'success');
-    refreshAllBoards();
-    if (result.project_id) openDetail(result.project_id, 'bp');
   }).catch(function (error) { msg(error.message, 'error'); }).finally(function () {
     if (submitButton) submitButton.disabled = false;
   });

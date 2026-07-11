@@ -1,5 +1,6 @@
-import { byId, esc } from './dom.js';
+import { byId } from './dom.js';
 import { Store } from './state.js';
+import { performLogin, fetchUserOptions } from './auth.js';
 
 var inFlight = null;
 
@@ -95,13 +96,7 @@ export function loginDialog() {
 
   errorEl.classList.add('hidden');
   passcodeInput.value = '';
-  fetch('/api/users', { cache: 'no-store' }).then(function (response) {
-    return response.ok ? response.json() : [];
-  }).then(function (users) {
-    select.innerHTML = (users || []).map(function (user) {
-      return '<option>' + esc(user.name) + '</option>';
-    }).join('');
-  }).catch(function () { select.innerHTML = ''; });
+  fetchUserOptions(select);
 
   loginInFlight = new Promise(function (resolve) {
     function finish(user) {
@@ -113,21 +108,13 @@ export function loginDialog() {
     function onClose() { finish(null); } // Esc / dismissal: caller surfaces its original 401
     function onSubmit(event) {
       event.preventDefault();
-      fetch('/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        cache: 'no-store',
-        body: JSON.stringify({ name: select.value, passcode: passcodeInput.value })
-      }).then(function (response) {
-        return response.json().then(function (body) { return { ok: response.ok, body: body }; });
-      }).then(function (result) {
+      // performLogin sets Store.user + dispatches 'auth:changed' on success.
+      performLogin(select.value, passcodeInput.value).then(function (result) {
         if (!result.ok) {
           errorEl.textContent = (result.body && result.body.detail) || 'Login failed.';
           errorEl.classList.remove('hidden');
           return;
         }
-        Store.user = { name: result.body.name, role: result.body.role };
-        document.dispatchEvent(new CustomEvent('auth:changed'));
         dialog.removeEventListener('close', onClose); // our own close must not resolve null
         dialog.close();
         finish(Store.user);

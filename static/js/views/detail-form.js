@@ -22,6 +22,28 @@ function renderStatusChip(status) {
   chip.className = 'status editor-status-chip ' + String(value).toLowerCase().replace(/\s+/g, '-');
 }
 
+var PRIORITY_CYCLE = { Low: 'Medium', Medium: 'High', High: 'Low' };
+
+function renderPriorityChip(task) {
+  var chip = byId('component-priority-chip');
+  if (!chip) return;
+  var value = task.priority || 'Medium';
+  chip.textContent = value;
+  chip.className = 'priority editor-priority-chip priority-' + String(value).toLowerCase();
+  chip.title = 'Priority: ' + value + ' — click to change';
+}
+
+// Cycles Low -> Medium -> High -> Low via the dedicated priority endpoint
+// (PATCH /api/tasks/<id>/priority; no revision check server-side), then
+// refreshes so the chip and boards adopt the new value + task revision.
+export function cyclePriorityChip() {
+  if (!Store.task) return;
+  var next = PRIORITY_CYCLE[Store.task.priority || 'Medium'] || 'Medium';
+  API.priority(Store.task.task_id, { priority: next, changed_by: currentUserName() })
+    .then(function () { return refreshAfterRecordChange('Priority set to ' + next + '.'); })
+    .catch(function (error) { msg(error.message, 'error'); });
+}
+
 function renderAssigneeSelect(task) {
   var select = byId('assigned-to');
   if (!select) return;
@@ -64,7 +86,7 @@ export function loadComponent(task) {
   renderStatusChip(task.status);
   renderAssigneeSelect(task);
   renderActionButtons(task);
-  byId('component-priority').value = task.priority || 'Medium';
+  renderPriorityChip(task);
   byId('comments').placeholder = commentPlaceholder(task.task_name);
   byId('comments').value = task.comments || '';
   Promise.all([API.fields(task.task_id), API.componentFolder(Store.projectId, task.task_id)]).then(function (results) {
@@ -293,14 +315,18 @@ export function renderComponentFolder(info) {
   var previous = byId('component-folder-card');
   if (previous) previous.remove();
   if (!info || !Number(info.requires_folder)) return;
+  var path = info.unc_path || 'Folder path placeholder not configured.';
   var card = document.createElement('div');
   card.id = 'component-folder-card';
   card.className = 'folder-card';
-  card.innerHTML = '<b>Component File Location</b><p>' + esc(info.unc_path || 'Folder path placeholder not configured.') + '</p>' +
+  card.innerHTML = '<span class="folder-glyph" aria-hidden="true">📁</span>' +
+    '<span class="folder-path" title="' + esc(path) + '">' + esc(path) + '</span>' +
     '<button type="button" class="icon-btn" id="copy-component-folder" title="Copy folder link" aria-label="Copy folder link">⧉</button>';
-  var container = byId('dynamic-fields');
-  container.parentNode.insertBefore(card, container.nextSibling);
-  byId('copy-component-folder').addEventListener('click', function () { copyText(info.unc_path || ''); });
+  // Comments-above-file-location: the card sits directly after the comments
+  // field instead of after the dynamic-fields grid.
+  var anchor = byId('comments-field');
+  anchor.parentNode.insertBefore(card, anchor.nextSibling);
+  byId('copy-component-folder').addEventListener('click', function () { copyText(path); });
 }
 export function updateConditionalVisibility() {
   var fields = getFields();
@@ -362,10 +388,12 @@ export function saveComponent(event) {
   if (submitButton) submitButton.disabled = true;
   // No status / assigned_to keys: Save only persists inputs. Status moves via
   // /transition and assignment via /assign; the backend preserves both when
-  // the keys are absent.
+  // the keys are absent. Priority now has its own chip/endpoint, but save_task
+  // defaults an absent priority to Medium (it does not preserve it), so we echo
+  // the current value to avoid clobbering it on save.
   API.updateTask(Store.task.task_id, {
     comments: byId('comments').value,
-    priority: byId('component-priority').value,
+    priority: Store.task.priority || 'Medium',
     fields: fields,
     revision: Store.task.revision,
     changed_by: currentUserName(),

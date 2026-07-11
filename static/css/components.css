@@ -33,6 +33,11 @@
 .priority-medium { background: var(--info-100); color: var(--info-700); border-color: var(--info-500); }
 .priority-high { background: var(--warning-100); color: var(--warning-700); border-color: var(--warning-500); }
 
+/* Slim New Lead disclosure: just the toggle button when collapsed; the form
+   reveals below it on open. */
+.new-lead-panel { padding: var(--space-3); }
+.new-lead-panel #new-lead-body { margin-top: var(--space-3); }
+
 /* =========================================================================
    Pipeline board (kanban-style columns for prospect + BP tabs)
    ========================================================================= */
@@ -107,18 +112,18 @@
   grid-template-columns: 280px minmax(420px, 1fr) minmax(360px, 400px);
   gap: var(--space-4);
   align-items: start;
-  /* scrollIntoView target: land below the sticky header (72px) + tab bar
-     (54px) with breathing room instead of overshooting behind them. */
-  scroll-margin-top: 140px;
+  /* scrollIntoView target: land below the sticky header (56px) + tab bar
+     (44px) with breathing room instead of overshooting behind them. */
+  scroll-margin-top: 112px;
 }
 .component-rail, .component-editor, .summary-panel { min-width: 0; }
 
-/* The rail and summary panel pin below the sticky header stack (72 + 54 +
+/* The rail and summary panel pin below the sticky header stack (56 + 44 +
    12px gap) and scroll internally, so long step lists fit any viewport. */
 .component-rail {
   position: sticky;
-  top: 138px;
-  max-height: calc(100vh - 150px);
+  top: 112px;
+  max-height: calc(100vh - 124px);
   display: flex;
   flex-direction: column;
 }
@@ -146,32 +151,32 @@
 .stage-icon { color: var(--text-faint); font-size: var(--text-base); line-height: 1; }
 .component-item {
   display: grid;
-  grid-template-columns: 32px 1fr;
+  grid-template-columns: 22px 1fr;
   gap: var(--space-2);
   text-align: left;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 10px;
+  padding: 6px 8px;
   color: var(--text);
 }
-.component-item span {
+.component-item .component-num {
   grid-row: 1 / 3;
   background: var(--gray-100);
   color: var(--brand-700);
   border-radius: var(--radius-pill);
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
   font-weight: 800;
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
 }
 .component-item b { font-size: var(--text-sm); }
-.component-item small { color: var(--text-faint); }
+.component-item .status { justify-self: start; }
 .component-item.active { border-color: var(--brand-500); background: var(--brand-050); }
-.component-item.done span { background: var(--success-100); color: var(--success-700); }
+.component-item.done .component-num { background: var(--success-100); color: var(--success-700); }
 
 .editor-head {
   display: flex;
@@ -194,10 +199,24 @@
   font-size: var(--text-sm);
 }
 .editor-head h2 { font-size: var(--text-lg); color: var(--ink-900); }
-.editor-status-chip { margin-left: auto; }
+/* Right-aligned control cluster: priority chip, compact assignee select and
+   the status chip all sit at the end of the editor head. margin-left:auto on
+   the first item pushes the whole group right. */
+.editor-priority-chip { margin-left: auto; box-shadow: none; cursor: pointer; }
+.editor-assignee {
+  width: auto;
+  max-width: 170px;
+  padding: 4px 10px;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+}
 
-.component-form { display: flex; flex-direction: column; gap: var(--space-4); }
-.dynamic-fields { display: grid; grid-template-columns: repeat(3, minmax(160px, 1fr)); gap: var(--space-3); align-items: start; }
+.component-form { display: flex; flex-direction: column; gap: var(--space-3); }
+.dynamic-fields { display: grid; grid-template-columns: repeat(3, minmax(160px, 1fr)); gap: var(--space-2); align-items: start; }
 .wide-field { grid-column: 1 / -1; }
 .conditional.hidden { display: none !important; }
 
@@ -233,7 +252,7 @@
 }
 .calculated-output output { color: var(--brand-700); font-size: var(--text-md); font-weight: 800; }
 
-.summary-box, .folder-card {
+.summary-box {
   grid-column: 1 / -1;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -241,10 +260,32 @@
   background: var(--surface-sunken);
   color: var(--text-muted);
 }
-.summary-box b, .folder-card b { color: var(--ink-800); }
-.folder-card { position: relative; }
-.folder-card .icon-btn { position: absolute; top: var(--space-3); right: var(--space-3); }
-.folder-card p { font-family: var(--font-mono); font-size: var(--text-sm); word-break: break-all; color: var(--text-muted); margin: var(--space-2) 32px 0 0; }
+.summary-box b { color: var(--ink-800); }
+/* Compact single-row file-location card: folder glyph, UNC path (mono,
+   ellipsized) and the copy icon-button. */
+.folder-card {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 6px 10px;
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+}
+.folder-card .folder-glyph { flex: 0 0 auto; color: var(--text-faint); }
+.folder-card .folder-path {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+.folder-card .icon-btn { flex: 0 0 auto; }
 .summary-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: grid; gap: var(--space-2); }
 .summary-list li { display: grid; grid-template-columns: 1.2fr 1fr; gap: var(--space-2); border-top: 1px solid var(--gray-100); padding-top: var(--space-2); }
 .summary-list span { color: var(--text-faint); }
@@ -286,8 +327,8 @@
   /* Same sticky treatment as .component-rail: pin below the header stack and
      scroll the panel internally when it outgrows the viewport. */
   position: sticky;
-  top: 138px;
-  max-height: calc(100vh - 150px);
+  top: 112px;
+  max-height: calc(100vh - 124px);
   overflow-y: auto;
 }
 .summary-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--space-4); overflow: hidden; max-width: 100%; }
@@ -360,11 +401,61 @@
 .portfolio-table tbody tr { cursor: default; }
 .portfolio-table tbody tr:hover { background: var(--surface); }
 /* WS7 columns: 1 Well Name, 2 Gas Field, 3 Seismic Block, 4 Classification,
-   5 BP Year, 6 Fluid, 7 Mean OGIP (numeric), 8 Total CoS (numeric). */
+   5 BP Year, 6 Fluid, 7 Mean OGIP (numeric), 8 Total CoS (numeric). Column
+   widths/alignment key off nth-child, so they hold regardless of which <tr>
+   (sort header vs. filter header) is being styled. */
 .portfolio-table th:nth-child(1), .portfolio-table td:nth-child(1) { min-width: 160px; }
 .portfolio-table th:nth-child(5), .portfolio-table td:nth-child(5) { width: 90px; }
 .portfolio-table th:nth-child(7), .portfolio-table th:nth-child(8),
 .portfolio-table td:nth-child(7), .portfolio-table td:nth-child(8) { text-align: right; white-space: nowrap; }
+
+/* Sortable header row: th owns the click target + the ▲/▼ affordance so the
+   whole cell (not just the label text) is clickable; .th-sort is a
+   button reset to look like the plain header label it replaces. */
+.portfolio-table thead tr:first-child th { position: relative; padding-right: 22px; cursor: pointer; user-select: none; }
+.portfolio-table thead tr:first-child th:hover { color: var(--brand-700); }
+.portfolio-table .th-sort {
+  background: none;
+  border: none;
+  box-shadow: none;
+  margin: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+.portfolio-table th.sorted-asc::after,
+.portfolio-table th.sorted-desc::after {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 9px;
+  color: var(--brand-700);
+}
+.portfolio-table th.sorted-asc::after { content: '\25B2'; }
+.portfolio-table th.sorted-desc::after { content: '\25BC'; }
+
+/* Column-filter row: compact inline controls under the sort headers. */
+.portfolio-filter-row th { background: var(--surface-sunken); padding: 6px 8px; cursor: default; }
+.portfolio-filter-input, .portfolio-filter-select {
+  width: 100%;
+  padding: 4px 8px;
+  font-size: var(--text-xs);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+}
+.portfolio-filter-input:focus, .portfolio-filter-select:focus { border-color: var(--brand-500); box-shadow: 0 0 0 2px var(--brand-100); }
+
+.portfolio-table .well-link { color: var(--brand-700); font-weight: 700; text-decoration: none; }
+.portfolio-table .well-link:hover { text-decoration: underline; }
 
 /* =========================================================================
    Audit tab
@@ -392,6 +483,28 @@
 .login-error { color: var(--danger-700); font-size: var(--text-sm); }
 
 /* =========================================================================
+   Full-page boot login (fronts the app under AUTH_REQUIRED; the modal above
+   handles mid-session 401s). Reuses the panel/dialog token language.
+   ========================================================================= */
+.login-page { min-height: 100vh; display: grid; place-items: center; padding: var(--space-5); }
+.login-card {
+  width: min(420px, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+.login-brand { margin-bottom: var(--space-2); }
+.login-lead { color: var(--text-muted); font-size: var(--text-sm); }
+.login-card select,
+.login-card input { width: 100%; }
+.login-card button[type="submit"] { width: 100%; margin-top: var(--space-2); }
+
+/* =========================================================================
    Responsive — component level
    ========================================================================= */
 @media (max-width: 1100px) {
@@ -409,8 +522,7 @@
 @media (max-width: 640px) {
   .pipeline-board { grid-auto-columns: minmax(230px, 86vw); }
   .pipeline-card { padding: var(--space-3); }
-  .create-grid-spacer { display: none; }
-  .detail-shell { scroll-margin-top: 126px; } /* 62px header + 50px tabs + room */
+  .detail-shell { scroll-margin-top: 106px; } /* 52px header + 40px tabs + room */
   .detail-shell.panel { padding: var(--space-3); }
   .summary-card { padding: var(--space-3); }
   .summary-grid { grid-template-columns: 1fr; }
@@ -426,4 +538,22 @@
   .portfolio-stats { grid-template-columns: 1fr; }
   .portfolio-panel { overflow-x: auto; }
   .portfolio-panel table { min-width: 860px; }
+}
+
+/* =========================================================================
+   Dark theme — scoped spot-fixes (token block lives in base.css). Only the
+   places where one token can't serve both a text and a fill/scrim role.
+   ========================================================================= */
+:root[data-theme="dark"] .app-dialog::backdrop {
+  /* deeper scrim than the light rgba(13,36,56,.45) so the dialog reads */
+  background: rgba(0, 0, 0, .6);
+}
+:root[data-theme="dark"] #app-dialog-confirm.danger {
+  /* --danger-700 is light red text in dark; fill solid to keep white legible */
+  background: var(--danger-500);
+}
+:root[data-theme="dark"] .action-row button:last-child {
+  /* success gradient bottom stop (--success-700) is light green in dark;
+     fill solid saturated green so the white "Save" label stays legible */
+  background: var(--success-500);
 }

@@ -247,12 +247,18 @@ def me():
     ``role`` is the session-stored role, NOT current_role(): an anonymous
     request in dev mode reports role None here so the front-end hides the
     signed-in chip, even though role checks would treat it as supervisor.
+
+    ``auth_required`` mirrors config.AUTH_REQUIRED, read here at REQUEST time
+    (like the before_request gate, so tests can monkeypatch it). The front-end
+    reads it to decide whether to front the app with the full-page login screen
+    before any data/meta loads (which WOULD 401 under AUTH_REQUIRED).
     """
     name: Optional[str] = flask_session.get("name")
     return json_response({
         "authenticated": bool(name),
         "name": name if name else None,
         "role": (flask_session.get("role") or "employee") if name else None,
+        "auth_required": config.AUTH_REQUIRED,
     })
 
 

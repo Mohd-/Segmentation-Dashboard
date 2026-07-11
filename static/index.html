@@ -4,11 +4,38 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Segment Maturation and Execution System</title>
-  <link rel="stylesheet" href="/static/css/base.css?v=2">
-  <link rel="stylesheet" href="/static/css/components.css?v=2">
+  <!-- Stamp the theme before first paint to avoid a flash of the wrong theme:
+       stored choice wins, else fall back to the OS preference. -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('theme');
+        if (!t) t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        if (t === 'dark') document.documentElement.dataset.theme = 'dark';
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/css/base.css?v=5">
+  <link rel="stylesheet" href="/static/css/components.css?v=6">
 </head>
 <body>
-  <header class="app-header">
+  <section id="login-page" class="login-page hidden">
+    <form id="login-page-form" class="login-card">
+      <div class="brand-lockup login-brand">
+        <span class="rig-mark" aria-hidden="true">&#9820;</span>
+        <div>
+          <h1>Segment Maturation and Execution System</h1>
+        </div>
+      </div>
+      <p class="login-lead">Select your name to sign in.</p>
+      <label>Name<select id="login-page-name" aria-label="Your name"></select></label>
+      <label>Passcode<input id="login-page-passcode" type="password" autocomplete="current-password" placeholder="Leave blank unless configured"></label>
+      <p id="login-page-error" class="login-error hidden"></p>
+      <button type="submit" id="login-page-submit">Sign in</button>
+    </form>
+  </section>
+
+  <header class="app-header app-chrome">
     <div class="brand-lockup">
       <span class="rig-mark" aria-hidden="true">&#9820;</span>
       <div>
@@ -16,32 +43,32 @@
       </div>
     </div>
     <div class="header-actions">
+      <button id="theme-toggle" type="button" class="icon-btn" aria-label="Toggle dark theme" aria-pressed="false" title="Toggle dark theme">&#9790;</button>
       <span id="user-chip" class="user-chip hidden"></span>
       <button id="sign-out" type="button" class="ghost hidden">Sign out</button>
       <button id="export-excel" type="button" class="ghost">Export to Excel</button>
     </div>
   </header>
 
-  <nav class="tabs" aria-label="Main navigation" role="tablist">
+  <nav class="tabs app-chrome" aria-label="Main navigation" role="tablist">
     <button data-tab="prospect" class="active" role="tab" aria-selected="true" type="button">Prospect Maturation</button>
     <button data-tab="portfolio" role="tab" aria-selected="false" type="button">Portfolio</button>
     <button data-tab="bp" role="tab" aria-selected="false" type="button">Business Plan Execution</button>
     <button data-tab="audit" role="tab" aria-selected="false" type="button">Audit Trail</button>
   </nav>
 
-  <main>
+  <main class="app-chrome">
     <section id="tab-prospect" class="tab active" role="tabpanel">
-      <div class="panel page-intro">
-        <h2>Prospect Maturation</h2>
-      </div>
-      <div class="panel">
-        <h3>New Lead</h3>
-        <form id="create-lead-form" class="create-grid">
-          <input id="new-lead-name" placeholder="Lead Name" aria-label="Lead Name" required>
-          <input id="new-lead-x" type="number" step="any" placeholder="X" aria-label="X" required>
-          <input id="new-lead-y" type="number" step="any" placeholder="Y" aria-label="Y" required>
-          <button type="submit">Create Lead</button>
-        </form>
+      <div class="panel new-lead-panel">
+        <button id="new-lead-toggle" type="button" class="ghost">+ New Lead</button>
+        <div id="new-lead-body" class="hidden">
+          <form id="create-lead-form" class="create-grid">
+            <input id="new-lead-name" placeholder="Lead Name" aria-label="Lead Name" required>
+            <input id="new-lead-x" type="number" step="any" placeholder="X" aria-label="X" required>
+            <input id="new-lead-y" type="number" step="any" placeholder="Y" aria-label="Y" required>
+            <button type="submit">Create Lead</button>
+          </form>
+        </div>
       </div>
       <div class="panel pipeline-panel">
         <div class="toolbar pipeline-toolbar">
@@ -54,18 +81,6 @@
     </section>
 
     <section id="tab-bp" class="tab" role="tabpanel">
-      <div class="panel page-intro">
-        <h2>Business Plan Execution</h2>
-      </div>
-      <div class="panel">
-        <h3>Add Well</h3>
-        <form id="add-well-form" class="create-grid">
-          <input id="new-well-name" placeholder="Well Name" aria-label="Well Name" required>
-          <select id="new-well-bp-year" aria-label="Business Plan year"></select>
-          <span class="create-grid-spacer" aria-hidden="true"></span>
-          <button type="submit">Add Well</button>
-        </form>
-      </div>
       <div class="panel pipeline-panel">
         <div class="toolbar pipeline-toolbar">
           <input id="bp-search" placeholder="Search BP wells" aria-label="Search BP wells">
@@ -78,9 +93,6 @@
     </section>
 
     <section id="tab-portfolio" class="tab" role="tabpanel">
-      <div class="panel page-intro">
-        <h2>Portfolio</h2>
-      </div>
       <div class="panel portfolio-panel">
         <div class="toolbar portfolio-toolbar">
           <select id="portfolio-year-filter" aria-label="Business Plan year filter"></select>
@@ -111,23 +123,13 @@
           <div>
             <h2 id="component-title">Component</h2>
           </div>
+          <button id="component-priority-chip" type="button" class="priority priority-medium editor-priority-chip" title="Priority: Medium — click to change">Medium</button>
+          <select id="assigned-to" class="editor-assignee" aria-label="Assignee"></select>
           <span id="component-status-chip" class="status not-assigned editor-status-chip">Not Assigned</span>
         </div>
         <form id="component-form" class="component-form">
-          <div class="form-row">
-            <label>Assignee
-              <select id="assigned-to" aria-label="Assignee"></select>
-            </label>
-            <label>Priority
-              <select id="component-priority">
-                <option>Low</option>
-                <option selected>Medium</option>
-                <option>High</option>
-              </select>
-            </label>
-          </div>
           <div id="dynamic-fields" class="dynamic-fields"></div>
-          <label class="wide-field">Comments<textarea id="comments" placeholder="Comments, assumptions, rationale, or required notes..."></textarea></label>
+          <label id="comments-field" class="wide-field">Comments<textarea id="comments" placeholder="Comments, assumptions, rationale, or required notes..."></textarea></label>
           <div class="action-row">
             <button id="return-component" type="button" class="ghost hidden">Return for Update</button>
             <button id="submit-component" type="button" class="hidden">Submit for Approval</button>
@@ -153,9 +155,6 @@
     </section>
 
     <section id="tab-audit" class="tab" role="tabpanel">
-      <div class="panel page-intro">
-        <h2>Audit Trail</h2>
-      </div>
       <div class="panel audit-panel">
         <div class="toolbar audit-toolbar">
           <select id="audit-project-filter" aria-label="Filter by lead or well">
@@ -192,6 +191,6 @@
     </form>
   </dialog>
 
-  <script type="module" src="/static/js/main.js?v=2"></script>
+  <script type="module" src="/static/js/main.js?v=6"></script>
 </body>
 </html>

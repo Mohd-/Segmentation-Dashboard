@@ -22,22 +22,23 @@ SEEDED = [("Employee", "employee"), ("Staff Member", "staff"), ("Supervisor", "s
 # ---------------------------------------------------------------------------
 
 def test_login_me_logout_round_trip(client):
+    # auth_required mirrors config.AUTH_REQUIRED (off by default here).
     me = client.get("/api/me").get_json()
-    assert me == {"authenticated": False, "name": None, "role": None}
+    assert me == {"authenticated": False, "name": None, "role": None, "auth_required": False}
 
     resp = client.post("/api/login", json={"name": "  Staff Member  "})
     assert resp.status_code == 200
     assert resp.get_json() == {"ok": True, "name": "Staff Member", "role": "staff"}
 
     me = client.get("/api/me").get_json()
-    assert me == {"authenticated": True, "name": "Staff Member", "role": "staff"}
+    assert me == {"authenticated": True, "name": "Staff Member", "role": "staff", "auth_required": False}
 
     resp = client.post("/api/logout")
     assert resp.status_code == 200
     assert resp.get_json() == {"ok": True}
 
     me = client.get("/api/me").get_json()
-    assert me == {"authenticated": False, "name": None, "role": None}
+    assert me == {"authenticated": False, "name": None, "role": None, "auth_required": False}
 
 
 def test_login_missing_or_bad_name_rejected(client):
@@ -65,7 +66,7 @@ def test_login_case_insensitive_returns_canonical_name(client):
     assert resp.get_json() == {"ok": True, "name": "Supervisor", "role": "supervisor"}
 
     me = client.get("/api/me").get_json()
-    assert me == {"authenticated": True, "name": "Supervisor", "role": "supervisor"}
+    assert me == {"authenticated": True, "name": "Supervisor", "role": "supervisor", "auth_required": False}
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +136,7 @@ def test_login_with_configured_passcode(client, monkeypatch):
 
     resp = client.post("/api/login", json={"name": "Supervisor", "passcode": "s3cret"})
     assert resp.status_code == 200
-    assert client.get("/api/me").get_json() == {"authenticated": True, "name": "Supervisor", "role": "supervisor"}
+    assert client.get("/api/me").get_json() == {"authenticated": True, "name": "Supervisor", "role": "supervisor", "auth_required": False}
 
 
 # ---------------------------------------------------------------------------
@@ -186,9 +187,13 @@ def test_auth_required_blocks_api_until_login(client, monkeypatch):
     # Exempt endpoints stay open. /api/users must be reachable anonymously:
     # the login dialog needs the name list before a session exists.
     assert client.get("/api/health").status_code == 200
-    assert client.get("/api/me").status_code == 200
     assert client.get("/api/users").status_code == 200
     assert client.post("/api/logout").status_code == 200
+
+    # /api/me stays open AND advertises auth_required: True so the front-end
+    # fronts the app with the full-page login before any data/meta load.
+    me = client.get("/api/me").get_json()
+    assert me == {"authenticated": False, "name": None, "role": None, "auth_required": True}
 
     resp = client.post("/api/login", json={"name": "Supervisor"})
     assert resp.status_code == 200

@@ -1,4 +1,4 @@
-import { byId, all, esc, isFilled, range, msg } from '../dom.js';
+import { byId, all, esc, isFilled, range, statusChip, msg } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName, Store, resetSelection } from '../state.js';
 import { BP_STAGES, PROSPECT_STAGES, DONE, schemaIndex } from '../schema.js';
@@ -66,7 +66,7 @@ export function renderDetail() {
       lastStage = task.stage_group;
       head = '<div class="rail-stage-head"><span class="stage-icon" aria-hidden="true">' + (STAGE_ICONS[task.stage_group] || '•') + '</span><span>' + esc(task.stage_group) + '</span></div>';
     }
-    return head + '<button type="button" class="component-item ' + (DONE[task.status] ? 'done' : '') + '" data-task-id="' + task.task_id + '"><span>' + esc(task.sequence_no) + '</span><b>' + esc(task.task_name) + '</b><small>' + esc(task.status || 'Not Assigned') + '</small></button>';
+    return head + '<button type="button" class="component-item ' + (DONE[task.status] ? 'done' : '') + '" data-task-id="' + task.task_id + '"><span class="component-num">' + esc(task.sequence_no) + '</span><b>' + esc(task.task_name) + '</b>' + statusChip(task.status || 'Not Assigned') + '</button>';
   }).join('') || '<div class="empty-state">No components in this pipeline.</div>';
   all('.component-item').forEach(function (button) {
     button.addEventListener('click', function () {

@@ -3,7 +3,37 @@
     "allow": [
       "Bash(git init *)",
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(python -m pytest -q)",
+      "Bash(python3 -m pytest -q)",
+      "Bash(/Users/Mohammad/Documents/kshkool/segments_dashboard/.venv/bin/python -m pytest -q)",
+      "Bash(/Users/Mohammad/Documents/kshkool/segments_dashboard/.venv/bin/python -m pip list)",
+      "Bash(/Users/Mohammad/Documents/kshkool/segments_dashboard/.venv/bin/python -m pip install -q pytest)",
+      "Bash(.venv/bin/python -m pytest -q)",
+      "Bash(./.venv/bin/python -m pytest -q)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(cp /Users/Mohammad/Documents/kshkool/segments_dashboard/pipeline_tracker.db* /private/tmp/claude-502/-Users-Mohammad-Documents-kshkool-segments-dashboard/08016fed-be0d-4c72-9fd9-61d72f9e8c69/scratchpad/)",
+      "Bash(sqlite3 /private/tmp/claude-502/-Users-Mohammad-Documents-kshkool-segments-dashboard/08016fed-be0d-4c72-9fd9-61d72f9e8c69/scratchpad/adopt_test.db 'SELECT name FROM sqlite_master WHERE type='\\\\''table'\\\\'' AND name='\\\\''users'\\\\''; SELECT value FROM app_settings WHERE key='\\\\''schema_version'\\\\'';')",
+      "Bash(cd *)",
+      "Read(//System/Volumes/Preboot/Cryptexes/OS/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/**)",
+      "Bash(/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc --module-file=static/js/views/detail-form.js)",
+      "Bash(sqlite3 /private/tmp/claude-502/-Users-Mohammad-Documents-kshkool-segments-dashboard/08016fed-be0d-4c72-9fd9-61d72f9e8c69/scratchpad/migration_smoke.db 'SELECT value FROM app_settings WHERE key='\\\\''schema_version'\\\\''; SELECT status, COUNT\\(*\\) FROM project_tasks GROUP BY status ORDER BY 2 DESC;')",
+      "Bash(sqlite3 *)",
+      "Bash(SEGMENT_TRACKER_DB_PATH=/private/tmp/claude-502/-Users-Mohammad-Documents-kshkool-segments-dashboard/08016fed-be0d-4c72-9fd9-61d72f9e8c69/scratchpad/migration_smoke.db .venv/bin/python -c ' *)",
+      "Bash(.venv/bin/python -m pytest tests/test_status_model.py tests/test_cos.py tests/test_api_contract.py -q)",
+      "Bash(.venv/bin/python -m pytest tests/test_status_model.py::test_migration_v18_retires_presence_step_and_renumbers -q)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -)",
+      "Bash(echo \"grep exit: $?\")",
+      "Bash(curl -s http://127.0.0.1:8020/api/projects/2/detail)",
+      "Bash(.venv/bin/python -c \"import json,sys; d=json.load\\(sys.stdin\\); p=d['project']; print\\(p['current_stage'], '|', p['current_task'], '|', p['lead_x'], p['lead_y'], '| completion', d['completion_percent']\\); ts=[t for t in d['tasks'] if t['is_active']]; pros=[t for t in ts if t['stage_group'] in \\('Lead Identification','Risking','Segmentation','Pre-Well Delivery'\\)]; print\\('active tasks:', len\\(ts\\), 'prospect:', len\\(pros\\)\\); print\\('statuses:', sorted\\(set\\(t['status'] for t in ts\\)\\)\\); print\\('overview keys present:', 'overview' in d, '| formations:', d.get\\('formations'\\)\\)\")",
+      "Bash(.venv/bin/python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(sorted\\(d.keys\\(\\)\\)\\)\")",
+      "Bash(.venv/bin/python -c ' *)",
+      "Bash(.venv/bin/python -m pytest -q tests/test_status_model.py)",
+      "Bash(curl -s -X POST http://127.0.0.1:8020/api/tasks/35/assign -H 'Content-Type: application/json' -d '{\"assignee\":\"Employee\",\"cascade\":true,\"revision\":0,\"changed_by\":\"Supervisor\"}')",
+      "Bash(awk '/^def get_portfolio_rows/,/^def [a-z_]+\\\\\\(session/' reporting.py)",
+      "Bash(git -C /Users/Mohammad/Documents/kshkool/segments_dashboard log --oneline -1 -- static/style.css)",
+      "Bash(git rm *)"
     ]
   }
 }

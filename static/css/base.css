@@ -80,13 +80,104 @@
 
   --bp-tablet: 1100px;
   --bp-mobile: 640px;
+
+  color-scheme: light;
+}
+
+/* =========================================================================
+   Dark theme — token overrides only. Every color in the app resolves through
+   the :root tokens above, so re-pointing them here re-skins the whole app.
+   Design (a purpose-built dark ramp, not an inversion):
+   - Surfaces step UP in lightness with elevation: --bg (deep ink) <
+     --surface-sunken < --surface (elevated). Borders are low-contrast grays
+     a notch above the surface they sit on.
+   - The ink/gray "dark" ramps invert ROLE: where they were dark text on light,
+     they become light text on dark (--ink-900 brightest heading → --text-faint
+     mid-gray). The gray tokens used as light BACKGROUNDS (chips, badges,
+     button.secondary: --gray-100/-050) instead become dark elevated tones.
+   - Brand teal brightened a step so it reads as an accent on dark; --brand-700
+     is the mid-bright teal used for links/accent text AND the primary button
+     fill (holds white ~AA-large). --brand-100/-050 become low-alpha teal tints
+     since they are chip/selection/hover/focus BACKGROUNDS.
+   - Semantic -100 tints become low-alpha rgba of the hue (chip/toast grounds);
+     the paired -700 text tokens lighten to stay legible on them; -500 stays
+     saturated for borders/fills.
+   - Shadows deepen (dark UIs cast near-black, softer shadows).
+   Conflicts resolved with scoped overrides below the block: --ink-800 is text
+   everywhere except the .rig-mark gradient; the -700 greens/reds are text but
+   also the bottom stop of the save/danger button gradients; --white stays #fff
+   (button/glyph text) so --surface is overridden directly rather than via it.
+   ========================================================================= */
+:root[data-theme="dark"] {
+  /* Brand ink — now LIGHT (used as heading/text colors) */
+  --ink-900: #f0f5f9;
+  --ink-800: #dbe5ee;
+  --ink-700: #c4d0db;
+
+  /* Brand teal — a step brighter for dark surfaces */
+  --brand-700: #2ba6bb;
+  --brand-600: #1c8a9e;
+  --brand-500: #33b4c9;
+  --brand-100: rgba(51, 180, 201, .15);
+  --brand-050: rgba(51, 180, 201, .08);
+
+  /* Neutrals — light where used as text, dark-elevated where used as bg */
+  --gray-900: #e6edf3;
+  --gray-700: #aab7c3;
+  --gray-500: #7c8a97;
+  --gray-300: #35434f;
+  --gray-200: #26333f;
+  --gray-100: #1f2b38;
+  --gray-050: #141d28;
+  --white: #ffffff; /* kept: white text on brand/semantic fills + rig glyph */
+
+  /* Semantic — low-alpha tint bg, lightened text, saturated line/fill */
+  --success-700: #57c98a;
+  --success-500: #269a5b;
+  --success-100: rgba(38, 154, 91, .16);
+  --warning-700: #edc25e;
+  --warning-500: #d3941f;
+  --warning-100: rgba(211, 148, 31, .16);
+  --danger-700: #ef8a83;
+  --danger-500: #cf5049;
+  --danger-100: rgba(207, 80, 73, .16);
+  --info-700: #79b6e4;
+  --info-500: #3a86c2;
+  --info-100: rgba(58, 134, 194, .16);
+
+  /* Surfaces — overridden directly (not via --white/--gray-*) */
+  --bg: #0e1621;
+  --surface: #172231;
+  --surface-sunken: #121b27;
+  --border: #26333f;
+  --border-strong: #35434f;
+  --text: #e6edf3;
+  --text-muted: #aab7c3;
+  --text-faint: #7c8a97;
+
+  /* Shadows — deeper, softer against dark surfaces */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .4);
+  --shadow-md: 0 8px 22px rgba(0, 0, 0, .5);
+  --shadow-lg: 0 18px 40px rgba(0, 0, 0, .6);
+
+  color-scheme: dark;
+}
+
+/* Dark-theme scoped spot-fixes: the few places where a single token can't
+   serve both its text and background/fill uses (see block header above). */
+:root[data-theme="dark"] .rig-mark {
+  /* light-mode end stop was --ink-800, now light → keep an all-teal gradient */
+  background: linear-gradient(155deg, var(--brand-600), var(--brand-700));
+}
+:root[data-theme="dark"] button.danger {
+  /* --danger-700 is light red text here; fill solid so white stays legible */
+  background: var(--danger-500);
 }
 
 /* =========================================================================
    Reset & base elements
    ========================================================================= */
 *, *::before, *::after { box-sizing: border-box; }
-html { color-scheme: light; }
 body {
   margin: 0;
   min-height: 100vh;
@@ -112,7 +203,7 @@ a { color: var(--brand-700); }
    App shell — header, tab bar, main
    ========================================================================= */
 .app-header {
-  height: 72px;
+  height: 56px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -137,7 +228,9 @@ a { color: var(--brand-700); }
   background: linear-gradient(155deg, var(--brand-600), var(--ink-800));
   color: var(--white);
 }
-.app-header h1 {
+/* Shared brand-title typography: the header lockup and the full-page login
+   card (.login-brand, components.css) reuse the same markup. */
+.app-header h1, .login-brand h1 {
   font-size: var(--text-md);
   letter-spacing: .04em;
   text-transform: uppercase;
@@ -147,14 +240,14 @@ a { color: var(--brand-700); }
 .user-chip { white-space: nowrap; }
 
 .tabs {
-  height: 54px;
+  height: 44px;
   display: flex;
   gap: var(--space-1);
   padding: 0 var(--space-4);
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   position: sticky;
-  top: 72px;
+  top: 56px;
   z-index: 15;
   overflow-x: auto;
 }
@@ -187,16 +280,9 @@ main { max-width: 1760px; margin: 0 auto; padding: var(--space-6); }
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: var(--space-5);
-  margin-bottom: var(--space-4);
+  padding: var(--space-4);
+  margin-bottom: var(--space-3);
   box-shadow: var(--shadow-sm);
-}
-.page-intro { padding: var(--space-4) var(--space-5); }
-.page-intro h2 {
-  color: var(--ink-800);
-  font-size: var(--text-md);
-  letter-spacing: .05em;
-  text-transform: uppercase;
 }
 .panel h3 { font-size: var(--text-base); color: var(--ink-800); margin-bottom: var(--space-3); }
 
@@ -266,14 +352,13 @@ button.danger { background: linear-gradient(180deg, var(--danger-500), var(--dan
 }
 button.icon-btn:hover { background: var(--brand-100); filter: brightness(.97); }
 
-.create-grid, .toolbar, .form-row {
+.create-grid, .toolbar {
   display: grid;
   grid-template-columns: repeat(4, minmax(160px, 1fr));
   gap: var(--space-3);
   align-items: end;
 }
 .create-grid button { height: 42px; }
-.create-grid-spacer { display: block; }
 .toolbar { grid-template-columns: 2fr 1fr 1fr 1fr; margin-bottom: var(--space-4); }
 
 /* =========================================================================
@@ -315,12 +400,12 @@ tbody tr[data-index] { cursor: pointer; }
    Responsive — shell level
    ========================================================================= */
 @media (max-width: 1100px) {
-  .create-grid, .toolbar, .form-row { grid-template-columns: 1fr; }
+  .create-grid, .toolbar { grid-template-columns: 1fr; }
 }
 @media (max-width: 640px) {
   main { padding: var(--space-3); }
-  .app-header { padding: 0 var(--space-3); height: 62px; }
-  .tabs { top: 62px; height: 50px; }
+  .app-header { padding: 0 var(--space-3); height: 52px; }
+  .tabs { top: 52px; height: 40px; }
   .tabs button { min-width: 150px; font-size: var(--text-xs); }
   .header-actions span { display: none; }
 }
