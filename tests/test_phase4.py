@@ -51,7 +51,7 @@ def test_internal_error_returns_generic_500_without_leaking(client, monkeypatch)
 
 def _approve_all_prospect_tasks(client, pid):
     for task in get_tasks(client, pid):
-        if task["stage_group"] in PROSPECT_STAGES and task["status"] not in ("Approved", "Not Applicable"):
+        if task["stage_group"] in PROSPECT_STAGES and task["status"] != "Approved":
             resp = client.patch(f"/api/tasks/{task['task_id']}", json={
                 "status": "Approved", "revision": task["revision"],
             })

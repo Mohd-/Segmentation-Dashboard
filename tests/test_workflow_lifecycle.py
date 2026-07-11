@@ -37,15 +37,19 @@ def test_new_prospect_project_has_31_tasks_all_not_assigned(client):
     assert project["current_task"] == "Reservoir Area Definition"
 
 
-def test_new_bp_project_marks_prospect_stages_not_applicable(client):
+def test_new_bp_project_seeds_all_31_tasks_not_assigned(client):
+    # Applicability is derived from pipeline_type, not stored per row: a BP
+    # project still materializes all 31 tasks Not Assigned (the prospect-stage
+    # rows simply fall outside its operating pipeline). current_task anchors on
+    # the first BP step.
     pid = create_project(
         client, "SEED-BP-1", pipeline_type="bp",
         business_plan_enabled=True, business_plan_year=2027,
     )
     tasks = get_tasks(client, pid)
+    assert len(tasks) == 31
     for task in tasks:
-        if task["stage_group"] in PROSPECT_STAGES:
-            assert task["status"] == "Not Applicable", task["task_name"]
+        assert task["status"] == "Not Assigned", task["task_name"]
 
     gate = get_task_by_name(client, pid, "BP Execution Gate")
     assert gate is not None
@@ -146,9 +150,11 @@ def test_optimistic_locking_stale_revision_rejected(client):
 # Completion percent arithmetic
 # ---------------------------------------------------------------------------
 
-def test_completion_percent_excludes_not_applicable_from_denominator(client):
-    # A fresh BP project has all 12 Prospect-stage tasks marked Not Applicable,
-    # leaving 19 applicable tasks (Well Delivery + Post-Drilling + Post-Testing).
+def test_completion_percent_scoped_to_bp_stages_for_bp_well(client):
+    # Completion is scoped to the operating pipeline's stages, not stored
+    # applicability: a BP well is measured against its 19 BP-stage tasks
+    # (Well Delivery + Post-Drilling + Post-Testing), never the 12 prospect
+    # rows that fall outside its pipeline.
     pid = create_project(
         client, "COMPLETION-BP-1", pipeline_type="bp",
         business_plan_enabled=True, business_plan_year=2029,
@@ -157,7 +163,7 @@ def test_completion_percent_excludes_not_applicable_from_denominator(client):
     assert resp.get_json() == {"percent": 0.0}
 
     tasks = get_tasks(client, pid)
-    applicable = [t for t in tasks if t["status"] != "Not Applicable"]
+    applicable = [t for t in tasks if t["stage_group"] not in PROSPECT_STAGES]
     assert len(applicable) == 19
 
     for task in applicable[:2]:
@@ -193,7 +199,7 @@ def test_approving_all_prospect_tasks_completes_project(client):
     pid = create_project(client, "COMPLETE-ALL-1")
     tasks = get_tasks(client, pid)
     for task in tasks:
-        if task["stage_group"] in PROSPECT_STAGES and task["status"] not in ("Approved", "Not Applicable"):
+        if task["stage_group"] in PROSPECT_STAGES and task["status"] != "Approved":
             resp = client.patch(f"/api/tasks/{task['task_id']}", json={
                 "status": "Approved", "revision": task["revision"],
             })
@@ -220,7 +226,7 @@ def test_approving_all_bp_tasks_completes_bp_well_anchored_on_pda(client):
         business_plan_enabled=True, business_plan_year=2029,
     )
     for task in get_tasks(client, pid):
-        if task["status"] not in ("Approved", "Not Applicable"):
+        if task["stage_group"] not in PROSPECT_STAGES and task["status"] != "Approved":
             resp = client.patch(f"/api/tasks/{task['task_id']}", json={
                 "status": "Approved", "revision": task["revision"],
             })

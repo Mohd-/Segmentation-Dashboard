@@ -2,8 +2,9 @@
 
 The 9-status dropdown is replaced by an implicit 4-state lifecycle:
 Not Assigned -> In Progress (assignment) -> Ready (submit) -> Approved
-(supervisor), with Return sending Ready back to In Progress. "Not Applicable"
-remains internal-only (seeding/pipeline scoping) and is rejected at the API.
+(supervisor), with Return sending Ready back to In Progress. There is no stored
+"not applicable" state; that name is rejected at the API like any other
+non-lifecycle status.
 
 Covers: POST /assign target + cascade semantics, POST /transition happy paths
 and wrong-state 400s, role gates (employee vs staff/supervisor), save_task's
@@ -255,12 +256,16 @@ def test_assign_cascade_for_bp_project_stays_in_bp_stages(client):
         business_plan_enabled=True, business_plan_year=2028,
     )
     tasks = get_tasks(client, pid)
-    first_bp = next(t for t in tasks if t["status"] == "Not Assigned")
+    # All 31 rows seed Not Assigned; the BP pipeline scopes the cascade to
+    # BP-stage tasks. Anchor on the first BP-stage task explicitly.
+    first_bp = next(t for t in tasks if t["stage_group"] not in PROSPECT_STAGES)
     _assign(client, first_bp["task_id"], "Employee", first_bp["revision"], cascade=True)
     after = get_tasks(client, pid)
     for task in after:
         if task["stage_group"] in PROSPECT_STAGES:
-            assert task["status"] == "Not Applicable", task["task_name"]
+            # Outside the BP well's operating pipeline: untouched by the cascade.
+            assert task["status"] == "Not Assigned", task["task_name"]
+            assert task["assigned_to"] is None, task["task_name"]
         else:
             assert task["status"] == "In Progress", task["task_name"]
             assert task["assigned_to"] == "Employee"

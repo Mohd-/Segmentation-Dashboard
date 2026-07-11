@@ -12,12 +12,11 @@
   background: var(--gray-050);
   color: var(--text-muted);
 }
-/* v17 lifecycle chips: Not Assigned / In Progress / Ready / Approved.
-   Not Applicable stays muted for internal/legacy rows. */
+/* v17 lifecycle chips: Not Assigned / In Progress / Ready / Approved. */
 .status.in-progress { background: var(--info-100); color: var(--info-700); border-color: var(--info-500); }
 .status.ready { background: var(--warning-100); color: var(--warning-700); border-color: var(--warning-500); }
 .status.approved { background: var(--success-100); color: var(--success-700); border-color: var(--success-500); }
-.status.not-applicable, .status.not-assigned { background: var(--gray-100); color: var(--text-faint); }
+.status.not-assigned { background: var(--gray-100); color: var(--text-faint); }
 
 .priority {
   display: inline-flex;

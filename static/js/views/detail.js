@@ -180,11 +180,12 @@ export function curatedOverviewMarkup(fieldMap) {
 }
 
 export function renderRightPanel(tasks) {
-  var applicableTasks = tasks.filter(function (task) { return task.status !== 'Not Applicable'; });
-  var completed = applicableTasks.filter(function (task) { return DONE[task.status] && task.status !== 'Not Applicable'; }).length;
-  var percent = applicableTasks.length ? Math.round((completed / applicableTasks.length) * 100) : 0;
+  // `tasks` is already scoped to the operating pipeline's stages (see
+  // tasksForPipeline), so every row counts toward progress.
+  var completed = tasks.filter(function (task) { return DONE[task.status]; }).length;
+  var percent = tasks.length ? Math.round((completed / tasks.length) * 100) : 0;
   byId('progress-percent').textContent = percent + '%';
-  byId('progress-count').textContent = completed + ' / ' + applicableTasks.length;
+  byId('progress-count').textContent = completed + ' / ' + tasks.length;
 
   var isBP = Number(Store.project.business_plan_enabled || 0) === 1;
   var isActive = Number(Store.project.active_well_enabled || 0) === 1;

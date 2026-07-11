@@ -4,10 +4,10 @@
 export var PROSPECT_STAGES = ['Lead Identification', 'Risking', 'Segmentation', 'Pre-Well Delivery'];
 export var BP_STAGES = ['Well Delivery', 'Post-Drilling', 'Post-Testing'];
 // The 4 user-facing lifecycle states (display only; the UI never submits a
-// status -- /assign and /transition drive it). 'Not Applicable' is internal.
+// status -- /assign and /transition drive it).
 export var STATUSES = ['Not Assigned', 'In Progress', 'Ready', 'Approved'];
-// DONE keeps the legacy keys so old data still renders as done in the rail.
-export var DONE = { 'Approved': 1, 'Not Applicable': 1, 'Complete': 1 };
+// The single done state: a component renders as done in the rail once Approved.
+export var DONE = { 'Approved': 1 };
 
 export function piip(prefix) {
   return [

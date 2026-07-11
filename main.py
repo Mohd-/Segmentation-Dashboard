@@ -282,11 +282,8 @@ def meta():
         "prospect_stages": workflow.PROSPECT_STAGES,
         "bp_stages": workflow.BP_EXECUTION_STAGES,
         "stage_order": workflow.STAGE_ORDER,
-        # Only the 4 user-facing lifecycle statuses. "Not Applicable" is
-        # internal-only (seeding / pipeline scoping) and must never surface in
-        # a picker filled from this endpoint; workflow.STATUSES keeps the full
-        # vocabulary for the domain layer.
-        "statuses": [s for s in workflow.STATUSES if s != "Not Applicable"],
+        # The 4 lifecycle statuses, straight from the domain layer.
+        "statuses": workflow.STATUSES,
         "roles": ["supervisor", "staff", "employee"],
     })
 

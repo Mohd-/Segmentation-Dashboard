@@ -1,9 +1,10 @@
 """Characterization tests for prospect -> BP Execution promotion/demotion.
 
-Pins: lead summary snapshot capture, pipeline_type switch, BP task activation,
-year validation, demotion preserving the snapshot and BP task statuses,
-re-promotion refreshing the snapshot timestamp, and the lead_piip_gas_mean ->
-overview.lead_ogip mirror.
+Pins: lead summary snapshot capture, pipeline_type switch, year validation,
+demotion preserving the snapshot and BP task statuses, re-promotion refreshing
+the snapshot timestamp, the lead_piip_gas_mean -> overview.lead_ogip mirror, and
+the derive-don't-store guarantee that promotion/demotion never rewrite task
+status or data (applicability is a pure function of pipeline_type).
 """
 from __future__ import annotations
 
@@ -100,6 +101,38 @@ def test_repromotion_refreshes_snapshot_timestamp(client):
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["pipeline_type"] == "bp"
     assert project["business_plan_year"] == 2028
+
+
+def test_bp_stage_data_entered_before_promotion_survives_promotion(client):
+    # derive-don't-store: promotion is a pure pipeline switch. BP-stage work
+    # entered while the record is still a prospect (status + dynamic fields)
+    # must carry through promotion untouched -- no status/data rewrite.
+    pid = create_project(client, "BP-SURVIVE-1")
+    proposal = get_task_by_name(client, pid, "Well Proposal")
+    saved = client.patch(f"/api/tasks/{proposal['task_id']}", json={
+        "fields": {"sarh_formation_prognosis_pre_drill": "2500 ft"},
+        "status": "Approved",
+        "revision": proposal["revision"],
+    })
+    assert saved.status_code == 200, saved.get_json()
+    assert saved.get_json()["task"]["status"] == "Approved"
+
+    resp = client.patch(f"/api/projects/{pid}/flags", json={
+        "business_plan_enabled": True, "business_plan_year": 2030,
+    })
+    assert resp.status_code == 200
+
+    after = get_task_by_name(client, pid, "Well Proposal")
+    assert after["status"] == "Approved"  # status not rewritten by promotion
+    detail = client.get(f"/api/projects/{pid}/detail").get_json()
+    fields = detail["fields"]["Well Proposal"]
+    assert fields["sarh_formation_prognosis_pre_drill"] == "2500 ft"
+
+    # And demotion reverses the pipeline without disturbing the data either.
+    resp = client.patch(f"/api/projects/{pid}/flags", json={"business_plan_enabled": False})
+    assert resp.status_code == 200
+    back = get_task_by_name(client, pid, "Well Proposal")
+    assert back["status"] == "Approved"
 
 
 def test_lead_piip_gas_mean_mirrors_to_overview_lead_ogip(client):

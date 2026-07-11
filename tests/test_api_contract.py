@@ -42,10 +42,9 @@ def test_meta_shape_matches_workflow_constants(client):
     assert body["prospect_stages"] == workflow.PROSPECT_STAGES
     assert body["bp_stages"] == workflow.BP_EXECUTION_STAGES
     assert body["stage_order"] == workflow.STAGE_ORDER
-    # Only the 4 user-facing lifecycle statuses: internal-only "Not Applicable"
-    # must never surface in a picker filled from /api/meta.
+    # The 4 lifecycle statuses, straight from the domain layer.
     assert body["statuses"] == ["Not Assigned", "In Progress", "Ready", "Approved"]
-    assert "Not Applicable" in workflow.STATUSES  # domain vocabulary unchanged
+    assert workflow.STATUSES == ["Not Assigned", "In Progress", "Ready", "Approved"]
     assert body["roles"] == ["supervisor", "staff", "employee"]
 
 

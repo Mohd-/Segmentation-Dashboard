@@ -69,7 +69,7 @@ def monthly_progress_metrics(session, limit=12):
                 SUM(CASE WHEN action_type = 'Lead Created' THEN 1 ELSE 0 END) AS leads_created,
                 SUM(CASE WHEN action_type = 'Well Added to BP' THEN 1 ELSE 0 END) AS wells_added_to_bp,
                 SUM(CASE WHEN action_type IN ('Task Update', 'Component Update')
-                              AND new_status IN ('Approved', 'Complete') THEN 1 ELSE 0 END) AS components_completed
+                              AND new_status = 'Approved' THEN 1 ELSE 0 END) AS components_completed
             FROM task_history
             WHERE changed_at IS NOT NULL
             GROUP BY substr(changed_at, 1, 7)
