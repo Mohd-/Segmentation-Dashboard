@@ -1,10 +1,13 @@
-"""SQLAlchemy ORM models mirroring the CURRENT production schema exactly.
+"""SQLAlchemy ORM models -- the single authoritative description of the schema.
 
-This file doubles as schema documentation: every table and its columns are the
-authoritative description of what the application stores. It must stay byte-for-
-byte compatible with existing production SQLite files -- table names, column
-names, column types and defaults are frozen so an old database opens with no
-migration.
+This file IS the schema, not a mirror of one. Every table and column here is
+what the application stores; there is no separate "production schema" it must
+stay compatible with. Pre-deployment (nothing is in production yet), changing
+this file to change the schema is normal: edit the model, delete the local
+``.db`` file (and its ``-shm``/``-wal`` sidecars), and restart the app --
+``migrations.run`` recreates and reseeds a fresh database from exactly what's
+defined here. See migrations.py for when that stops being true (first
+production deployment) and a real migration path becomes necessary.
 
 What belongs here:
 - ``declarative_base`` table definitions and their indexes.
@@ -15,12 +18,8 @@ What does NOT belong here:
 
 Style note: we use classic ``Column(...)`` definitions (NOT the 2.0-only
 ``Mapped[]``/``mapped_column``) so this file works under both SQLAlchemy 1.4 and
-2.0. ``Base.metadata.create_all`` is used only to create a brand-new database;
-existing databases are adopted as-is (see migrations.py).
-
-Deliberately NOT added yet: a ``UNIQUE(project_id, task_name)`` constraint on
-project_tasks. Legacy data contains duplicate rows and adding the constraint is
-a separate later phase.
+2.0. ``Base.metadata.create_all`` builds the whole schema from these
+definitions on every bootstrap (see migrations.py).
 """
 from __future__ import annotations
 
@@ -73,10 +72,8 @@ class Project(Base):
     current_stage = Column(Text)
     current_task = Column(Text)
     current_owner = Column(Text)
-    drill_result = Column(Text)
     start_date = Column(Text)
     target_date = Column(Text)
-    location = Column(Text)
     business_plan_enabled = Column(Integer, nullable=False, server_default=text("0"))
     business_plan_year = Column(Integer)
     active_well_enabled = Column(Integer, nullable=False, server_default=text("0"))
@@ -85,9 +82,8 @@ class Project(Base):
     last_updated = Column(Text)
     archived = Column(Integer, nullable=False, server_default=text("0"))
     lead_folder_path = Column(Text)
-    # lead_x / lead_y / revision were added by legacy _ensure_column migrations.
-    lead_x = Column(Integer)
-    lead_y = Column(Integer)
+    lead_x = Column(REAL)
+    lead_y = Column(REAL)
     revision = Column(Integer, nullable=False, server_default=text("0"))
     # Set by refresh_project_state exactly when overall_status becomes
     # 'Completed'; cleared (NULL) when the project reopens. Added by schema v16
@@ -117,14 +113,9 @@ class ProjectTask(Base):
     task_name = Column(Text, nullable=False)
     stage_group = Column(Text, nullable=False)
     assigned_to = Column(Text)
-    backup_owner = Column(Text)
-    approver = Column(Text)
     status = Column(Text, nullable=False, server_default=text("'Not Started'"))
-    planned_start = Column(Text)
     actual_start = Column(Text)
-    planned_finish = Column(Text)
     actual_finish = Column(Text)
-    output_notes = Column(Text)
     comments = Column(Text)
     priority = Column(Text, nullable=False, server_default=text("'Normal'"))
     business_plan_enabled = Column(Integer, nullable=False, server_default=text("0"))
@@ -134,6 +125,7 @@ class ProjectTask(Base):
     revision = Column(Integer, nullable=False, server_default=text("0"))
 
     __table_args__ = (
+        UniqueConstraint("project_id", "task_name"),
         Index("idx_project_tasks_project_active_sequence", "project_id", "is_active", "sequence_no"),
         Index("idx_project_tasks_project_status", "project_id", "status"),
         Index("idx_project_tasks_project_name", "project_id", "task_name"),
@@ -218,10 +210,11 @@ class ProjectFormation(Base):
     ``source_task_id`` records which component last wrote them (also the anchor
     for the "Formation Data Updated" history event).
 
-    Value columns are TEXT to match the app-wide convention (task_dynamic_fields
-    et al. store user inputs as entered). ``Base.metadata.create_all`` runs on
-    every bootstrap, so this purely additive table needs no numbered migration
-    (same pattern as ``users``); the v19 step only backfills legacy SARH values.
+    Measurement columns are REAL (they are genuinely numeric and get computed
+    on -- averages, ratios, comparisons); ``fluid`` stays TEXT (a free-text
+    description, e.g. "Gas over Water"). ``workflow.upsert_project_formations``
+    coerces incoming values to float (blank/whitespace -> NULL) and raises
+    ValueError -> 400 on anything non-numeric.
     """
     __tablename__ = "project_formations"
 
@@ -229,13 +222,13 @@ class ProjectFormation(Base):
     project_id = Column(Integer, ForeignKey("projects.project_id", ondelete="CASCADE"), nullable=False)
     formation = Column(Text, nullable=False)
     phase = Column(Text, nullable=False)
-    top_tvdss_ft = Column(Text)
-    base_tvdss_ft = Column(Text)
-    thickness_ft = Column(Text)
-    porosity_pct = Column(Text)
-    swt_pct = Column(Text)
-    pay_ft = Column(Text)
-    ngr_pct = Column(Text)
+    top_tvdss_ft = Column(REAL)
+    base_tvdss_ft = Column(REAL)
+    thickness_ft = Column(REAL)
+    porosity_pct = Column(REAL)
+    swt_pct = Column(REAL)
+    pay_ft = Column(REAL)
+    ngr_pct = Column(REAL)
     fluid = Column(Text)
     source_task_id = Column(Integer)
     updated_at = Column(Text)

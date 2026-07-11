@@ -25,7 +25,7 @@ Conventions:
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
+from datetime import date
 from typing import Any, Dict, List, Optional
 
 import config
@@ -90,6 +90,9 @@ FORMATION_VALUE_FIELDS = [
     "top_tvdss_ft", "base_tvdss_ft", "thickness_ft", "porosity_pct",
     "swt_pct", "pay_ft", "ngr_pct", "fluid",
 ]
+# All value fields except 'fluid' are REAL columns (project_formations); 'fluid'
+# is a free-text description and stays TEXT.
+FORMATION_NUMERIC_FIELDS = [f for f in FORMATION_VALUE_FIELDS if f != "fluid"]
 
 # Template tuple: id, component, stage, role, duration, depends_on, branch_type, output
 PIPELINE_TEMPLATES = [
@@ -130,14 +133,6 @@ PIPELINE_TEMPLATES = [
     (31, "PDA", "Post-Testing", "PDA Owner", 2, None, "normal", "PDA complete"),
 ]
 
-WORKFLOW_TASK_RENAMES = {
-    "Quicklook Logs": "Quicklook Logs Interpretation",
-    "Aramco Approved Picks": "Aramco Picks",
-    "Flowback": "Flowback Results",
-    "Flow Back": "Flowback Results",
-    "Post Test": "Flowback Results",
-}
-
 DYNAMIC_FIELD_OVERVIEW_MAP = {
     "lead_piip_gas_mean": "lead_ogip",
     "pre_drill_piip_gas_mean": "pre_drill_estimation",
@@ -169,10 +164,10 @@ _OVERVIEW_ALLOWED_FIELDS = {
 def get_templates(session) -> List[Dict[str, Any]]:
     """Return the live task templates ordered by sequence.
 
-    Filtered to the canonical PIPELINE_TEMPLATES names: a migrated database
-    still carries retired templates (e.g. "Presence CoS Evaluation", parked at
-    sequence_no 999 by the v18 migration so historical task rows keep their
-    template reference), and those must not spawn tasks on new projects.
+    Filtered to the canonical PIPELINE_TEMPLATES names: a database can carry
+    retired templates left parked at a high sequence_no (kept only so old task
+    rows retain a valid template_id reference), and those must not spawn tasks
+    on new projects.
     """
     names = [tpl[1] for tpl in PIPELINE_TEMPLATES]
     return db.fetch_all(session, """
@@ -285,17 +280,17 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
         result = db.execute(session, """
             INSERT INTO projects (
                 project_name, overall_status, current_stage, current_task, current_owner,
-                drill_result, start_date, target_date, current_stage_started_at, last_updated,
+                start_date, target_date, current_stage_started_at, last_updated,
                 lead_folder_path, lead_x, lead_y, business_plan_enabled, business_plan_year,
                 active_well_enabled, pipeline_type
             ) VALUES (:project_name, :overall_status, :current_stage, :current_task, :current_owner,
-                      :drill_result, :start_date, :target_date, :stage_started_at, :last_updated,
+                      :start_date, :target_date, :stage_started_at, :last_updated,
                       :lead_folder_path, :lead_x, :lead_y, :business_plan_enabled, :business_plan_year,
                       :active_well_enabled, :pipeline_type)
         """, {
             "project_name": project_name, "overall_status": "In Progress",
             "current_stage": first_template["stage_group"], "current_task": first_template["task_name"],
-            "current_owner": None, "drill_result": None, "start_date": start_date,
+            "current_owner": None, "start_date": start_date,
             "target_date": target_date, "stage_started_at": start_date, "last_updated": now,
             "lead_folder_path": folders.default_lead_folder_path(project_name),
             "lead_x": lead_x or None, "lead_y": lead_y or None,
@@ -303,10 +298,6 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
             "active_well_enabled": 1 if active_well_enabled else 0, "pipeline_type": pipeline_type,
         })
         project_id = result.lastrowid  # PG: use RETURNING when on Postgres
-        try:
-            start_dt = date.fromisoformat(start_date)
-        except Exception:
-            start_dt = date.today()
         first_task_id = None
         first_sequence = first_template["sequence_no"]
         for row in templates:
@@ -314,29 +305,24 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
             if pipeline_type == "bp" and not is_bp_stage:
                 initial_status = "Not Applicable"
             else:
-                # v17 lifecycle: every step starts Not Assigned (the first step
-                # still carries planned dates); assignment moves it In Progress.
+                # v17 lifecycle: every step starts Not Assigned; assignment
+                # moves it to In Progress.
                 initial_status = "Not Assigned"
-            planned_start = start_dt.isoformat() if row["sequence_no"] == first_sequence else None
-            planned_finish = ((start_dt + timedelta(days=row["default_duration_days"])).isoformat()
-                              if row["sequence_no"] == first_sequence else None)
             task_result = db.execute(session, """
                 INSERT INTO project_tasks (
                     project_id, template_id, sequence_no, task_name, stage_group, assigned_to,
-                    backup_owner, approver, status, planned_start, actual_start, planned_finish,
-                    actual_finish, output_notes, comments, priority, business_plan_enabled,
+                    status, actual_start, actual_finish, comments, priority, business_plan_enabled,
                     business_plan_year, is_active, last_updated
                 ) VALUES (:project_id, :template_id, :sequence_no, :task_name, :stage_group, :assigned_to,
-                          :backup_owner, :approver, :status, :planned_start, :actual_start, :planned_finish,
-                          :actual_finish, :output_notes, :comments, :priority, :business_plan_enabled,
+                          :status, :actual_start, :actual_finish, :comments, :priority, :business_plan_enabled,
                           :business_plan_year, 1, :last_updated)
             """, {
                 "project_id": project_id, "template_id": row["template_id"],
                 "sequence_no": row["sequence_no"], "task_name": row["task_name"],
-                "stage_group": row["stage_group"], "assigned_to": None, "backup_owner": None,
-                "approver": None, "status": initial_status, "planned_start": planned_start,
-                "actual_start": None, "planned_finish": planned_finish, "actual_finish": None,
-                "output_notes": row["mandatory_output"], "comments": None, "priority": "Medium",
+                "stage_group": row["stage_group"], "assigned_to": None,
+                "status": initial_status,
+                "actual_start": None, "actual_finish": None,
+                "comments": None, "priority": "Medium",
                 "business_plan_enabled": bp_enabled, "business_plan_year": year_val,
                 "last_updated": now,
             })
@@ -730,9 +716,12 @@ def upsert_project_formations(session, project_id, phase, rows, changed_by="Web 
     """Upsert formation rows for one phase; return the fresh full list.
 
     Each row is a full replacement for its (project_id, formation, phase) slot:
-    absent value fields are stored as ''. Validation is strict -- an unknown
-    phase, formation or field key raises ValueError (-> 400) rather than being
-    silently dropped, so client typos never lose data quietly.
+    absent numeric fields are stored as NULL, absent ``fluid`` as ''. Validation
+    is strict -- an unknown phase, formation or field key raises ValueError
+    (-> 400) rather than being silently dropped, so client typos never lose
+    data quietly. Numeric fields that don't parse as a float also raise
+    ValueError (-> 400) naming the offending field, so junk input never lands
+    silently as NULL.
 
     When ``source_task_id`` is provided, ONE "Formation Data Updated" history
     event is logged against that task listing the formations touched. No role
@@ -756,8 +745,16 @@ def upsert_project_formations(session, project_id, phase, rows, changed_by="Web 
         unknown = [k for k in row if k not in FORMATION_VALUE_FIELDS and k != "formation"]
         if unknown:
             raise ValueError("Unknown formation fields: " + ", ".join(sorted(unknown)) + ".")
-        values = {field: ("" if row.get(field) is None else str(row.get(field)).strip())
-                  for field in FORMATION_VALUE_FIELDS}
+        values = {"fluid": "" if row.get("fluid") is None else str(row.get("fluid")).strip()}
+        for field in FORMATION_NUMERIC_FIELDS:
+            raw = row.get(field)
+            if raw is None or (isinstance(raw, str) and not raw.strip()):
+                values[field] = None
+                continue
+            try:
+                values[field] = float(raw)
+            except (TypeError, ValueError):
+                raise ValueError(f"Invalid numeric value for {field}: {raw!r}.")
         clean_rows.append((formation, values))
 
     with db.write_transaction(session):

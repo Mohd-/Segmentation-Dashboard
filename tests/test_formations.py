@@ -2,13 +2,13 @@
 
 Formation interpretation values (SARH / QASM / QWRH) belong to the WELL, not to
 a workflow step: GET/PUT /api/projects/<id>/formations, upsert keyed by
-(project, formation, phase), strict validation, one history event against the
-source task, /detail exposure, and the v19 backfill from the legacy quicklook_/
-final_ task dynamic fields.
+(project, formation, phase), strict validation (including numeric coercion --
+measurement fields are REAL columns), one history event against the source
+task, and /detail exposure.
 """
 from __future__ import annotations
 
-from conftest import create_project, get_task_by_name, raw_sqlite_connect
+from conftest import create_project, get_task_by_name
 
 SARH_ROW = {
     "formation": "SARH",
@@ -60,12 +60,14 @@ def test_put_get_round_trip_both_phases(client):
     rows = client.get(f"/api/projects/{pid}/formations").get_json()
     assert len(rows) == 3
     by_key = {(r["phase"], r["formation"]): r for r in rows}
-    assert by_key[("quicklook", "SARH")]["top_tvdss_ft"] == "10500"
+    assert by_key[("quicklook", "SARH")]["top_tvdss_ft"] == 10500.0
     assert by_key[("quicklook", "SARH")]["fluid"] == "Gas"
-    # Absent value fields are stored as '' (full-row replacement semantics).
-    assert by_key[("quicklook", "QASM")]["pay_ft"] == "20"
-    assert by_key[("quicklook", "QASM")]["top_tvdss_ft"] == ""
-    assert by_key[("final", "SARH")]["pay_ft"] == "72"
+    # Absent numeric fields are stored as NULL (full-row replacement semantics);
+    # fluid (TEXT) still defaults to ''.
+    assert by_key[("quicklook", "QASM")]["pay_ft"] == 20.0
+    assert by_key[("quicklook", "QASM")]["top_tvdss_ft"] is None
+    assert by_key[("quicklook", "QASM")]["fluid"] == ""
+    assert by_key[("final", "SARH")]["pay_ft"] == 72.0
 
 
 def test_upsert_overwrites_not_duplicates(client):
@@ -78,7 +80,7 @@ def test_upsert_overwrites_not_duplicates(client):
 
     rows = client.get(f"/api/projects/{pid}/formations").get_json()
     assert len(rows) == 1  # upsert, not append
-    assert rows[0]["pay_ft"] == "99"
+    assert rows[0]["pay_ft"] == 99.0
 
 
 def test_formation_rows_ordered_by_phase_then_canonical_formation(client):
@@ -121,6 +123,21 @@ def test_put_formations_unknown_project_400(client):
     assert resp.get_json()["detail"] == "Lead / well not found."
 
 
+def test_non_numeric_measurement_value_rejected(client):
+    pid = create_project(client, "FORM-BAD-4")
+    resp = _put(client, pid, "quicklook", [{"formation": "SARH", "porosity_pct": "not-a-number"}])
+    assert resp.status_code == 400
+    assert "porosity_pct" in resp.get_json()["detail"]
+
+
+def test_blank_measurement_value_stored_as_null(client):
+    pid = create_project(client, "FORM-BLANK-1")
+    resp = _put(client, pid, "quicklook", [{"formation": "SARH", "top_tvdss_ft": "  "}])
+    assert resp.status_code == 200
+    rows = client.get(f"/api/projects/{pid}/formations").get_json()
+    assert rows[0]["top_tvdss_ft"] is None
+
+
 # ---------------------------------------------------------------------------
 # Detail payload + history
 # ---------------------------------------------------------------------------
@@ -156,92 +173,3 @@ def test_no_history_event_without_source_task(client):
     _put(client, pid, "quicklook", [SARH_ROW])
     events = client.get(f"/api/activity?project_id={pid}").get_json()
     assert not [e for e in events if e["action_type"] == "Formation Data Updated"]
-
-
-# ---------------------------------------------------------------------------
-# Migration v19: legacy SARH backfill
-# ---------------------------------------------------------------------------
-
-def test_migration_v19_backfills_sarh_rows_from_legacy_fields(client):
-    import db as dbmod
-
-    pid = create_project(client, "MIGRATE-V19-1")
-    quicklook = get_task_by_name(client, pid, "Quicklook Logs Interpretation")
-    final = get_task_by_name(client, pid, "Final Log Analysis")
-
-    legacy_quicklook = {
-        "quicklook_top_sarah_tvdss_ft": "10100",
-        "quicklook_base_sarah_tvdss_ft": "10220",
-        "quicklook_formation_thickness_ft": "120",
-        "quicklook_average_porosity_pct": "7.5",
-        "quicklook_average_swt_pct": "40",
-        "quicklook_pay_thickness_ft": "55",
-        "quicklook_ngr_pct": "11",
-        "quicklook_fluid_type": "Gas over Water",
-    }
-    legacy_final = {"final_top_sarah_tvdss_ft": "10105", "final_pay_thickness_ft": "58"}
-
-    conn = raw_sqlite_connect(client.db_path)
-    try:
-        for task, fields in ((quicklook, legacy_quicklook), (final, legacy_final)):
-            for key, value in fields.items():
-                conn.execute("""
-                    INSERT INTO task_dynamic_fields (task_id, field_key, field_value, updated_at)
-                    VALUES (?, ?, ?, datetime('now'))
-                """, (task["task_id"], key, value))
-        conn.execute("UPDATE app_settings SET value = '18' WHERE key = 'schema_version'")
-        conn.commit()
-    finally:
-        conn.close()
-
-    dbmod.reset_for_tests()
-    dbmod.init_db(str(client.db_path))
-
-    rows = client.get(f"/api/projects/{pid}/formations").get_json()
-    by_phase = {r["phase"]: r for r in rows}
-    assert set(by_phase) == {"quicklook", "final"}
-    assert all(r["formation"] == "SARH" for r in rows)
-    ql = by_phase["quicklook"]
-    assert ql["top_tvdss_ft"] == "10100"
-    assert ql["base_tvdss_ft"] == "10220"
-    assert ql["thickness_ft"] == "120"
-    assert ql["porosity_pct"] == "7.5"
-    assert ql["swt_pct"] == "40"
-    assert ql["pay_ft"] == "55"
-    assert ql["ngr_pct"] == "11"
-    assert ql["fluid"] == "Gas over Water"
-    fin = by_phase["final"]
-    assert fin["top_tvdss_ft"] == "10105"
-    assert fin["pay_ft"] == "58"
-    assert fin["thickness_ft"] == ""  # legacy value absent -> stored blank
-
-    # Idempotent AND non-destructive: edit a value through the API, replay the
-    # migration -- INSERT OR IGNORE must not clobber the user's edit.
-    edited = dict(SARH_ROW)
-    edited["pay_ft"] = "77"
-    assert _put(client, pid, "quicklook", [edited]).status_code == 200
-    conn = raw_sqlite_connect(client.db_path)
-    conn.execute("UPDATE app_settings SET value = '18' WHERE key = 'schema_version'")
-    conn.commit()
-    conn.close()
-    dbmod.reset_for_tests()
-    dbmod.init_db(str(client.db_path))
-
-    rows = client.get(f"/api/projects/{pid}/formations").get_json()
-    assert len(rows) == 2  # still one row per phase
-    ql = next(r for r in rows if r["phase"] == "quicklook")
-    assert ql["pay_ft"] == "77"  # user edit survives the replay
-
-
-def test_migration_v19_skips_projects_without_legacy_values(client):
-    import db as dbmod
-
-    pid = create_project(client, "MIGRATE-V19-EMPTY-1")
-    conn = raw_sqlite_connect(client.db_path)
-    conn.execute("UPDATE app_settings SET value = '18' WHERE key = 'schema_version'")
-    conn.commit()
-    conn.close()
-    dbmod.reset_for_tests()
-    dbmod.init_db(str(client.db_path))
-
-    assert client.get(f"/api/projects/{pid}/formations").get_json() == []

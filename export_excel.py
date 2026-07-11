@@ -47,7 +47,7 @@ def export_to_excel(session, filepath):
 
     if not projects_df.empty:
         for col in ["project_id", "project_name", "overall_status", "current_stage", "current_task",
-                    "current_owner", "drill_result", "start_date", "target_date", "location",
+                    "current_owner", "start_date", "target_date",
                     "current_stage_started_at", "last_updated"]:
             if col not in projects_df.columns:
                 projects_df[col] = None
@@ -58,13 +58,13 @@ def export_to_excel(session, filepath):
         projects_df["days_to_target"] = (projects_df["days_to_target"] - pd.Timestamp.today().normalize()).dt.days
         overview_df = projects_df.reindex(columns=[
             "project_id", "project_name", "overall_status", "health", "current_stage",
-            "current_task", "current_owner", "drill_result", "start_date", "target_date",
-            "location", "current_stage_started_at", "last_updated"
+            "current_task", "current_owner", "start_date", "target_date",
+            "current_stage_started_at", "last_updated"
         ]).copy()
         overview_df.columns = [
             "Well ID", "Well Name", "Overall Status", "Health", "Current Stage",
-            "Current Task", "Assignee", "Drill Result", "Start Date", "Target Date",
-            "Location", "Stage Started", "Last Updated"
+            "Current Task", "Assignee", "Start Date", "Target Date",
+            "Stage Started", "Last Updated"
         ]
         health_order = {"Overdue": 0, "Due Soon": 1, "On Track": 2, "Completed": 3}
         overview_df["_sort"] = overview_df["Health"].map(health_order).fillna(9)
@@ -72,32 +72,32 @@ def export_to_excel(session, filepath):
     else:
         overview_df = pd.DataFrame(columns=[
             "Well ID", "Well Name", "Overall Status", "Health", "Current Stage",
-            "Current Task", "Assignee", "Drill Result", "Start Date", "Target Date",
-            "Location", "Stage Started", "Last Updated"
+            "Current Task", "Assignee", "Start Date", "Target Date",
+            "Stage Started", "Last Updated"
         ])
 
     task_export_df = tasks_df.copy()
     if not task_export_df.empty:
         for col in ["project_id", "sequence_no", "task_name", "stage_group", "assigned_to",
-                    "status", "planned_start", "planned_finish", "actual_start", "actual_finish",
+                    "status", "actual_start", "actual_finish",
                     "comments", "is_active"]:
             if col not in task_export_df.columns:
                 task_export_df[col] = None
         task_export_df = task_export_df.reindex(columns=[
             "project_id", "sequence_no", "task_name", "stage_group", "assigned_to",
-            "status", "planned_start", "planned_finish", "actual_start", "actual_finish",
+            "status", "actual_start", "actual_finish",
             "comments", "is_active"
         ]).copy()
         task_export_df.columns = [
             "Well ID", "Seq", "Component", "Stage", "Assignee",
-            "Status", "Planned Start", "Planned Finish", "Actual Start", "Actual Finish",
+            "Status", "Actual Start", "Actual Finish",
             "Comments", "Active"
         ]
         task_export_df = task_export_df.sort_values(["Well ID", "Seq"])
     else:
         task_export_df = pd.DataFrame(columns=[
             "Well ID", "Seq", "Component", "Stage", "Assignee",
-            "Status", "Planned Start", "Planned Finish", "Actual Start", "Actual Finish",
+            "Status", "Actual Start", "Actual Finish",
             "Comments", "Active"
         ])
 

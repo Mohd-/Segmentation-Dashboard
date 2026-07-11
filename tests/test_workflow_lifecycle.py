@@ -19,9 +19,9 @@ PROSPECT_STAGES = {"Lead Identification", "Risking", "Segmentation", "Pre-Well D
 
 def test_new_prospect_project_has_31_tasks_all_not_assigned(client):
     # v17 lifecycle: every step (including the first) starts Not Assigned;
-    # assignment is what moves a step to In Progress. The first step still
-    # carries the planned dates, and current_task still anchors on it.
-    # (31 tasks since v18 removed the Presence CoS Evaluation step.)
+    # assignment is what moves a step to In Progress. current_task still
+    # anchors on the first step. (31 tasks since v18 removed the Presence CoS
+    # Evaluation step.)
     pid = create_project(client, "SEED-PROSPECT-1")
     tasks = get_tasks(client, pid)
     assert len(tasks) == 31
@@ -29,13 +29,9 @@ def test_new_prospect_project_has_31_tasks_all_not_assigned(client):
     first = tasks[0]
     assert first["task_name"] == "Reservoir Area Definition"
     assert first["status"] == "Not Assigned"
-    assert first["planned_start"] is not None
-    assert first["planned_finish"] is not None
 
     for task in tasks[1:]:
         assert task["status"] == "Not Assigned"
-        assert task["planned_start"] is None
-        assert task["planned_finish"] is None
 
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["current_task"] == "Reservoir Area Definition"

@@ -23,8 +23,15 @@ python main.py
 ```
 
 The app serves at <http://127.0.0.1:8020>. On first start it creates
-`pipeline_tracker.db` beside `main.py` and runs any pending schema migrations
-automatically.
+`pipeline_tracker.db` beside `main.py` and seeds it from `models.py`.
+
+**Dev note:** the app is pre-deployment, so the database is throwaway --
+`models.py` is the single source of truth for the schema, with no migration
+path preserving old data. If you change a model, delete `pipeline_tracker.db`
+(and its `-shm`/`-wal` sidecars) and restart; the app regenerates a fresh
+database from the current models. Booting against a database stamped with a
+newer schema version than the code knows raises a clear `RuntimeError` telling
+you to do exactly that (see `migrations.py`).
 
 ## Configuration
 
@@ -94,9 +101,10 @@ in the header while a session is active.
 
 All data lives in one SQLite file (default `./pipeline_tracker.db`). It is
 deliberately **not** in git (see `.gitignore`). To back up: stop the app, then
-copy `pipeline_tracker.db` plus the `-wal` / `-shm` files if present. Schema
-migrations run automatically at startup — an old database file is upgraded in
-place the first time a newer app version boots against it.
+copy `pipeline_tracker.db` plus the `-wal` / `-shm` files if present.
+Pre-deployment, there is no upgrade-in-place migration path: a schema change
+means deleting the `.db` file and letting the app regenerate it from
+`models.py` (see the Quickstart dev note above).
 
 ## Switching to Postgres
 
@@ -114,10 +122,10 @@ grep -rn "PG:" *.py
 
 ## Deployment
 
-For shared use, run behind Gunicorn/Nginx. Startup migrations are process-safe
-(each migration step takes the database write lock up front), but the simplest
-operational rule is: on the **first boot after an upgrade**, start a single
-instance, let it finish migrating, then scale out.
+For shared use, run behind Gunicorn/Nginx. Startup bootstrap is process-safe
+(the seed/ensure step takes the database write lock up front), but the
+simplest operational rule is: on the **first boot after an upgrade**, start a
+single instance, let it finish bootstrapping, then scale out.
 
 ## Running tests
 
@@ -126,7 +134,7 @@ instance, let it finish migrating, then scale out.
 ```
 
 The pytest suite covers the HTTP API contract, the workflow lifecycle,
-promotion/demotion, the CoS math, migrations, error handling and identity.
+promotion/demotion, the CoS math, schema bootstrap, error handling and identity.
 
 ## Version history
 

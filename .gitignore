@@ -1,8 +1,10 @@
 # Live application data — never version the database.
 # To back up: stop the app and copy pipeline_tracker.db (plus -wal/-shm if present).
-pipeline_tracker.db
-*.db-wal
+# Pre-deployment: the DB is throwaway (see migrations.py); on a schema change,
+# just delete these files and restart the app to regenerate a fresh one.
+*.db
 *.db-shm
+*.db-wal
 
 # Local environments and caches
 .venv/
