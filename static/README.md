@@ -26,8 +26,9 @@ static/
     main.js                   boots the app: wires up the tab buttons and the four static forms
     views/
       pipeline.js              Prospect Maturation + Business Plan Execution tabs (the kanban-style boards)
-      detail.js                the right-hand detail panel: summary card, rename/archive, BP/Active flags
+      detail.js                the right-hand detail panel: compact summary card, rename/archive, BP/Active flags
       detail-form.js           the middle detail panel: the component form itself, dynamic fields, repeatable rows
+      project-editor.js         the "all fields" editor for one project, opened from a Portfolio well name
       portfolio.js              Portfolio tab
       audit.js                  Audit Trail tab
 ```
@@ -127,14 +128,16 @@ through the existing generic `fields` payload (the backend's `task_dynamic_field
 accepts arbitrary keys for a task — see the `workflow/` package if unsure, since the backend
 is a separate system this guide doesn't cover).
 
-Note: the right-hand summary panel (`views/detail.js`'s `curatedOverviewMarkup()`) does **not**
-auto-pick-up new fields — it's a hand-curated list, not schema-driven. See the next paragraph.
+Note: the right-hand summary panel (`views/detail.js`'s `renderRightPanel()`) does **not**
+auto-pick-up new fields — it's a compact hand-curated card, not schema-driven. See the next
+paragraph.
 
-To add a field that should also show up in the backend-computed overview (the "Total CoS"
-style values the detail payload returns under `overview`) or in `curatedOverviewMarkup()`
-(the always-visible top summary), that's backend-composed or hand-curated respectively — see
-`views/detail.js`'s `curatedOverviewMarkup()` for the current curated list, and add a line
-there following the existing `add('Label', sourceVal(...), 'Component Name')` pattern.
+That summary card is deliberately small: a completion progress bar, the latest P90/P10 gas
+figures, the Reservoir / Trap / Seal CoS values, and a gear popover holding the BP / Active
+flags, BP year, and Rename / Archive. To surface a new value there (or in the backend-composed
+`overview` the detail payload returns — the "Total CoS" style read-time values), edit
+`views/detail.js`'s `renderRightPanel()` and add a `metricRow('Label', value, 'Component Name')`
+line following the existing ones (the `overview` values themselves are backend-composed).
 
 ## 5. Adding a whole new tab
 

@@ -1,7 +1,7 @@
-import { byId, all, esc, isFilled, range, statusChip, msg } from '../dom.js';
+import { byId, all, esc, isFilled, range, msg } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName, Store, resetSelection } from '../state.js';
-import { BP_STAGES, PROSPECT_STAGES, DONE, schemaIndex } from '../schema.js';
+import { BP_STAGES, PROSPECT_STAGES, DONE } from '../schema.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { loadComponent, LATEST_PIIP_SOURCES } from './detail-form.js';
 import { refreshAllBoards } from './pipeline.js';
@@ -25,6 +25,9 @@ export function chooseInitialTask(tasks) {
 export function openDetail(projectId, pipeline) {
   Store.projectId = projectId;
   Store.pipeline = pipeline || 'prospect';
+  // One record view at a time: the full-project editor and the pipeline detail
+  // are mutually exclusive panels.
+  byId('project-editor').classList.add('hidden');
   byId('detail-shell').classList.remove('hidden');
   API.detail(projectId).then(function (detail) {
     Store.project = detail.project || {};
@@ -52,22 +55,80 @@ var STAGE_ICONS = {
   'Post-Testing': '\u2713'              // ✓ check
 };
 
+// Rail accordion: exactly one stage group open at a time (zero open allowed).
+// State is module-level so it survives the re-render after every save/refresh,
+// and resets when the selected project changes (see renderDetail below). The
+// selected task's stage is revealed after render by revealTaskStage().
+var openStage = null;
+var openStageProjectId = null;
+
+// Sync the already-rendered rail to `openStage`: toggle each header's
+// open/aria-expanded and each body's collapsed class. Shared by the header
+// click handler and revealTaskStage so neither re-renders the whole list.
+function syncStageOpenState() {
+  all('.rail-stage-head').forEach(function (head) {
+    var isOpen = head.getAttribute('data-stage') === openStage;
+    head.classList.toggle('open', isOpen);
+    head.setAttribute('aria-expanded', String(isOpen));
+  });
+  all('.rail-stage-body').forEach(function (body) {
+    body.classList.toggle('collapsed', body.getAttribute('data-stage') !== openStage);
+  });
+}
+
+// Open the stage that owns `task` and sync the rendered rail in place. Called
+// from detail-form.js loadComponent (renderDetail runs before the task is
+// picked, so the default-open stage is set here rather than at render time).
+export function revealTaskStage(task) {
+  if (!task) return;
+  openStage = task.stage_group;
+  openStageProjectId = Store.projectId;
+  syncStageOpenState();
+}
+
 export function renderDetail() {
   var tasks = tasksForPipeline(Store.pipeline);
   byId('detail-name').textContent = Store.project.project_name || 'Lead / Well';
   byId('detail-subtitle').textContent = Store.pipeline === 'bp' ? 'Business Plan Execution' : 'Prospect Maturation';
   byId('back-to-overview').textContent = '← Back to ' + (Store.pipeline === 'bp' ? 'Business Plan Execution' : 'Prospect Maturation');
-  // Tasks arrive ordered by sequence_no, so a stage header is emitted exactly
-  // when stage_group changes between consecutive items.
-  var lastStage = null;
-  byId('component-list').innerHTML = tasks.map(function (task) {
-    var head = '';
-    if (task.stage_group !== lastStage) {
-      lastStage = task.stage_group;
-      head = '<div class="rail-stage-head"><span class="stage-icon" aria-hidden="true">' + (STAGE_ICONS[task.stage_group] || '•') + '</span><span>' + esc(task.stage_group) + '</span></div>';
-    }
-    return head + '<button type="button" class="component-item ' + (DONE[task.status] ? 'done' : '') + '" data-task-id="' + task.task_id + '"><span class="component-num">' + esc(task.sequence_no) + '</span><b>' + esc(task.task_name) + '</b>' + statusChip(task.status || 'Not Assigned') + '</button>';
+  // Accordion state is per-project: a fresh selection starts fully collapsed
+  // (revealTaskStage opens the selected task's stage right after this render).
+  if (Store.projectId !== openStageProjectId) { openStage = null; openStageProjectId = Store.projectId; }
+  // Tasks arrive ordered by sequence_no, so a new stage group begins wherever
+  // stage_group changes between consecutive items.
+  var groups = [];
+  tasks.forEach(function (task) {
+    var group = groups[groups.length - 1];
+    if (!group || group.stage !== task.stage_group) { group = { stage: task.stage_group, tasks: [] }; groups.push(group); }
+    group.tasks.push(task);
+  });
+  byId('component-list').innerHTML = groups.map(function (group) {
+    var approved = group.tasks.filter(function (task) { return DONE[task.status]; }).length;
+    var isOpen = group.stage === openStage;
+    var items = group.tasks.map(function (task) {
+      // status-<slug> colours the number badge (see components.css); same slug
+      // the status chips use, so the token trios line up.
+      var slug = String(task.status || 'Not Assigned').toLowerCase().replace(/\s+/g, '-');
+      return '<button type="button" class="component-item status-' + slug + '" data-task-id="' + task.task_id + '"><span class="component-num">' + esc(task.sequence_no) + '</span><b>' + esc(task.task_name) + '</b></button>';
+    }).join('');
+    return '<div class="rail-stage">' +
+      '<button type="button" class="rail-stage-head' + (isOpen ? ' open' : '') + '" data-stage="' + esc(group.stage) + '" aria-expanded="' + isOpen + '">' +
+      '<span class="stage-icon" aria-hidden="true">' + (STAGE_ICONS[group.stage] || '•') + '</span>' +
+      '<span class="rail-stage-name">' + esc(group.stage) + '</span>' +
+      '<span class="rail-stage-count">' + approved + '/' + group.tasks.length + '</span>' +
+      '<span class="rail-stage-chevron" aria-hidden="true"></span></button>' +
+      '<div class="rail-stage-body' + (isOpen ? '' : ' collapsed') + '" data-stage="' + esc(group.stage) + '">' + items + '</div></div>';
   }).join('') || '<div class="empty-state">No components in this pipeline.</div>';
+  all('.rail-stage-head').forEach(function (head) {
+    head.addEventListener('click', function () {
+      var stage = head.getAttribute('data-stage');
+      // Toggle: clicking the open stage collapses it; else open it (and the
+      // single-open sync closes whichever was open before).
+      openStage = (openStage === stage) ? null : stage;
+      openStageProjectId = Store.projectId;
+      syncStageOpenState();
+    });
+  });
   all('.component-item').forEach(function (button) {
     button.addEventListener('click', function () {
       var taskId = Number(button.getAttribute('data-task-id'));
@@ -77,22 +138,6 @@ export function renderDetail() {
   renderRightPanel(tasks);
 }
 
-export function summaryValue(sources, fieldMap) {
-  var sourceMap = fieldMap || Store.allFields;
-  for (var i = 0; i < sources.length; i += 1) {
-    var component = sources[i][0];
-    var key = sources[i][1];
-    var componentFields = sourceMap[component] || {};
-    if (isFilled(componentFields[key])) return componentFields[key];
-  }
-  return '';
-}
-
-export function summaryItemMarkup(label, value, component, className, valueIsHtml) {
-  var source = component ? '<small>' + esc(component) + '</small>' : '';
-  var classes = 'summary-item' + (className ? ' ' + className : '');
-  return '<div class="' + classes + '"><div class="summary-item-label">' + source + '<span>' + esc(label) + '</span></div><div class="summary-item-value">' + (valueIsHtml ? value : esc(value)) + '</div></div>';
-}
 export function parseRepeatableRows(value) {
   if (Array.isArray(value)) return value;
   try {
@@ -108,75 +153,62 @@ export function reservoirCosSummary(fieldMap) {
     return isFilled(row.reservoir_cos_pct) ? ref + row.reservoir_cos_pct + '%' : '';
   }).filter(Boolean).join(' · ');
 }
-export function curatedOverviewMarkup(fieldMap) {
-  var sourceMap = fieldMap || Store.allFields;
-  function sourceVal(component, key) { return ((sourceMap[component] || {})[key]) || ''; }
-  var rows = [];
-  function add(label, value, component) {
-    if (isFilled(value)) rows.push(summaryItemMarkup(label, value, component || '', '', false));
+// Latest gas P90/P10 pair. Same source precedence as LATEST_PIIP_SOURCES
+// (newest assessment first), but reading each step's <prefix>_gas_p90 /
+// <prefix>_gas_p10 keys (derived from the mean key). The first step with
+// either filled supplies both values.
+function latestGasPair() {
+  for (var i = 0; i < LATEST_PIIP_SOURCES.length; i += 1) {
+    var fields = Store.allFields[LATEST_PIIP_SOURCES[i][0]] || {};
+    var p90 = fields[LATEST_PIIP_SOURCES[i][1].replace('_gas_mean', '_gas_p90')];
+    var p10 = fields[LATEST_PIIP_SOURCES[i][1].replace('_gas_mean', '_gas_p10')];
+    if (isFilled(p90) || isFilled(p10)) return { p90: p90, p10: p10, source: LATEST_PIIP_SOURCES[i][0] };
   }
-  var finalOrQuick = function (finalKey, quickKey) {
-    return summaryValue([['Final Log Analysis', finalKey], ['Quicklook Logs Interpretation', quickKey]], sourceMap);
-  };
-  // WS6: formation-derived values prefer the well-level SARH row ('final'
-  // phase first, then 'quicklook'), falling back to the legacy task fields for
-  // old projects. A lead-summary snapshot (fieldMap passed) renders only its
-  // captured values -- no live formation reads.
-  function sarhFormationVal(metric) {
-    if (fieldMap) return null;
-    var phases = [['final', 'Final Log Analysis'], ['quicklook', 'Quicklook Logs Interpretation']];
-    for (var i = 0; i < phases.length; i += 1) {
-      var phase = phases[i][0];
-      var row = (Store.formations || []).find(function (r) { return r.phase === phase && r.formation === 'SARH'; });
-      if (row && isFilled(row[metric])) return { value: row[metric], source: phases[i][1] + ' (SARH)' };
-    }
-    return null;
+  return { p90: '', p10: '', source: '' };
+}
+
+// One compact metric row: label (+ optional source note) and its value (— when
+// blank). Kept tiny so the summary card stays far denser than the old tiles.
+function metricRow(label, value, note) {
+  var small = note ? '<small>' + esc(note) + '</small>' : '';
+  return '<div class="summary-metric"><div class="summary-metric-label"><span>' + esc(label) + '</span>' + small + '</div><div class="summary-metric-value">' + (isFilled(value) ? esc(value) : '—') + '</div></div>';
+}
+
+// The gear popover, its outside-click/Escape dismissal, and the toggle button
+// (static in index.html) are wired once — the button and document persist
+// across re-renders, so byId resolves the freshly rendered popover at call
+// time and no listeners stack.
+var summarySettingsWired = false;
+function wireSummarySettings() {
+  if (summarySettingsWired) return;
+  summarySettingsWired = true;
+  var toggle = byId('summary-settings-toggle');
+  function close() {
+    var popover = byId('summary-settings');
+    if (popover) popover.classList.add('hidden');
+    if (toggle) toggle.setAttribute('aria-expanded', 'false');
   }
-  function formationOrLegacy(metric, finalKey, quickKey) {
-    return sarhFormationVal(metric) || { value: finalOrQuick(finalKey, quickKey), source: 'Final / Quicklook Logs' };
-  }
-  add('P90 Area (km²)', sourceVal('Reservoir Area Definition', 'p90_area_km2'), 'Reservoir Area Definition');
-  add('P10 Area (km²)', sourceVal('Reservoir Area Definition', 'p10_area_km2'), 'Reservoir Area Definition');
-  add('Sarah Formation Thickness (ft)', sourceVal('Thickness Estimation', 'formation_thickness_ft'), 'Thickness Estimation');
-  add('Reservoir Thickness (ft)', sourceVal('Thickness Estimation', 'reservoir_thickness_ft'), 'Thickness Estimation');
-  add('Reservoir CoS (%)', reservoirCosSummary(sourceMap), 'Reservoir CoS');
-  add('Trap CoS (%)', sourceVal('Trap CoS', 'trap_cos_pct'), 'Trap CoS');
-  add('Seal CoS (%)', sourceVal('Seal CoS', 'seal_cos_pct'), 'Seal CoS');
-  // v18: the derived Presence value has no step of its own. Live view reads
-  // overview.derisking; a lead-summary snapshot (fieldMap passed) keeps
-  // reading the legacy 'Presence CoS Evaluation' fields captured at the time.
-  var totalChance = fieldMap
-    ? sourceVal('Presence CoS Evaluation', 'presence_cos')
-    : ((Store.overview && Store.overview.derisking) || '');
-  add('Total Chance of Success (%)', totalChance, 'Derived');
-  // Item 13: ONE latest-PIIP row instead of the stale Lead/Pre/Post trio. The
-  // small label names the step that supplied the value.
-  var latestPiip = { value: '', source: '' };
-  for (var p = 0; p < LATEST_PIIP_SOURCES.length; p += 1) {
-    var candidate = sourceVal(LATEST_PIIP_SOURCES[p][0], LATEST_PIIP_SOURCES[p][1]);
-    if (isFilled(candidate)) { latestPiip = { value: candidate, source: LATEST_PIIP_SOURCES[p][0] }; break; }
-  }
-  add('Mean PIIP Gas (BCF) — Latest', latestPiip.value, latestPiip.source);
-  add('SARH Formation Prognosis — Pre-Drill', sourceVal('Well Proposal', 'sarh_formation_prognosis_pre_drill'), 'Well Proposal');
-  var prognosisPost = formationOrLegacy('top_tvdss_ft', 'final_top_sarah_tvdss_ft', 'quicklook_top_sarah_tvdss_ft');
-  add('SARH Formation Prognosis — Post-Drill', prognosisPost.value, prognosisPost.source);
-  add('SARH Formation Thickness (ft) — Pre-Drill', sourceVal('Thickness Estimation', 'formation_thickness_ft'), 'Thickness Estimation');
-  var thicknessPost = formationOrLegacy('thickness_ft', 'final_formation_thickness_ft', 'quicklook_formation_thickness_ft');
-  add('SARH Formation Thickness (ft) — Post-Drill', thicknessPost.value, thicknessPost.source);
-  var pay = formationOrLegacy('pay_ft', 'final_pay_thickness_ft', 'quicklook_pay_thickness_ft');
-  add('Pay Thickness (ft)', pay.value, pay.source);
-  var phit = formationOrLegacy('porosity_pct', 'final_average_porosity_pct', 'quicklook_average_porosity_pct');
-  add('PHIT (%)', phit.value, phit.source);
-  var swt = formationOrLegacy('swt_pct', 'final_average_swt_pct', 'quicklook_average_swt_pct');
-  add('SWT (%)', swt.value, swt.source);
-  var fluid = formationOrLegacy('fluid', 'final_fluid_type', 'quicklook_fluid_type');
-  add('Fluid Type', fluid.value, fluid.source);
-  var flowback = sourceMap['Flowback Results'] || {};
-  var flowbackMeta = schemaIndex('Flowback Results');
-  Object.keys(flowbackMeta).forEach(function (key) {
-    if (isFilled(flowback[key])) add(flowbackMeta[key].label, flowback[key], 'Flowback Results');
+  if (toggle) toggle.addEventListener('click', function (event) {
+    event.stopPropagation();
+    var popover = byId('summary-settings');
+    if (!popover) return;
+    var opening = popover.classList.contains('hidden');
+    popover.classList.toggle('hidden', !opening);
+    toggle.setAttribute('aria-expanded', String(opening));
   });
-  return rows.join('');
+  document.addEventListener('click', function (event) {
+    var popover = byId('summary-settings');
+    if (!popover || popover.classList.contains('hidden')) return;
+    if (popover.contains(event.target) || (toggle && toggle.contains(event.target))) return;
+    close();
+  });
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Escape') return;
+    var popover = byId('summary-settings');
+    if (!popover || popover.classList.contains('hidden')) return;
+    close();
+    if (toggle) toggle.focus();
+  });
 }
 
 export function renderRightPanel(tasks) {
@@ -184,31 +216,39 @@ export function renderRightPanel(tasks) {
   // tasksForPipeline), so every row counts toward progress.
   var completed = tasks.filter(function (task) { return DONE[task.status]; }).length;
   var percent = tasks.length ? Math.round((completed / tasks.length) * 100) : 0;
-  byId('progress-percent').textContent = percent + '%';
-  byId('progress-count').textContent = completed + ' / ' + tasks.length;
 
   var isBP = Number(Store.project.business_plan_enabled || 0) === 1;
   var isActive = Number(Store.project.active_well_enabled || 0) === 1;
   var year = Number(Store.project.business_plan_year || new Date().getFullYear());
   if (year < 2026 || year > 2040) year = 2026;
-  var items = [summaryItemMarkup('Lead / Well', Store.project.project_name || '-', '', 'summary-item-primary', false)];
-  if (isBP) {
-    var yearSelect = '<select id="summary-bp-year" class="summary-year" aria-label="Business Plan Year">' + range(2026, 2040).map(function (value) { return '<option ' + (Number(value) === year ? 'selected' : '') + '>' + value + '</option>'; }).join('') + '</select>';
-    items.push(summaryItemMarkup('BP Year', yearSelect, '', 'summary-item-control', true));
-  }
   var recordKind = String(Store.project.pipeline_type || '').toLowerCase() === 'bp' ? 'Well' : 'Lead';
-  var leadSnapshotFields = (Store.leadSummary && Store.leadSummary.fields) || {};
-  var hasLeadSnapshot = recordKind === 'Well' && Object.keys(leadSnapshotFields).length > 0;
-  var leadSnapshotHtml = hasLeadSnapshot ?
-    '<div class="lead-summary-toggle"><button id="toggle-lead-summary" type="button" class="ghost">Lead Summary</button></div>' +
-    '<div id="lead-summary-snapshot" class="summary-grid hidden"><div class="summary-item summary-item-primary"><div class="summary-item-label"><span>Lead Summary at BP Promotion</span></div><div class="summary-item-value">Captured ' + esc((Store.leadSummary && Store.leadSummary.captured_at) || '') + '</div></div>' + curatedOverviewMarkup(leadSnapshotFields) + '</div>' : '';
-  var summaryHtml =
-    '<div class="flag-controls"><label><input id="summary-bp-flag" type="checkbox" ' + (isBP ? 'checked' : '') + '> Business Plan</label><label><input id="summary-active-flag" type="checkbox" ' + (isActive ? 'checked' : '') + '> Active Well</label></div>' +
-    '<div class="summary-grid">' + items.join('') + curatedOverviewMarkup() + '</div>' +
-    leadSnapshotHtml +
-    '<div class="record-actions"><button id="rename-record" type="button" class="ghost">Rename ' + recordKind + '</button><button id="delete-record" type="button" class="danger">Archive ' + recordKind + '</button></div>';
+
+  var gas = latestGasPair();
+  var trapCos = (Store.allFields['Trap CoS'] || {}).trap_cos_pct;
+  var sealCos = (Store.allFields['Seal CoS'] || {}).seal_cos_pct;
+
+  var progressHtml =
+    '<div class="summary-progress"><div class="summary-progress-bar"><span style="width:' + percent + '%"></span></div>' +
+    '<div class="summary-progress-figures"><b>' + percent + '%</b><small>' + completed + ' / ' + tasks.length + '</small></div></div>';
+  var metricsHtml = '<div class="summary-metrics">' +
+    metricRow('P90 Gas (BCF)', gas.p90, gas.source) +
+    metricRow('P10 Gas (BCF)', gas.p10, gas.source) +
+    metricRow('Reservoir CoS (%)', reservoirCosSummary(), 'Reservoir CoS') +
+    metricRow('Trap CoS (%)', trapCos, 'Trap CoS') +
+    metricRow('Seal CoS (%)', sealCos, 'Seal CoS') +
+    '</div>';
+  // Popover: what the compact card dropped but still needs a home. BP year is
+  // present-but-hidden until Business Plan is on (checking it round-trips
+  // through saveProjectFlags, which re-renders with the select revealed).
+  var popoverHtml =
+    '<div id="summary-settings" class="summary-popover hidden" role="dialog" aria-label="Manage ' + recordKind.toLowerCase() + '">' +
+    '<label class="summary-popover-check"><input id="summary-bp-flag" type="checkbox" ' + (isBP ? 'checked' : '') + '> Business Plan</label>' +
+    '<label class="summary-popover-year' + (isBP ? '' : ' hidden') + '">BP Year<select id="summary-bp-year" aria-label="Business Plan Year">' + range(2026, 2040).map(function (value) { return '<option ' + (Number(value) === year ? 'selected' : '') + '>' + value + '</option>'; }).join('') + '</select></label>' +
+    '<label class="summary-popover-check"><input id="summary-active-flag" type="checkbox" ' + (isActive ? 'checked' : '') + '> Active Well</label>' +
+    '<div class="summary-popover-actions"><button id="rename-record" type="button" class="ghost">Rename ' + recordKind + '</button><button id="delete-record" type="button" class="danger">Archive ' + recordKind + '</button></div></div>';
+
   byId('summary-title').textContent = recordKind + ' Summary';
-  byId('lead-summary').innerHTML = summaryHtml;
+  byId('lead-summary').innerHTML = progressHtml + metricsHtml + popoverHtml;
 
   var bpFlag = byId('summary-bp-flag');
   var activeFlag = byId('summary-active-flag');
@@ -216,18 +256,11 @@ export function renderRightPanel(tasks) {
   if (bpFlag) bpFlag.addEventListener('change', function () { saveProjectFlags({ business_plan_enabled: bpFlag.checked, business_plan_year: bpFlag.checked ? year : null }); });
   if (activeFlag) activeFlag.addEventListener('change', function () { saveProjectFlags({ active_well_enabled: activeFlag.checked }); });
   if (bpYear) bpYear.addEventListener('change', function () { saveProjectFlags({ business_plan_enabled: true, business_plan_year: bpYear.value }); });
-  var leadSummaryToggle = byId('toggle-lead-summary');
-  if (leadSummaryToggle) leadSummaryToggle.addEventListener('click', function () {
-    var panel = byId('lead-summary-snapshot');
-    if (!panel) return;
-    var opening = panel.classList.contains('hidden');
-    panel.classList.toggle('hidden', !opening);
-    leadSummaryToggle.textContent = opening ? 'Hide Lead Summary' : 'Lead Summary';
-  });
   var renameButton = byId('rename-record');
   var deleteButton = byId('delete-record');
   if (renameButton) renameButton.addEventListener('click', renameSelectedProject);
   if (deleteButton) deleteButton.addEventListener('click', deleteSelectedProject);
+  wireSummarySettings();
 }
 export function refreshAfterRecordChange(message) {
   return API.detail(Store.projectId)

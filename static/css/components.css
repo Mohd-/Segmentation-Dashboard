@@ -42,7 +42,10 @@
    Pipeline board (kanban-style columns for prospect + BP tabs)
    ========================================================================= */
 .pipeline-panel { overflow: hidden; padding: var(--space-4); }
-.pipeline-toolbar { grid-template-columns: minmax(220px, 2fr) repeat(3, minmax(150px, 1fr)); }
+/* Prospect has 2 selects, BP has 3 — a wrapping flex row keeps both tidy and
+   left-aligned instead of a fixed 4-column grid. */
+.pipeline-toolbar { display: flex; flex-wrap: wrap; justify-content: flex-start; }
+.pipeline-toolbar select { flex: 0 1 220px; min-width: 150px; }
 .pipeline-board {
   display: grid;
   grid-auto-flow: column;
@@ -132,26 +135,44 @@
 .rail-head h3 { margin: var(--space-3) 0 4px; font-size: var(--text-base); color: var(--ink-800); }
 .rail-head p { color: var(--text-faint); font-size: var(--text-sm); }
 
-.component-list { display: flex; flex-direction: column; gap: var(--space-2); overflow-y: auto; flex: 1; min-height: 0; padding-right: 2px; }
+.component-list { display: flex; flex-direction: column; gap: var(--space-1); overflow-y: auto; flex: 1; min-height: 0; padding-right: 2px; }
 
+/* Stage accordion: each group is a full-width header button + a collapsible
+   body of component buttons. Exactly one body is open at a time (detail.js). */
+.rail-stage { display: flex; flex-direction: column; }
 .rail-stage-head {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  margin: var(--space-3) 0 2px;
-  padding-top: var(--space-2);
+  width: 100%;
+  margin: 0;
+  padding: var(--space-2) 4px;
+  background: none;
+  border: none;
   border-top: 1px solid var(--gray-100);
+  border-radius: 0;
+  box-shadow: none;
   color: var(--text-faint);
   font-size: var(--text-xs);
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: .05em;
+  cursor: pointer;
 }
-.rail-stage-head:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.rail-stage:first-child .rail-stage-head { border-top: 0; }
+.rail-stage-head:hover { color: var(--brand-700); background: none; }
+.rail-stage-name { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-stage-count { color: var(--text-faint); font-weight: 700; letter-spacing: 0; }
+.rail-stage-chevron { color: var(--text-faint); line-height: 1; }
+.rail-stage-chevron::before { content: '\25B8'; }                       /* ▸ collapsed */
+.rail-stage-head.open .rail-stage-chevron::before { content: '\25BE'; } /* ▾ open */
 .stage-icon { color: var(--text-faint); font-size: var(--text-base); line-height: 1; }
+.rail-stage-body { display: flex; flex-direction: column; gap: var(--space-2); padding: 2px 0 var(--space-2); }
+.rail-stage-body.collapsed { display: none; }
 .component-item {
   display: grid;
   grid-template-columns: 22px 1fr;
+  align-items: center;
   gap: var(--space-2);
   text-align: left;
   background: var(--surface);
@@ -161,9 +182,9 @@
   color: var(--text);
 }
 .component-item .component-num {
-  grid-row: 1 / 3;
   background: var(--gray-100);
   color: var(--brand-700);
+  border: 1px solid transparent;
   border-radius: var(--radius-pill);
   width: 22px;
   height: 22px;
@@ -174,9 +195,12 @@
   font-size: var(--text-xs);
 }
 .component-item b { font-size: var(--text-sm); }
-.component-item .status { justify-self: start; }
 .component-item.active { border-color: var(--brand-500); background: var(--brand-050); }
-.component-item.done .component-num { background: var(--success-100); color: var(--success-700); }
+/* Number badge tinted by status — same token trios as the .status chips. */
+.component-item.status-not-assigned .component-num { background: var(--gray-100); color: var(--text-faint); }
+.component-item.status-in-progress .component-num { background: var(--info-100); color: var(--info-700); border-color: var(--info-500); }
+.component-item.status-ready .component-num { background: var(--warning-100); color: var(--warning-700); border-color: var(--warning-500); }
+.component-item.status-approved .component-num { background: var(--success-100); color: var(--success-700); border-color: var(--success-500); }
 
 .editor-head {
   display: flex;
@@ -199,11 +223,13 @@
   font-size: var(--text-sm);
 }
 .editor-head h2 { font-size: var(--text-lg); color: var(--ink-900); }
-/* Right-aligned control cluster: priority chip, compact assignee select and
-   the status chip all sit at the end of the editor head. margin-left:auto on
-   the first item pushes the whole group right. */
-.editor-priority-chip { margin-left: auto; box-shadow: none; cursor: pointer; }
+/* Right-aligned control cluster: the assignee select leads, then the priority
+   chip and status chip, all sitting at the end of the editor head. margin-left:
+   auto on the first item (assignee) pushes the whole group right so it reads
+   assignee | priority | status. */
+.editor-priority-chip { box-shadow: none; cursor: pointer; }
 .editor-assignee {
+  margin-left: auto;
   width: auto;
   max-width: 170px;
   padding: 4px 10px;
@@ -236,21 +262,27 @@
 }
 .check-label input { width: auto; }
 
-.dynamic-fields > .calculated-output,
-.repeatable-row > .calculated-output {
+/* Standalone calculated output (e.g. Seal CoS %): a slim full-width row — muted
+   label at left, brand-tinted value chip at right — not a fat banner. */
+.dynamic-fields > .calculated-output {
   grid-column: 1 / -1;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-4);
-  border: 1px solid var(--brand-500);
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--text-muted);
+}
+.calculated-output output {
+  padding: 4px 8px;
   border-radius: var(--radius-sm);
-  padding: 12px 14px;
+  border: 1px solid var(--brand-500);
   background: var(--brand-050);
   color: var(--brand-700);
+  font-size: var(--text-xs);
   font-weight: 800;
 }
-.calculated-output output { color: var(--brand-700); font-size: var(--text-md); font-weight: 800; }
 
 .summary-box {
   grid-column: 1 / -1;
@@ -294,21 +326,53 @@
 .action-row { display: flex; gap: var(--space-3); justify-content: space-between; }
 .action-row button:last-child { margin-left: auto; background: linear-gradient(180deg, var(--success-500), var(--success-700)); }
 
-/* Repeatable rows (e.g. Reservoir CoS evaluations) */
+/* Repeatable field (e.g. Reservoir CoS evaluations) rendered as a compact
+   mini-spreadsheet: one muted header row of column labels, then slim rows of
+   bare inputs. Each row's grid-template-columns is set inline (see
+   repeatableTemplate) so the header and every data row stay aligned. The sheet
+   scrolls horizontally if the columns can't fit the editor column. */
 .repeatable-field { grid-column: 1 / -1; border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-4); background: var(--surface-sunken); }
 .repeatable-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-3); }
-.repeatable-rows { display: grid; gap: var(--space-3); }
-.repeatable-row {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(130px, 1fr)) auto;
-  gap: var(--space-3);
-  align-items: end;
-  padding: var(--space-3);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  border: 1px solid var(--border);
+.repeatable-sheet { overflow-x: auto; }
+.repeatable-rows { display: grid; gap: var(--space-1); }
+.repeatable-head, .repeatable-row { display: grid; gap: var(--space-2); align-items: center; }
+.repeatable-row { padding: var(--space-1) 0; }
+.repeatable-col-label {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--text-faint);
+  align-self: end;
 }
-.remove-repeatable-row { white-space: nowrap; height: fit-content; }
+.repeatable-row input, .repeatable-row select { padding: 4px 8px; font-size: var(--text-sm); }
+/* Compact brand-tinted value chip for the row's readonly calculated column. */
+.repeatable-calc {
+  align-self: center;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--brand-500);
+  background: var(--brand-050);
+  color: var(--brand-700);
+  font-size: var(--text-xs);
+  font-weight: 800;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* Grouped field rows (Staking option pairs, PIIP P90/Mean/P10 trios): a set of
+   related fields sharing a schema `row` id render inside one full-width grid of
+   equal columns. An optional section heading precedes the group. */
+.field-row { grid-column: 1 / -1; display: grid; gap: var(--space-2); align-items: start; }
+.field-row.cols-2 { grid-template-columns: repeat(2, 1fr); }
+.field-row.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.field-section-label {
+  grid-column: 1 / -1;
+  font-size: var(--text-sm);
+  font-weight: 800;
+  color: var(--ink-800);
+  margin-top: var(--space-2);
+}
 
 /* Formations mini-sheet (well-level SARH/QASM/QWRH values; detail-form.js).
    Reuses the repeatable-field frame; the sheet is a fixed 4-column grid so the
@@ -331,63 +395,117 @@
   max-height: calc(100vh - 124px);
   overflow-y: auto;
 }
-.summary-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--space-4); overflow: hidden; max-width: 100%; }
-.summary-card h3 { margin-bottom: var(--space-3); color: var(--brand-700); text-transform: uppercase; letter-spacing: .05em; font-size: var(--text-sm); }
+.summary-card { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--space-4); max-width: 100%; }
+.summary-card h3 { color: var(--brand-700); text-transform: uppercase; letter-spacing: .05em; font-size: var(--text-sm); }
+.summary-card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-3); }
+.summary-card-head .icon-btn { flex: 0 0 auto; }
 .summary-content { min-width: 0; }
 
-.progress-ring {
-  height: 118px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--brand-500);
-  background: var(--brand-050);
+/* Compact completion progress: slim bar with % + count beside it. */
+.summary-progress { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); }
+.summary-progress-bar { flex: 1; min-width: 0; height: 8px; border-radius: var(--radius-pill); background: var(--surface-sunken); border: 1px solid var(--border); overflow: hidden; }
+.summary-progress-bar span { display: block; height: 100%; background: var(--brand-500); border-radius: var(--radius-pill); }
+.summary-progress-figures { flex: 0 0 auto; display: flex; align-items: baseline; gap: var(--space-2); }
+.summary-progress-figures b { font-size: var(--text-lg); color: var(--brand-700); }
+.summary-progress-figures small { color: var(--text-faint); font-size: var(--text-xs); }
+
+/* Tight label/value list — denser than the old summary-item tile grid. */
+.summary-metrics { display: flex; flex-direction: column; }
+.summary-metric { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) 0; border-top: 1px solid var(--gray-100); }
+.summary-metric:first-child { border-top: 0; }
+.summary-metric-label { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.summary-metric-label span { color: var(--text-muted); font-size: var(--text-sm); font-weight: 700; overflow-wrap: anywhere; }
+.summary-metric-label small { color: var(--text-faint); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .04em; overflow-wrap: anywhere; }
+.summary-metric-value { flex: 0 0 auto; color: var(--ink-900); font-size: var(--text-md); font-weight: 800; text-align: right; overflow-wrap: anywhere; }
+
+/* Gear popover: small floating panel anchored to the card header, hosting the
+   BP/Active flags and Rename/Archive that the compact card dropped. */
+.summary-popover {
+  position: absolute;
+  top: calc(var(--space-4) + 30px);
+  right: var(--space-4);
+  z-index: 20;
+  width: min(240px, calc(100% - var(--space-4) * 2));
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-}
-.progress-ring b { font-size: 32px; color: var(--brand-700); }
-.progress-ring span { color: var(--text-faint); font-size: var(--text-sm); }
-
-.flag-controls { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); margin-bottom: var(--space-3); }
-.flag-controls label {
-  flex-direction: row;
-  align-items: center;
   gap: var(--space-2);
-  padding: 9px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-sunken);
-  color: var(--ink-800);
-  font-weight: 700;
+  padding: var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
 }
-.flag-controls input { width: auto; }
+.summary-popover-check { flex-direction: row; align-items: center; gap: var(--space-2); color: var(--ink-800); font-weight: 700; font-size: var(--text-sm); }
+.summary-popover-check input { width: auto; }
+.summary-popover-year { flex-direction: column; gap: 3px; color: var(--text-muted); font-size: var(--text-xs); }
+.summary-popover-year select { width: 100%; }
+.summary-popover-actions { display: flex; gap: var(--space-2); margin-top: var(--space-1); }
+.summary-popover-actions button { flex: 1; min-width: 0; padding: 8px 10px; font-size: var(--text-sm); }
 
-.summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); align-items: stretch; }
-.summary-item {
+/* =========================================================================
+   Project editor — the full-project "all fields" view (views/project-editor.js)
+   opened from a Portfolio well name. A flat stack: head, properties card, then
+   one card per component grouped under non-interactive stage headings.
+   ========================================================================= */
+.project-editor {
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  gap: 9px;
-  min-width: 0;
-  padding: 12px 13px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-sunken);
+  gap: var(--space-4);
+  /* Same scroll-into-view landing as .detail-shell: clear the sticky header
+     (56px) + tab bar (44px) stack instead of hiding behind them. */
+  scroll-margin-top: 112px;
 }
-.summary-item-primary { background: var(--brand-050); border-color: var(--brand-500); }
-.summary-item-label { display: flex; flex-direction: column; gap: 3px; min-width: 0; color: var(--text-muted); }
-.summary-item-label small { font-size: var(--text-xs); color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em; overflow-wrap: anywhere; }
-.summary-item-label span { font-size: var(--text-sm); font-weight: 800; overflow-wrap: anywhere; }
-.summary-item-value { min-width: 0; color: var(--ink-900); font-size: var(--text-md); font-weight: 800; overflow-wrap: anywhere; word-break: break-word; }
-.summary-item-control .summary-item-value { display: flex; align-items: flex-start; }
-.summary-year { display: inline-block; width: 100%; max-width: 150px; padding: 6px 8px; font-size: var(--text-sm); background: var(--surface); }
-.mini-copy { padding: 6px 10px; border-radius: var(--radius-sm); font-size: var(--text-xs); background: var(--brand-100); color: var(--brand-700); border: 1px solid var(--brand-500); white-space: nowrap; }
+.pe-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--space-4);
+}
+.pe-head-titles { flex: 1; min-width: 0; }
+.pe-head-titles h2 { font-size: var(--text-lg); color: var(--ink-900); }
+.pe-subtitle { color: var(--text-faint); font-size: var(--text-sm); }
 
-.lead-summary-toggle { margin: var(--space-3) 0; }
-#lead-summary-snapshot { margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px dashed var(--border-strong); }
+/* Stage heading: the rail-stage-head visual language (muted, uppercase,
+   letter-spaced, hairline above) but a plain label, not a button. */
+.pe-stage-head {
+  padding: var(--space-2) 0 var(--space-1);
+  border-top: 1px solid var(--gray-100);
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+.pe-stage-head:first-of-type { border-top: 0; }
 
-.record-actions { display: flex; gap: var(--space-2); margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--border); }
-.record-actions button { flex: 1; min-width: 0; padding: 10px 12px; font-size: var(--text-sm); }
+/* Component card: a surface panel holding the header, the fields grid, comments
+   and its Save. */
+.pe-component {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+}
+.pe-component-head { display: flex; align-items: center; gap: var(--space-3); }
+.pe-component-head h3 { font-size: var(--text-md); color: var(--ink-900); }
+.pe-component-name { flex: 1; min-width: 0; font-size: var(--text-base); color: var(--ink-900); }
+.pe-component-actions { display: flex; justify-content: flex-end; }
+
+/* Properties card: a responsive field grid of the project-level columns plus
+   its own action row (Save / Archive). */
+.pe-properties-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  gap: var(--space-3);
+  align-items: end;
+}
+.pe-prop-year { grid-column: auto; }
+.pe-properties-actions { display: flex; gap: var(--space-3); }
+.pe-properties-actions .danger { margin-left: auto; }
 
 /* =========================================================================
    Portfolio tab
@@ -439,9 +557,10 @@
 .portfolio-table th.sorted-asc::after { content: '\25B2'; }
 .portfolio-table th.sorted-desc::after { content: '\25BC'; }
 
-/* Column-filter row: compact inline controls under the sort headers. */
-.portfolio-filter-row th { background: var(--surface-sunken); padding: 6px 8px; cursor: default; }
-.portfolio-filter-input, .portfolio-filter-select {
+/* Column-filter row: compact inline controls under the sort headers. The th is
+   the positioning context for the multi-select checklist popover below. */
+.portfolio-filter-row th { position: relative; background: var(--surface-sunken); padding: 6px 8px; cursor: default; }
+.portfolio-filter-input {
   width: 100%;
   padding: 4px 8px;
   font-size: var(--text-xs);
@@ -452,7 +571,77 @@
   border: 1px solid var(--border-strong);
   background: var(--surface);
 }
-.portfolio-filter-input:focus, .portfolio-filter-select:focus { border-color: var(--brand-500); box-shadow: 0 0 0 2px var(--brand-100); }
+.portfolio-filter-input:focus { border-color: var(--brand-500); box-shadow: 0 0 0 2px var(--brand-100); }
+
+/* Multi-select filter: a trigger button styled like .portfolio-filter-input,
+   plus a checklist popover anchored under the cell so several values can be
+   active at once. */
+.portfolio-filter-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 8px;
+  font-size: var(--text-xs);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--ink-800);
+  box-shadow: none;
+  cursor: pointer;
+}
+.portfolio-filter-trigger:focus-visible { border-color: var(--brand-500); box-shadow: 0 0 0 2px var(--brand-100); }
+.portfolio-filter-trigger-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.portfolio-filter-caret { flex: none; font-size: 9px; color: var(--text-muted); }
+.portfolio-filter-popover {
+  position: absolute;
+  top: calc(100% - 2px);
+  left: 6px;
+  right: 6px;
+  z-index: 30;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+.portfolio-filter-popover[hidden] { display: none; }
+.portfolio-filter-clear-row { margin-bottom: 4px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.portfolio-filter-clear {
+  width: 100%;
+  padding: 3px 6px;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-align: left;
+  color: var(--brand-700);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  cursor: pointer;
+}
+.portfolio-filter-clear:hover { background: var(--surface-sunken); }
+.portfolio-filter-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  font-size: var(--text-sm);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--ink-800);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.portfolio-filter-option:hover { background: var(--surface-sunken); }
+.portfolio-filter-option input { margin: 0; flex: none; }
 
 .portfolio-table .well-link { color: var(--brand-700); font-weight: 700; text-decoration: none; }
 .portfolio-table .well-link:hover { text-decoration: underline; }
@@ -508,7 +697,8 @@
    Responsive — component level
    ========================================================================= */
 @media (max-width: 1100px) {
-  .pipeline-toolbar { grid-template-columns: 1fr; }
+  .pipeline-toolbar { flex-direction: column; }
+  .pipeline-toolbar select { flex-basis: auto; width: 100%; }
   .pipeline-board { grid-auto-columns: minmax(245px, 80vw); }
   .detail-shell { grid-template-columns: 1fr; }
   .summary-panel { order: 3; }
@@ -517,7 +707,10 @@
   /* Single-column collapse: sticky pinning off, panels back to natural flow. */
   .component-rail, .summary-panel { position: static; max-height: none; overflow-y: visible; }
   .dynamic-fields { grid-template-columns: 1fr; }
-  .repeatable-row { grid-template-columns: repeat(2, minmax(160px, 1fr)); }
+  .pe-properties-grid { grid-template-columns: 1fr; }
+  /* The mini-spreadsheet keeps its inline column template and relies on
+     .repeatable-sheet's own horizontal scroll when the narrower editor column
+     can't fit every column. */
 }
 @media (max-width: 640px) {
   .pipeline-board { grid-auto-columns: minmax(230px, 86vw); }
@@ -525,14 +718,9 @@
   .detail-shell { scroll-margin-top: 106px; } /* 52px header + 40px tabs + room */
   .detail-shell.panel { padding: var(--space-3); }
   .summary-card { padding: var(--space-3); }
-  .summary-grid { grid-template-columns: 1fr; }
   .action-row { flex-wrap: wrap; }
   .action-row button { width: 100%; }
   .action-row button:last-child { margin-left: 0; }
-  .flag-controls { grid-template-columns: 1fr; }
-  .record-actions { flex-direction: column; }
-  .record-actions button { width: 100%; }
-  .repeatable-row { grid-template-columns: 1fr; }
   .repeatable-heading { align-items: flex-start; flex-direction: column; }
   .portfolio-toolbar { grid-template-columns: 1fr; }
   .portfolio-stats { grid-template-columns: 1fr; }

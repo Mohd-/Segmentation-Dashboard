@@ -1,20 +1,20 @@
 import { byId, all, esc, msg } from '../dom.js';
 import { API } from '../api.js';
-import { openDetail } from './detail.js';
+import { openProjectEditor } from './project-editor.js';
 
 // WS7: exactly the 8 analysis columns, in this order. `filter` selects the
 // column-filter control rendered in the second thead row ('text' = substring
-// input, 'select' = distinct-value dropdown, null = no column filter -- BP
-// Year is covered by the toolbar select; Mean OGIP / Total CoS get none per
-// spec). `numeric` selects Number()-based sort with blanks-last in both
-// directions instead of localeCompare.
+// input, 'multi' = distinct-value checklist popover (multi-select), null = no
+// column filter -- BP Year is covered by the toolbar select; Mean OGIP / Total
+// CoS get none per spec). `numeric` selects Number()-based sort with blanks-last
+// in both directions instead of localeCompare.
 var COLUMNS = [
   { key: 'well_name', label: 'Well Name', numeric: false, filter: 'text' },
-  { key: 'gas_field', label: 'Gas Field', numeric: false, filter: 'select' },
+  { key: 'gas_field', label: 'Gas Field', numeric: false, filter: 'multi' },
   { key: 'seismic_block', label: 'Seismic Block', numeric: false, filter: 'text' },
-  { key: 'classification', label: 'Classification', numeric: false, filter: 'select' },
+  { key: 'classification', label: 'Classification', numeric: false, filter: 'multi' },
   { key: 'year', label: 'BP Year', numeric: true, filter: null },
-  { key: 'fluid', label: 'Fluid', numeric: false, filter: 'select' },
+  { key: 'fluid', label: 'Fluid', numeric: false, filter: 'multi' },
   { key: 'mean_ogip', label: 'Mean OGIP (BCF)', numeric: true, filter: null },
   { key: 'total_cos', label: 'Total CoS (%)', numeric: true, filter: null }
 ];
@@ -63,10 +63,14 @@ function applyFilters(rows) {
   return rows.filter(function (row) {
     return COLUMNS.every(function (col) {
       var filterValue = state.filters[col.key];
-      if (!col.filter || !filterValue) return true;
+      if (!col.filter || filterValue == null) return true;
       var cellValue = String(row[col.key] == null ? '' : row[col.key]);
-      if (col.filter === 'text') return cellValue.toLowerCase().indexOf(String(filterValue).toLowerCase()) >= 0;
-      return cellValue === filterValue;
+      if (col.filter === 'text') {
+        if (!filterValue) return true;
+        return cellValue.toLowerCase().indexOf(String(filterValue).toLowerCase()) >= 0;
+      }
+      // 'multi': array of selected values; an empty/absent array = no filter.
+      return !filterValue.length || filterValue.indexOf(cellValue) >= 0;
     });
   });
 }
@@ -119,7 +123,7 @@ function renderBody(table) {
   all('.well-link', tbody).forEach(function (link) {
     link.addEventListener('click', function (event) {
       event.preventDefault();
-      openDetail(Number(link.getAttribute('data-project-id')), 'bp');
+      openProjectEditor(Number(link.getAttribute('data-project-id')));
     });
   });
   renderPortfolioStats(rows);
@@ -134,21 +138,66 @@ function updateSortIndicators(table) {
   });
 }
 
+// Trigger label for a 'multi' column: "All" when nothing is picked, the value
+// itself for exactly one, otherwise "N selected".
+function filterLabel(key) {
+  var selected = state.filters[key];
+  if (!selected || !selected.length) return 'All';
+  if (selected.length === 1) return selected[0];
+  return selected.length + ' selected';
+}
+
 function renderFilterCell(col) {
   if (col.filter === 'text') {
     var textValue = state.filters[col.key] || '';
     return '<th class="portfolio-filter-cell"><input type="text" class="portfolio-filter-input" data-key="' + col.key +
       '" value="' + esc(textValue) + '" placeholder="Filter…" aria-label="Filter ' + esc(col.label) + '"></th>';
   }
-  if (col.filter === 'select') {
-    var current = state.filters[col.key] || 'All';
-    var optionsHtml = '<option value="All">All</option>' + distinctValues(col.key).map(function (value) {
-      return '<option value="' + esc(value) + '"' + (value === current ? ' selected' : '') + '>' + esc(value) + '</option>';
+  if (col.filter === 'multi') {
+    var selected = state.filters[col.key] || [];
+    var optionsHtml = distinctValues(col.key).map(function (value) {
+      var checked = selected.indexOf(value) >= 0 ? ' checked' : '';
+      return '<label class="portfolio-filter-option"><input type="checkbox" value="' + esc(value) + '"' + checked +
+        '><span>' + esc(value) + '</span></label>';
     }).join('');
-    return '<th class="portfolio-filter-cell"><select class="portfolio-filter-select" data-key="' + col.key +
-      '" aria-label="Filter ' + esc(col.label) + '">' + optionsHtml + '</select></th>';
+    // The trigger button carries data-key (not the th) so the sort handler's
+    // th[data-key] lookup on the header row never picks up filter cells.
+    return '<th class="portfolio-filter-cell portfolio-filter-multi">' +
+      '<button type="button" class="portfolio-filter-trigger" data-key="' + col.key +
+      '" aria-haspopup="true" aria-expanded="false" aria-label="Filter ' + esc(col.label) + '">' +
+      '<span class="portfolio-filter-trigger-label">' + esc(filterLabel(col.key)) + '</span>' +
+      '<span class="portfolio-filter-caret" aria-hidden="true">▾</span></button>' +
+      '<div class="portfolio-filter-popover" hidden>' +
+      '<div class="portfolio-filter-clear-row"><button type="button" class="portfolio-filter-clear">Clear</button></div>' +
+      optionsHtml + '</div></th>';
   }
   return '<th class="portfolio-filter-cell"></th>';
+}
+
+// Only one checklist popover is open at a time; closing simply hides every one
+// currently in the DOM (queried live, so it survives renderHead rebuilds).
+function closePortfolioPopovers() {
+  all('.portfolio-filter-popover', document).forEach(function (popover) { popover.hidden = true; });
+  all('.portfolio-filter-trigger', document).forEach(function (trigger) { trigger.setAttribute('aria-expanded', 'false'); });
+}
+
+// Outside-click + Escape dismissal is wired to the document ONCE: renderHead can
+// run again after a refetch, but these listeners key off live DOM queries so a
+// single registration keeps working across rebuilds.
+var dismissWired = false;
+function wirePortfolioDismiss() {
+  if (dismissWired) return;
+  dismissWired = true;
+  document.addEventListener('click', function (event) {
+    var target = event.target;
+    // Clicks on a trigger (its own handler toggles) or inside a popover
+    // (checkbox / Clear) must not close it; everything else dismisses.
+    if (target.closest && (target.closest('.portfolio-filter-trigger') || target.closest('.portfolio-filter-popover'))) return;
+    closePortfolioPopovers();
+  });
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') closePortfolioPopovers();
+  });
 }
 
 // Rebuilds thead (header row + filter row) -- only called when the fetched
@@ -181,13 +230,40 @@ function renderHead(table) {
       renderBody(table);
     });
   });
-  all('.portfolio-filter-select', table).forEach(function (select) {
-    select.addEventListener('change', function () {
-      var key = select.getAttribute('data-key');
-      state.filters[key] = select.value === 'All' ? '' : select.value;
+  // Multi-select checklist popovers. Toggling a checkbox re-renders only the
+  // tbody + stats and rewrites the trigger label in place -- the thead is left
+  // intact so the open popover keeps its state (see renderHead's contract).
+  all('.portfolio-filter-multi', table).forEach(function (cell) {
+    var trigger = cell.querySelector('.portfolio-filter-trigger');
+    var popover = cell.querySelector('.portfolio-filter-popover');
+    var labelEl = cell.querySelector('.portfolio-filter-trigger-label');
+    var key = trigger.getAttribute('data-key');
+    trigger.addEventListener('click', function () {
+      var wasOpen = !popover.hidden;
+      closePortfolioPopovers();
+      if (!wasOpen) { popover.hidden = false; trigger.setAttribute('aria-expanded', 'true'); }
+    });
+    all('input[type="checkbox"]', popover).forEach(function (box) {
+      box.addEventListener('change', function () {
+        var selected = state.filters[key] || [];
+        if (box.checked) {
+          if (selected.indexOf(box.value) < 0) selected = selected.concat([box.value]);
+        } else {
+          selected = selected.filter(function (value) { return value !== box.value; });
+        }
+        state.filters[key] = selected;
+        labelEl.textContent = filterLabel(key);
+        renderBody(table);
+      });
+    });
+    cell.querySelector('.portfolio-filter-clear').addEventListener('click', function () {
+      state.filters[key] = [];
+      all('input[type="checkbox"]', popover).forEach(function (box) { box.checked = false; });
+      labelEl.textContent = filterLabel(key);
       renderBody(table);
     });
   });
+  wirePortfolioDismiss();
   updateSortIndicators(table);
 }
 

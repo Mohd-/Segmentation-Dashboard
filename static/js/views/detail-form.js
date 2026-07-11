@@ -3,7 +3,7 @@ import { API } from '../api.js';
 import { currentUserName, currentRole, canManageAssignments, Store } from '../state.js';
 import { SCHEMA, FORMATIONS, FORMATION_METRICS } from '../schema.js';
 import { confirmDialog } from '../dialog.js';
-import { renderDetail, renderRightPanel, chooseInitialTask, tasksForPipeline, parseRepeatableRows, refreshAfterRecordChange } from './detail.js';
+import { renderDetail, renderRightPanel, chooseInitialTask, tasksForPipeline, parseRepeatableRows, refreshAfterRecordChange, revealTaskStage } from './detail.js';
 import { refreshAllBoards } from './pipeline.js';
 
 export function ensureUsers() {
@@ -81,6 +81,7 @@ export function loadComponent(task) {
   if (!task) return;
   Store.task = task;
   all('.component-item').forEach(function (button) { button.classList.toggle('active', Number(button.getAttribute('data-task-id')) === task.task_id); });
+  revealTaskStage(task);
   byId('component-number').textContent = String(task.sequence_no || '');
   byId('component-title').textContent = task.task_name;
   renderStatusChip(task.status);
@@ -182,6 +183,12 @@ export function formationRowsForSave(phase) {
   });
 }
 
+// Dirty-flag accessors so the project editor's per-component save can decide
+// whether to PUT a phase's formation rows (and clear the flag afterward)
+// without reaching into the module-private buffers directly.
+export function formationPhaseDirty(phase) { return !!formationDirty[phase]; }
+export function clearFormationPhaseDirty(phase) { formationDirty[phase] = false; }
+
 function renderFormationsField(field) {
   var phase = field.phase || 'quicklook';
   seedFormationEdits(phase);
@@ -210,8 +217,11 @@ function loadFormationIntoInputs(container, formation) {
   container.setAttribute('data-current-formation', formation);
 }
 
-function bindFormationFields() {
-  all('.formations-field', byId('dynamic-fields')).forEach(function (container) {
+// `root` defaults to the step editor's #dynamic-fields; the project editor
+// passes each component card's own .dynamic-fields root instead.
+function bindFormationFields(root) {
+  root = root || byId('dynamic-fields');
+  all('.formations-field', root).forEach(function (container) {
     var phase = container.getAttribute('data-formations-phase');
     var picker = container.querySelector('[data-formation-picker]');
     loadFormationIntoInputs(container, picker.value || FORMATIONS[0]);
@@ -232,53 +242,124 @@ function bindFormationFields() {
   });
 }
 
-export function renderFields(componentName, values) {
+// Precedence: saved value ?? Store.project[field.defaultFrom] ?? field.value ?? ''.
+// defaultFrom prefills from a project column (e.g. Staking well X/Y from
+// lead_x/lead_y); the prefill persists as a normal dynamic field on save.
+function resolveFieldValue(field, values) {
+  var fallback = field.value || '';
+  if (field.defaultFrom && Store.project && Store.project[field.defaultFrom] != null) {
+    fallback = Store.project[field.defaultFrom];
+  }
+  return values[field.key] != null ? values[field.key] : fallback;
+}
+// Markup for one field's control element, given a pre-built class string and
+// data-show-if attribute (so the caller can put visibility on the field itself
+// or hoist it onto a grouping wrapper).
+function fieldMarkup(field, value, classes, showIfAttr) {
+  if (field.readonly) {
+    return '<label class="calculated-output' + classes + '"' + showIfAttr + '>' + esc(field.label) + '<output>' + (isFilled(value) ? esc(value) + '%' : 'Calculated on save') + '</output></label>';
+  }
+  if (field.type === 'select') {
+    return '<label class="' + classes + '"' + showIfAttr + '>' + esc(field.label) + '<select data-field="' + esc(field.key) + '">' + (field.options || []).map(function (option) { return '<option ' + (String(value) === String(option) ? 'selected' : '') + '>' + esc(option) + '</option>'; }).join('') + '</select></label>';
+  }
+  if (field.type === 'checkbox') {
+    return '<label class="check-label' + classes + '"' + showIfAttr + '><input type="checkbox" data-field="' + esc(field.key) + '" ' + (truthy(value) ? 'checked' : '') + '> ' + esc(field.label) + '</label>';
+  }
+  if (field.type === 'text') {
+    return '<label class="' + classes + '"' + showIfAttr + '>' + esc(field.label) + '<input data-field="' + esc(field.key) + '" value="' + esc(value) + '"></label>';
+  }
+  if (field.type === 'link') {
+    // Link cards never toggle; data-show-if is intentionally omitted.
+    return '<div class="summary-box' + classes + '"><b>' + esc(field.label) + '</b><p><a href="' + esc(field.value || '#') + '" target="_blank" rel="noreferrer">' + esc(field.linkText || 'New Request') + '</a></p></div>';
+  }
+  return '<label class="' + classes + '"' + showIfAttr + '>' + esc(field.label) + '<input type="number" step="any" data-field="' + esc(field.key) + '" value="' + esc(value) + '"></label>';
+}
+// A field standing on its own (no row grouping): visibility lives on the field.
+function standaloneFieldMarkup(field, componentName, values) {
+  var value = resolveFieldValue(field, values);
+  if (field.type === 'formations') return renderFormationsField(field);
+  if (field.type === 'repeatable') return renderRepeatableField(field, value);
+  if (field.type === 'summary') {
+    var summaryHtml = autoSummaryHtml(componentName);
+    return summaryHtml ? '<div class="summary-box conditional">' + summaryHtml + '</div>' : '';
+  }
+  var hidden = field.showIf && !truthy(values[field.showIf]);
+  var classes = (hidden ? ' conditional hidden' : ' conditional') + (field.type === 'text' ? ' wide-field' : '');
+  return fieldMarkup(field, value, classes, ' data-show-if="' + esc(field.showIf || '') + '"');
+}
+// Consecutive fields sharing a row id render inside one full-width .field-row of
+// equal columns. If every field in the row shares one showIf, the wrapper (not
+// the inner controls) carries data-show-if so the whole row hides as a unit
+// without leaving a gap; otherwise each control keeps its own visibility.
+function rowGroupMarkup(group, values) {
+  var shared = group[0].showIf || '';
+  var allShared = shared && group.every(function (item) { return item.showIf === shared; });
+  var hidden = allShared && !truthy(values[shared]);
+  var wrapClasses = 'field-row cols-' + group.length + ' conditional' + (hidden ? ' hidden' : '');
+  var wrapShowIf = allShared ? ' data-show-if="' + esc(shared) + '"' : '';
+  var inner = group.map(function (item) {
+    var value = resolveFieldValue(item, values);
+    if (allShared) return fieldMarkup(item, value, '', '');
+    var itemHidden = item.showIf && !truthy(values[item.showIf]);
+    return fieldMarkup(item, value, itemHidden ? ' conditional hidden' : ' conditional', ' data-show-if="' + esc(item.showIf || '') + '"');
+  }).join('');
+  return '<div class="' + wrapClasses + '"' + wrapShowIf + '>' + inner + '</div>';
+}
+// Section heading emitted before a field that opens a new section. The heading
+// carries a showIf only when every field of the section shares it (so it hides
+// with the section it labels).
+function sectionLabelMarkup(fields, startIndex, values) {
+  var section = fields[startIndex].section;
+  var shared = fields[startIndex].showIf || '';
+  for (var k = startIndex; k < fields.length; k += 1) {
+    if (k > startIndex && fields[k].section && fields[k].section !== section) break;
+    if (fields[k].showIf !== shared) { shared = ''; break; }
+  }
+  var hidden = shared && !truthy(values[shared]);
+  var cls = 'field-section-label conditional' + (hidden ? ' hidden' : '');
+  var attr = shared ? ' data-show-if="' + esc(shared) + '"' : '';
+  return '<div class="' + cls + '"' + attr + '>' + esc(section) + '</div>';
+}
+// `root` (default #dynamic-fields) is the container to render into, so the
+// project editor can drive many component grids from this one renderer.
+// `onInput` (default: the step editor's live conditional-visibility + summary
+// preview) fires on every field change; the project editor passes a callback
+// that only refreshes its card's conditional visibility (no summary preview).
+export function renderFields(componentName, values, root, onInput) {
+  root = root || byId('dynamic-fields');
   var fields = SCHEMA[componentName] || [];
   var html = '';
-  fields.forEach(function (field) {
-    // Precedence: saved value ?? Store.project[field.defaultFrom] ?? field.value ?? ''.
-    // defaultFrom prefills from a project column (e.g. Staking well X/Y from
-    // lead_x/lead_y); the prefill persists as a normal dynamic field on save.
-    var fallback = field.value || '';
-    if (field.defaultFrom && Store.project && Store.project[field.defaultFrom] != null) {
-      fallback = Store.project[field.defaultFrom];
+  var lastSection = null;
+  var i = 0;
+  while (i < fields.length) {
+    var field = fields[i];
+    if (field.section && field.section !== lastSection) {
+      html += sectionLabelMarkup(fields, i, values);
     }
-    var value = values[field.key] != null ? values[field.key] : fallback;
-    var hidden = field.showIf && !truthy(values[field.showIf]);
-    var classes = (hidden ? ' conditional hidden' : ' conditional') + (field.type === 'text' ? ' wide-field' : '');
-    if (field.type === 'formations') {
-      html += renderFormationsField(field);
-    } else if (field.type === 'repeatable') {
-      html += renderRepeatableField(field, value);
-    } else if (field.readonly) {
-      html += '<label class="calculated-output' + classes + '" data-show-if="' + esc(field.showIf || '') + '">' + esc(field.label) + '<output>' + (isFilled(value) ? esc(value) + '%' : 'Calculated on save') + '</output></label>';
-    } else if (field.type === 'select') {
-      html += '<label class="' + classes + '" data-show-if="' + esc(field.showIf || '') + '">' + esc(field.label) + '<select data-field="' + esc(field.key) + '">' + (field.options || []).map(function (option) { return '<option ' + (String(value) === String(option) ? 'selected' : '') + '>' + esc(option) + '</option>'; }).join('') + '</select></label>';
-    } else if (field.type === 'checkbox') {
-      html += '<label class="check-label' + classes + '" data-show-if="' + esc(field.showIf || '') + '"><input type="checkbox" data-field="' + esc(field.key) + '" ' + (truthy(value) ? 'checked' : '') + '> ' + esc(field.label) + '</label>';
-    } else if (field.type === 'text') {
-      html += '<label class="' + classes + '" data-show-if="' + esc(field.showIf || '') + '">' + esc(field.label) + '<input data-field="' + esc(field.key) + '" value="' + esc(value) + '"></label>';
-    } else if (field.type === 'link') {
-      html += '<div class="summary-box' + classes + '"><b>' + esc(field.label) + '</b><p><a href="' + esc(field.value || '#') + '" target="_blank" rel="noreferrer">' + esc(field.linkText || 'New Request') + '</a></p></div>';
-    } else if (field.type === 'summary') {
-      var summaryHtml = autoSummaryHtml(componentName);
-      if (summaryHtml) html += '<div class="summary-box' + classes + '">' + summaryHtml + '</div>';
+    if (field.section) lastSection = field.section;
+    if (field.row) {
+      var group = [];
+      var j = i;
+      while (j < fields.length && fields[j].row === field.row) { group.push(fields[j]); j += 1; }
+      html += rowGroupMarkup(group, values);
+      i = j;
     } else {
-      html += '<label class="' + classes + '" data-show-if="' + esc(field.showIf || '') + '">' + esc(field.label) + '<input type="number" step="any" data-field="' + esc(field.key) + '" value="' + esc(value) + '"></label>';
+      html += standaloneFieldMarkup(field, componentName, values);
+      i += 1;
     }
+  }
+  root.innerHTML = html;
+  var handler = onInput || function () {
+    updateConditionalVisibility(root);
+    previewSummaryInputs();
+  };
+  all('[data-field], [data-repeatable-input]', root).forEach(function (element) {
+    element.addEventListener('change', handler);
+    element.addEventListener('input', handler);
   });
-  byId('dynamic-fields').innerHTML = html;
-  all('[data-field], [data-repeatable-input]', byId('dynamic-fields')).forEach(function (element) {
-    function syncPreview() {
-      updateConditionalVisibility();
-      previewSummaryInputs();
-    }
-    element.addEventListener('change', syncPreview);
-    element.addEventListener('input', syncPreview);
-  });
-  bindRepeatableFields();
-  bindFormationFields();
-  updateConditionalVisibility();
+  bindRepeatableFields(root, handler);
+  bindFormationFields(root);
+  updateConditionalVisibility(root);
 }
 export function val(component, key) {
   var value = ((Store.allFields || {})[component] || {})[key];
@@ -328,19 +409,21 @@ export function renderComponentFolder(info) {
   anchor.parentNode.insertBefore(card, anchor.nextSibling);
   byId('copy-component-folder').addEventListener('click', function () { copyText(path); });
 }
-export function updateConditionalVisibility() {
-  var fields = getFields();
-  all('[data-show-if]', byId('dynamic-fields')).forEach(function (element) {
+export function updateConditionalVisibility(root) {
+  root = root || byId('dynamic-fields');
+  var fields = getFields(root);
+  all('[data-show-if]', root).forEach(function (element) {
     var key = element.getAttribute('data-show-if');
     if (key) element.classList.toggle('hidden', !truthy(fields[key]));
   });
 }
-export function getFields() {
+export function getFields(root) {
+  root = root || byId('dynamic-fields');
   var fields = {};
-  all('[data-field]', byId('dynamic-fields')).forEach(function (element) {
+  all('[data-field]', root).forEach(function (element) {
     fields[element.getAttribute('data-field')] = element.type === 'checkbox' ? (element.checked ? '1' : '') : element.value;
   });
-  all('[data-repeatable]', byId('dynamic-fields')).forEach(function (container) {
+  all('[data-repeatable]', root).forEach(function (container) {
     var key = container.getAttribute('data-repeatable');
     var rows = [];
     all('.repeatable-row', container).forEach(function (row) {
@@ -427,44 +510,75 @@ export function saveComponent(event) {
     if (submitButton) submitButton.disabled = false;
   });
 }
+// Shared grid template so the header row and every data row line up: each
+// editable column is a flexible min-90px track, each readonly (calculated)
+// column a compact auto track, plus a trailing auto track for the row action.
+function repeatableTemplate(field) {
+  return (field.columns || []).map(function (col) { return col.readonly ? 'auto' : 'minmax(90px, 1fr)'; }).join(' ') + ' auto';
+}
 export function repeatableInputMarkup(field, row, rowIndex) {
   var cols = field.columns || [];
-  return '<div class="repeatable-row" data-repeatable-row="' + rowIndex + '">' + cols.map(function (col) {
+  var style = ' style="grid-template-columns:' + repeatableTemplate(field) + '"';
+  return '<div class="repeatable-row" data-repeatable-row="' + rowIndex + '"' + style + '>' + cols.map(function (col) {
     var value = row[col.key] == null ? '' : row[col.key];
     var attr = 'data-repeatable-input="' + esc(field.key) + '" data-repeatable-row="' + rowIndex + '" data-repeatable-column="' + esc(col.key) + '"';
+    var aria = ' aria-label="' + esc(col.label) + '"';
+    // Readonly calculated column: a compact brand-tinted value chip at the right
+    // end of the row (server computes it on save; not harvested by getFields).
     if (col.readonly) {
-      return '<label class="calculated-output">' + esc(col.label) + '<output>' + (isFilled(value) ? esc(value) + '%' : 'Calculated on save') + '</output></label>';
+      return '<span class="repeatable-calc" title="' + esc(col.label) + '">' + (isFilled(value) ? esc(value) + '%' : '—') + '</span>';
     }
     if (col.type === 'select') {
-      return '<label>' + esc(col.label) + '<select ' + attr + '>' + (col.options || []).map(function (option) { return '<option value="' + esc(option) + '" ' + (String(value) === String(option) ? 'selected' : '') + '>' + esc(option || 'Select') + '</option>'; }).join('') + '</select></label>';
+      return '<select ' + attr + aria + '>' + (col.options || []).map(function (option) { return '<option value="' + esc(option) + '" ' + (String(value) === String(option) ? 'selected' : '') + '>' + esc(option || 'Select') + '</option>'; }).join('') + '</select>';
     }
-    return '<label>' + esc(col.label) + '<input type="' + (col.type === 'number' ? 'number' : 'text') + '" step="any" ' + attr + ' value="' + esc(value) + '"></label>';
-  }).join('') + '<button type="button" class="ghost remove-repeatable-row" data-repeatable-key="' + esc(field.key) + '" data-repeatable-row="' + rowIndex + '">Remove row</button></div>';
+    return '<input type="' + (col.type === 'number' ? 'number' : 'text') + '" step="any" ' + attr + aria + ' value="' + esc(value) + '">';
+  }).join('') + '<button type="button" class="icon-btn remove-repeatable-row" data-repeatable-key="' + esc(field.key) + '" data-repeatable-row="' + rowIndex + '" title="Remove row" aria-label="Remove row">✕</button></div>';
 }
 export function renderRepeatableField(field, value) {
   var rows = parseRepeatableRows(value);
   if (!rows.length) rows = [{}];
-  return '<div class="repeatable-field wide-field" data-repeatable="' + esc(field.key) + '"><div class="repeatable-heading"><b>' + esc(field.label) + '</b><button type="button" class="secondary add-repeatable-row" data-repeatable-key="' + esc(field.key) + '">Add row</button></div><div class="repeatable-rows">' + rows.map(function (row, index) { return repeatableInputMarkup(field, row || {}, index); }).join('') + '</div></div>';
+  var cols = field.columns || [];
+  // One muted header row of column labels (kept out of the .repeatable-row set
+  // so it is not counted by getFields/bindRepeatableFields) plus a trailing
+  // spacer aligned with the row-action button.
+  var header = '<div class="repeatable-head" style="grid-template-columns:' + repeatableTemplate(field) + '">' + cols.map(function (col) {
+    return '<span class="repeatable-col-label">' + esc(col.label) + '</span>';
+  }).join('') + '<span class="repeatable-col-label" aria-hidden="true"></span></div>';
+  return '<div class="repeatable-field wide-field" data-repeatable="' + esc(field.key) + '"><div class="repeatable-heading"><b>' + esc(field.label) + '</b><button type="button" class="icon-btn add-repeatable-row" data-repeatable-key="' + esc(field.key) + '" title="Add row" aria-label="Add row">+</button></div><div class="repeatable-sheet"><div class="repeatable-rows">' + header + rows.map(function (row, index) { return repeatableInputMarkup(field, row || {}, index); }).join('') + '</div></div></div>';
 }
-export function bindRepeatableFields() {
-  all('.add-repeatable-row', byId('dynamic-fields')).forEach(function (button) {
+// Repeatable field keys are globally unique across SCHEMA, so the "add row"
+// def resolves by key search rather than through Store.task.task_name -- the
+// project editor binds several components' repeatables at once, none of which
+// is the (step editor's) Store.task.
+function repeatableFieldDef(key) {
+  var names = Object.keys(SCHEMA);
+  for (var i = 0; i < names.length; i += 1) {
+    var field = (SCHEMA[names[i]] || []).find(function (item) { return item.key === key; });
+    if (field) return field;
+  }
+  return null;
+}
+export function bindRepeatableFields(root, onInput) {
+  root = root || byId('dynamic-fields');
+  var handler = onInput || previewSummaryInputs;
+  all('.add-repeatable-row', root).forEach(function (button) {
     button.addEventListener('click', function () {
       var key = button.getAttribute('data-repeatable-key');
-      var field = (SCHEMA[Store.task.task_name] || []).find(function (item) { return item.key === key; });
+      var field = repeatableFieldDef(key);
       var parent = button.closest('[data-repeatable]');
       var rows = parent.querySelector('.repeatable-rows');
       rows.insertAdjacentHTML('beforeend', repeatableInputMarkup(field, {}, rows.querySelectorAll('.repeatable-row').length));
-      bindRepeatableFields();
-      previewSummaryInputs();
+      bindRepeatableFields(root, handler);
+      handler();
     });
   });
-  all('.remove-repeatable-row', byId('dynamic-fields')).forEach(function (button) {
+  all('.remove-repeatable-row', root).forEach(function (button) {
     button.addEventListener('click', function () {
       var parent = button.closest('[data-repeatable]');
       var rows = parent.querySelectorAll('.repeatable-row');
       if (rows.length === 1) { all('input,select', rows[0]).forEach(function (element) { element.value = ''; }); }
       else { button.closest('.repeatable-row').remove(); }
-      previewSummaryInputs();
+      handler();
     });
   });
 }

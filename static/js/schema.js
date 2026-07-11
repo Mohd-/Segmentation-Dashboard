@@ -10,14 +10,19 @@ export var STATUSES = ['Not Assigned', 'In Progress', 'Ready', 'Approved'];
 export var DONE = { 'Approved': 1 };
 
 export function piip(prefix) {
+  // Grouped layout: the gas P90/Mean/P10 trio sits under a 'Gas (BCF)' section
+  // in one row; the liquid checkbox stands alone; the liquid trio is its own row
+  // that shows only when the checkbox is on. Keys are unchanged (renaming EAV
+  // keys orphans data); only the labels are concise and the row/section metadata
+  // is new. Mean stays between P90 and P10 -- it feeds the portfolio/summary.
   return [
-    { key: prefix + '_gas_p90', label: 'P90 Gas (BCF)', type: 'number' },
-    { key: prefix + '_gas_mean', label: 'Mean Gas (BCF)', type: 'number' },
-    { key: prefix + '_gas_p10', label: 'P10 Gas (BCF)', type: 'number' },
+    { key: prefix + '_gas_p90', label: 'P90', type: 'number', section: 'Gas (BCF)', row: prefix + '_gas' },
+    { key: prefix + '_gas_mean', label: 'Mean', type: 'number', row: prefix + '_gas' },
+    { key: prefix + '_gas_p10', label: 'P10', type: 'number', row: prefix + '_gas' },
     { key: prefix + '_has_liquid', label: 'Liquid (MMSTB)', type: 'checkbox' },
-    { key: prefix + '_liquid_p90', label: 'P90 Liquid (MMSTB)', type: 'number', showIf: prefix + '_has_liquid' },
-    { key: prefix + '_liquid_mean', label: 'Mean Liquid (MMSTB)', type: 'number', showIf: prefix + '_has_liquid' },
-    { key: prefix + '_liquid_p10', label: 'P10 Liquid (MMSTB)', type: 'number', showIf: prefix + '_has_liquid' }
+    { key: prefix + '_liquid_p90', label: 'P90', type: 'number', showIf: prefix + '_has_liquid', row: prefix + '_liquid' },
+    { key: prefix + '_liquid_mean', label: 'Mean', type: 'number', showIf: prefix + '_has_liquid', row: prefix + '_liquid' },
+    { key: prefix + '_liquid_p10', label: 'P10', type: 'number', showIf: prefix + '_has_liquid', row: prefix + '_liquid' }
   ];
 }
 // WS7 vocabulary. Legacy stored values ('Wet'/'Tight') simply render
@@ -60,15 +65,17 @@ export var SCHEMA = {
   // Old moving_* values remain in the DB untouched; the step now captures the
   // well location (prefilled from the project's lead X/Y) plus three
   // distance/azimuth option pairs.
+  // Four 2-column rows stacked: the well location pair, then one row per staking
+  // option (max distance + azimuth). Row ids group each pair; keys/labels stay.
   'Staking Moving Tolerance': [
-    { key: 'staking_well_x', label: 'Well Location X', type: 'number', defaultFrom: 'lead_x' },
-    { key: 'staking_well_y', label: 'Well Location Y', type: 'number', defaultFrom: 'lead_y' },
-    { key: 'staking_opt1_max_distance_m', label: 'Option 1 Max Distance (m)', type: 'number' },
-    { key: 'staking_opt1_azimuth_deg', label: 'Option 1 Azimuth (°)', type: 'number' },
-    { key: 'staking_opt2_max_distance_m', label: 'Option 2 Max Distance (m)', type: 'number' },
-    { key: 'staking_opt2_azimuth_deg', label: 'Option 2 Azimuth (°)', type: 'number' },
-    { key: 'staking_opt3_max_distance_m', label: 'Option 3 Max Distance (m)', type: 'number' },
-    { key: 'staking_opt3_azimuth_deg', label: 'Option 3 Azimuth (°)', type: 'number' }
+    { key: 'staking_well_x', label: 'Well Location X', type: 'number', defaultFrom: 'lead_x', row: 'staking_loc' },
+    { key: 'staking_well_y', label: 'Well Location Y', type: 'number', defaultFrom: 'lead_y', row: 'staking_loc' },
+    { key: 'staking_opt1_max_distance_m', label: 'Option 1 Max Distance (m)', type: 'number', row: 'staking_opt1' },
+    { key: 'staking_opt1_azimuth_deg', label: 'Option 1 Azimuth (°)', type: 'number', row: 'staking_opt1' },
+    { key: 'staking_opt2_max_distance_m', label: 'Option 2 Max Distance (m)', type: 'number', row: 'staking_opt2' },
+    { key: 'staking_opt2_azimuth_deg', label: 'Option 2 Azimuth (°)', type: 'number', row: 'staking_opt2' },
+    { key: 'staking_opt3_max_distance_m', label: 'Option 3 Max Distance (m)', type: 'number', row: 'staking_opt3' },
+    { key: 'staking_opt3_azimuth_deg', label: 'Option 3 Azimuth (°)', type: 'number', row: 'staking_opt3' }
   ],
   'Approval to Stake': [],
   // sarh_formation_prognosis_pre_drill keeps its key (renaming EAV keys
@@ -106,9 +113,3 @@ export var SCHEMA = {
   'Resource Assessment Update': piip('resource_update').concat([{ key: 'resource_update_note', label: '', type: 'summary' }]),
   'Prospect Evaluation Presentation': [], 'Well Creation': [], 'BP Execution Gate': [], 'Site Preparation': [], 'Post-Well Outcome & Decision Gate': [], 'Executive Summary Final': [], 'PDA': [], 'Approval To Drill': []
 };
-
-export function schemaIndex(componentName) {
-  var out = {};
-  (SCHEMA[componentName] || []).forEach(function (field) { out[field.key] = field; });
-  return out;
-}

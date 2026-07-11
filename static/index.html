@@ -16,7 +16,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/css/base.css?v=5">
-  <link rel="stylesheet" href="/static/css/components.css?v=6">
+  <link rel="stylesheet" href="/static/css/components.css?v=10">
 </head>
 <body>
   <section id="login-page" class="login-page hidden">
@@ -72,7 +72,6 @@
       </div>
       <div class="panel pipeline-panel">
         <div class="toolbar pipeline-toolbar">
-          <input id="prospect-search" placeholder="Search leads" aria-label="Search leads">
           <select id="prospect-status-filter" aria-label="Filter by status"></select>
           <select id="prospect-assignee-filter" aria-label="Filter by assignee"></select>
         </div>
@@ -83,7 +82,6 @@
     <section id="tab-bp" class="tab" role="tabpanel">
       <div class="panel pipeline-panel">
         <div class="toolbar pipeline-toolbar">
-          <input id="bp-search" placeholder="Search BP wells" aria-label="Search BP wells">
           <select id="bp-year-filter" aria-label="Filter by Business Plan year"></select>
           <select id="bp-status-filter" aria-label="Filter by status"></select>
           <select id="bp-assignee-filter" aria-label="Filter by assignee"></select>
@@ -123,8 +121,8 @@
           <div>
             <h2 id="component-title">Component</h2>
           </div>
-          <button id="component-priority-chip" type="button" class="priority priority-medium editor-priority-chip" title="Priority: Medium — click to change">Medium</button>
           <select id="assigned-to" class="editor-assignee" aria-label="Assignee"></select>
+          <button id="component-priority-chip" type="button" class="priority priority-medium editor-priority-chip" title="Priority: Medium — click to change">Medium</button>
           <span id="component-status-chip" class="status not-assigned editor-status-chip">Not Assigned</span>
         </div>
         <form id="component-form" class="component-form">
@@ -141,18 +139,18 @@
 
       <aside class="summary-panel">
         <div class="summary-card">
-          <h3 id="summary-title">Lead Summary</h3>
-          <div id="lead-summary" class="summary-content"></div>
-        </div>
-        <div class="summary-card">
-          <h3>Completion Progress</h3>
-          <div class="progress-ring">
-            <b id="progress-percent">0%</b>
-            <span id="progress-count">0 / 0</span>
+          <div class="summary-card-head">
+            <h3 id="summary-title">Lead Summary</h3>
+            <button id="summary-settings-toggle" type="button" class="icon-btn" title="Manage lead / well" aria-label="Manage lead / well" aria-haspopup="dialog" aria-expanded="false">&#9881;&#65038;</button>
           </div>
+          <div id="lead-summary" class="summary-content"></div>
         </div>
       </aside>
     </section>
+
+    <!-- Full-project editor: sibling of #detail-shell, shown/hidden independently.
+         JS (views/project-editor.js) renders its entire contents. -->
+    <section id="project-editor" class="project-editor panel hidden" aria-live="polite"></section>
 
     <section id="tab-audit" class="tab" role="tabpanel">
       <div class="panel audit-panel">
@@ -191,6 +189,6 @@
     </form>
   </dialog>
 
-  <script type="module" src="/static/js/main.js?v=6"></script>
+  <script type="module" src="/static/js/main.js?v=8"></script>
 </body>
 </html>

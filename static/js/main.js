@@ -20,6 +20,7 @@ export function showTab(name) {
     button.setAttribute('aria-selected', String(isActive));
   });
   byId('detail-shell').classList.add('hidden');
+  byId('project-editor').classList.add('hidden');
   if (name === 'prospect') refreshProspect();
   if (name === 'bp') refreshBP();
   if (name === 'portfolio') refreshPortfolio();
@@ -91,8 +92,8 @@ export function wire() {
   safeOn('approve-component', 'click', function () { transitionComponent('approve'); });
   safeOn('return-component', 'click', function () { transitionComponent('return'); });
   safeOn('back-to-overview', 'click', function () { byId('detail-shell').classList.add('hidden'); byId('tab-' + Store.pipeline).scrollIntoView({ behavior: 'smooth', block: 'start' }); });
-  ['prospect-search', 'prospect-status-filter', 'prospect-assignee-filter'].forEach(function (id) { safeOn(id, 'input', refreshProspect); safeOn(id, 'change', refreshProspect); });
-  ['bp-search', 'bp-year-filter', 'bp-status-filter', 'bp-assignee-filter'].forEach(function (id) { safeOn(id, 'input', refreshBP); safeOn(id, 'change', refreshBP); });
+  ['prospect-status-filter', 'prospect-assignee-filter'].forEach(function (id) { safeOn(id, 'input', refreshProspect); safeOn(id, 'change', refreshProspect); });
+  ['bp-year-filter', 'bp-status-filter', 'bp-assignee-filter'].forEach(function (id) { safeOn(id, 'input', refreshBP); safeOn(id, 'change', refreshBP); });
   ['portfolio-year-filter', 'portfolio-activity-filter'].forEach(function (id) { safeOn(id, 'change', refreshPortfolio); });
   safeOn('audit-project-filter', 'change', refreshAudit);
 }

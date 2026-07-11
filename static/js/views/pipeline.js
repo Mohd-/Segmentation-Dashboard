@@ -52,7 +52,6 @@ function assigneeFilterValue(id) {
 
 export function refreshProspect() {
   var query = {
-    search: byId('prospect-search').value,
     status_filter: byId('prospect-status-filter').value,
     owner_filter: assigneeFilterValue('prospect-assignee-filter'),
     pipeline_filter: 'prospect'
@@ -63,7 +62,6 @@ export function refreshProspect() {
 }
 export function refreshBP() {
   var query = {
-    search: byId('bp-search').value,
     status_filter: byId('bp-status-filter').value,
     owner_filter: assigneeFilterValue('bp-assignee-filter'),
     pipeline_filter: 'bp'
