@@ -240,9 +240,117 @@ def test_approving_all_bp_tasks_completes_bp_well_anchored_on_pda(client):
     assert completion == {"percent": 100.0}
 
 
+# ---------------------------------------------------------------------------
+# Derived board pointers (no stored current_stage/task/owner/overall_status)
+# ---------------------------------------------------------------------------
+
+def test_derived_pointers_track_first_open_task_of_half_approved_prospect(client):
+    # Approve steps 1-3 (all of Lead Identification) and assign step 4: the
+    # derived pointers must land on step 4 (Seismic Signature Validation /
+    # Risking) and carry its assignee, on both the single-project read and the
+    # board row.
+    pid = create_project(client, "DERIVED-POINTERS-1")
+    tasks = get_tasks(client, pid)
+    for task in tasks[:3]:
+        resp = client.patch(f"/api/tasks/{task['task_id']}", json={
+            "status": "Approved", "revision": task["revision"],
+        })
+        assert resp.status_code == 200, resp.get_json()
+    step4 = get_tasks(client, pid)[3]
+    resp = client.post(f"/api/tasks/{step4['task_id']}/assign", json={
+        "assignee": "Employee", "cascade": False, "revision": step4["revision"],
+    })
+    assert resp.status_code == 200, resp.get_json()
+
+    project = client.get(f"/api/projects/{pid}").get_json()
+    assert project["overall_status"] == "In Progress"
+    assert project["current_task"] == "Seismic Signature Validation"
+    assert project["current_stage"] == "Risking"
+    assert project["current_owner"] == "Employee"
+
+    row = next(r for r in client.get("/api/projects").get_json() if r["project_id"] == pid)
+    assert row["current_task"] == "Seismic Signature Validation"
+    assert row["current_stage"] == "Risking"
+    assert row["current_owner"] == "Employee"
+    assert row["overall_status"] == "In Progress"
+
+
+def test_transition_approve_completes_and_reopen_clears_completed_at(client):
+    # Approve steps 1-11 directly; walk the final prospect step (Approval to
+    # Stake) through assign -> submit -> approve so transition_task performs
+    # the completing write. Then reopen and confirm completed_at clears.
+    pid = create_project(client, "DERIVED-COMPLETE-1")
+    tasks = get_tasks(client, pid)
+    prospect = [t for t in tasks if t["stage_group"] in PROSPECT_STAGES]
+    for task in prospect[:-1]:
+        resp = client.patch(f"/api/tasks/{task['task_id']}", json={
+            "status": "Approved", "revision": task["revision"],
+        })
+        assert resp.status_code == 200, resp.get_json()
+    last = get_tasks(client, pid)[prospect[-1]["sequence_no"] - 1]
+    assert last["task_name"] == "Approval to Stake"
+    assigned = client.post(f"/api/tasks/{last['task_id']}/assign", json={
+        "assignee": "Employee", "cascade": False, "revision": last["revision"],
+    }).get_json()["task"]
+    ready = client.post(f"/api/tasks/{last['task_id']}/transition", json={
+        "action": "submit", "revision": assigned["revision"],
+    }).get_json()["task"]
+    resp = client.post(f"/api/tasks/{last['task_id']}/transition", json={
+        "action": "approve", "revision": ready["revision"],
+    })
+    assert resp.status_code == 200, resp.get_json()
+
+    project = client.get(f"/api/projects/{pid}").get_json()
+    assert project["overall_status"] == "Completed"
+    assert project["completed_at"]  # stamped by the completing transition
+    assert project["current_task"] == "Approval to Stake"
+    assert project["current_stage"] == "Pre-Well Delivery"
+    assert project["current_owner"] is None
+
+    # Reopen: send the final step back to Ready (save path), then return it to
+    # In Progress (transition path). The project reads In Progress again and
+    # the completion stamp is gone.
+    approved = client.get(f"/api/tasks/{last['task_id']}").get_json()
+    resp = client.patch(f"/api/tasks/{last['task_id']}", json={
+        "status": "Ready", "revision": approved["revision"],
+    })
+    assert resp.status_code == 200, resp.get_json()
+    project = client.get(f"/api/projects/{pid}").get_json()
+    assert project["overall_status"] == "In Progress"
+    assert project["completed_at"] is None
+
+    reready = client.get(f"/api/tasks/{last['task_id']}").get_json()
+    resp = client.post(f"/api/tasks/{last['task_id']}/transition", json={
+        "action": "return", "revision": reready["revision"],
+    })
+    assert resp.status_code == 200, resp.get_json()
+    project = client.get(f"/api/projects/{pid}").get_json()
+    assert project["overall_status"] == "In Progress"
+    assert project["completed_at"] is None
+    assert project["current_task"] == "Approval to Stake"
+
+
+def test_owner_filter_matches_derived_owner(client):
+    pid_a = create_project(client, "OWNER-FILTER-A")
+    pid_b = create_project(client, "OWNER-FILTER-B")
+    task_a = get_tasks(client, pid_a)[0]
+    task_b = get_tasks(client, pid_b)[0]
+    client.post(f"/api/tasks/{task_a['task_id']}/assign", json={
+        "assignee": "Employee", "cascade": False, "revision": task_a["revision"],
+    })
+    client.post(f"/api/tasks/{task_b['task_id']}/assign", json={
+        "assignee": "Staff Member", "cascade": False, "revision": task_b["revision"],
+    })
+
+    rows = client.get("/api/projects?owner_filter=Employee").get_json()
+    assert [r["project_id"] for r in rows] == [pid_a]
+    rows = client.get("/api/projects?owner_filter=Staff Member").get_json()
+    assert [r["project_id"] for r in rows] == [pid_b]
+
+
 def _deactivate_stage_tasks(db_path, project_id, stages):
-    """Force the `final_done is None` fallback: mark every applicable-stage task
-    inactive so refresh_project_state finds no rows to anchor on."""
+    """Force the no-active-rows template fallback: mark every applicable-stage
+    task inactive so the derived state has no task rows to anchor on."""
     import sqlite3
     conn = sqlite3.connect(str(db_path))
     try:
@@ -257,29 +365,17 @@ def _deactivate_stage_tasks(db_path, project_id, stages):
         conn.close()
 
 
-def _refresh(app_modules, project_id):
-    """Call workflow.refresh_project_state in its own committed transaction."""
-    _, db = app_modules
-    import workflow
-    session = db.new_session()
-    try:
-        db.begin_write(session)
-        workflow.refresh_project_state(session, project_id)
-        session.commit()
-    finally:
-        session.close()
-
-
-def test_prospect_completion_fallback_anchors_on_prospect_not_pda(client, app_modules):
+def test_prospect_completion_fallback_anchors_on_prospect_not_pda(client):
     # Regression: the completed-with-no-active-rows fallback previously hardcoded
     # the BP-only literals "PDA"/"Post-Testing" regardless of pipeline_type,
-    # mis-stamping prospect leads. It must derive the prospect anchors instead.
+    # mis-stamping prospect leads. The derived anchor must come from the
+    # prospect templates instead -- and being derived at read time, it needs no
+    # refresh call after the raw data change.
     pid = create_project(client, "FALLBACK-PROSPECT-1")
     _deactivate_stage_tasks(
         client.db_path, pid,
         ["Lead Identification", "Risking", "Segmentation", "Pre-Well Delivery"],
     )
-    _refresh(app_modules, pid)
 
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["overall_status"] == "Completed"
@@ -289,7 +385,7 @@ def test_prospect_completion_fallback_anchors_on_prospect_not_pda(client, app_mo
     assert project["current_stage"] != "Post-Testing"
 
 
-def test_bp_completion_fallback_still_anchors_on_pda(client, app_modules):
+def test_bp_completion_fallback_still_anchors_on_pda(client):
     # The BP branch of the same fallback must keep anchoring on its own final
     # step, PDA / Post-Testing.
     pid = create_project(
@@ -299,7 +395,6 @@ def test_bp_completion_fallback_still_anchors_on_pda(client, app_modules):
     _deactivate_stage_tasks(
         client.db_path, pid, ["Well Delivery", "Post-Drilling", "Post-Testing"],
     )
-    _refresh(app_modules, pid)
 
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["overall_status"] == "Completed"

@@ -44,35 +44,37 @@ class Project(Base):
 
     ``pipeline_type`` ('prospect' or 'bp') decides which operational board it
     belongs to; ``business_plan_enabled`` controls Portfolio inclusion.
+
+    Board pointers (current stage/task/owner, overall status, stage-started
+    date) are NOT stored: they are fully derivable from ``project_tasks`` and
+    are computed at read time by ``workflow._annotate_derived_state``. Only
+    ``completed_at`` persists, because "when did the applicable set FIRST
+    become fully approved" is history, not current state.
     """
     __tablename__ = "projects"
 
     project_id = Column(Integer, primary_key=True)
     project_name = Column(Text, nullable=False, unique=True)
-    overall_status = Column(Text, nullable=False, server_default=text("'In Progress'"))
-    current_stage = Column(Text)
-    current_task = Column(Text)
-    current_owner = Column(Text)
     start_date = Column(Text)
     target_date = Column(Text)
     business_plan_enabled = Column(Integer, nullable=False, server_default=text("0"))
     business_plan_year = Column(Integer)
     active_well_enabled = Column(Integer, nullable=False, server_default=text("0"))
     pipeline_type = Column(Text, nullable=False, server_default=text("'prospect'"))
-    current_stage_started_at = Column(Text)
     last_updated = Column(Text)
     archived = Column(Integer, nullable=False, server_default=text("0"))
     lead_folder_path = Column(Text)
     lead_x = Column(REAL)
     lead_y = Column(REAL)
     revision = Column(Integer, nullable=False, server_default=text("0"))
-    # Set by refresh_project_state exactly when overall_status becomes
-    # 'Completed'; cleared (NULL) when the project reopens. Added by schema v16
-    # so completion-month reporting no longer drifts with later edits.
+    # Set by workflow._sync_completed_at exactly when the applicable task set
+    # becomes fully approved; cleared (NULL) when the project reopens. Kept
+    # stored (v16) so completion-month reporting no longer drifts with later
+    # edits.
     completed_at = Column(Text)
 
     __table_args__ = (
-        Index("idx_projects_archived_stage", "archived", "pipeline_type", "current_stage"),
+        Index("idx_projects_archived_pipeline", "archived", "pipeline_type"),
         Index("idx_projects_portfolio", "archived", "business_plan_enabled",
               "business_plan_year", "active_well_enabled"),
         {"sqlite_autoincrement": True},

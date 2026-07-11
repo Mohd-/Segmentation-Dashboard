@@ -239,8 +239,8 @@ def add_project(session, project_name, start_date=None, target_date=None, change
     if duplicate:
         raise ValueError("A lead / well with this name already exists.")
 
-    # The workflow definition lives in code (PIPELINE_TEMPLATES); the project
-    # anchors on its pipeline's first step.
+    # The workflow definition lives in code (PIPELINE_TEMPLATES); the creation
+    # history event anchors on the pipeline's first step.
     first_template = (next((t for t in PIPELINE_TEMPLATES if t[2] in BP_EXECUTION_STAGES), PIPELINE_TEMPLATES[0])
                       if pipeline_type == "bp" else PIPELINE_TEMPLATES[0])
 
@@ -259,23 +259,19 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
                                year_val, bp_enabled, active_well_enabled, pipeline_type,
                                first_template, now):
     """Insert the project row plus one task per PIPELINE_TEMPLATES step in one locked transaction."""
-    first_sequence, first_task_name, first_stage = first_template
+    first_sequence, first_task_name, _first_stage = first_template
     with db.write_transaction(session):
         result = db.execute(session, """
             INSERT INTO projects (
-                project_name, overall_status, current_stage, current_task, current_owner,
-                start_date, target_date, current_stage_started_at, last_updated,
+                project_name, start_date, target_date, last_updated,
                 lead_folder_path, lead_x, lead_y, business_plan_enabled, business_plan_year,
                 active_well_enabled, pipeline_type
-            ) VALUES (:project_name, :overall_status, :current_stage, :current_task, :current_owner,
-                      :start_date, :target_date, :stage_started_at, :last_updated,
+            ) VALUES (:project_name, :start_date, :target_date, :last_updated,
                       :lead_folder_path, :lead_x, :lead_y, :business_plan_enabled, :business_plan_year,
                       :active_well_enabled, :pipeline_type)
         """, {
-            "project_name": project_name, "overall_status": "In Progress",
-            "current_stage": first_stage, "current_task": first_task_name,
-            "current_owner": None, "start_date": start_date,
-            "target_date": target_date, "stage_started_at": start_date, "last_updated": now,
+            "project_name": project_name, "start_date": start_date,
+            "target_date": target_date, "last_updated": now,
             "lead_folder_path": folders.default_lead_folder_path(project_name),
             "lead_x": lead_x or None, "lead_y": lead_y or None,
             "business_plan_enabled": bp_enabled, "business_plan_year": year_val,
@@ -327,17 +323,85 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
                 changed_by=changed_by,
                 comment=comment,
             )
-        refresh_project_state(session, project_id)
     return project_id
 
 
 # ---------------------------------------------------------------------------
-# Project reads
+# Project reads (board pointers are DERIVED from project_tasks, never stored)
 # ---------------------------------------------------------------------------
+
+def _annotate_derived_state(session, projects):
+    """Fill the derived board pointers on a list of project dicts, in place.
+
+    The projects table stores no current stage/task/owner/status: they are a
+    pure function of the active task rows. This is the ONE implementation of
+    that derivation, shared by get_projects (board) and get_project (detail):
+
+    - current task  = first active task with status != 'Approved' in the
+      pipeline's applicable stages, ordered by sequence_no. Its stage_group,
+      assigned_to and priority become current_stage / current_owner /
+      current_task_priority; overall_status = 'In Progress'.
+    - no open task  = 'Completed', anchored on the LAST applicable active task
+      (falling back to the last applicable PIPELINE_TEMPLATES entry when no
+      active rows survive: "Approval to Stake" for a prospect, "PDA" for a BP
+      well); current_owner is NULL.
+    - current_stage_started_at = MIN(actual_start) of the tasks in the derived
+      current stage, falling back to the project's start_date.
+
+    One batched query for the whole list, so the board never multiplies rows
+    (legacy duplicate task rows collapse into the per-project grouping).
+    """
+    projects = [p for p in projects if p]
+    if not projects:
+        return
+    task_rows = db.fetch_all(session, """
+        SELECT project_id, task_name, stage_group, assigned_to, status, priority, actual_start
+        FROM project_tasks
+        WHERE project_id IN :project_ids AND is_active = 1
+        ORDER BY project_id, sequence_no
+    """, {"project_ids": [p["project_id"] for p in projects]})
+    by_project: Dict[int, List[Dict[str, Any]]] = {}
+    for row in task_rows:
+        by_project.setdefault(row["project_id"], []).append(row)
+
+    for project in projects:
+        rows = by_project.get(project["project_id"], [])
+        stages = applicable_stages(project.get("pipeline_type"))
+        open_task = next((r for r in rows if r["stage_group"] in stages and r["status"] != "Approved"), None)
+        if open_task:
+            anchor = open_task
+            current_owner = open_task["assigned_to"]
+            overall_status = "In Progress"
+        else:
+            # Completed: anchor on the final applicable step of the project's
+            # OWN pipeline. Prefer the last active applicable row; derive from
+            # the templates when none survive, so this stays correct if a
+            # later workstream removes/renumbers a step.
+            fallback = next((t for t in reversed(PIPELINE_TEMPLATES) if t[2] in stages), None)
+            anchor = next((r for r in reversed(rows) if r["stage_group"] in stages), None) \
+                or {"task_name": fallback[1] if fallback else None,
+                    "stage_group": fallback[2] if fallback else stages[-1],
+                    "priority": "Medium"}
+            current_owner = None
+            overall_status = "Completed"
+        current_stage = anchor["stage_group"]
+        started = [r["actual_start"] for r in rows
+                   if r["stage_group"] == current_stage and r["actual_start"]]
+        project["current_stage"] = current_stage
+        project["current_task"] = anchor["task_name"]
+        project["current_owner"] = current_owner
+        project["overall_status"] = overall_status
+        project["current_stage_started_at"] = min(started) if started else project.get("start_date")
+        project["current_task_priority"] = anchor.get("priority") or "Medium"
+
 
 def get_projects(session, search_text="", stage_filter="All", status_filter="All",
                  owner_filter="All", health_filter="All", sort_key="Well Name", pipeline_filter="All"):
-    """Return the (filtered, sorted) project board rows with derived health.
+    """Return the (filtered, sorted) project board rows with derived state.
+
+    Search/pipeline/archived filters act on stored columns and stay in SQL; the
+    stage/status/owner/health filters act on DERIVED values (see
+    _annotate_derived_state) and are applied in Python after annotation.
 
     The active_drilling subquery aggregates per project (one row each), so a
     project with multiple Quicklook task rows carrying the field appears exactly
@@ -349,31 +413,15 @@ def get_projects(session, search_text="", stage_filter="All", status_filter="All
     if needle:
         conditions.append("LOWER(COALESCE(p.project_name, '')) LIKE :search_text")
         params["search_text"] = f"%{needle}%"
-    if stage_filter != "All":
-        conditions.append("p.current_stage = :stage_filter")
-        params["stage_filter"] = stage_filter
-    if status_filter != "All":
-        conditions.append("p.overall_status = :status_filter")
-        params["status_filter"] = status_filter
-    if owner_filter != "All":
-        conditions.append("p.current_owner = :owner_filter")
-        params["owner_filter"] = owner_filter
     if pipeline_filter in {"prospect", "bp"}:
         conditions.append("LOWER(COALESCE(p.pipeline_type, 'prospect')) = :pipeline_filter")
         params["pipeline_filter"] = pipeline_filter
     where_clause = " AND ".join(conditions)
     rows = db.fetch_all(session, f"""
         SELECT p.*,
-               COALESCE(pt_current.priority, 'Medium') AS current_task_priority,
                COALESCE(priority_flags.has_high_priority_tasks, 0) AS has_high_priority_tasks,
-               CASE WHEN p.current_stage = 'Post-Drilling'
-                         AND COALESCE(active_drilling.is_drilling, 0) = 1
-                    THEN 1 ELSE 0 END AS active_drilling
+               COALESCE(active_drilling.is_drilling, 0) AS is_drilling
         FROM projects p
-        LEFT JOIN project_tasks pt_current
-          ON pt_current.project_id = p.project_id
-         AND pt_current.task_name = p.current_task
-         AND pt_current.is_active = 1
         LEFT JOIN (
             SELECT project_id,
                    MAX(CASE WHEN priority = 'High' THEN 1 ELSE 0 END) AS has_high_priority_tasks
@@ -396,10 +444,20 @@ def get_projects(session, search_text="", stage_filter="All", status_filter="All
         WHERE {where_clause}
         ORDER BY p.project_id DESC
     """, params)
+    _annotate_derived_state(session, rows)
     filtered = []
     for item in rows:
+        # Drilling is only surfaced while the project sits in Post-Drilling.
+        item["active_drilling"] = 1 if (item.get("current_stage") == "Post-Drilling"
+                                        and int(item.pop("is_drilling") or 0) == 1) else 0
         item["active_well_enabled"] = int(item.get("active_well_enabled") or 0)
         item["health"] = health_from_target(item.get("target_date"), item.get("overall_status"))
+        if stage_filter != "All" and item.get("current_stage") != stage_filter:
+            continue
+        if status_filter != "All" and item.get("overall_status") != status_filter:
+            continue
+        if owner_filter != "All" and item.get("current_owner") != owner_filter:
+            continue
         if health_filter != "All" and item["health"] != health_filter:
             continue
         filtered.append(item)
@@ -421,13 +479,14 @@ def get_projects(session, search_text="", stage_filter="All", status_filter="All
 
 
 def get_project(session, project_id):
-    """Return one project dict (with a default lead-folder path), or None."""
+    """Return one project dict with derived board pointers, or None."""
     project = db.fetch_one(session, "SELECT * FROM projects WHERE project_id = :project_id",
                            {"project_id": project_id})
     if not project:
         return None
     if not project.get("lead_folder_path"):
         project["lead_folder_path"] = folders.default_lead_folder_path(project.get("project_name") or "")
+    _annotate_derived_state(session, [project])
     return project
 
 
@@ -451,7 +510,7 @@ def project_completion_percent(session, project_id):
 
     Scoped to the stages of the project's operating pipeline (Prospect
     Maturation stages for prospects, BP Execution stages for BP wells) so the
-    figure agrees with the overall_status logic in refresh_project_state: a
+    figure agrees with the derived overall_status (_annotate_derived_state): a
     prospect that has approved every Prospect-stage task reads 100% even though
     its BP-stage tasks are untouched. The stage filter IS the scope: every task
     in the operating pipeline counts toward the denominator.
@@ -468,6 +527,38 @@ def project_completion_percent(session, project_id):
     total = int(row["applicable_total"] or 0)
     done = int(row["done"] or 0)
     return round((done / total) * 100, 1) if total else 0.0
+
+
+def _sync_completed_at(session, project_id):
+    """Keep projects.completed_at consistent with the derived completion state.
+
+    ``completed_at`` records when the applicable task set FIRST became fully
+    approved -- history, not current state, so it is the one completion fact
+    that stays stored. Rule: stamp utc_now when a write leaves the applicable
+    set fully approved and the stamp is empty; clear it when a write reopens
+    the set. Called from every write that can change completeness: save_task /
+    transition_task (status changes) and promotion/demotion (the applicable set
+    itself changes). No commit -- runs in the caller's transaction.
+    """
+    project = db.fetch_one(session,
+                           "SELECT pipeline_type, completed_at FROM projects WHERE project_id = :project_id",
+                           {"project_id": project_id})
+    if not project:
+        return
+    stages = applicable_stages(project.get("pipeline_type"))
+    open_count = db.fetch_one(session, """
+        SELECT COUNT(*) AS c FROM project_tasks
+        WHERE project_id = :project_id AND is_active = 1 AND stage_group IN :stages
+          AND status != 'Approved'
+    """, {"project_id": project_id, "stages": stages})["c"]
+    if open_count == 0 and not project.get("completed_at"):
+        db.execute(session,
+                   "UPDATE projects SET completed_at = :now WHERE project_id = :project_id",
+                   {"now": utc_now_str(), "project_id": project_id})
+    elif open_count > 0 and project.get("completed_at"):
+        db.execute(session,
+                   "UPDATE projects SET completed_at = NULL WHERE project_id = :project_id",
+                   {"project_id": project_id})
 
 
 def update_project_name(session, project_id, new_name, changed_by="Admin", lead_x=None, lead_y=None,
@@ -570,64 +661,6 @@ def delete_project(session, project_id, changed_by="Admin"):
     with db.write_transaction(session):
         db.execute(session, "DELETE FROM projects WHERE project_id = :project_id",
                    {"project_id": project_id})
-
-
-def reconcile_project_flow(session, project_id):
-    """Return the current open task for a project's applicable pipeline stages.
-
-    If no task is explicitly open, continue from the current task position rather
-    than jumping back to the first incomplete item. Enforces no dependencies or
-    locks -- it only determines which task the UI should treat as current.
-    """
-    project = get_project(session, project_id) or {}
-    stages = applicable_stages(project.get("pipeline_type"))
-
-    # ``IN :stages`` with a list value becomes an expanding bindparam (see
-    # db._prepare): SQLAlchemy renders one placeholder per element at execution
-    # time, portably across dialects. Never build "?,?,?" strings by hand.
-    row = db.fetch_one(session, """
-        SELECT * FROM project_tasks
-        WHERE project_id = :project_id AND is_active = 1 AND status IN ('In Progress','Ready')
-          AND stage_group IN :stages
-        ORDER BY sequence_no
-        LIMIT 1
-    """, {"project_id": project_id, "stages": stages})
-    if row:
-        return row
-
-    current_task = project.get("current_task")
-    current_seq = 0
-    if current_task:
-        seq_row = db.fetch_one(session, """
-            SELECT sequence_no FROM project_tasks
-            WHERE project_id = :project_id AND task_name = :task_name AND is_active = 1
-            LIMIT 1
-        """, {"project_id": project_id, "task_name": current_task})
-        current_seq = seq_row["sequence_no"] if seq_row else 0
-
-    # >= (not >): with the v17 lifecycle a project can sit entirely in
-    # "Not Assigned" (no active rows at all), and the current task itself is
-    # then still the open one -- skipping it would wrongly anchor on the NEXT
-    # step. A done current task is excluded by the status predicate anyway, so
-    # advancement past completed steps is unchanged.
-    row = db.fetch_one(session, """
-        SELECT * FROM project_tasks
-        WHERE project_id = :project_id AND is_active = 1 AND status != 'Approved' AND sequence_no >= :current_seq
-          AND stage_group IN :stages
-        ORDER BY sequence_no
-        LIMIT 1
-    """, {"project_id": project_id, "current_seq": current_seq, "stages": stages})
-    if row:
-        return row
-
-    row = db.fetch_one(session, """
-        SELECT * FROM project_tasks
-        WHERE project_id = :project_id AND is_active = 1 AND status != 'Approved'
-          AND stage_group IN :stages
-        ORDER BY sequence_no
-        LIMIT 1
-    """, {"project_id": project_id, "stages": stages})
-    return row
 
 
 # ---------------------------------------------------------------------------
@@ -826,11 +859,12 @@ def _capture_lead_summary_snapshot(session, project_id: int, changed_by: str):
 def _move_lead_to_bp_execution(session, project_id: int, year_val: int, changed_by: str):
     """Promote a matured lead into the BP Execution pipeline without losing its lead record.
 
-    Applicability is derived from pipeline_type (see applicable_stages), so
-    promotion is a PURE pipeline switch: it never rewrites task statuses or
-    data. The BP-stage rows -- including any progress entered before promotion
-    -- carry through untouched. Only the project's pipeline_type, BP flags/year
-    and current pointers move, plus the lead-summary snapshot capture.
+    Applicability is derived from pipeline_type (see applicable_stages), and
+    the board pointers are derived at read time, so promotion is a PURE
+    pipeline switch: it never rewrites task statuses, data or pointers. The
+    BP-stage rows -- including any progress entered before promotion -- carry
+    through untouched. Only the project's pipeline_type and BP flags/year
+    move, plus the lead-summary snapshot capture.
     """
     project = get_project(session, project_id)
     if not project:
@@ -838,73 +872,38 @@ def _move_lead_to_bp_execution(session, project_id: int, year_val: int, changed_
     if str(project.get("pipeline_type") or "prospect").lower() != "bp":
         _capture_lead_summary_snapshot(session, project_id, changed_by)
 
-    bp_tasks = db.fetch_all(session, """
-        SELECT * FROM project_tasks
+    bp_task_count = db.fetch_one(session, """
+        SELECT COUNT(*) AS c FROM project_tasks
         WHERE project_id = :project_id AND stage_group IN :stages AND is_active = 1
-        ORDER BY sequence_no
-    """, {"project_id": project_id, "stages": BP_EXECUTION_STAGES})
-    if not bp_tasks:
+    """, {"project_id": project_id, "stages": BP_EXECUTION_STAGES})["c"]
+    if not bp_task_count:
         raise RuntimeError("Business Plan workflow is not available for this lead.")
-    now = utc_now_str()
-
-    first_open = db.fetch_one(session, """
-        SELECT * FROM project_tasks
-        WHERE project_id = :project_id AND stage_group IN :stages AND is_active = 1
-          AND status != 'Approved'
-        ORDER BY sequence_no LIMIT 1
-    """, {"project_id": project_id, "stages": BP_EXECUTION_STAGES})
-    if not first_open:
-        first_open = bp_tasks[0]
     db.execute(session, """
         UPDATE projects
         SET pipeline_type = 'bp', business_plan_enabled = 1, business_plan_year = :year,
-            current_stage = :stage, current_task = :task, current_owner = :owner, current_stage_started_at = :today,
-            overall_status = 'In Progress', last_updated = :now, revision = COALESCE(revision, 0) + 1
+            last_updated = :now, revision = COALESCE(revision, 0) + 1
         WHERE project_id = :project_id
-    """, {"year": year_val, "stage": first_open["stage_group"], "task": first_open["task_name"],
-          "owner": first_open["assigned_to"], "today": today_str(), "now": now, "project_id": project_id})
+    """, {"year": year_val, "now": utc_now_str(), "project_id": project_id})
 
 
 def _move_bp_to_lead_phase(session, project_id: int, changed_by: str):
     """Return a promoted BP Well to Prospect Maturation without data loss.
 
     The reverse of promotion, and equally pure: only the project's
-    pipeline_type, BP flags/year and current pointers move. Task rows and their
-    data (including entered BP progress) survive untouched.
+    pipeline_type and BP flags/year move. Task rows and their data (including
+    entered BP progress) survive untouched; the board pointers re-derive from
+    the prospect stages on the next read.
     """
     project = get_project(session, project_id)
     if not project:
         raise ValueError("Lead / well not found.")
-    now = utc_now_str()
     db.execute(session, """
         UPDATE projects
         SET pipeline_type = 'prospect', business_plan_enabled = 0,
             business_plan_year = NULL, last_updated = :now,
             revision = COALESCE(revision, 0) + 1
         WHERE project_id = :project_id
-    """, {"now": now, "project_id": project_id})
-    lead_open = db.fetch_one(session, """
-        SELECT * FROM project_tasks
-        WHERE project_id = :project_id AND stage_group IN :stages AND is_active = 1
-          AND status != 'Approved'
-        ORDER BY sequence_no LIMIT 1
-    """, {"project_id": project_id, "stages": PROSPECT_STAGES})
-    if not lead_open:
-        lead_open = db.fetch_one(session, """
-            SELECT * FROM project_tasks
-            WHERE project_id = :project_id AND stage_group IN :stages AND is_active = 1
-            ORDER BY sequence_no LIMIT 1
-        """, {"project_id": project_id, "stages": PROSPECT_STAGES})
-    if lead_open:
-        db.execute(session, """
-            UPDATE projects
-            SET current_stage = :stage, current_task = :task, current_owner = :owner,
-                overall_status = 'In Progress', current_stage_started_at = :today,
-                last_updated = :now
-            WHERE project_id = :project_id
-        """, {"stage": lead_open['stage_group'], "task": lead_open['task_name'],
-              "owner": lead_open['assigned_to'], "today": today_str(), "now": now,
-              "project_id": project_id})
+    """, {"now": utc_now_str(), "project_id": project_id})
 
 
 def set_business_plan(session, project_id, enabled, year=None, changed_by="Admin", *args, **kwargs):
@@ -933,7 +932,10 @@ def set_business_plan(session, project_id, enabled, year=None, changed_by="Admin
             new_state = f"{enabled_int}/{year_val or '-'}"
             action = "Lead Promoted to BP Execution" if enabled_int and str(old.get("pipeline_type") or "prospect").lower() != "bp" else ("Well Added to BP" if enabled_int else "BP Well Returned to Lead Phase")
             log_task_event(session, first_task["task_id"], project_id, first_task["task_name"], action, old_state, new_state, changed_by, "Business plan assignment updated.")
-        refresh_project_state(session, project_id)
+        # The applicable set just changed pipelines, which can complete or
+        # reopen the project (e.g. a fully-approved prospect promoted into an
+        # unstarted BP pipeline is no longer complete).
+        _sync_completed_at(session, project_id)
 
 
 def update_project_flags(session, project_id, business_plan_enabled=None, active_well_enabled=None, business_plan_year=None, changed_by="Web User"):
@@ -1179,18 +1181,12 @@ def save_task(session, task_id, payload, changed_by="Web User"):
             log_task_event(session, task_id, task["project_id"], task["task_name"], "Component Update",
                            old_status, status, changed_by, comments or f"Status set to {status}.")
 
-        current = get_task(session, task_id)
-        if status in DONE_STATUSES:
-            db.execute(session, """
-                UPDATE projects
-                SET current_stage = :stage, current_task = :task, current_owner = :owner,
-                    last_updated = :now, revision = revision + 1
-                WHERE project_id = :project_id
-            """, {"stage": current["stage_group"], "task": current["task_name"],
-                  "owner": current["assigned_to"], "now": now, "project_id": current["project_id"]})
-        refresh_project_state(session, current["project_id"])
-        db.execute(session, "UPDATE projects SET revision = revision + 1 WHERE project_id = :project_id",
-                   {"project_id": current["project_id"]})
+        # A status change may have completed or reopened the applicable set;
+        # the board pointers themselves are derived at read time.
+        _sync_completed_at(session, task["project_id"])
+        db.execute(session,
+                   "UPDATE projects SET last_updated = :now, revision = revision + 1 WHERE project_id = :project_id",
+                   {"now": now, "project_id": task["project_id"]})
         result = get_task(session, task_id) or {}
     return result
 
@@ -1296,9 +1292,12 @@ def assign_task(session, task_id, assignee, cascade=True, changed_by="Web User",
                            "Component Assigned", old_status, new_status, changed_by,
                            f"Assigned to {canonical_name}.")
 
-        refresh_project_state(session, task["project_id"])
-        db.execute(session, "UPDATE projects SET revision = revision + 1 WHERE project_id = :project_id",
-                   {"project_id": task["project_id"]})
+        # No completed_at sync: assignment only moves Not Assigned ->
+        # In Progress, which can never complete or reopen the applicable set
+        # (a complete set has no Not Assigned rows to assign).
+        db.execute(session,
+                   "UPDATE projects SET last_updated = :now, revision = revision + 1 WHERE project_id = :project_id",
+                   {"now": now, "project_id": task["project_id"]})
         result = get_task(session, task_id) or {}
     return result
 
@@ -1332,8 +1331,9 @@ def transition_task(session, task_id, action, changed_by="Web User", expected_re
 
     Wrong from-state or an unknown action -> ValueError (400). Optimistic
     locking mirrors save_task (StaleRevisionError -> 409). One history event is
-    logged with the old/new status; project state is refreshed. Returns the
-    fresh task row.
+    logged with the old/new status; completed_at is re-synced (approve can
+    complete the applicable set, return reopens it). Returns the fresh task
+    row.
     """
     action_key = str(action or "").strip().lower()
     if action_key not in TASK_TRANSITIONS:
@@ -1382,9 +1382,11 @@ def transition_task(session, task_id, action, changed_by="Web User", expected_re
                        _TRANSITION_EVENTS[action_key], old_status, new_status, changed_by,
                        f"Status moved from {old_status} to {new_status}.")
 
-        refresh_project_state(session, task["project_id"])
-        db.execute(session, "UPDATE projects SET revision = revision + 1 WHERE project_id = :project_id",
-                   {"project_id": task["project_id"]})
+        # Approve may have completed the applicable set; return reopens it.
+        _sync_completed_at(session, task["project_id"])
+        db.execute(session,
+                   "UPDATE projects SET last_updated = :now, revision = revision + 1 WHERE project_id = :project_id",
+                   {"now": now, "project_id": task["project_id"]})
         result = get_task(session, task_id) or {}
     return result
 
@@ -1470,112 +1472,8 @@ def recalculate_presence_cos(session, project_id, changed_by="System"):
 
 
 # ---------------------------------------------------------------------------
-# Project state refresh + history + location
+# History
 # ---------------------------------------------------------------------------
-
-def refresh_project_state(session, project_id):
-    """Recompute a project's current stage/task/owner and overall status.
-
-    Uses reconcile_project_flow to find the active task; when none remain in the
-    applicable pipeline stages the project is marked Completed and anchored on
-    the final (highest-sequence) task of its own pipeline -- "Approval to Stake"
-    for a completed prospect, "PDA" for a completed BP well.
-
-    ``completed_at`` bookkeeping (schema v16): stamped with the current UTC time
-    exactly when overall_status TRANSITIONS to 'Completed'; cleared (NULL) when
-    a completed project transitions back to In Progress; untouched otherwise.
-    No commit -- runs within the caller's transaction.
-    """
-    active = reconcile_project_flow(session, project_id)
-    # The completed_at fragments are fixed strings chosen by the transition
-    # check -- never user input.
-    clear_completed_sql = ", completed_at = NULL"
-    stamp_completed_sql = ", completed_at = :completed_at"
-
-    if active:
-        new_stage = active["stage_group"]
-        new_task = active["task_name"]
-        new_owner = active["assigned_to"]
-        overall_status = "In Progress"
-        project = get_project(session, project_id)
-        was_completed = (project or {}).get("overall_status") == "Completed"
-        current_stage_started_at = project["current_stage_started_at"]
-        if project["current_stage"] != new_stage:
-            current_stage_started_at = today_str()
-        db.execute(session, f"""
-            UPDATE projects
-            SET current_stage = :stage, current_task = :task, current_owner = :owner, overall_status = :overall_status,
-                current_stage_started_at = :stage_started_at, last_updated = :now
-                {clear_completed_sql if was_completed else ''}
-            WHERE project_id = :project_id
-        """, {"stage": new_stage, "task": new_task, "owner": new_owner,
-              "overall_status": overall_status, "stage_started_at": current_stage_started_at,
-              "now": utc_now_str(), "project_id": project_id})
-    else:
-        project = get_project(session, project_id) or {}
-        was_completed = project.get("overall_status") == "Completed"
-        stages = applicable_stages(project.get("pipeline_type"))
-        incomplete = db.fetch_one(session, """
-            SELECT COUNT(*) AS c FROM project_tasks
-            WHERE project_id = :project_id AND is_active = 1 AND stage_group IN :stages
-              AND status != 'Approved'
-        """, {"project_id": project_id, "stages": stages})["c"]
-        overall_status = "Completed" if incomplete == 0 else "In Progress"
-        if overall_status == "Completed":
-            newly_completed = not was_completed
-            final_done = db.fetch_one(session, """
-                SELECT task_name, stage_group
-                FROM project_tasks
-                WHERE project_id = :project_id AND is_active = 1 AND stage_group IN :stages
-                ORDER BY sequence_no DESC
-                LIMIT 1
-            """, {"project_id": project_id, "stages": stages})
-            # Fallback anchor when no active rows survive: derive from the
-            # pipeline templates rather than hardcoding names. The last template
-            # whose stage belongs to this pipeline is the true final step
-            # ("Approval to Stake"/"Pre-Well Delivery" for prospect, "PDA"/
-            # "Post-Testing" for bp). Deriving keeps this correct if a later
-            # workstream removes/renumbers a step.
-            fallback = next((t for t in reversed(PIPELINE_TEMPLATES) if t[2] in stages), None)
-            final_task_name = final_done["task_name"] if final_done else (fallback[1] if fallback else None)
-            final_stage = final_done["stage_group"] if final_done else (fallback[2] if fallback else stages[-1])
-            params = {"stage": final_stage, "task": final_task_name, "overall_status": overall_status,
-                      "today": today_str(), "now": utc_now_str(), "project_id": project_id}
-            if newly_completed:
-                params["completed_at"] = utc_now_str()
-            db.execute(session, f"""
-                UPDATE projects
-                SET current_stage = :stage, current_task = :task, current_owner = NULL,
-                    overall_status = :overall_status, current_stage_started_at = :today, last_updated = :now
-                    {stamp_completed_sql if newly_completed else ''}
-                WHERE project_id = :project_id
-            """, params)
-        else:
-            earliest_open = db.fetch_one(session, """
-                SELECT stage_group, task_name, assigned_to
-                FROM project_tasks
-                WHERE project_id = :project_id AND is_active = 1 AND stage_group IN :stages
-                  AND status != 'Approved'
-                ORDER BY sequence_no
-                LIMIT 1
-            """, {"project_id": project_id, "stages": stages})
-            if earliest_open:
-                db.execute(session, f"""
-                    UPDATE projects
-                    SET current_stage = :stage, current_task = :task, current_owner = :owner,
-                        overall_status = :overall_status, last_updated = :now
-                        {clear_completed_sql if was_completed else ''}
-                    WHERE project_id = :project_id
-                """, {"stage": earliest_open['stage_group'], "task": earliest_open['task_name'],
-                      "owner": earliest_open['assigned_to'], "overall_status": overall_status,
-                      "now": utc_now_str(), "project_id": project_id})
-            else:
-                db.execute(session, f"""
-                    UPDATE projects SET overall_status = :overall_status, last_updated = :now
-                        {clear_completed_sql if was_completed else ''}
-                    WHERE project_id = :project_id
-                """, {"overall_status": overall_status, "now": utc_now_str(), "project_id": project_id})
-
 
 def log_task_event(session, task_id, project_id, task_name, action_type, old_status, new_status, changed_by, comment):
     """Append one row to the task_history audit trail (no commit)."""

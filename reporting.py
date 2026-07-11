@@ -29,12 +29,13 @@ from helpers import to_float_or_none
 
 
 def dashboard_metrics(session):
-    """Return (metrics, stage_counts, owner_workload) for the dashboard header."""
-    rows = db.fetch_all(session, """
-        SELECT overall_status, current_stage, current_owner, target_date, current_stage_started_at
-        FROM projects
-        WHERE COALESCE(archived, 0) = 0
-    """)
+    """Return (metrics, stage_counts, owner_workload) for the dashboard header.
+
+    Stage/owner/status come from workflow.get_projects: the board pointers are
+    derived from project_tasks at read time (never stored), so the dashboard
+    always agrees with the board.
+    """
+    rows = workflow.get_projects(session)
     metrics = {
         "Completed Wells": sum(1 for row in rows if row["overall_status"] == "Completed"),
         # v17 lifecycle: 'Ready' is the awaiting-approval state (formerly the
@@ -75,12 +76,13 @@ def monthly_progress_metrics(session, limit=12):
             GROUP BY substr(changed_at, 1, 7)
         ), completed AS (
             -- Bucketed by completed_at (stamped once at the completion
-            -- transition), so later edits to a completed well cannot move it
-            -- between months.
-            SELECT substr(COALESCE(completed_at, ''), 1, 7) AS month, COUNT(*) AS completed_wells
+            -- transition; _sync_completed_at keeps it in lockstep with the
+            -- derived completion state), so later edits to a completed well
+            -- cannot move it between months.
+            SELECT substr(completed_at, 1, 7) AS month, COUNT(*) AS completed_wells
             FROM projects
-            WHERE overall_status = 'Completed'
-            GROUP BY substr(COALESCE(completed_at, ''), 1, 7)
+            WHERE completed_at IS NOT NULL AND completed_at != ''
+            GROUP BY substr(completed_at, 1, 7)
         )
         SELECT activity.month, activity.leads_created, activity.wells_added_to_bp,
                activity.components_completed, COALESCE(completed.completed_wells, 0) AS completed_wells

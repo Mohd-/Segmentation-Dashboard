@@ -8,8 +8,9 @@ What does NOT belong here:
 - The metric calculations themselves (reporting.py / workflow.py) -- this module
   only lays them out.
 
-pandas reads the raw tables straight off the SQLAlchemy connection; the derived
-metrics come from the reporting/workflow layers.
+pandas reads the task register straight off the SQLAlchemy connection; the
+project rows and derived metrics come from the workflow/reporting layers (board
+pointers are derived, not stored).
 """
 from __future__ import annotations
 
@@ -42,7 +43,12 @@ def export_to_excel(session, filepath):
         raise RuntimeError("openpyxl styling tools are not available in this environment.")
 
     connection = session.connection()
-    projects_df = pd.read_sql_query("SELECT * FROM projects", connection)
+    # Board pointers (current stage/task/owner, overall status, stage started)
+    # are derived, not stored -- go through workflow.get_projects so the export
+    # carries the same derived values as the board. Archived projects are
+    # excluded, matching every other surface of the app.
+    projects = workflow.get_projects(session)
+    projects_df = pd.DataFrame(projects)
     tasks_df = pd.read_sql_query("SELECT * FROM project_tasks", connection)
 
     if not projects_df.empty:
@@ -113,7 +119,6 @@ def export_to_excel(session, filepath):
             "progress_index": "Progress Index",
         })
 
-    projects = workflow.get_projects(session)
     _, stage_counts, owner_workload = reporting.dashboard_metrics(session)
     monthly_all = reporting.monthly_progress_metrics(session, limit=120)
     summary_rows = [
