@@ -12,11 +12,11 @@ of what belongs in it.
   are functions (`db_path()`, `database_url()`, `rf_model_path()`). Never put
   SQL, Flask objects or business logic here.
 
-- **models.py** — SQLAlchemy `declarative_base` table definitions mirroring the
-  production schema exactly; doubles as schema documentation. Applied via
-  `create_all` on every bootstrap, which also creates newly added tables
-  (e.g. `users`, `project_formations`) on existing databases; column-level
-  changes still need a migration. No queries, no business logic.
+- **models.py** — SQLAlchemy `declarative_base` table definitions: THE single
+  authoritative schema (there is no separate production schema to mirror).
+  Applied via `create_all` on every bootstrap. Pre-deployment, a schema change
+  is an edit here plus deleting the dev `.db` file — no migration. No queries,
+  no business logic.
 
 - **db.py** — engine creation (SQLite pragmas, WAL), the session factory,
   Flask per-request session (`get_session` bound to `flask.g`), the one-time
@@ -24,14 +24,26 @@ of what belongs in it.
   `fetch_one` / `fetch_all` plus `write_transaction` / `begin_write`. No
   business logic or report SQL.
 
-- **migrations.py** — the numbered migration framework: fresh-DB creation,
-  legacy column ensures, and the `MIGRATIONS` step list. Runtime domain logic
-  stays out (though a step may call domain helpers to reproduce behavior).
+- **migrations.py** — schema bootstrap, pre-deployment flavor: `create_all`,
+  seed base data (users + the commitment row), stamp `schema_version` 1, and
+  refuse (clear `RuntimeError`) any database stamped with a newer version. The
+  numbered-migration skeleton (`MIGRATIONS = [(version, fn), ...]`) is empty
+  and resumes at first production deployment.
 
-- **workflow.py** — the domain: workflow constants (statuses, stages,
-  `PIPELINE_TEMPLATES`), and every project/task lifecycle operation (create,
-  save, promote/demote, snapshots, presence-CoS recalculation, history).
-  Every function takes a `session` first; no Flask imports.
+- **workflow/** — the domain, a package (`import workflow` exposes the full
+  public API via `__init__.py` re-exports). Every function takes a `session`
+  first; no Flask imports. Modules, bottom of the dependency graph first:
+  - `constants.py` — statuses, stages, `applicable_stages()`,
+    `PIPELINE_TEMPLATES` (the single source of truth for the 31-step
+    workflow), formation vocabulary, `StaleRevisionError`.
+  - `history.py` — the append-only `task_history` writer (`log_task_event`).
+  - `users.py` — login identity lookups.
+  - `projects.py` — project CRUD + the derived board state
+    (`_annotate_derived_state`).
+  - `lifecycle.py` — task reads/saves, assignment, submit/approve/return.
+  - `promotion.py` — lead-summary snapshots, BP promotion/demotion, flags.
+  - `formations.py` — well-level formation data.
+  - `summary.py` — the computed overview + Total Chance of Success reads.
 
 - **cos.py** — pure Chance-of-Success math (Reservoir/Seal/Presence CoS,
   `segment_class`) and the cached RF-model loader. No SQLAlchemy or Flask
@@ -78,43 +90,80 @@ else → generic 500 + server-side log.
 
 ## The data model, in domain terms
 
-- **projects** — one row per lead/well. `pipeline_type` is `'prospect'`
-  (maturing lead, works Prospect stages) or `'bp'` (promoted well, works
-  Business Plan Execution stages). `business_plan_enabled` only controls
-  Portfolio reporting inclusion. `revision` powers optimistic locking;
-  `completed_at` is stamped when the project completes.
-- **task_templates / project_tasks** — the canonical 31-component workflow and
-  its per-project instances ("components" in the UI). Retired components stay
-  as `is_active = 0` rows so their inputs and history survive.
+- **projects** — one row per lead/well: identity, dates, flags
+  (`business_plan_enabled` controls Portfolio reporting inclusion,
+  `active_well_enabled`, `archived`), coordinates (`lead_x`/`lead_y`, REAL)
+  and `pipeline_type` — `'prospect'` (maturing lead, works Prospect stages) or
+  `'bp'` (promoted well, works Business Plan Execution stages). `revision`
+  powers optimistic locking. The board pointers (current stage/task/owner,
+  overall status) are NOT stored — see "Derive, don't store" below; the one
+  stored completion fact is `completed_at`, a historical timestamp kept in
+  sync by `_sync_completed_at` (`workflow/projects.py`) from every write that
+  can change completeness (save, transition, promotion/demotion).
+- **project_tasks** — the per-project instances of the 31-step workflow
+  ("components" in the UI), materialized straight from
+  `workflow.PIPELINE_TEMPLATES` at creation (there is no templates table).
+  `UNIQUE(project_id, task_name)`; retired components would stay as
+  `is_active = 0` rows so their inputs and history survive.
 - **task_dynamic_fields** — key/value inputs attached to a task (the component
   form data). This EAV table is why most new inputs need no schema change.
 - **task_history** — append-only audit trail of every change (`changed_by`,
   action type, old/new status, comment).
-- **project_overview** — one denormalized row per project mirroring selected
-  dynamic fields (via `DYNAMIC_FIELD_OVERVIEW_MAP`) for fast reporting.
 - **lead_summary_snapshots** — a frozen JSON copy of all Prospect-stage inputs,
   captured at the moment a lead is promoted to BP Execution (refreshed on
-  re-promotion, kept on demotion).
+  re-promotion, kept on demotion). Deliberately stored: it is a historical
+  record of what the lead looked like at promotion, not a cache.
 - **users** — login identities and roles (`supervisor`/`staff`/`employee`),
   seeded idempotently from `config.SEED_USERS`; login only accepts active rows.
 - **project_formations** — well-level formation interpretation values
   (formation × phase), edited via the mini-sheet on the logs components.
+  Measurement columns are REAL; the API coerces input to float and rejects
+  junk with a 400 naming the field.
 - **business_plan_commitment / app_settings** — single-row commitment totals;
   key/value settings including `schema_version`.
 
-## Migrations
+Task statuses are exactly four (`Not Assigned` / `In Progress` / `Ready` /
+`Approved`). There is no stored "Not Applicable": applicability is a pure
+function of the pipeline — `applicable_stages(pipeline_type)` scopes every
+completion/board/cascade query to the operating pipeline's stages.
 
-`app_settings.schema_version` records the database's shape. At startup,
-`migrations.run` creates missing tables (`create_all`), applies the legacy
-column ensures, seeds templates on an empty DB, then applies every
-`MIGRATIONS = [(version, fn), ...]` step whose version is greater than the
-stored one — each step in its own write-locked transaction, bumping the version
-as it commits. A brand-new database jumps straight to `LATEST_SCHEMA_VERSION`
-without replaying history. Version 15 is the adoption baseline: any older
-database runs `_consolidate_to_v15`, a faithful port of the legacy upgrade
-(renames, template upserts, task backfills, status normalization).
-`_upgrade_to_v16` is the model for new steps. Never edit a shipped step —
-append a new one.
+## Derive, don't store
+
+The design theme of the schema: anything that is a pure function of other
+stored data is computed at read time, never persisted, so it can never go
+stale or need repair machinery.
+
+- **The workflow definition** lives in code (`PIPELINE_TEMPLATES` in
+  `workflow/constants.py`), not in a table.
+- **The board pointers** (current stage/task/owner, overall status,
+  stage-started-at) are derived from the active task rows by
+  `workflow.projects._annotate_derived_state` — one batched query for the
+  whole board.
+- **The project overview** shown in `/detail` is composed from
+  `task_dynamic_fields` at read time via `_OVERVIEW_READ_SOURCES`
+  (`workflow/constants.py`); the Total Chance of Success (`derisking`) is
+  recomputed from the Reservoir/Trap/Seal CoS inputs on every read
+  (`total_cos_from_fields`). There is no `project_overview` table.
+- **Applicability** is `applicable_stages(pipeline_type)`, so BP
+  promotion/demotion is a pure pipeline switch: it rewrites no task rows.
+
+The two legitimate stored copies are **historical facts**, not caches:
+`lead_summary_snapshots` (what the lead's inputs were at the moment of
+promotion) and `projects.completed_at` (when the applicable set first became
+fully approved — stamped/cleared by `_sync_completed_at` in the write paths).
+
+## Schema bootstrap (pre-deployment)
+
+Nothing is deployed yet, so the database is throwaway and `models.py` IS the
+schema. At startup `migrations.run` refuses a database stamped with a newer
+`schema_version` than the code knows (clear `RuntimeError`: delete the `.db`
+and its `-shm`/`-wal` sidecars, restart), then runs `create_all`, seeds base
+data (users from `config.SEED_USERS`, the commitment row) and stamps
+`schema_version` 1. A schema change is: edit `models.py`, delete the dev
+`.db`, restart. The numbered-migration framework (append-only
+`MIGRATIONS = [(version, fn), ...]` steps, never editing a shipped one)
+resumes at first production deployment, when field data must be carried
+forward instead of discarded.
 
 ## Design decisions
 
@@ -127,5 +176,5 @@ append a new one.
 - **An EAV table (`task_dynamic_fields`) for component inputs.** Components
   gain and lose technical input fields frequently; storing them as key/value
   rows means adding a field is a front-end-only change — no migration, no
-  model edit. The few fields reporting needs are mirrored to `project_overview`
-  columns via `DYNAMIC_FIELD_OVERVIEW_MAP`.
+  model edit. The few values reporting needs are composed from these rows at
+  read time via `_OVERVIEW_READ_SOURCES` (see "Derive, don't store").

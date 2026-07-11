@@ -124,16 +124,17 @@ A brand-new field with none of `readonly`/`showIf`/`options` set is the common c
 `key`, `label`, `type`. **You do not need to touch any other file** for a plain new field:
 `renderFields()` renders it, `getFields()` collects it on save, and the backend receives it
 through the existing generic `fields` payload (the backend's `task_dynamic_fields` table
-accepts arbitrary keys for a task — see `workflow.py` if unsure, since the backend is a
-separate system this guide doesn't cover).
+accepts arbitrary keys for a task — see the `workflow/` package if unsure, since the backend
+is a separate system this guide doesn't cover).
 
 Note: the right-hand summary panel (`views/detail.js`'s `curatedOverviewMarkup()`) does **not**
 auto-pick-up new fields — it's a hand-curated list, not schema-driven. See the next paragraph.
 
-To add a field that should also show up in the auto-computed "Presence CoS" style output or in
-`curatedOverviewMarkup()` (the always-visible top summary), that's backend-computed or
-hand-curated respectively — see `views/detail.js`'s `curatedOverviewMarkup()` for the current
-curated list, and add a line there following the existing `add('Label', sourceVal(...), 'Component Name')` pattern.
+To add a field that should also show up in the backend-computed overview (the "Total CoS"
+style values the detail payload returns under `overview`) or in `curatedOverviewMarkup()`
+(the always-visible top summary), that's backend-composed or hand-curated respectively — see
+`views/detail.js`'s `curatedOverviewMarkup()` for the current curated list, and add a line
+there following the existing `add('Label', sourceVal(...), 'Component Name')` pattern.
 
 ## 5. Adding a whole new tab
 
@@ -201,7 +202,7 @@ The front end talks to the backend purely through the endpoints already defined 
 `static/js/api.js` / `main.py`. If a change needs new data the backend doesn't currently
 store or expose (a new column, a new endpoint, a new computed value), that's a backend change
 first — this guide, and the front-end code it describes, is a separate layer from
-`main.py`/`workflow.py` and doesn't cover editing those.
+`main.py` and the `workflow/` package and doesn't cover editing those.
 
 ## 10. Quick sanity check after any change
 

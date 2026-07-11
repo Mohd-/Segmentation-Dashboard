@@ -113,12 +113,12 @@ queries use dialect-portable named bind parameters, **but** a handful of
 SQLite-only constructs are flagged in the code and must be addressed first:
 
 ```bash
-grep -rn "PG:" *.py
+grep -rn "PG:" --include="*.py" .
 ```
 
-(covers `COLLATE NOCASE`, `substr()` month bucketing, `lastrowid` vs
-`RETURNING`, `INSERT OR IGNORE`, `PRAGMA table_info`, and SQLite's relaxed
-`GROUP BY`.)
+(covers `COLLATE NOCASE`, `substr()` month bucketing, and `lastrowid` vs
+`RETURNING`; the `INSERT OR IGNORE` seeding in `migrations.py` is also
+SQLite-flavored.)
 
 ## Deployment
 
@@ -209,3 +209,22 @@ v16 also ships a full backend refactor:
 
 - Formation interpretation values (SARH/QASM/QWRH, quicklook and final phases) move off scattered step fields into a well-level `project_formations` table, edited through a mini-sheet on the logs steps. Legacy SARH values are backfilled once. New endpoints: `GET`/`PUT /api/projects/<id>/formations`.
 - The Portfolio tab becomes an 8-column mature-prospect analysis table: Well Name, Gas Field, Seismic Block (mapped via `SEISMIC_BLOCK_NAMES` in `config.py`), Classification, BP Year, Fluid, Mean OGIP, Total CoS.
+
+### The pre-deployment architecture reset (current)
+
+Because nothing was ever deployed, the legacy-data machinery the notes above
+describe was deleted wholesale rather than carried forward:
+
+- Schema migrations are gone; `models.py` is the single source of truth and a
+  schema change means regenerating the dev database (see Quickstart). The
+  numbered-migration framework resumes at first production deployment.
+- The `task_templates` and `project_overview` tables are gone: the workflow is
+  defined in code (`PIPELINE_TEMPLATES`), and the overview shown in the detail
+  panel — including Total CoS — is composed from step inputs at read time.
+- The board pointers (current stage/task/owner, overall status) are derived
+  from the task rows at read time instead of being stored, and the stored
+  "Not Applicable" status is gone — applicability follows the pipeline.
+- Dead columns were dropped; coordinates and formation measurements became
+  real numeric columns with input validation.
+
+See `ARCHITECTURE.md` ("Derive, don't store") for the design rationale.
