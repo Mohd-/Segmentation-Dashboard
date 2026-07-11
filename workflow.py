@@ -126,9 +126,9 @@ PIPELINE_TEMPLATES = [
     (6, "Trap CoS", "Risking"),
     (7, "Seal CoS", "Risking"),
     # v18: "Presence CoS Evaluation" (formerly step 8) was removed as a visible
-    # step -- its value is derived (Reservoir x Trap x Seal), computed by
-    # recalculate_presence_cos and surfaced as project_overview.derisking.
-    # The remaining steps renumber to a clean 1-31.
+    # step -- its value is derived (Reservoir x Trap x Seal), computed at read
+    # time (calculate_total_cos) and surfaced as ``derisking`` in the /detail
+    # payload's computed overview. The remaining steps renumber to a clean 1-31.
     (8, "Prospect Evaluation Presentation", "Segmentation"),
     (9, "Well Creation", "Pre-Well Delivery"),
     (10, "Pre-Drilling Resource Assessment", "Pre-Well Delivery"),
@@ -154,30 +154,6 @@ PIPELINE_TEMPLATES = [
     (30, "Resource Assessment Update", "Post-Testing"),
     (31, "PDA", "Post-Testing"),
 ]
-
-DYNAMIC_FIELD_OVERVIEW_MAP = {
-    "lead_piip_gas_mean": "lead_ogip",
-    "pre_drill_piip_gas_mean": "pre_drill_estimation",
-    "post_drill_piip_gas_mean": "post_drill_estimation",
-    "resource_update_gas_mean": "post_drill_estimation",
-    # v18: no "presence_cos" entry -- recalculate_presence_cos writes
-    # project_overview.derisking directly (the Presence step was removed).
-    "quicklook_pay_thickness_ft": "quick_look_pay",
-    "quicklook_average_porosity_pct": "quick_look_porosity",
-    "quicklook_average_swt_pct": "quick_look_swt",
-    "flowback_gas_rate_mmscfd": "flowback_results",
-    # WS7: the Classification entered in the GHEER step feeds the Portfolio.
-    "gheer_classification": "classification",
-}
-
-_OVERVIEW_ALLOWED_FIELDS = {
-    "derisking", "ogip", "lead_ogip", "preliminary_resource_estimation", "pre_drill_estimation",
-    "post_drill_estimation", "reservoir_pressure", "reservoir_gradient",
-    "flowback_results", "pay", "porosity", "swt",
-    "quick_look_pay", "quick_look_porosity", "quick_look_swt",
-    "classification",
-}
-
 
 # ---------------------------------------------------------------------------
 # Users (login identities + roles; seeded from config.SEED_USERS)
@@ -306,9 +282,6 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
             if sequence_no == first_sequence:
                 first_task_id = task_result.lastrowid  # PG: use RETURNING when on Postgres
 
-        db.execute(session,
-                   "INSERT OR IGNORE INTO project_overview (project_id, last_updated) VALUES (:project_id, :now)",
-                   {"project_id": project_id, "now": now})
         if first_task_id is not None:
             action = "Well Added to BP" if pipeline_type == "bp" else "Lead Created"
             comment = f"{'Well added to Business Plan Execution' if pipeline_type == 'bp' else 'Lead created'}: {project_name}"
@@ -664,32 +637,62 @@ def delete_project(session, project_id, changed_by="Admin"):
 
 
 # ---------------------------------------------------------------------------
-# Project overview
+# Project overview (computed at read -- there is no project_overview table)
 # ---------------------------------------------------------------------------
 
-def update_project_overview_fields(session, project_id, fields):
-    """Upsert allowed overview fields for a project (no commit -- caller commits)."""
-    clean = {k: (v.strip() if isinstance(v, str) else v) for k, v in (fields or {}).items() if k in _OVERVIEW_ALLOWED_FIELDS}
-    if not clean:
-        return
-    db.execute(session,
-               "INSERT OR IGNORE INTO project_overview (project_id, last_updated) VALUES (:project_id, :now)",
-               {"project_id": project_id, "now": utc_now_str()})
-    # Column names come from the _OVERVIEW_ALLOWED_FIELDS allowlist; values are binds.
-    assignments = ", ".join([f"{k} = :{k}" for k in clean]) + ", last_updated = :now"
-    db.execute(session, f"UPDATE project_overview SET {assignments} WHERE project_id = :project_id",
-               dict(clean, now=utc_now_str(), project_id=project_id))
+# READ mapping: overview_key -> ordered [(task_name, field_key), ...] sources;
+# the first non-blank source wins. This is a display composition, not a stored
+# mirror: a step's field feeds the overview the moment it is read, so a missed
+# entry here shows a BLANK in the overview -- it can never show silently stale
+# data. Multi-source keys follow the frontend's latest-assessment-first
+# precedence (LATEST_PIIP_SOURCES in static/js/views/detail-form.js).
+_OVERVIEW_READ_SOURCES = {
+    "lead_ogip": [("Lead Resource Assessment", "lead_piip_gas_mean")],
+    "pre_drill_estimation": [("Pre-Drilling Resource Assessment", "pre_drill_piip_gas_mean")],
+    "post_drill_estimation": [("Resource Assessment Update", "resource_update_gas_mean"),
+                              ("Post-Drilling Resource Assessment", "post_drill_piip_gas_mean")],
+    "quick_look_pay": [("Quicklook Logs Interpretation", "quicklook_pay_thickness_ft")],
+    "quick_look_porosity": [("Quicklook Logs Interpretation", "quicklook_average_porosity_pct")],
+    "quick_look_swt": [("Quicklook Logs Interpretation", "quicklook_average_swt_pct")],
+    "flowback_results": [("Flowback Results", "flowback_gas_rate_mmscfd")],
+    # WS7: the Classification entered in the GHEER step feeds the Portfolio.
+    "classification": [("GHEER", "gheer_classification")],
+}
+
+# Overview keys with no feeding step in the current 31-step pipeline; kept as
+# blanks so the /detail ``overview`` shape stays stable for the frontend.
+_OVERVIEW_LEGACY_KEYS = [
+    "ogip", "preliminary_resource_estimation", "reservoir_pressure",
+    "reservoir_gradient", "pay", "porosity", "swt",
+]
 
 
 def get_project_overview(session, project_id: int):
-    """Return the project_overview row as a dict (pure read; {} if missing).
+    """Compose the per-project overview dict from task inputs, at read time.
 
-    Every project is guaranteed an overview row since the v16 backfill, so the
-    empty-dict fallback only guards freshly-deleted edge cases.
+    Pure read: every value comes straight from task_dynamic_fields (one batched
+    query via get_project_dynamic_field_map) through _OVERVIEW_READ_SOURCES,
+    plus ``derisking`` = the computed Total Chance of Success
+    (calculate_total_cos). Nothing here is stored, so the overview can never
+    drift from the step inputs it summarizes.
     """
-    return db.fetch_one(session,
-                        "SELECT * FROM project_overview WHERE project_id = :project_id",
-                        {"project_id": project_id}) or {}
+    field_map = get_project_dynamic_field_map(session, project_id)
+
+    def first_filled(sources):
+        for task_name, field_key in sources:
+            value = str((field_map.get(task_name) or {}).get(field_key) or "").strip()
+            if value:
+                return value
+        return ""
+
+    overview = {key: first_filled(sources) for key, sources in _OVERVIEW_READ_SOURCES.items()}
+    overview.update({key: "" for key in _OVERVIEW_LEGACY_KEYS})
+    overview["derisking"] = total_cos_from_fields(
+        (field_map.get("Reservoir CoS") or {}).get("reservoir_cos_rows"),
+        first_filled([("Trap CoS", "trap_cos_pct")]),
+        first_filled([("Seal CoS", "seal_cos_pct")]),
+    )
+    return overview
 
 
 def get_project_dynamic_field_map(session, project_id: int):
@@ -1006,15 +1009,16 @@ def get_task_dynamic_fields(session, task_id):
 
 
 def _apply_dynamic_fields(session, task, fields, changed_by, now):
-    """Upsert dynamic fields, mirror mapped fields to the overview, and log a note.
+    """Upsert dynamic fields and log a history note for the changed keys.
 
     Shared by :func:`save_task` and :func:`save_task_dynamic_fields` so the
-    field-upsert + overview-mirror + history-note logic exists in exactly one
-    place. Does not commit or touch task status/revision.
+    field-upsert + history-note logic exists in exactly one place. Does not
+    commit or touch task status/revision. There is no overview mirror: the
+    /detail overview is composed from these fields at read time
+    (get_project_overview).
     """
     task_id = task["task_id"]
     changed_keys = []
-    overview_updates = {}
     for key, value in fields.items():
         val = "" if value is None else str(value).strip()
         existing = db.fetch_one(session,
@@ -1029,10 +1033,6 @@ def _apply_dynamic_fields(session, task, fields, changed_by, now):
             ON CONFLICT(task_id, field_key) DO UPDATE
             SET field_value = excluded.field_value, updated_at = excluded.updated_at
         """, {"task_id": task_id, "field_key": key, "field_value": val, "now": now})
-        if key in DYNAMIC_FIELD_OVERVIEW_MAP:
-            overview_updates[DYNAMIC_FIELD_OVERVIEW_MAP[key]] = val
-    if overview_updates:
-        update_project_overview_fields(session, task["project_id"], overview_updates)
     if changed_keys:
         readable = [key.replace("_", " ") for key in changed_keys]
         listed = ", ".join(readable[:8])
@@ -1045,8 +1045,9 @@ def _apply_dynamic_fields(session, task, fields, changed_by, now):
 def save_task_dynamic_fields(session, task_id, fields, changed_by="Web User"):
     """Save a task's dynamic fields only (no status change, no revision check).
 
-    Seal CoS is recomputed on save; Reservoir/Trap/Seal CoS saves trigger the
-    automatic Presence CoS recalculation.
+    Seal CoS is recomputed on save. The Total Chance of Success needs no
+    recalculation trigger: it is computed at read time (calculate_total_cos)
+    from the stored Reservoir/Trap/Seal CoS inputs.
     """
     task = get_task(session, task_id)
     if not task:
@@ -1060,8 +1061,6 @@ def save_task_dynamic_fields(session, task_id, fields, changed_by="Web User"):
         _apply_dynamic_fields(session, task, fields, changed_by, now)
         db.execute(session, "UPDATE project_tasks SET last_updated = :now WHERE task_id = :task_id",
                    {"now": now, "task_id": task_id})
-        if task.get("task_name") in {"Reservoir CoS", "Trap CoS", "Seal CoS"}:
-            recalculate_presence_cos(session, task["project_id"], changed_by)
 
 
 def save_task(session, task_id, payload, changed_by="Web User"):
@@ -1173,9 +1172,6 @@ def save_task(session, task_id, payload, changed_by="Web User"):
                 SET business_plan_enabled = 1, business_plan_year = :bp_year, last_updated = :now, revision = revision + 1
                 WHERE project_id = :project_id
             """, {"bp_year": year_val, "now": now, "project_id": task["project_id"]})
-
-        if task.get("task_name") in {"Reservoir CoS", "Trap CoS", "Seal CoS"}:
-            recalculate_presence_cos(session, task["project_id"], changed_by)
 
         if status != old_status or assigned_to != old_assigned_to or comments != old_comments or priority != old_priority:
             log_task_event(session, task_id, task["project_id"], task["task_name"], "Component Update",
@@ -1392,7 +1388,7 @@ def transition_task(session, task_id, action, changed_by="Web User", expected_re
 
 
 # ---------------------------------------------------------------------------
-# Presence CoS recalculation + CoS field lookups
+# Total Chance of Success (read-time computation) + CoS field lookups
 # ---------------------------------------------------------------------------
 
 def _task_field_value(session, project_id, task_name, field_key):
@@ -1431,44 +1427,31 @@ def last_reservoir_cos_row_value(raw_rows_json, key):
     return ""
 
 
-def _final_reservoir_cos_value(session, project_id):
-    """Return the last completed Reservoir CoS row value (the final Reservoir CoS)."""
-    raw = _task_field_value(session, project_id, "Reservoir CoS", "reservoir_cos_rows")
-    return last_reservoir_cos_row_value(raw, "reservoir_cos_pct")
+def total_cos_from_fields(reservoir_rows_json, trap, seal):
+    """Pure Total-CoS formula over already-fetched inputs; '' if any is missing.
 
-
-def recalculate_presence_cos(session, project_id, changed_by="System"):
-    """Recompute the automatic Presence CoS (Total Chance of Success).
-
-    The final Reservoir CoS is the last completed row in Reservoir CoS;
-    Presence CoS always equals Reservoir x Trap x Seal. Since v18 the value has
-    no workflow step of its own: it is written ONLY to
-    ``project_overview.derisking`` (surfaced in the detail payload's
-    ``overview``), never to task dynamic fields. On change, the history event
-    is logged against the project's Seal CoS task -- the final input of the
-    formula. No commit here -- the caller's transaction owns the commit.
+    Total Chance of Success (the v18 replacement for the removed Presence CoS
+    step) = final Reservoir CoS (last non-blank row of reservoir_cos_rows) x
+    Trap CoS x Seal CoS, as a whole-percent string. Shared by
+    get_project_overview (per project) and reporting's batched BP-well reads so
+    the formula exists in exactly one place.
     """
-    reservoir = _final_reservoir_cos_value(session, project_id)
+    reservoir = last_reservoir_cos_row_value(reservoir_rows_json, "reservoir_cos_pct")
+    values = cos.calculate_presence_cos(reservoir, str(trap or "").strip(), str(seal or "").strip())
+    return str(values.get("presence_cos", "") or "")
+
+
+def calculate_total_cos(session, project_id):
+    """Compute a project's Total Chance of Success at read time.
+
+    Pure READ -- nothing is stored and no history is written: the value is
+    recomposed from the Reservoir/Trap/Seal CoS task inputs on every call, so
+    it can never go stale.
+    """
+    raw_rows = _task_field_value(session, project_id, "Reservoir CoS", "reservoir_cos_rows")
     trap = _task_field_value(session, project_id, "Trap CoS", "trap_cos_pct")
     seal = _task_field_value(session, project_id, "Seal CoS", "seal_cos_pct")
-    values = cos.calculate_presence_cos(reservoir, trap, seal)
-    new_value = str(values.get("presence_cos", "") or "")
-    previous = db.fetch_one(session,
-                            "SELECT derisking FROM project_overview WHERE project_id = :project_id",
-                            {"project_id": project_id})
-    old_value = "" if not previous or previous["derisking"] is None else str(previous["derisking"])
-    update_project_overview_fields(session, project_id, {"derisking": new_value})
-    if new_value != old_value:
-        seal_task = db.fetch_one(session, """
-            SELECT task_id FROM project_tasks
-            WHERE project_id = :project_id AND task_name = 'Seal CoS' AND is_active = 1
-            ORDER BY task_id DESC LIMIT 1
-        """, {"project_id": project_id})
-        if seal_task:
-            note = "Total Chance of Success automatically recalculated from final Reservoir CoS x Trap CoS x Seal CoS."
-            log_task_event(session, seal_task["task_id"], project_id, "Seal CoS",
-                           "Presence CoS Calculated", None, None, changed_by, note)
-    return values
+    return total_cos_from_fields(raw_rows, trap, seal)
 
 
 # ---------------------------------------------------------------------------

@@ -8,7 +8,7 @@ export const Store = {
   task: null,
   allFields: {},
   leadSummary: null,
-  overview: null, // project_overview row from /detail (derived values, e.g. derisking)
+  overview: null, // computed overview dict from /detail (read-time values, e.g. derisking)
   formations: [], // well-level formation rows from /detail (SARH/QASM/QWRH x phase)
   pipeline: 'prospect'
 };

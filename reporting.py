@@ -108,30 +108,6 @@ def monthly_progress_metrics(session, limit=12):
     return list(reversed(monthly))
 
 
-def get_business_plan_rows(session):
-    """Return BP-enabled well rows for the business-plan scorecard."""
-    rows = db.fetch_all(session, """
-        SELECT p.project_id,
-               p.business_plan_year AS year,
-               p.project_name AS well_name,
-               COALESCE(o.pre_drill_estimation, '') AS pre_drill_ogip,
-               COALESCE(o.post_drill_estimation, '') AS post_drill_ogip,
-               COALESCE(o.derisking, '') AS chance_of_success,
-               COALESCE(p.active_well_enabled, 0) AS active_well_enabled
-        FROM projects p
-        LEFT JOIN project_overview o ON o.project_id = p.project_id
-        WHERE COALESCE(p.archived, 0) = 0 AND COALESCE(p.business_plan_enabled, 0) = 1
-        ORDER BY p.business_plan_year, p.project_name COLLATE NOCASE
-    """)  # PG: COLLATE NOCASE
-    result = []
-    for item in rows:
-        # Classification should be blank if required inputs are incomplete.
-        class_ogip = item.get("post_drill_ogip") or item.get("pre_drill_ogip")
-        item["segment_class"] = cos.segment_class(class_ogip, item.get("chance_of_success"))
-        result.append(item)
-    return result
-
-
 def _first_filled(*values) -> str:
     """Return the first non-blank value as a stripped string, else ''."""
     for value in values:
@@ -141,13 +117,25 @@ def _first_filled(*values) -> str:
     return ""
 
 
-def _portfolio_task_fields(session, project_ids):
-    """Batched {project_id: {field_key: value}} for the portfolio's task-level
-    inputs (fluid precedence + Reservoir CoS rows).
+# The task-level inputs the BP-well readers compose from, at read time (there
+# is no stored overview mirror): fluid precedence, Reservoir CoS rows (AR
+# number + final reservoir pct), the Trap/Seal CoS inputs of Total CoS, the
+# mean-PIIP assessments, and the GHEER classification.
+_BP_TASK_FIELD_KEYS = [
+    "final_fluid_type", "quicklook_fluid_type", "reservoir_cos_rows",
+    "trap_cos_pct", "seal_cos_pct",
+    "lead_piip_gas_mean", "pre_drill_piip_gas_mean",
+    "post_drill_piip_gas_mean", "resource_update_gas_mean",
+    "gheer_classification",
+]
 
-    Queried directly from active task rows -- NOT the overview mirror, whose
-    last-write-wins semantics cannot express the final-beats-quicklook
-    precedence. Deterministic on legacy duplicate rows: higher task_id wins.
+
+def _bp_task_fields(session, project_ids):
+    """Batched {project_id: {field_key: value}} of _BP_TASK_FIELD_KEYS.
+
+    Queried directly from active task rows in ONE query for the whole id list;
+    shared by the business-plan scorecard and the Portfolio. Deterministic on
+    legacy duplicate rows: higher task_id wins.
     """
     if not project_ids:
         return {}
@@ -156,25 +144,60 @@ def _portfolio_task_fields(session, project_ids):
         FROM project_tasks pt
         JOIN task_dynamic_fields tdf ON tdf.task_id = pt.task_id
         WHERE pt.project_id IN :project_ids AND pt.is_active = 1
-          AND tdf.field_key IN ('final_fluid_type', 'quicklook_fluid_type', 'reservoir_cos_rows')
+          AND tdf.field_key IN :field_keys
         ORDER BY pt.task_id
-    """, {"project_ids": list(project_ids)})
+    """, {"project_ids": list(project_ids), "field_keys": _BP_TASK_FIELD_KEYS})
     fields: Dict[int, Dict[str, str]] = {}
     for row in rows:
         fields.setdefault(row["project_id"], {})[row["field_key"]] = row["field_value"] or ""
     return fields
 
 
+def get_business_plan_rows(session):
+    """Return BP-enabled well rows for the business-plan scorecard.
+
+    OGIP and chance-of-success columns are composed from the task inputs at
+    read time (one batched _bp_task_fields query). Post-drill OGIP follows the
+    latest-assessment-first precedence: Resource Assessment Update beats
+    Post-Drilling Resource Assessment.
+    """
+    rows = db.fetch_all(session, """
+        SELECT p.project_id,
+               p.business_plan_year AS year,
+               p.project_name AS well_name,
+               COALESCE(p.active_well_enabled, 0) AS active_well_enabled
+        FROM projects p
+        WHERE COALESCE(p.archived, 0) = 0 AND COALESCE(p.business_plan_enabled, 0) = 1
+        ORDER BY p.business_plan_year, p.project_name COLLATE NOCASE
+    """)  # PG: COLLATE NOCASE
+    task_fields = _bp_task_fields(session, [r["project_id"] for r in rows])
+    result = []
+    for item in rows:
+        fields = task_fields.get(item["project_id"], {})
+        item["pre_drill_ogip"] = _first_filled(fields.get("pre_drill_piip_gas_mean"))
+        item["post_drill_ogip"] = _first_filled(fields.get("resource_update_gas_mean"),
+                                                fields.get("post_drill_piip_gas_mean"))
+        item["chance_of_success"] = workflow.total_cos_from_fields(
+            fields.get("reservoir_cos_rows"), fields.get("trap_cos_pct"), fields.get("seal_cos_pct"))
+        # Classification should be blank if required inputs are incomplete.
+        class_ogip = item["post_drill_ogip"] or item["pre_drill_ogip"]
+        item["segment_class"] = cos.segment_class(class_ogip, item["chance_of_success"])
+        result.append(item)
+    return result
+
+
 def get_portfolio_rows(session, year="All", activity="All"):
     """Return the filtered Portfolio analysis rows (BP-enabled wells) + summary.
 
-    Each row carries exactly the 8 user-facing columns (WS7): well name,
-    gas field (project-name prefix before the first hyphen), seismic block
-    (last non-empty Reservoir CoS AR number mapped through
-    config.SEISMIC_BLOCK_NAMES, raw AR fallback), classification (GHEER,
-    mirrored to overview), BP year, fluid (final -> quicklook ->
-    'Not Drilled Yet'), mean OGIP (post-drill -> pre-drill -> lead) and total
-    chance of success (overview.derisking). Filters apply here so the summary
+    Each row carries exactly the 8 user-facing columns (WS7), all composed
+    from the task inputs at read time (one batched _bp_task_fields query):
+    well name, gas field (project-name prefix before the first hyphen),
+    seismic block (last non-empty Reservoir CoS AR number mapped through
+    config.SEISMIC_BLOCK_NAMES, raw AR fallback), classification (the GHEER
+    step's input), BP year, fluid (final -> quicklook -> 'Not Drilled Yet'),
+    mean OGIP (latest assessment first: resource update -> post-drill ->
+    pre-drill -> lead) and total chance of success
+    (workflow.total_cos_from_fields). Filters apply here so the summary
     reflects the displayed rows.
     """
     selected_year = str(year or "All").strip()
@@ -196,18 +219,12 @@ def get_portfolio_rows(session, year="All", activity="All"):
         SELECT p.project_id,
                p.project_name,
                p.business_plan_year AS year,
-               COALESCE(p.active_well_enabled, 0) AS active_well_enabled,
-               COALESCE(o.classification, '') AS classification,
-               COALESCE(o.derisking, '') AS total_cos,
-               COALESCE(o.post_drill_estimation, '') AS post_drill_estimation,
-               COALESCE(o.pre_drill_estimation, '') AS pre_drill_estimation,
-               COALESCE(o.lead_ogip, '') AS lead_ogip
+               COALESCE(p.active_well_enabled, 0) AS active_well_enabled
         FROM projects p
-        LEFT JOIN project_overview o ON o.project_id = p.project_id
         WHERE COALESCE(p.archived, 0) = 0 AND COALESCE(p.business_plan_enabled, 0) = 1
         ORDER BY p.business_plan_year, p.project_name COLLATE NOCASE
     """)  # PG: COLLATE NOCASE
-    task_fields = _portfolio_task_fields(session, [p["project_id"] for p in projects])
+    task_fields = _bp_task_fields(session, [p["project_id"] for p in projects])
 
     filtered = []
     cumulative_ogip = 0.0
@@ -223,19 +240,22 @@ def get_portfolio_rows(session, year="All", activity="All"):
         fields = task_fields.get(item["project_id"], {})
         ar_number = workflow.last_reservoir_cos_row_value(
             fields.get("reservoir_cos_rows"), "seismic_volume_ar_number")
-        mean_ogip = _first_filled(item["post_drill_estimation"],
-                                  item["pre_drill_estimation"], item["lead_ogip"])
+        mean_ogip = _first_filled(fields.get("resource_update_gas_mean"),
+                                  fields.get("post_drill_piip_gas_mean"),
+                                  fields.get("pre_drill_piip_gas_mean"),
+                                  fields.get("lead_piip_gas_mean"))
         row = {
             "project_id": item["project_id"],
             "well_name": item["project_name"],
             "gas_field": folders.parse_field_and_well(item["project_name"])[0],
             "seismic_block": config.SEISMIC_BLOCK_NAMES.get(ar_number, ar_number) if ar_number else "",
-            "classification": item["classification"],
+            "classification": _first_filled(fields.get("gheer_classification")),
             "year": item["year"],
             "fluid": _first_filled(fields.get("final_fluid_type"),
                                    fields.get("quicklook_fluid_type")) or "Not Drilled Yet",
             "mean_ogip": mean_ogip,
-            "total_cos": item["total_cos"],
+            "total_cos": workflow.total_cos_from_fields(
+                fields.get("reservoir_cos_rows"), fields.get("trap_cos_pct"), fields.get("seal_cos_pct")),
             "active_well_enabled": int(item["active_well_enabled"] or 0),
         }
         ogip_value = to_float_or_none(row["mean_ogip"])

@@ -1,12 +1,13 @@
-"""Characterization tests for the Chance-of-Success (CoS) domain math in database.py.
+"""Characterization tests for the Chance-of-Success (CoS) domain math.
 
 Pure-function tests (calculate_seal_cos, calculate_reservoir_cos_rows,
-segment_class) import database directly. Presence CoS / final Reservoir CoS
-tests exercise the stored-value flow through the Flask API, since that path
-also validates the recalculation triggers (Reservoir CoS / Trap CoS / Seal CoS
-task saves -> automatic recalculate_presence_cos -> overview.derisking).
-Since v18 the Presence CoS Evaluation step is gone: the derived value lives
-ONLY in project_overview.derisking (surfaced via /detail's ``overview``).
+segment_class) import cos directly. Total CoS / final Reservoir CoS tests
+exercise the flow through the Flask API: Reservoir/Trap/Seal CoS inputs are
+saved as task dynamic fields, and the Total Chance of Success is COMPUTED AT
+READ TIME (workflow.calculate_total_cos / total_cos_from_fields) -- nothing is
+stored and no recalculation event is written. Since v18 the Presence CoS
+Evaluation step is gone: the value surfaces only as ``derisking`` in /detail's
+computed ``overview``.
 
 The RF model backing calculate_reservoir_cos_rows is a tiny stub
 (RandomForestClassifier) trained and joblib-dumped by the session-scoped
@@ -23,7 +24,7 @@ import os
 import joblib
 import pytest
 
-from conftest import create_project, get_task_by_name, raw_sqlite_connect
+from conftest import create_project, get_task_by_name
 
 
 def _load_stub_model():
@@ -135,26 +136,22 @@ def test_reservoir_cos_rows_empty_or_none_returns_empty_json_list(client):
 
 
 # ---------------------------------------------------------------------------
-# Presence CoS via API (integration)
+# Total CoS via API (integration; computed at read)
 # ---------------------------------------------------------------------------
 
 def _derisking(client, pid):
-    conn = raw_sqlite_connect(client.db_path)
-    try:
-        row = conn.execute(
-            "SELECT derisking FROM project_overview WHERE project_id = ?", (pid,),
-        ).fetchone()
-    finally:
-        conn.close()
-    return row["derisking"]
+    """The read-time Total Chance of Success, as /detail's overview surfaces it."""
+    detail = client.get(f"/api/projects/{pid}/detail").get_json()
+    return detail["overview"]["derisking"]
 
 
-def test_presence_cos_computed_via_task_save_endpoint(client):
+def test_total_cos_computed_at_read_via_task_save_endpoint(client):
     """Reservoir CoS rows saved through PATCH /api/tasks/<id> (main save route)
-    trigger the model recalculation, then Reservoir/Trap/Seal CoS saves each
-    trigger recalculate_presence_cos automatically. Since v18 there is no
-    Presence task: the result lands in overview.derisking (also surfaced in
-    the /detail payload's ``overview``)."""
+    trigger the model recalculation of reservoir_cos_pct; the Total Chance of
+    Success is then composed at READ time from the stored Reservoir/Trap/Seal
+    inputs. Since v18 there is no Presence task: the result appears as
+    overview.derisking in the /detail payload -- with no recalculation write
+    or history event behind it."""
     model = _load_stub_model()
 
     pid = create_project(client, "PRESENCE-1")
@@ -189,19 +186,13 @@ def test_presence_cos_computed_via_task_save_endpoint(client):
     expected_presence = str(int(round(reservoir_probability * trap_probability * seal_probability * 100)))
     assert _derisking(client, pid) == expected_presence
 
-    # The detail payload surfaces the same value for the UI.
-    detail = client.get(f"/api/projects/{pid}/detail").get_json()
-    assert detail["overview"]["derisking"] == expected_presence
-
-    # The recalculation event is logged against Seal CoS -- the formula's
-    # final input -- now that the Presence step no longer exists.
+    # Computed at read means NO recalculation write: no "Presence CoS
+    # Calculated" history event exists anywhere in the project's log.
     events = client.get(f"/api/activity?project_id={pid}").get_json()
-    presence_events = [e for e in events if e["action_type"] == "Presence CoS Calculated"]
-    assert presence_events
-    assert all(e["task_name"] == "Seal CoS" for e in presence_events)
+    assert not [e for e in events if e["action_type"] == "Presence CoS Calculated"]
 
 
-def test_presence_cos_blank_if_any_component_missing(client):
+def test_total_cos_blank_if_any_component_missing(client):
     pid = create_project(client, "PRESENCE-2")
     trap = get_task_by_name(client, pid, "Trap CoS")
     client.patch(f"/api/tasks/{trap['task_id']}/dynamic-fields", json={"fields": {"trap_cos_pct": "80"}})
@@ -213,7 +204,7 @@ def test_final_reservoir_cos_is_last_row_with_nonempty_pct(client):
     bypasses the model recalculation (only the main task-save route on the
     Reservoir CoS task recomputes reservoir_cos_pct). This lets us pin the
     "skip blank pct, use the last non-blank one" selection logic in
-    workflow._final_reservoir_cos_value via the derisking result."""
+    workflow.last_reservoir_cos_row_value via the derisking result."""
     pid = create_project(client, "PRESENCE-FINAL-1")
     reservoir = get_task_by_name(client, pid, "Reservoir CoS")
     trap = get_task_by_name(client, pid, "Trap CoS")

@@ -165,8 +165,8 @@ def test_project_detail_shape(client):
         assert key in body
     assert "percent" in body["completion"]
     assert body["lead_summary"] is None  # never promoted
-    # overview is the project_overview row (guaranteed since the v16 backfill);
-    # derisking carries the derived Total Chance of Success.
+    # overview is composed from the task inputs at read time (no stored
+    # project_overview table); derisking carries the computed Total CoS.
     assert isinstance(body["overview"], dict)
     assert "derisking" in body["overview"]
 

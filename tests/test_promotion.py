@@ -2,15 +2,15 @@
 
 Pins: lead summary snapshot capture, pipeline_type switch, year validation,
 demotion preserving the snapshot and BP task statuses, re-promotion refreshing
-the snapshot timestamp, the lead_piip_gas_mean -> overview.lead_ogip mirror, and
-the derive-don't-store guarantee that promotion/demotion never rewrite task
-status or data (applicability is a pure function of pipeline_type).
+the snapshot timestamp, the read-time lead_piip_gas_mean -> overview.lead_ogip
+composition, and the derive-don't-store guarantee that promotion/demotion never
+rewrite task status or data (applicability is a pure function of pipeline_type).
 """
 from __future__ import annotations
 
 import time
 
-from conftest import create_project, get_task_by_name, raw_sqlite_connect
+from conftest import create_project, get_task_by_name
 
 
 def test_promotion_sets_pipeline_type_and_captures_lead_summary(client):
@@ -135,17 +135,19 @@ def test_bp_stage_data_entered_before_promotion_survives_promotion(client):
     assert back["status"] == "Approved"
 
 
-def test_lead_piip_gas_mean_mirrors_to_overview_lead_ogip(client):
-    pid = create_project(client, "MIRROR-1")
+def test_overview_lead_ogip_composed_from_lead_piip_gas_mean_at_read(client):
+    # The /detail overview is a read-time composition of task inputs (there is
+    # no stored mirror): every save is reflected on the very next read.
+    pid = create_project(client, "READ-COMPOSE-1")
     lra = get_task_by_name(client, pid, "Lead Resource Assessment")
     client.patch(f"/api/tasks/{lra['task_id']}/dynamic-fields", json={
         "fields": {"lead_piip_gas_mean": "12.5"},
     })
-    conn = raw_sqlite_connect(client.db_path)
-    try:
-        row = conn.execute(
-            "SELECT lead_ogip FROM project_overview WHERE project_id = ?", (pid,),
-        ).fetchone()
-    finally:
-        conn.close()
-    assert row["lead_ogip"] == "12.5"
+    detail = client.get(f"/api/projects/{pid}/detail").get_json()
+    assert detail["overview"]["lead_ogip"] == "12.5"
+
+    client.patch(f"/api/tasks/{lra['task_id']}/dynamic-fields", json={
+        "fields": {"lead_piip_gas_mean": "13.0"},
+    })
+    detail = client.get(f"/api/projects/{pid}/detail").get_json()
+    assert detail["overview"]["lead_ogip"] == "13.0"

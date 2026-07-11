@@ -138,36 +138,6 @@ class TaskHistory(Base):
     )
 
 
-class ProjectOverview(Base):
-    """Denormalized per-project reporting values mirrored from task inputs.
-
-    One row per project. Populated by the dynamic-field -> overview mirror in
-    ``workflow.py`` and read by the reporting/export layer.
-    """
-    __tablename__ = "project_overview"
-
-    project_id = Column(Integer, ForeignKey("projects.project_id", ondelete="CASCADE"), primary_key=True)
-    derisking = Column(Text)
-    ogip = Column(Text)
-    lead_ogip = Column(Text)
-    preliminary_resource_estimation = Column(Text)
-    pre_drill_estimation = Column(Text)
-    post_drill_estimation = Column(Text)
-    reservoir_pressure = Column(Text)
-    reservoir_gradient = Column(Text)
-    flowback_results = Column(Text)
-    pay = Column(Text)
-    porosity = Column(Text)
-    swt = Column(Text)
-    quick_look_pay = Column(Text)
-    quick_look_porosity = Column(Text)
-    quick_look_swt = Column(Text)
-    # WS7: mirrored from the GHEER step's gheer_classification select
-    # (Development / Appraisal / Exploration); shown in the Portfolio table.
-    classification = Column(Text)
-    last_updated = Column(Text)
-
-
 class TaskDynamicField(Base):
     """Free-form key/value inputs attached to a task (the component form data)."""
     __tablename__ = "task_dynamic_fields"
