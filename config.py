@@ -146,15 +146,15 @@ SEISMIC_BLOCK_NAMES = {
 #   Open Lead Folder, Open Well Folder, Segmentation, PDA, MTR
 # Server/FastX path is optional and used only if the share is mounted on Linux.
 # Windows client path is what folder buttons return to users' browsers.
-# Example client PDA path: \\YOUR_WINDOWS_SERVER\YOUR_SHARE\Wells\MDFT\MDFT-3\PDA
+# Example client PDA path: \\aramco.com\ecc\data\NAUGAD\Wells\MDFT\MDFT-3\PDA
 WELL_OVERVIEW_DIRECTORY_ROOT = Path("/mnt/wells")
-WINDOWS_WELL_SHARE_ROOT = r"\\YOUR_WINDOWS_SERVER\YOUR_SHARE\Wells"
+WINDOWS_WELL_SHARE_ROOT = r"\\aramco.com\ecc\data\NAUGAD\Wells"
 
 # Separate lead-workflow directory used only by the Task Update stage buttons:
 #   Open Identification Folder, Open Risking Folder, Open Segmentation Folder
-# Example client path: \\YOUR_WINDOWS_SERVER\YOUR_SHARE\Lead_Workflow\MDFT\MDFT-3\Leads\Identification
+# Example client path: \\aramco.com\ecc\data\NAUGAD\Lead_Workflow\MDFT\MDFT-3\Leads\Identification
 LEAD_WORKFLOW_DIRECTORY_ROOT = Path("/mnt/lead_workflow")
-WINDOWS_LEAD_WORKFLOW_SHARE_ROOT = r"\\YOUR_WINDOWS_SERVER\YOUR_SHARE\Lead_Workflow"
+WINDOWS_LEAD_WORKFLOW_SHARE_ROOT = r"\\aramco.com\ecc\data\NAUGAD\Lead_Workflow"
 
 # Easy-to-change folder placeholders. Keys are used by frontend buttons; values are
 # subfolders under the resolved ROOT / Field / Well path.

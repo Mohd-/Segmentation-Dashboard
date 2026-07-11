@@ -398,7 +398,7 @@
 .summary-card { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--space-4); max-width: 100%; }
 .summary-card h3 { color: var(--brand-700); text-transform: uppercase; letter-spacing: .05em; font-size: var(--text-sm); }
 .summary-card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-3); }
-.summary-card-head .icon-btn { flex: 0 0 auto; }
+.summary-card-head .icon-btn { flex: 0 0 auto; width: 24px; height: 24px; font-size: 18px; }
 .summary-content { min-width: 0; }
 
 /* Compact completion progress: slim bar with % + count beside it. */
