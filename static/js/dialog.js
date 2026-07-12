@@ -1,4 +1,4 @@
-import { byId } from './dom.js';
+import { byId, esc } from './dom.js';
 import { Store } from './state.js';
 import { performLogin, fetchUserOptions } from './auth.js';
 
@@ -11,10 +11,15 @@ function openDialog(options) {
   var title = byId('app-dialog-title');
   var message = byId('app-dialog-message');
   var input = byId('app-dialog-input');
+  var select = byId('app-dialog-select');
+  var selectWrap = byId('app-dialog-select-label');
+  var selectCaption = byId('app-dialog-select-caption');
   var cancelButton = byId('app-dialog-cancel');
   var confirmButton = byId('app-dialog-confirm');
 
   title.textContent = options.title || '';
+  // The message is textContent (never markup); white-space: pre-line on the
+  // element lets callers pass multi-line copy joined with '\n'.
   message.textContent = options.message || '';
   message.classList.toggle('hidden', !options.message);
   confirmButton.textContent = options.confirmLabel || 'OK';
@@ -22,6 +27,19 @@ function openDialog(options) {
   confirmButton.classList.toggle('danger', !!options.danger);
   input.classList.toggle('hidden', !options.isPrompt);
   if (options.isPrompt) input.value = options.initialValue || '';
+  // Optional select, mirroring the prompt input: selectOptions entries are
+  // either {value, label} objects or plain values; selectValue preselects.
+  var hasSelect = !!(options.selectOptions && options.selectOptions.length);
+  selectWrap.classList.toggle('hidden', !hasSelect);
+  if (hasSelect) {
+    selectCaption.textContent = options.selectLabel || '';
+    select.innerHTML = options.selectOptions.map(function (option) {
+      var value = (option && typeof option === 'object') ? option.value : option;
+      var label = (option && typeof option === 'object') ? option.label : option;
+      var selected = String(value) === String(options.selectValue) ? ' selected' : '';
+      return '<option value="' + esc(value) + '"' + selected + '>' + esc(label) + '</option>';
+    }).join('');
+  }
 
   inFlight = new Promise(function (resolve) {
     function onClose() {
@@ -30,9 +48,10 @@ function openDialog(options) {
       form.removeEventListener('submit', onSubmit);
       inFlight = null;
       if (dialog.returnValue === 'confirm') {
-        resolve(options.isPrompt ? input.value.trim() : true);
+        // Prompt → trimmed input; select → selected option value; else true.
+        resolve(options.isPrompt ? input.value.trim() : (hasSelect ? select.value : true));
       } else {
-        resolve(options.isPrompt ? null : false);
+        resolve((options.isPrompt || hasSelect) ? null : false);
       }
     }
     function onCancel() { dialog.close('cancel'); }
@@ -48,6 +67,8 @@ function openDialog(options) {
   return inFlight;
 }
 
+// Plain confirm resolves true/false. With selectOptions it becomes a chooser:
+// resolves the selected option's value (a string) on confirm, null on cancel.
 export function confirmDialog(options) {
   var opts = options || {};
   return openDialog({
@@ -56,7 +77,10 @@ export function confirmDialog(options) {
     confirmLabel: opts.confirmLabel || 'Confirm',
     cancelLabel: opts.cancelLabel || 'Cancel',
     danger: opts.danger,
-    isPrompt: false
+    isPrompt: false,
+    selectLabel: opts.selectLabel,
+    selectOptions: opts.selectOptions,
+    selectValue: opts.selectValue
   });
 }
 

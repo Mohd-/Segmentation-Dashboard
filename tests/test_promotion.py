@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import time
 
-from conftest import create_project, get_task_by_name
+import pytest
+
+from conftest import create_project, get_task_by_name, get_tasks
 
 
 def test_promotion_sets_pipeline_type_and_captures_lead_summary(client):
@@ -133,6 +135,107 @@ def test_bp_stage_data_entered_before_promotion_survives_promotion(client):
     assert resp.status_code == 200
     back = get_task_by_name(client, pid, "Well Proposal")
     assert back["status"] == "Approved"
+
+
+# ---------------------------------------------------------------------------
+# Single-writer guarantee: /flags is the ONLY route that mutates promotion
+# state, and business_plan_enabled changes are supervisor-gated.
+# ---------------------------------------------------------------------------
+
+def _login(client, name):
+    resp = client.post("/api/login", json={"name": name})
+    assert resp.status_code == 200, resp.get_json()
+
+
+def _project_promotion_state(client, pid):
+    project = client.get(f"/api/projects/{pid}").get_json()
+    return (project["pipeline_type"], project["business_plan_enabled"],
+            project["business_plan_year"])
+
+
+@pytest.mark.parametrize("name", ["Employee", "Staff Member"])
+def test_flags_business_plan_requires_supervisor(client, name):
+    pid = create_project(client, f"GATE-{name.split()[0].upper()}-1")
+    _login(client, name)
+
+    resp = client.patch(f"/api/projects/{pid}/flags", json={
+        "business_plan_enabled": True, "business_plan_year": 2027,
+    })
+    assert resp.status_code == 403
+    assert "supervisor" in resp.get_json()["detail"]
+    # Project promotion state must be completely untouched by the refused call.
+    assert _project_promotion_state(client, pid) == ("prospect", 0, None)
+
+
+def test_flags_business_plan_supervisor_promotes_and_recalls(client):
+    pid = create_project(client, "GATE-SUP-1")
+    _login(client, "Supervisor")
+
+    resp = client.patch(f"/api/projects/{pid}/flags", json={
+        "business_plan_enabled": True, "business_plan_year": 2027,
+    })
+    assert resp.status_code == 200
+    assert _project_promotion_state(client, pid) == ("bp", 1, 2027)
+
+    resp = client.patch(f"/api/projects/{pid}/flags", json={"business_plan_enabled": False})
+    assert resp.status_code == 200
+    assert _project_promotion_state(client, pid) == ("prospect", 0, None)
+
+
+def test_flags_business_plan_anonymous_dev_mode_still_works(client):
+    # With AUTH_REQUIRED off and no session, current_role() is 'supervisor':
+    # an open dev instance keeps promoting exactly as before roles existed.
+    pid = create_project(client, "GATE-ANON-1")
+    resp = client.patch(f"/api/projects/{pid}/flags", json={
+        "business_plan_enabled": True, "business_plan_year": 2028,
+    })
+    assert resp.status_code == 200
+    assert _project_promotion_state(client, pid) == ("bp", 1, 2028)
+
+
+def test_flags_active_well_only_stays_ungated_for_employee(client):
+    pid = create_project(client, "GATE-AW-1")
+    _login(client, "Employee")
+
+    resp = client.patch(f"/api/projects/{pid}/flags", json={"active_well_enabled": True})
+    assert resp.status_code == 200
+    project = client.get(f"/api/projects/{pid}").get_json()
+    assert project["active_well_enabled"] == 1
+    # And the promotion state is untouched, of course.
+    assert _project_promotion_state(client, pid) == ("prospect", 0, None)
+
+
+def test_rename_ignores_smuggled_promotion_and_active_well_keys(client):
+    pid = create_project(client, "SMUGGLE-RENAME-1")
+    resp = client.patch(f"/api/projects/{pid}/rename", json={
+        "new_name": "SMUGGLE-RENAME-1-NEW",
+        "business_plan_enabled": True,
+        "business_plan_year": 2027,
+        "active_well_enabled": True,
+    })
+    assert resp.status_code == 200
+
+    project = client.get(f"/api/projects/{pid}").get_json()
+    assert project["project_name"] == "SMUGGLE-RENAME-1-NEW"  # rename applied
+    assert project["active_well_enabled"] == 0
+    assert _project_promotion_state(client, pid) == ("prospect", 0, None)
+
+
+def test_save_task_ignores_smuggled_business_plan_keys(client):
+    pid = create_project(client, "SMUGGLE-SAVE-1")
+    task = get_tasks(client, pid)[0]
+    resp = client.patch(f"/api/tasks/{task['task_id']}", json={
+        "status": "In Progress",
+        "revision": task["revision"],
+        "business_plan_enabled": True,
+        "business_plan_year": 2027,
+    })
+    assert resp.status_code == 200, resp.get_json()
+    assert resp.get_json()["task"]["status"] == "In Progress"  # save itself applied
+
+    # The project was neither promoted nor given a year: /flags stays the
+    # single writer of promotion state.
+    assert _project_promotion_state(client, pid) == ("prospect", 0, None)
 
 
 def test_overview_lead_ogip_composed_from_lead_piip_gas_mean_at_read(client):

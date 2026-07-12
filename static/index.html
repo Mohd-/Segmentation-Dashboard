@@ -16,7 +16,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/css/base.css?v=5">
-  <link rel="stylesheet" href="/static/css/components.css?v=10">
+  <link rel="stylesheet" href="/static/css/components.css?v=11">
 </head>
 <body>
   <section id="login-page" class="login-page hidden">
@@ -169,6 +169,9 @@
       <h3 id="app-dialog-title"></h3>
       <p id="app-dialog-message"></p>
       <input id="app-dialog-input" class="hidden" type="text">
+      <label id="app-dialog-select-label" class="app-dialog-select-label hidden"><span id="app-dialog-select-caption"></span>
+        <select id="app-dialog-select"></select>
+      </label>
       <div class="app-dialog-actions">
         <button type="button" id="app-dialog-cancel" class="ghost">Cancel</button>
         <button type="submit" id="app-dialog-confirm">OK</button>
@@ -189,6 +192,6 @@
     </form>
   </dialog>
 
-  <script type="module" src="/static/js/main.js?v=8"></script>
+  <script type="module" src="/static/js/main.js?v=9"></script>
 </body>
 </html>

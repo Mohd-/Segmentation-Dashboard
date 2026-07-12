@@ -409,6 +409,17 @@
 .summary-progress-figures b { font-size: var(--text-lg); color: var(--brand-700); }
 .summary-progress-figures small { color: var(--text-faint); font-size: var(--text-xs); }
 
+/* Phase row: current phase (Lead / BP Well · year) + the supervisor-only
+   promote/recall action. Sits between the progress bar and the metric list. */
+.summary-phase { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-2) 0; margin-bottom: var(--space-2); border-bottom: 1px solid var(--gray-100); }
+.summary-phase-label { color: var(--ink-800); font-size: var(--text-sm); font-weight: 800; }
+.summary-phase-btn { flex: 0 0 auto; padding: 5px 10px; font-size: var(--text-xs); font-weight: 700; white-space: nowrap; }
+
+/* Outline danger variant for compact destructive-ish actions (recall): the
+   filled button.danger gradient is too loud for table rows and card chrome. */
+button.ghost.danger-outline { color: var(--danger-700); border-color: var(--danger-500); }
+button.ghost.danger-outline:hover { background: var(--danger-100); }
+
 /* Tight label/value list — denser than the old summary-item tile grid. */
 .summary-metrics { display: flex; flex-direction: column; }
 .summary-metric { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) 0; border-top: 1px solid var(--gray-100); }
@@ -419,7 +430,7 @@
 .summary-metric-value { flex: 0 0 auto; color: var(--ink-900); font-size: var(--text-md); font-weight: 800; text-align: right; overflow-wrap: anywhere; }
 
 /* Gear popover: small floating panel anchored to the card header, hosting the
-   BP/Active flags and Rename/Archive that the compact card dropped. */
+   Active Well flag and Rename/Archive that the compact card dropped. */
 .summary-popover {
   position: absolute;
   top: calc(var(--space-4) + 30px);
@@ -437,8 +448,6 @@
 }
 .summary-popover-check { flex-direction: row; align-items: center; gap: var(--space-2); color: var(--ink-800); font-weight: 700; font-size: var(--text-sm); }
 .summary-popover-check input { width: auto; }
-.summary-popover-year { flex-direction: column; gap: 3px; color: var(--text-muted); font-size: var(--text-xs); }
-.summary-popover-year select { width: 100%; }
 .summary-popover-actions { display: flex; gap: var(--space-2); margin-top: var(--space-1); }
 .summary-popover-actions button { flex: 1; min-width: 0; padding: 8px 10px; font-size: var(--text-sm); }
 
@@ -495,15 +504,26 @@
 .pe-component-name { flex: 1; min-width: 0; font-size: var(--text-base); color: var(--ink-900); }
 .pe-component-actions { display: flex; justify-content: flex-end; }
 
-/* Properties card: a responsive field grid of the project-level columns plus
-   its own action row (Save / Archive). */
+/* Properties card: the phase row (chip + promote/recall), a responsive field
+   grid of the project-level columns, and its own action row (Save / Archive). */
+.pe-phase-row { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); }
+.pe-phase-chip {
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--brand-500);
+  background: var(--brand-050);
+  color: var(--brand-700);
+  font-size: var(--text-xs);
+  font-weight: 800;
+  white-space: nowrap;
+}
+.pe-phase-btn { padding: 5px 10px; font-size: var(--text-xs); font-weight: 700; white-space: nowrap; }
 .pe-properties-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(160px, 1fr));
   gap: var(--space-3);
   align-items: end;
 }
-.pe-prop-year { grid-column: auto; }
 .pe-properties-actions { display: flex; gap: var(--space-3); }
 .pe-properties-actions .danger { margin-left: auto; }
 
@@ -629,6 +649,8 @@
 .portfolio-filter-clear:hover { background: var(--surface-sunken); }
 .portfolio-filter-option {
   display: flex;
+  /* Labels are column-flex globally (base.css); this one is a checkbox row. */
+  flex-direction: row;
   align-items: center;
   gap: 6px;
   padding: 4px 6px;
@@ -641,10 +663,19 @@
   cursor: pointer;
 }
 .portfolio-filter-option:hover { background: var(--surface-sunken); }
-.portfolio-filter-option input { margin: 0; flex: none; }
+.portfolio-filter-option input { margin: 0; flex: none; width: auto; }
 
 .portfolio-table .well-link { color: var(--brand-700); font-weight: 700; text-decoration: none; }
 .portfolio-table .well-link:hover { text-decoration: underline; }
+
+/* Supervisor-only trailing Actions column: unsortable header + compact
+   per-row Recall button (ghost + danger-outline). */
+.portfolio-actions-th { white-space: nowrap; }
+/* Not sortable: undo the first-row th sorting affordances. */
+.portfolio-table thead tr:first-child th.portfolio-actions-th { cursor: default; }
+.portfolio-table thead tr:first-child th.portfolio-actions-th:hover { color: inherit; }
+.portfolio-actions-cell { white-space: nowrap; text-align: right; }
+.portfolio-recall { padding: 3px 10px; font-size: var(--text-xs); font-weight: 700; }
 
 /* =========================================================================
    Audit tab
@@ -666,7 +697,9 @@
 .app-dialog::backdrop { background: rgba(13, 36, 56, .45); }
 .app-dialog-form { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-5); }
 .app-dialog-form h3 { font-size: var(--text-md); color: var(--ink-900); }
-.app-dialog-form p { color: var(--text-muted); font-size: var(--text-sm); }
+/* pre-line lets dialog.js pass multi-line copy as plain text joined with \n. */
+.app-dialog-form p { color: var(--text-muted); font-size: var(--text-sm); white-space: pre-line; }
+.app-dialog-select-label { gap: 3px; color: var(--text-muted); font-size: var(--text-sm); font-weight: 700; }
 .app-dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-2); }
 #app-dialog-confirm.danger { background: linear-gradient(180deg, var(--danger-500), var(--danger-700)); }
 .login-error { color: var(--danger-700); font-size: var(--text-sm); }

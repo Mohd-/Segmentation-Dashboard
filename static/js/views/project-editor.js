@@ -1,13 +1,14 @@
-import { byId, all, esc, range, msg, statusChip } from '../dom.js';
+import { byId, all, esc, msg, statusChip } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName, Store, resetSelection } from '../state.js';
 import { SCHEMA } from '../schema.js';
 import { confirmDialog } from '../dialog.js';
+import { canTransitionPhase, promoteProject, recallProject } from './transitions.js';
 import {
   renderFields, getFields, updateConditionalVisibility,
   formationRowsForSave, formationPhaseDirty, clearFormationPhaseDirty
 } from './detail-form.js';
-import { openDetail } from './detail.js';
+import { openDetail, tasksForPipeline } from './detail.js';
 import { refreshAllBoards } from './pipeline.js';
 import { refreshAudit } from './audit.js';
 
@@ -54,24 +55,35 @@ function headMarkup(project) {
     '</div>';
 }
 
-// Properties card: the project-level columns (name, lead X/Y, BP + year,
-// active well) saved in one PATCH /rename, plus the Archive danger action.
-function propertiesMarkup(project) {
+// Phase row inside the Properties card: a chip naming the current phase plus
+// the supervisor-only transition action. Re-rendered in place (see
+// syncPhaseRow) after a properties save or a phase transition.
+function phaseRowMarkup(project) {
   var isBP = Number(project.business_plan_enabled || 0) === 1;
+  var chip = isBP
+    ? 'BP Well' + (project.business_plan_year ? ' · ' + esc(project.business_plan_year) : '')
+    : 'Lead';
+  var action = '';
+  if (canTransitionPhase()) {
+    action = isBP
+      ? '<button id="pe-phase-action" type="button" class="ghost danger-outline pe-phase-btn">Recall to Lead Phase…</button>'
+      : '<button id="pe-phase-action" type="button" class="ghost pe-phase-btn">Promote to BP Well…</button>';
+  }
+  return '<span class="pe-phase-chip">' + chip + '</span>' + action;
+}
+
+// Properties card: the project-level columns (name, lead X/Y, active well)
+// saved via PATCH /rename + PATCH /flags, the phase row (promote/recall), and
+// the Archive danger action.
+function propertiesMarkup(project) {
   var isActive = Number(project.active_well_enabled || 0) === 1;
-  var year = Number(project.business_plan_year || new Date().getFullYear());
-  if (year < 2026 || year > 2040) year = 2026;
-  var yearOptions = range(2026, 2040).map(function (value) {
-    return '<option ' + (Number(value) === year ? 'selected' : '') + '>' + value + '</option>';
-  }).join('');
   return '<div class="pe-component pe-properties">' +
     '<div class="pe-component-head"><h3>Properties</h3></div>' +
+    '<div id="pe-phase-row" class="pe-phase-row">' + phaseRowMarkup(project) + '</div>' +
     '<div class="pe-properties-grid">' +
     '<label>Name<input id="pe-prop-name" value="' + esc(project.project_name || '') + '"></label>' +
     '<label>Lead X<input id="pe-prop-x" type="number" step="any" value="' + esc(project.lead_x == null ? '' : project.lead_x) + '"></label>' +
     '<label>Lead Y<input id="pe-prop-y" type="number" step="any" value="' + esc(project.lead_y == null ? '' : project.lead_y) + '"></label>' +
-    '<label class="check-label"><input id="pe-prop-bp" type="checkbox" ' + (isBP ? 'checked' : '') + '> Business Plan</label>' +
-    '<label id="pe-prop-year-field" class="pe-prop-year' + (isBP ? '' : ' hidden') + '">BP Year<select id="pe-prop-year">' + yearOptions + '</select></label>' +
     '<label class="check-label"><input id="pe-prop-active" type="checkbox" ' + (isActive ? 'checked' : '') + '> Active Well</label>' +
     '</div>' +
     '<div class="pe-properties-actions">' +
@@ -140,10 +152,7 @@ function bindEditor() {
   byId('pe-open-pipeline').addEventListener('click', function () {
     openDetail(Store.projectId, String((Store.project || {}).pipeline_type || '').toLowerCase() === 'bp' ? 'bp' : 'prospect');
   });
-  var bpFlag = byId('pe-prop-bp');
-  bpFlag.addEventListener('change', function () {
-    byId('pe-prop-year-field').classList.toggle('hidden', !bpFlag.checked);
-  });
+  bindPhaseAction();
   byId('pe-save-props').addEventListener('click', saveProperties);
   byId('pe-archive').addEventListener('click', archiveProject);
   all('.pe-save', byId('project-editor')).forEach(function (button) {
@@ -158,6 +167,43 @@ function bindEditor() {
 function backToPortfolio() {
   byId('project-editor').classList.add('hidden');
   byId('tab-portfolio').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// Re-render the phase row in place (chip + action button) and rebind its
+// handler. Deliberately NOT a full renderEditor: like syncPropertiesInputs, a
+// phase change must not wipe unsaved typing in the component cards.
+function syncPhaseRow() {
+  var row = byId('pe-phase-row');
+  if (!row) return;
+  row.innerHTML = phaseRowMarkup(Store.project || {});
+  bindPhaseAction();
+}
+
+function bindPhaseAction() {
+  var button = byId('pe-phase-action');
+  if (button) button.addEventListener('click', transitionPhase);
+}
+
+// Promote/recall from the Properties card. transitions.js owns the confirm
+// dialog + PATCH /flags; on success re-fetch and sync the head, properties
+// inputs and phase row (component cards keep their unsaved typing).
+function transitionPhase() {
+  var project = Store.project || {};
+  var isBP = Number(project.business_plan_enabled || 0) === 1;
+  var actor = currentUserName();
+  var transition = isBP
+    ? recallProject(project, actor)
+    : promoteProject(project, tasksForPipeline('prospect'), actor);
+  transition.then(function (result) {
+    if (result === null) return null; // dialog cancelled
+    return API.detail(Store.projectId).then(function (detail) {
+      adoptDetail(detail);
+      syncPropertiesInputs();
+      syncPhaseRow();
+      refreshAllBoards();
+      msg(isBP ? 'Recalled to lead phase.' : 'Promoted to BP well.', 'success');
+    });
+  }).catch(function (error) { msg(error.message, 'error'); });
 }
 
 // Per-component save. Comments and priority MUST be echoed: save_task clears an
@@ -220,31 +266,30 @@ function syncPropertiesInputs() {
   byId('pe-prop-name').value = project.project_name || '';
   byId('pe-prop-x').value = project.lead_x == null ? '' : project.lead_x;
   byId('pe-prop-y').value = project.lead_y == null ? '' : project.lead_y;
-  var isBP = Number(project.business_plan_enabled || 0) === 1;
-  byId('pe-prop-bp').checked = isBP;
-  byId('pe-prop-year-field').classList.toggle('hidden', !isBP);
-  if (project.business_plan_year) byId('pe-prop-year').value = String(project.business_plan_year);
   byId('pe-prop-active').checked = Number(project.active_well_enabled || 0) === 1;
 }
 
-// Save every project property in one PATCH /rename (the endpoint applies them
-// all). BP year is only sent when Business Plan is on. Re-fetch so derived
-// values and the boards adopt the change; only the head title and the
-// properties inputs are updated in the DOM (see syncPropertiesInputs).
+// Save the record columns (name, lead X/Y) in one PATCH /rename. The Active
+// Well checkbox goes through PATCH /flags instead — and only when it actually
+// changed, chained after the rename in the same click. Phase (Business Plan)
+// is NOT saved here; that's the phase row's promote/recall. One re-fetch at
+// the end; only the head title and the properties inputs are updated in the
+// DOM (see syncPropertiesInputs).
 function saveProperties() {
   var button = byId('pe-save-props');
-  var bpOn = byId('pe-prop-bp').checked;
   var payload = {
     new_name: byId('pe-prop-name').value,
     lead_x: byId('pe-prop-x').value,
     lead_y: byId('pe-prop-y').value,
-    business_plan_enabled: bpOn,
-    active_well_enabled: byId('pe-prop-active').checked,
     changed_by: currentUserName()
   };
-  if (bpOn) payload.business_plan_year = byId('pe-prop-year').value;
+  var activeChecked = byId('pe-prop-active').checked;
+  var activeChanged = activeChecked !== (Number((Store.project || {}).active_well_enabled || 0) === 1);
   button.disabled = true;
   API.rename(Store.projectId, payload).then(function () {
+    if (!activeChanged) return null;
+    return API.flags(Store.projectId, { active_well_enabled: activeChecked, changed_by: currentUserName() });
+  }).then(function () {
     return API.detail(Store.projectId);
   }).then(function (detail) {
     adoptDetail(detail);

@@ -1,6 +1,12 @@
 import { byId, all, esc, msg } from '../dom.js';
 import { API } from '../api.js';
+import { currentUserName } from '../state.js';
+import { canTransitionPhase, recallProject } from './transitions.js';
 import { openProjectEditor } from './project-editor.js';
+// Deliberate module cycle (portfolio → pipeline → portfolio): refreshAllBoards
+// is a hoisted function declaration and only called from event handlers, same
+// as the existing portfolio → project-editor → pipeline chain.
+import { refreshAllBoards } from './pipeline.js';
 
 // WS7: exactly the 8 analysis columns, in this order. `filter` selects the
 // column-filter control rendered in the second thead row ('text' = substring
@@ -102,6 +108,11 @@ function visibleRows() {
 }
 
 function rowMarkup(row) {
+  // Supervisor-only trailing Actions cell: recall the well to the lead phase
+  // (transitions.js confirm + PATCH /flags).
+  var actionsCell = canTransitionPhase()
+    ? '<td class="portfolio-actions-cell"><button type="button" class="ghost danger-outline portfolio-recall" data-project-id="' + esc(row.project_id) + '" data-project-name="' + esc(row.well_name || '') + '">Recall</button></td>'
+    : '';
   return '<tr>' +
     '<td><a href="#" class="well-link" data-project-id="' + esc(row.project_id) + '">' + esc(row.well_name || '') + '</a></td>' +
     '<td>' + esc(row.gas_field || '') + '</td>' +
@@ -111,6 +122,7 @@ function rowMarkup(row) {
     '<td>' + esc(row.fluid || '') + '</td>' +
     '<td>' + esc(row.mean_ogip || '') + '</td>' +
     '<td>' + esc(row.total_cos || '') + '</td>' +
+    actionsCell +
     '</tr>';
 }
 
@@ -118,12 +130,26 @@ function renderBody(table) {
   var tbody = table.querySelector('tbody');
   if (!tbody) return;
   var rows = visibleRows();
+  var columnCount = COLUMNS.length + (canTransitionPhase() ? 1 : 0);
   tbody.innerHTML = rows.length ? rows.map(rowMarkup).join('') :
-    '<tr><td colspan="' + COLUMNS.length + '" class="empty-state">No records yet.</td></tr>';
+    '<tr><td colspan="' + columnCount + '" class="empty-state">No records yet.</td></tr>';
   all('.well-link', tbody).forEach(function (link) {
     link.addEventListener('click', function (event) {
       event.preventDefault();
       openProjectEditor(Number(link.getAttribute('data-project-id')));
+    });
+  });
+  all('.portfolio-recall', tbody).forEach(function (button) {
+    button.addEventListener('click', function () {
+      var project = {
+        project_id: Number(button.getAttribute('data-project-id')),
+        project_name: button.getAttribute('data-project-name') || ''
+      };
+      recallProject(project, currentUserName()).then(function (result) {
+        if (result === null) return; // dialog cancelled
+        refreshAllBoards(); // includes refreshPortfolio, so the row drops out
+        msg('Recalled to lead phase.', 'success');
+      }).catch(function (error) { msg(error.message, 'error'); });
     });
   });
   renderPortfolioStats(rows);
@@ -204,12 +230,16 @@ function wirePortfolioDismiss() {
 // dataset changes, so typing in a filter input never fights the DOM for
 // focus (filter/sort changes only call renderBody).
 function renderHead(table) {
+  // Supervisor-only trailing Actions column (per-row Recall): one unsortable
+  // header th (no data-key) and one empty filter cell to keep the rows aligned.
+  var actionsHead = canTransitionPhase() ? '<th class="portfolio-actions-th">Actions</th>' : '';
+  var actionsFilter = canTransitionPhase() ? '<th class="portfolio-filter-cell"></th>' : '';
   table.innerHTML =
     '<thead>' +
     '<tr>' + COLUMNS.map(function (col) {
       return '<th data-key="' + col.key + '" aria-sort="none"><button type="button" class="th-sort">' + esc(col.label) + '</button></th>';
-    }).join('') + '</tr>' +
-    '<tr class="portfolio-filter-row">' + COLUMNS.map(renderFilterCell).join('') + '</tr>' +
+    }).join('') + actionsHead + '</tr>' +
+    '<tr class="portfolio-filter-row">' + COLUMNS.map(renderFilterCell).join('') + actionsFilter + '</tr>' +
     '</thead><tbody></tbody>';
   // Handler lives on the th, not the inner .th-sort button: the CSS makes the
   // whole cell (padding and the ▲/▼ zone included) read as clickable, and

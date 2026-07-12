@@ -169,7 +169,7 @@ the main way a "small" edit causes a confusing bug in a codebase like this.
 Rule of thumb: if you're renaming an `id="..."` or `class="..."` string, grep both `static/js/`
 and `static/index.html` for every occurrence of the old name before you save. Ids are usually
 looked up via `byId('the-id')`; classes are usually matched via `all('.the-class', ...)` or
-`querySelector`. A handful of ids (like `summary-bp-year`, `rename-record`) are never in
+`querySelector`. A handful of ids (like `summary-phase-action`, `rename-record`) are never in
 `index.html` at all — they're written into the page later by JS itself (search for the id string
 inside `views/detail.js`/`detail-form.js` if you don't find it in the HTML).
 

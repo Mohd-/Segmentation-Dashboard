@@ -1,8 +1,9 @@
-import { byId, all, esc, isFilled, range, msg } from '../dom.js';
+import { byId, all, esc, isFilled, msg } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName, Store, resetSelection } from '../state.js';
 import { BP_STAGES, PROSPECT_STAGES, DONE } from '../schema.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
+import { canTransitionPhase, promoteProject, recallProject } from './transitions.js';
 import { loadComponent, LATEST_PIIP_SOURCES } from './detail-form.js';
 import { refreshAllBoards } from './pipeline.js';
 import { refreshAudit } from './audit.js';
@@ -230,6 +231,17 @@ export function renderRightPanel(tasks) {
   var progressHtml =
     '<div class="summary-progress"><div class="summary-progress-bar"><span style="width:' + percent + '%"></span></div>' +
     '<div class="summary-progress-figures"><b>' + percent + '%</b><small>' + completed + ' / ' + tasks.length + '</small></div></div>';
+  // Phase row: where the record sits (Lead vs BP Well · year) plus the
+  // supervisor-only transition action (transitions.js owns the confirm + PATCH).
+  var phaseButtonHtml = '';
+  if (canTransitionPhase()) {
+    phaseButtonHtml = isBP
+      ? '<button id="summary-phase-action" type="button" class="ghost danger-outline summary-phase-btn">Recall to Lead Phase…</button>'
+      : '<button id="summary-phase-action" type="button" class="ghost summary-phase-btn">Promote to BP Well…</button>';
+  }
+  var phaseHtml = '<div class="summary-phase"><span class="summary-phase-label">' +
+    (isBP ? 'BP Well · ' + esc(Store.project.business_plan_year || year) : 'Lead') +
+    '</span>' + phaseButtonHtml + '</div>';
   var metricsHtml = '<div class="summary-metrics">' +
     metricRow('P90 Gas (BCF)', gas.p90, gas.source) +
     metricRow('P10 Gas (BCF)', gas.p10, gas.source) +
@@ -237,25 +249,29 @@ export function renderRightPanel(tasks) {
     metricRow('Trap CoS (%)', trapCos, 'Trap CoS') +
     metricRow('Seal CoS (%)', sealCos, 'Seal CoS') +
     '</div>';
-  // Popover: what the compact card dropped but still needs a home. BP year is
-  // present-but-hidden until Business Plan is on (checking it round-trips
-  // through saveProjectFlags, which re-renders with the select revealed).
+  // Popover: what the compact card dropped but still needs a home. Phase moves
+  // (promote/recall) live on the visible phase row, not here.
   var popoverHtml =
     '<div id="summary-settings" class="summary-popover hidden" role="dialog" aria-label="Manage ' + recordKind.toLowerCase() + '">' +
-    '<label class="summary-popover-check"><input id="summary-bp-flag" type="checkbox" ' + (isBP ? 'checked' : '') + '> Business Plan</label>' +
-    '<label class="summary-popover-year' + (isBP ? '' : ' hidden') + '">BP Year<select id="summary-bp-year" aria-label="Business Plan Year">' + range(2026, 2040).map(function (value) { return '<option ' + (Number(value) === year ? 'selected' : '') + '>' + value + '</option>'; }).join('') + '</select></label>' +
     '<label class="summary-popover-check"><input id="summary-active-flag" type="checkbox" ' + (isActive ? 'checked' : '') + '> Active Well</label>' +
     '<div class="summary-popover-actions"><button id="rename-record" type="button" class="ghost">Rename ' + recordKind + '</button><button id="delete-record" type="button" class="danger">Archive ' + recordKind + '</button></div></div>';
 
   byId('summary-title').textContent = recordKind + ' Summary';
-  byId('lead-summary').innerHTML = progressHtml + metricsHtml + popoverHtml;
+  byId('lead-summary').innerHTML = progressHtml + phaseHtml + metricsHtml + popoverHtml;
 
-  var bpFlag = byId('summary-bp-flag');
   var activeFlag = byId('summary-active-flag');
-  var bpYear = byId('summary-bp-year');
-  if (bpFlag) bpFlag.addEventListener('change', function () { saveProjectFlags({ business_plan_enabled: bpFlag.checked, business_plan_year: bpFlag.checked ? year : null }); });
   if (activeFlag) activeFlag.addEventListener('change', function () { saveProjectFlags({ active_well_enabled: activeFlag.checked }); });
-  if (bpYear) bpYear.addEventListener('change', function () { saveProjectFlags({ business_plan_enabled: true, business_plan_year: bpYear.value }); });
+  var phaseAction = byId('summary-phase-action');
+  if (phaseAction) phaseAction.addEventListener('click', function () {
+    var actor = currentUserName();
+    var transition = isBP
+      ? recallProject(Store.project, actor)
+      : promoteProject(Store.project, tasksForPipeline('prospect'), actor);
+    transition.then(function (result) {
+      if (result === null) return; // dialog cancelled
+      return refreshAfterFlagsChange(isBP ? 'Recalled to lead phase.' : 'Promoted to BP well.');
+    }).catch(function (error) { msg(error.message, 'error'); });
+  });
   var renameButton = byId('rename-record');
   var deleteButton = byId('delete-record');
   if (renameButton) renameButton.addEventListener('click', renameSelectedProject);
@@ -309,12 +325,11 @@ export async function deleteSelectedProject() {
   }).catch(function (error) { msg(error.message, 'error'); });
 }
 
-export function saveProjectFlags(payload) {
-  if (!Store.projectId) return;
-  payload.changed_by = currentUserName();
-  API.flags(Store.projectId, payload).then(function () {
-    return API.detail(Store.projectId);
-  }).then(function (detail) {
+// Post-flags refresh, shared by the Active Well checkbox (saveProjectFlags)
+// and the phase-row promote/recall actions: re-fetch the detail payload, adopt
+// whichever pipeline the record now belongs to, and re-render everything.
+function refreshAfterFlagsChange(message) {
+  return API.detail(Store.projectId).then(function (detail) {
     Store.project = detail.project || {};
     Store.tasks = detail.tasks || [];
     Store.allFields = detail.fields || {};
@@ -325,6 +340,14 @@ export function saveProjectFlags(payload) {
     renderDetail();
     loadComponent(chooseInitialTask(tasksForPipeline(Store.pipeline)));
     refreshAllBoards();
-    msg('Lead / well flags updated.', 'success');
+    msg(message, 'success');
+  });
+}
+
+export function saveProjectFlags(payload) {
+  if (!Store.projectId) return;
+  payload.changed_by = currentUserName();
+  API.flags(Store.projectId, payload).then(function () {
+    return refreshAfterFlagsChange('Lead / well flags updated.');
   }).catch(function (error) { msg(error.message, 'error'); });
 }

@@ -148,6 +148,10 @@ def save_task(session, task_id, payload, changed_by="Web User"):
     edits are rejected (StaleRevisionError -> HTTP 409) rather than silently
     overwriting a newer change. Preserves the actual_start/actual_finish rules
     and the multiple project-revision bumps of the original implementation.
+
+    Business-plan promotion state never flows through here: payload
+    business_plan_enabled / business_plan_year keys are ignored (see
+    workflow/promotion.py, the single writer of promotion state).
     """
     payload = payload or {}
     fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
@@ -205,17 +209,10 @@ def save_task(session, task_id, payload, changed_by="Web User"):
             if status == "Not Assigned":
                 actual_start = None
 
-        project = get_project(session, task["project_id"]) or {}
-        bp_enabled = payload.get("business_plan_enabled")
-        if bp_enabled is None:
-            bp_enabled = task.get("business_plan_enabled") or project.get("business_plan_enabled") or 0
-        enabled_int = 1 if bool(bp_enabled) else 0
-        year_val = None
-        if enabled_int:
-            selected_year = payload.get("business_plan_year") or task.get("business_plan_year") or project.get("business_plan_year")
-            year_val = int(selected_year) if selected_year else None
-            if year_val is None or year_val < 2026 or year_val > 2040:
-                raise ValueError("Select a business plan year from 2026 to 2040.")
+        # Business-plan promotion state is NOT handled here: any
+        # business_plan_enabled / business_plan_year keys in the payload are
+        # ignored. Promotion is owned exclusively by update_project_flags
+        # (workflow/promotion.py) via PATCH /api/projects/<id>/flags.
 
         # Reservoir CoS is model-derived, not manually keyed. The saved result is a whole-number percent.
         if task.get("task_name") == "Reservoir CoS" and "reservoir_cos_rows" in fields:
@@ -230,26 +227,19 @@ def save_task(session, task_id, payload, changed_by="Web User"):
 
         _apply_dynamic_fields(session, task, fields, changed_by, now)
 
+        # Note: the project_tasks.business_plan_enabled / business_plan_year
+        # columns still exist in the schema but are no longer written here.
         update_result = db.execute(session, """
             UPDATE project_tasks
             SET status = :status, assigned_to = :assigned_to, comments = :comments, priority = :priority,
                 actual_start = :actual_start, actual_finish = :actual_finish,
-                business_plan_enabled = :bp_enabled, business_plan_year = :bp_year,
                 last_updated = :now, revision = revision + 1
             WHERE task_id = :task_id AND revision = :expected_revision
         """, {"status": status, "assigned_to": assigned_to or None, "comments": comments or None,
               "priority": priority, "actual_start": actual_start, "actual_finish": actual_finish,
-              "bp_enabled": enabled_int, "bp_year": year_val, "now": now,
-              "task_id": task_id, "expected_revision": current_revision})
+              "now": now, "task_id": task_id, "expected_revision": current_revision})
         if update_result.rowcount != 1:
             raise StaleRevisionError("This component was updated by someone else. Refresh and review the latest values.")
-
-        if enabled_int:
-            db.execute(session, """
-                UPDATE projects
-                SET business_plan_enabled = 1, business_plan_year = :bp_year, last_updated = :now, revision = revision + 1
-                WHERE project_id = :project_id
-            """, {"bp_year": year_val, "now": now, "project_id": task["project_id"]})
 
         if status != old_status or assigned_to != old_assigned_to or comments != old_comments or priority != old_priority:
             log_task_event(session, task_id, task["project_id"], task["task_name"], "Component Update",

@@ -469,8 +469,9 @@ export function saveComponent(event) {
   var formationsField = (SCHEMA[Store.task.task_name] || []).find(function (item) { return item.type === 'formations'; });
   var submitButton = event.target.querySelector('button[type="submit"]');
   if (submitButton) submitButton.disabled = true;
-  // No status / assigned_to keys: Save only persists inputs. Status moves via
-  // /transition and assignment via /assign; the backend preserves both when
+  // No status / assigned_to / BP-flag keys: Save only persists inputs. Status
+  // moves via /transition, assignment via /assign, and the Business Plan phase
+  // via PATCH /flags (transitions.js); the backend preserves all of them when
   // the keys are absent. Priority now has its own chip/endpoint, but save_task
   // defaults an absent priority to Medium (it does not preserve it), so we echo
   // the current value to avoid clobbering it on save.
@@ -479,9 +480,7 @@ export function saveComponent(event) {
     priority: Store.task.priority || 'Medium',
     fields: fields,
     revision: Store.task.revision,
-    changed_by: currentUserName(),
-    business_plan_enabled: Number(Store.project.business_plan_enabled || 0) === 1,
-    business_plan_year: Store.project.business_plan_year
+    changed_by: currentUserName()
   }).then(function () {
     if (formationsField && formationDirty[formationsField.phase]) {
       return API.saveFormations(Store.projectId, {

@@ -361,9 +361,15 @@ def _sync_completed_at(session, project_id):
                    {"project_id": project_id})
 
 
-def update_project_name(session, project_id, new_name, changed_by="Admin", lead_x=None, lead_y=None,
-                        business_plan_year=None, business_plan_enabled=None, active_well_enabled=None):
-    """Rename a project, realign default folders, and log the rename event."""
+def update_project_name(session, project_id, new_name, changed_by="Admin", lead_x=None, lead_y=None):
+    """Rename a project, realign default folders, and log the rename event.
+
+    Only the name and lead coordinates are writable here. Promotion state
+    (business_plan_enabled / business_plan_year / pipeline_type) and
+    active_well_enabled are owned exclusively by update_project_flags
+    (workflow/promotion.py), keeping pipeline_type <-> business_plan_enabled
+    in lockstep.
+    """
     new_name = (new_name or "").strip()
     if not new_name:
         raise ValueError("Lead / well name is required.")
@@ -380,15 +386,6 @@ def update_project_name(session, project_id, new_name, changed_by="Admin", lead_
         updates["lead_x"] = lead_x or None
     if lead_y is not None:
         updates["lead_y"] = lead_y or None
-    if business_plan_enabled is not None:
-        updates["business_plan_enabled"] = 1 if business_plan_enabled else 0
-    if active_well_enabled is not None:
-        updates["active_well_enabled"] = 1 if active_well_enabled else 0
-    if business_plan_year is not None and str(business_plan_year).strip():
-        y = int(business_plan_year)
-        if y < 2026 or y > 2040:
-            raise ValueError("Select a business plan year from 2026 to 2040.")
-        updates["business_plan_year"] = y
     # Column names come from the fixed allowlisted keys above (never user input);
     # only the values are bound parameters.
     assignments = ", ".join([f"{k} = :{k}" for k in updates])

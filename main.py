@@ -182,8 +182,10 @@ def current_role() -> Optional[str]:
 def require_role(*roles: str) -> None:
     """Raise PermissionError (-> 403) unless the current role is one of ``roles``.
 
-    Consumers: POST /api/tasks/<id>/assign (supervisor, staff) and the
-    approve/return actions of POST /api/tasks/<id>/transition (supervisor).
+    Consumers: POST /api/tasks/<id>/assign (supervisor, staff), the
+    approve/return actions of POST /api/tasks/<id>/transition (supervisor),
+    and business_plan_enabled changes via PATCH /api/projects/<id>/flags
+    (supervisor).
     """
     if current_role() not in roles:
         raise PermissionError("Forbidden: requires " + " or ".join(roles) + " role.")
@@ -397,9 +399,7 @@ def rename_project(project_id):
     payload = request.get_json(silent=True) or {}
     workflow.update_project_name(
         session, project_id, payload.get("new_name", ""), actor(payload),
-        payload.get("lead_x"), payload.get("lead_y"), payload.get("business_plan_year"),
-        payload.get("business_plan_enabled") if "business_plan_enabled" in payload else None,
-        payload.get("active_well_enabled") if "active_well_enabled" in payload else None,
+        payload.get("lead_x"), payload.get("lead_y"),
     )
     return json_response({"ok": True})
 
@@ -430,6 +430,10 @@ def completion(project_id):
 def project_flags(project_id):
     session = db.get_session()
     payload = request.get_json(silent=True) or {}
+    # Promoting/recalling a project (business_plan_enabled) is a supervisor-only
+    # action; toggling only active_well_enabled stays ungated.
+    if "business_plan_enabled" in payload:
+        require_role("supervisor")
     workflow.update_project_flags(
         session,
         project_id,
