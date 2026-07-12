@@ -561,7 +561,11 @@ function repeatableFieldDef(key) {
 export function bindRepeatableFields(root, onInput) {
   root = root || byId('dynamic-fields');
   var handler = onInput || previewSummaryInputs;
+
   all('.add-repeatable-row', root).forEach(function (button) {
+    if (button.dataset.bound) return;
+    button.dataset.bound = 'true';
+
     button.addEventListener('click', function () {
       var key = button.getAttribute('data-repeatable-key');
       var field = repeatableFieldDef(key);
@@ -572,7 +576,11 @@ export function bindRepeatableFields(root, onInput) {
       handler();
     });
   });
+
   all('.remove-repeatable-row', root).forEach(function (button) {
+    if (button.dataset.bound) return;
+    button.dataset.bound = 'true';
+
     button.addEventListener('click', function () {
       var parent = button.closest('[data-repeatable]');
       var rows = parent.querySelectorAll('.repeatable-row');
