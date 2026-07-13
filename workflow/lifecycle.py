@@ -141,13 +141,18 @@ def save_task_dynamic_fields(session, task_id, fields, changed_by="Web User"):
                    {"now": now, "task_id": task_id})
 
 
-def save_task(session, task_id, payload, changed_by="Web User"):
+def save_task(session, task_id, payload, changed_by="Web User", allow_priority_change=True):
     """Save a component atomically: fields, priority, status and workflow state.
 
     ``revision`` is optional for backward compatibility. When provided, stale
     edits are rejected (StaleRevisionError -> HTTP 409) rather than silently
     overwriting a newer change. Preserves the actual_start/actual_finish rules
     and the multiple project-revision bumps of the original implementation.
+
+    Priority is supervisor-only. Callers pass ``allow_priority_change=False``
+    for non-supervisors: the payload's priority is then ignored and the stored
+    value kept, so a Save cannot be used to bypass PATCH
+    /api/tasks/<id>/priority (which is gated with require_role).
 
     Business-plan promotion state never flows through here: payload
     business_plan_enabled / business_plan_year keys are ignored (see
@@ -194,6 +199,8 @@ def save_task(session, task_id, payload, changed_by="Web User"):
         old_assigned_to = (task.get("assigned_to") or "").strip()
         old_comments = (task.get("comments") or "").strip()
         old_priority = task.get("priority") or "Medium"
+        if not allow_priority_change:
+            priority = old_priority
         actual_start = task.get("actual_start")
         actual_finish = task.get("actual_finish")
         today = today_str()

@@ -184,8 +184,10 @@ def require_role(*roles: str) -> None:
 
     Consumers: POST /api/tasks/<id>/assign (supervisor, staff), the
     approve/return actions of POST /api/tasks/<id>/transition (supervisor),
-    and business_plan_enabled changes via PATCH /api/projects/<id>/flags
-    (supervisor).
+    business_plan_enabled changes via PATCH /api/projects/<id>/flags
+    (supervisor), and PATCH /api/tasks/<id>/priority (supervisor). Priority is
+    also guarded on the Save path: PATCH /api/tasks/<id> passes
+    allow_priority_change so a non-supervisor's save keeps the stored value.
     """
     if current_role() not in roles:
         raise PermissionError("Forbidden: requires " + " or ".join(roles) + " role.")
@@ -463,7 +465,10 @@ def task(task_id):
 def update_task(task_id):
     session = db.get_session()
     payload = request.get_json(silent=True) or {}
-    task_after_save = workflow.save_task(session, task_id, payload, actor(payload))
+    task_after_save = workflow.save_task(
+        session, task_id, payload, actor(payload),
+        allow_priority_change=current_role() == "supervisor",
+    )
     return json_response({"ok": True, "task": task_after_save})
 
 
@@ -532,6 +537,8 @@ def component_folder(project_id, task_id):
 
 @app.patch("/api/tasks/<int:task_id>/priority")
 def priority(task_id):
+    """Set a component's priority (supervisor only)."""
+    require_role("supervisor")
     session = db.get_session()
     payload = request.get_json(silent=True) or {}
     workflow.set_task_priority(session, task_id, payload.get("priority", payload.get("priority_value", "Medium")), actor(payload))

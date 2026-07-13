@@ -228,6 +228,8 @@
    auto on the first item (assignee) pushes the whole group right so it reads
    assignee | priority | status. */
 .editor-priority-chip { box-shadow: none; cursor: pointer; }
+/* Non-supervisors see the value, but it is not a toggle for them. */
+.editor-priority-chip-static { cursor: default; }
 .editor-assignee {
   margin-left: auto;
   width: auto;

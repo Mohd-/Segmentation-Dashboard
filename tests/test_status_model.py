@@ -168,6 +168,46 @@ def test_employee_cannot_approve_or_return(client):
     assert resp.status_code == 200
 
 
+def test_only_supervisor_can_set_priority(client):
+    pid = create_project(client, "ROLES-PRIORITY-1")
+    task = get_tasks(client, pid)[0]
+
+    for name in ("Employee", "Staff Member"):
+        _login(client, name)
+        resp = client.patch(f"/api/tasks/{task['task_id']}/priority", json={"priority": "High"})
+        assert resp.status_code == 403
+
+    _login(client, "Supervisor")
+    resp = client.patch(f"/api/tasks/{task['task_id']}/priority", json={"priority": "High"})
+    assert resp.status_code == 200
+    assert get_tasks(client, pid)[0]["priority"] == "High"
+
+
+def test_save_cannot_bypass_the_priority_gate(client):
+    """A non-supervisor's Save keeps the stored priority, whatever it sends."""
+    pid = create_project(client, "ROLES-PRIORITY-2")
+    task = get_tasks(client, pid)[0]
+    _login(client, "Supervisor")
+    assert client.patch(f"/api/tasks/{task['task_id']}/priority", json={"priority": "High"}).status_code == 200
+    task = get_tasks(client, pid)[0]
+
+    _login(client, "Employee")
+    resp = client.patch(f"/api/tasks/{task['task_id']}", json={
+        "priority": "Low", "comments": "note", "revision": task["revision"],
+    })
+    assert resp.status_code == 200
+    assert resp.get_json()["task"]["priority"] == "High"
+    # The rest of the save still lands.
+    assert resp.get_json()["task"]["comments"] == "note"
+
+    _login(client, "Supervisor")
+    task = get_tasks(client, pid)[0]
+    resp = client.patch(f"/api/tasks/{task['task_id']}", json={
+        "priority": "Low", "comments": "note", "revision": task["revision"],
+    })
+    assert resp.get_json()["task"]["priority"] == "Low"
+
+
 def test_employee_can_submit_own_task_but_not_someone_elses(client):
     pid = create_project(client, "ROLES-SUBMIT-1")
     tasks = get_tasks(client, pid)

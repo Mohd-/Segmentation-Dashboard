@@ -24,20 +24,28 @@ function renderStatusChip(status) {
 
 var PRIORITY_CYCLE = { Low: 'Medium', Medium: 'High', High: 'Low' };
 
+// Only supervisors set priority (anonymous dev mode acts as supervisor,
+// matching the backend's current_role()); everyone else sees a read-only chip.
+function canSetPriority() {
+  return currentRole() === 'supervisor';
+}
+
 function renderPriorityChip(task) {
   var chip = byId('component-priority-chip');
   if (!chip) return;
   var value = task.priority || 'Medium';
+  var editable = canSetPriority();
   chip.textContent = value;
-  chip.className = 'priority editor-priority-chip priority-' + String(value).toLowerCase();
-  chip.title = 'Priority: ' + value + ' — click to change';
+  chip.className = 'priority editor-priority-chip priority-' + String(value).toLowerCase() +
+    (editable ? '' : ' editor-priority-chip-static');
+  chip.title = 'Priority: ' + value + (editable ? ' — click to change' : ' — set by a supervisor');
 }
 
 // Cycles Low -> Medium -> High -> Low via the dedicated priority endpoint
 // (PATCH /api/tasks/<id>/priority; no revision check server-side), then
 // refreshes so the chip and boards adopt the new value + task revision.
 export function cyclePriorityChip() {
-  if (!Store.task) return;
+  if (!Store.task || !canSetPriority()) return;
   var next = PRIORITY_CYCLE[Store.task.priority || 'Medium'] || 'Medium';
   API.priority(Store.task.task_id, { priority: next, changed_by: currentUserName() })
     .then(function () { return refreshAfterRecordChange('Priority set to ' + next + '.'); })
