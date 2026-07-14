@@ -56,18 +56,19 @@ export var FLOWBACK_RATE_FIELDS = {
 // Formation data is well-level (project_formations via /api/projects/<id>/
 // formations), edited per phase across four steps -- phases quicklook /
 // post_drill / final / resource_update (pipeline order). The canonical trio
-// below always renders; users may add custom formations (names normalized
-// strip().upper(), <=40 chars) through the multi-row editor's 'Other...' option.
-// Legacy per-SARH task fields remain readable in old data (see FORMATION_METRICS'
-// legacy fallbacks in detail.js) but are no longer rendered as inputs.
+// below always seeds the picker (SARH selected by default); users may add
+// custom formations (names normalized strip().upper(), <=40 chars) through the
+// picker's 'Add custom formation…' option. Legacy per-SARH task fields remain
+// readable in old data (see detail.js fluid/tops fallbacks) but are no longer
+// rendered as inputs.
 export var FORMATIONS = ['SARH', 'QASM', 'QWRH'];
 export var FORMATION_METRICS = [
   { key: 'top_tvdss_ft', label: 'Top TVDSS (ft)', type: 'number' },
   { key: 'base_tvdss_ft', label: 'Base TVDSS (ft)', type: 'number' },
-  { key: 'thickness_ft', label: 'Thickness (ft)', type: 'number' },
+  { key: 'thickness_ft', label: 'Formation Thickness (ft)', type: 'number' },
   { key: 'porosity_pct', label: 'Porosity (%)', type: 'number' },
   { key: 'swt_pct', label: 'Swt (%)', type: 'number' },
-  { key: 'pay_ft', label: 'Pay (ft)', type: 'number' },
+  { key: 'pay_ft', label: 'Pay Thickness (ft)', type: 'number' },
   { key: 'ngr_pct', label: 'NGR (%)', type: 'number' },
   { key: 'fluid', label: 'Fluid', type: 'select', options: FLUID_TYPES }
 ];
@@ -121,15 +122,14 @@ export var SCHEMA = {
   // read-fallback but is no longer entered here.
   'GHEER': [{ key: 'gheer_base_map', label: 'Base Map', type: 'checkbox' }, { key: 'gheer_offset_wells', label: 'Offset Wells', type: 'checkbox' }, { key: 'gheer_target_polygon', label: 'Target Drilling Polygon (50x50 m)', type: 'checkbox' }, { key: 'gheer_prognosis_tops', label: 'Prognosis Tops', type: 'checkbox' }, { key: 'gheer_depth_top_sarah_grid', label: 'Depth Top Sarah Formation Grid', type: 'checkbox' }, { key: 'gheer_drilling_hazards', label: 'Drilling Hazards', type: 'checkbox' }, { key: 'gheer_pore_pressure_fracture_gradient', label: 'Pore Pressure Gradient and Fracture Gradient', type: 'checkbox' }, { key: 'gheer_wellbore_stability', label: 'Wellbore Stability', type: 'checkbox' }],
   // WS6: per-SARH scalar fields + the quickNew clone block are replaced by the
-  // well-level formations mini-sheet; reservoir depths and file checkboxes stay
-  // as normal task fields.
+  // well-level formations picker; per-formation tops/fluid now live inside the
+  // formation panel (the well inherits SARH's fluid -- backend resolves that),
+  // so the old step-level tops/fluid keys are dropped. Only the log-file
+  // checkboxes remain as normal task fields (grouped in one row).
   'Quicklook Logs Interpretation': [
     { key: 'quicklook_formations', label: 'Formation Interpretation (Quicklook)', type: 'formations', phase: 'quicklook' },
-    { key: 'quicklook_top_reservoir_tvdss_ft', label: 'Top Reservoir TVDSS (ft)', type: 'number' },
-    { key: 'quicklook_base_reservoir_tvdss_ft', label: 'Base Reservoir TVDSS (ft)', type: 'number' },
-    { key: 'quicklook_fluid_type', label: 'Fluid Type', type: 'select', options: FLUID_TYPES },
-    { key: 'quicklook_pdf', label: 'Logs in PDF', type: 'checkbox' },
-    { key: 'quicklook_las', label: 'Logs as LAS', type: 'checkbox' }
+    { key: 'quicklook_pdf', label: 'Logs in PDF', type: 'checkbox', row: 'quicklook_logs' },
+    { key: 'quicklook_las', label: 'Logs as LAS', type: 'checkbox', row: 'quicklook_logs' }
   ],
   'Aramco Picks': [],
   'Post-Drilling Resource Assessment': [{ key: 'post_drill_formations', label: 'Formation Interpretation (Post-Drill)', type: 'formations', phase: 'post_drill' }].concat(piip('post_drill_piip')).concat([{ key: 'post_drill_fluid_type', label: 'Fluid Type', type: 'select', options: FLUID_TYPES }]),
@@ -138,17 +138,18 @@ export var SCHEMA = {
   'URED Update': [],
   'Flowback Results': [{ key: 'flowback_gas_rate_mmscfd', label: 'Gas Rate (MMSCFD)', type: 'number' }, { key: 'flowback_water_rate_bwpd', label: 'Water Rate (BWPD)', type: 'number' }, { key: 'flowback_liquid_rate_bpd', label: 'Liquid Rate (BPD)', type: 'number' }, { key: 'flowback_choke_size_in', label: 'Choke Size (in)', type: 'number' }, { key: 'flowback_fwhp_psi', label: 'FWHP (psi)', type: 'number' }, { key: 'flowback_dynamic_area_km2', label: 'Dynamic Reservoir Area (km²)', type: 'number' }, { key: 'flowback_dynamic_ogip_bcf', label: 'Dynamic OGIP (BCF)', type: 'number' }, { key: 'flowback_sheet', label: 'Flowback Sheet', type: 'checkbox' }, { key: 'flowback_slide', label: 'Flowback Slide', type: 'checkbox' }],
   'SAD Update': [],
+  // Same shape as Quicklook (formations picker replaces the step-level
+  // tops/fluid keys, dropped here too); final_petrel is this step's unique
+  // extra. The three log-file checkboxes (Petrel/PDF/LAS) stay grouped in one
+  // row.
   'Final Log Analysis': [
     { key: 'final_formations', label: 'Formation Interpretation (Final)', type: 'formations', phase: 'final' },
-    { key: 'final_top_reservoir_tvdss_ft', label: 'Top Reservoir TVDSS (ft)', type: 'number' },
-    { key: 'final_base_reservoir_tvdss_ft', label: 'Base Reservoir TVDSS (ft)', type: 'number' },
-    { key: 'final_fluid_type', label: 'Fluid Type', type: 'select', options: FLUID_TYPES },
-    { key: 'final_pdf', label: 'Logs in PDF', type: 'checkbox' },
-    { key: 'final_las', label: 'Logs as LAS', type: 'checkbox' },
-    { key: 'final_petrel', label: 'Logs in Petrel', type: 'checkbox' }
+    { key: 'final_petrel', label: 'Logs in Petrel', type: 'checkbox', row: 'final_logs' },
+    { key: 'final_pdf', label: 'Logs in PDF', type: 'checkbox', row: 'final_logs' },
+    { key: 'final_las', label: 'Logs as LAS', type: 'checkbox', row: 'final_logs' }
   ],
   'PVAD Structural MTR': [{ key: 'pvad_mtr_link', label: 'Hyperlink Placeholder', type: 'text' }],
-  'Resource Assessment Update': [{ key: 'resource_update_formations', label: 'Formation Interpretation (Resource Update)', type: 'formations', phase: 'resource_update' }].concat(piip('resource_update')).concat([{ key: 'resource_update_note', label: '', type: 'summary' }, { key: 'resource_update_fluid_type', label: 'Fluid Type', type: 'select', options: FLUID_TYPES }]),
+  'Resource Assessment Update': [{ key: 'resource_update_formations', label: 'Formation Interpretation (Resource Update)', type: 'formations', phase: 'resource_update' }].concat(piip('resource_update')).concat([{ key: 'resource_update_fluid_type', label: 'Fluid Type', type: 'select', options: FLUID_TYPES }]),
   'Prospect Evaluation Presentation': [], 'Well Creation': [],
   // Classification lives here now (moved off GHEER); reporting reads the new key
   // first, falling back to the legacy gheer_classification for old wells.

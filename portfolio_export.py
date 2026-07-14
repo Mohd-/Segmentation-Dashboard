@@ -147,18 +147,12 @@ def _sarh_formations(session, project_ids) -> Dict[int, Dict[str, dict]]:
     """Batched {project_id: {phase: project_formations row}} for formation SARH.
 
     One query for the whole id list, restricted to the canonical SARH row --
-    the only formation the export's pay/porosity/Swt trio reads.
+    the formation the export's pay/porosity/Swt trio AND the well-fluid ladder
+    read. Delegates to reporting.sarh_formations_by_phase so this module and the
+    Portfolio UI resolve fluid from the exact same rows (kept as a thin wrapper
+    to preserve this module's own _sarh_formations name/call surface).
     """
-    if not project_ids:
-        return {}
-    rows = db.fetch_all(session, """
-        SELECT * FROM project_formations
-        WHERE project_id IN :project_ids AND formation = 'SARH'
-    """, {"project_ids": list(project_ids)})
-    result: Dict[int, Dict[str, dict]] = {}
-    for row in rows:
-        result.setdefault(row["project_id"], {})[row["phase"]] = row
-    return result
+    return reporting.sarh_formations_by_phase(session, project_ids)
 
 
 def _export_projects(session):
@@ -276,7 +270,10 @@ def get_portfolio_export_rows(session) -> List[dict]:
         primary_reservoir_row = _parse_reservoir_cos_primary_row(fields.get("reservoir_cos_rows"))
         first_ar = _first_filled(primary_reservoir_row.get("seismic_volume_ar_number"))
         seismic_block = config.AR_TO_SEISMIC_BLOCK.get(first_ar, first_ar) if first_ar else ""
-        status = reporting.record_status(fields, stake_map.get(item["project_id"], False))
+        sarh_by_phase = formations.get(item["project_id"], {})
+        well_fluid = reporting.resolve_well_fluid(fields, sarh_by_phase)
+        status = reporting.record_status(fields, stake_map.get(item["project_id"], False),
+                                         fluid=well_fluid)
         booked = "Yes" if _truthy(fields.get("pda_booked")) else "No"
 
         source_prefix = None
@@ -300,7 +297,6 @@ def get_portfolio_export_rows(session) -> List[dict]:
         bts = _first_filled(primary_reservoir_row.get("base_tight_sarah"))
         reservoir_cos_pct = _first_filled(primary_reservoir_row.get("reservoir_cos_pct"))
 
-        sarh_by_phase = formations.get(item["project_id"], {})
         sarh_row = None
         for phase in _SARH_PHASE_PRECEDENCE:
             if phase in sarh_by_phase:

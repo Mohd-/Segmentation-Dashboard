@@ -117,6 +117,47 @@ def _first_filled(*values) -> str:
     return ""
 
 
+def _sarh_phase_fluid(sarh_by_phase, phase) -> str:
+    """Fluid of the SARH formation row at ``phase`` in a {phase: row} map.
+
+    Tolerant of a missing/None map or a phase whose row is absent or lacks a
+    ``fluid`` key (returns '' in every such case)."""
+    row = (sarh_by_phase or {}).get(phase)
+    if not row:
+        return ""
+    getter = getattr(row, "get", None)
+    return _first_filled(getter("fluid")) if callable(getter) else ""
+
+
+def resolve_well_fluid(fields, sarh_by_phase) -> str:
+    """Resolve the WELL's fluid down the canonical ladder, first non-blank wins.
+
+    The well inherits SARH's per-formation fluid; the step-level Quicklook /
+    Final Log Analysis fluid selects are gone, so their EAV keys survive only as
+    read-fallbacks for wells written before the multi-formation editor existed.
+    Precedence:
+
+    1. SARH formation row's fluid at phase 'final' (the petrophysical authority)
+    2. legacy EAV ``final_fluid_type`` (old-well fallback; nothing writes it now)
+    3. EAV ``resource_update_fluid_type`` (Resource Assessment Update step)
+    4. EAV ``post_drill_fluid_type`` (Post-Drilling Resource Assessment step)
+    5. SARH formation row's fluid at phase 'quicklook'
+    6. legacy EAV ``quicklook_fluid_type`` (old-well fallback)
+
+    ``fields`` is the task-EAV dict; ``sarh_by_phase`` is a {phase: formation
+    row (dict-like)} map for the well's SARH rows -- both tolerated as
+    missing/None. Returns '' when no source is filled."""
+    fields = fields or {}
+    return _first_filled(
+        _sarh_phase_fluid(sarh_by_phase, "final"),
+        fields.get("final_fluid_type"),
+        fields.get("resource_update_fluid_type"),
+        fields.get("post_drill_fluid_type"),
+        _sarh_phase_fluid(sarh_by_phase, "quicklook"),
+        fields.get("quicklook_fluid_type"),
+    )
+
+
 # The task-level inputs the BP-well readers compose from, at read time (there
 # is no stored overview mirror): fluid precedence (final -> resource_update ->
 # post_drill -> quicklook, mirroring the formations "actual" phase precedence
@@ -156,6 +197,26 @@ def _bp_task_fields(session, project_ids):
     for row in rows:
         fields.setdefault(row["project_id"], {})[row["field_key"]] = row["field_value"] or ""
     return fields
+
+
+def sarh_formations_by_phase(session, project_ids) -> Dict[int, Dict[str, dict]]:
+    """Batched {project_id: {phase: project_formations row}} for formation SARH.
+
+    ONE query over the whole id list, restricted to the canonical SARH row --
+    the only formation the well-fluid ladder (resolve_well_fluid) reads. Shared
+    with portfolio_export (whose _sarh_formations now delegates here) so the two
+    surfaces resolve fluid from the exact same rows.
+    """
+    if not project_ids:
+        return {}
+    rows = db.fetch_all(session, """
+        SELECT * FROM project_formations
+        WHERE project_id IN :project_ids AND formation = 'SARH'
+    """, {"project_ids": list(project_ids)})
+    result: Dict[int, Dict[str, dict]] = {}
+    for row in rows:
+        result.setdefault(row["project_id"], {})[row["phase"]] = row
+    return result
 
 
 def get_business_plan_rows(session):
@@ -249,20 +310,23 @@ def _approval_to_stake_map(session, project_ids):
     return {row["project_id"]: bool(row["staked"]) for row in rows}
 
 
-def record_status(fields, staked):
+def record_status(fields, staked, fluid=None):
     """Portfolio status of a record from its task inputs (Proposed/Staked/fluid).
 
-    Once a fluid is recorded that value shows, resolved at the precedence
-    final -> resource_update -> post_drill -> quicklook (mirroring the formations
-    "actual" phase precedence, with the final read as the petrophysical
-    authority); otherwise the record is 'Staked' when its 'Approval to Stake'
-    step is Approved, else 'Proposed' (the default for every portfolio record).
-    Replaces the old 'Not Drilled Yet' fluid fallback.
+    Once a fluid is recorded that value shows; otherwise the record is 'Staked'
+    when its 'Approval to Stake' step is Approved, else 'Proposed' (the default
+    for every portfolio record). Replaces the old 'Not Drilled Yet' fallback.
+
+    ``fluid`` may be pre-resolved by the caller via resolve_well_fluid (the full
+    SARH-aware ladder). When left None, this degrades to the legacy EAV-only
+    lookup (final -> resource_update -> post_drill -> quicklook) so a caller that
+    has not fetched the SARH formation rows still gets a workable status.
     """
-    fluid = _first_filled(fields.get("final_fluid_type"),
-                          fields.get("resource_update_fluid_type"),
-                          fields.get("post_drill_fluid_type"),
-                          fields.get("quicklook_fluid_type"))
+    if fluid is None:
+        fluid = _first_filled(fields.get("final_fluid_type"),
+                              fields.get("resource_update_fluid_type"),
+                              fields.get("post_drill_fluid_type"),
+                              fields.get("quicklook_fluid_type"))
     if fluid:
         return fluid
     return "Staked" if staked else "Proposed"
@@ -280,11 +344,13 @@ def get_portfolio_rows(session, year="All", activity="All"):
     number mapped through config.AR_TO_SEISMIC_BLOCK, raw AR fallback),
     classification (BP Execution Gate input -> legacy GHEER fallback), BP year,
     status (fluid -> 'Staked' when Approval to Stake is approved -> 'Proposed'),
-    raw fluid (final -> resource_update -> post_drill -> quicklook, '' when
-    unset), mean OGIP (latest assessment
-    first: resource update -> post-drill -> pre-drill -> lead) and total chance
-    of success (workflow.total_cos_from_fields). Filters apply here so the
-    summary reflects the displayed rows.
+    raw fluid (resolve_well_fluid: SARH 'final'-phase formation fluid -> legacy
+    final_fluid_type -> resource_update -> post_drill -> SARH 'quicklook'-phase
+    formation fluid -> legacy quicklook_fluid_type, '' when unset), mean OGIP
+    (latest assessment first: resource update -> post-drill -> pre-drill ->
+    lead) and total chance of success (workflow.total_cos_from_fields). One
+    batched SARH-formation fetch (sarh_formations_by_phase) feeds the fluid
+    ladder. Filters apply here so the summary reflects the displayed rows.
     """
     selected_year = str(year or "All").strip()
     selected_activity = str(activity or "All").strip()
@@ -305,6 +371,7 @@ def get_portfolio_rows(session, year="All", activity="All"):
     project_ids = [p["project_id"] for p in projects]
     task_fields = _bp_task_fields(session, project_ids)
     stake_map = _approval_to_stake_map(session, project_ids)
+    sarh_formations = sarh_formations_by_phase(session, project_ids)
 
     filtered = []
     cumulative_ogip = 0.0
@@ -318,6 +385,7 @@ def get_portfolio_rows(session, year="All", activity="All"):
             continue
 
         fields = task_fields.get(item["project_id"], {})
+        well_fluid = resolve_well_fluid(fields, sarh_formations.get(item["project_id"], {}))
         # Mature leads are the non-BP-enabled members of the portfolio: they got
         # in via the fully-approved-prospect arm of _portfolio_projects. BP-enabled
         # records (whether or not their pipeline_type has flipped to 'bp') are wells.
@@ -336,11 +404,9 @@ def get_portfolio_rows(session, year="All", activity="All"):
             "classification": _first_filled(fields.get("bp_gate_classification"),
                                             fields.get("gheer_classification")),
             "year": item["year"],
-            "status": record_status(fields, stake_map.get(item["project_id"], False)),
-            "fluid": _first_filled(fields.get("final_fluid_type"),
-                                   fields.get("resource_update_fluid_type"),
-                                   fields.get("post_drill_fluid_type"),
-                                   fields.get("quicklook_fluid_type")),
+            "status": record_status(fields, stake_map.get(item["project_id"], False),
+                                    fluid=well_fluid),
+            "fluid": well_fluid,
             "mean_ogip": mean_ogip,
             "total_cos": workflow.total_cos_from_fields(
                 fields.get("reservoir_cos_rows"), fields.get("trap_cos_pct"), fields.get("seal_cos_pct")),

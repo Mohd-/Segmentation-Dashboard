@@ -591,3 +591,24 @@ def test_export_includes_proposed_leads_with_latest_estimates(client):
                      for row in ws_staking.iter_rows(min_row=5, max_row=ws_staking.max_row, values_only=True)}
     assert "EXPORT-LEAD-1" not in staking_names
     assert "EXPORT-LEAD-BARE" not in staking_names
+
+
+def test_export_status_reads_sarh_formation_fluid(client):
+    """The export Status column resolves fluid down the SARH-aware well-fluid
+    ladder (reporting.resolve_well_fluid): a SARH 'final'-phase formation fluid
+    shows as the record's Status, since the step-level fluid selects are gone."""
+    bp_pid = create_project(client, "EXPORT-FLUID-1", pipeline_type="bp",
+                             business_plan_enabled=True, business_plan_year=2030)
+    resp = client.put(f"/api/projects/{bp_pid}/formations",
+                      json={"phase": "final", "rows": [{"formation": "SARH", "fluid": "Oil"}]})
+    assert resp.status_code == 200, resp.get_json()
+
+    resp = client.get("/api/export/excel")
+    assert resp.status_code == 200
+    workbook = openpyxl.load_workbook(io.BytesIO(resp.data))
+    ws_export = workbook["Portfolio Export"]
+    header = [cell.value for cell in ws_export[4]]
+    matching_rows = [row for row in ws_export.iter_rows(min_row=5, max_row=ws_export.max_row, values_only=True)
+                     if row[header.index("Well Name")] == "EXPORT-FLUID-1"]
+    assert len(matching_rows) == 1
+    assert matching_rows[0][header.index("Status")] == "Oil"

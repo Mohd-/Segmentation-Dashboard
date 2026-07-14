@@ -2,7 +2,7 @@ import { byId, all, esc, isFilled, truthy, msg } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName, currentRole, canManageAssignments, Store } from '../state.js';
 import { SCHEMA, FORMATIONS, FORMATION_METRICS, SEISMIC_BLOCKS } from '../schema.js';
-import { confirmDialog } from '../dialog.js';
+import { confirmDialog, promptDialog } from '../dialog.js';
 import { renderDetail, renderRightPanel, chooseInitialTask, tasksForPipeline, parseRepeatableRows, refreshAfterRecordChange, revealTaskStage } from './detail.js';
 import { refreshAllBoards } from './pipeline.js';
 
@@ -158,18 +158,40 @@ export function commentPlaceholder(componentName) {
   return 'Comments, assumptions, rationale, or required notes...';
 }
 // ---------------------------------------------------------------------------
-// Formations multi-row editor (type: 'formations')
+// Formations editor (type: 'formations') -- picker + grouped panel
 // ---------------------------------------------------------------------------
-// Well-level formation values (Store.formations) edited per phase as a sheet
-// where every formation is visible at once -- one row per formation, each with
-// a formation dropdown (SARH/QASM/QWRH/Other...) plus the aligned metric inputs.
-// Edits are kept per-phase in a local buffer of row objects (write-through on
-// input) and PUT to /api/projects/<id>/formations on Save when the phase was
-// touched. The PUT is a phase-scoped full replacement server-side, so rows the
-// user removed simply disappear from the payload and are deleted.
+// Well-level formation values (Store.formations) edited per phase. Instead of a
+// wide all-formations-visible sheet, the editor is a formation PICKER (a select
+// of the canonical trio + any stored custom formations + "Add custom
+// formation…") above a grouped panel showing only the SELECTED formation's
+// fields (no horizontal scrolling). The per-phase buffer still holds ALL rows;
+// switching the picker just swaps which buffered row's inputs render. Edits are
+// write-through on input and PUT to /api/projects/<id>/formations on Save when
+// the phase was touched. The PUT is a phase-scoped full replacement server-side,
+// so removing a custom formation drops it from the payload and deletes it.
 
 var formationEdits = {}; // phase -> [ { formation, isCustom, values: {metric: value} }, ... ]
 var formationDirty = {}; // phase -> true when any input changed since load
+var formationSelected = {}; // phase -> buffer index currently shown in the panel
+
+// The panel groups FORMATION_METRICS into labelled rows (reuses the .field-row /
+// .field-section-label idiom -- see rowGroupMarkup). Concise per-metric labels
+// live here; the fluid select's type/options are looked up from FORMATION_METRICS.
+var FORMATION_GROUPS = [
+  { section: 'Formation', metrics: [
+    { key: 'top_tvdss_ft', label: 'Top (ft TVDSS)' },
+    { key: 'base_tvdss_ft', label: 'Base (ft TVDSS)' },
+    { key: 'thickness_ft', label: 'Formation Thickness (ft)' } ] },
+  { section: 'Pay', metrics: [
+    { key: 'pay_ft', label: 'Pay Thickness (ft)' },
+    { key: 'porosity_pct', label: 'Porosity (%)' },
+    { key: 'swt_pct', label: 'Swt (%)' },
+    { key: 'ngr_pct', label: 'NGR (%)' } ] },
+  { section: 'Fluid', metrics: [
+    { key: 'fluid', label: '' } ] }
+];
+var FORMATION_METRIC_BY_KEY = {};
+FORMATION_METRICS.forEach(function (metric) { FORMATION_METRIC_BY_KEY[metric.key] = metric; });
 
 // Custom formation names mirror the backend normalization (strip().upper(),
 // <=40 chars) so what the editor shows is what gets stored.
@@ -255,12 +277,6 @@ export function validateFormationRows(phase) {
 export function formationPhaseDirty(phase) { return !!formationDirty[phase]; }
 export function clearFormationPhaseDirty(phase) { formationDirty[phase] = false; }
 
-// Shared grid template: the formation cell, one track per metric, then the
-// trailing auto track for the per-row remove action (custom rows only).
-function formationTemplate() {
-  return 'minmax(120px, 1.2fr) ' + FORMATION_METRICS.map(function () { return 'minmax(90px, 1fr)'; }).join(' ') + ' auto';
-}
-
 // The formations widget with a formations field is unique per phase, so the
 // add/remove re-render can re-find its schema field by phase alone.
 function formationFieldForPhase(phase) {
@@ -274,71 +290,106 @@ function formationFieldForPhase(phase) {
   return { phase: phase, label: 'Formations' };
 }
 
-// One data row: the formation cell (a select plus a custom-name input shown only
-// for 'Other...' rows) followed by the metric inputs and a remove button on
-// custom rows. `index` matches the buffer position so input handlers can address
-// their row.
-function formationRowMarkup(row, index, template) {
-  var options = FORMATIONS.map(function (name) {
-    return '<option ' + (!row.isCustom && row.formation === name ? 'selected' : '') + '>' + esc(name) + '</option>';
-  }).join('') + '<option value="__other__" ' + (row.isCustom ? 'selected' : '') + '>Other&hellip;</option>';
-  var nameInput = '<input type="text" maxlength="40" class="formation-custom-name' + (row.isCustom ? '' : ' hidden') +
-    '" data-formation-name data-formation-row="' + index + '" placeholder="Custom name" value="' +
-    esc(row.isCustom ? row.formation : '') + '" aria-label="Custom formation name">';
-  var formationCell = '<div class="formation-name-cell">' +
-    '<select data-formation-select data-formation-row="' + index + '" aria-label="Formation">' + options + '</select>' +
-    nameInput + '</div>';
-  var metrics = FORMATION_METRICS.map(function (metric) {
-    var value = row.values[metric.key] || '';
-    if (metric.type === 'select') {
-      return '<select data-formation-metric="' + esc(metric.key) + '" data-formation-row="' + index + '" aria-label="' + esc(metric.label) + '">' +
-        (metric.options || []).map(function (option) { return '<option ' + (String(value) === String(option) ? 'selected' : '') + '>' + esc(option) + '</option>'; }).join('') +
-        '</select>';
-    }
-    return '<input type="number" step="any" data-formation-metric="' + esc(metric.key) + '" data-formation-row="' + index + '" value="' + esc(value) + '" aria-label="' + esc(metric.label) + '">';
-  }).join('');
-  var action = row.isCustom
-    ? '<button type="button" class="icon-btn remove-formation-row" data-formation-row="' + index + '" title="Remove formation" aria-label="Remove formation">&#10005;</button>'
-    : '<span aria-hidden="true"></span>';
-  return '<div class="repeatable-row formation-row" data-formation-row="' + index + '" style="grid-template-columns:' + template + '">' +
-    formationCell + metrics + action + '</div>';
+// Clamp (and memoize) the selected buffer index for a phase; defaults to 0 --
+// SARH, always the first canonical row. Guards against a stale index after a
+// remove or a reseed.
+function selectedFormationIndex(phase) {
+  var rows = formationEdits[phase] || [];
+  var selected = formationSelected[phase];
+  if (selected == null || selected < 0 || selected >= rows.length) selected = 0;
+  formationSelected[phase] = selected;
+  return selected;
 }
 
-// Container inner markup (heading, header labels, one row per buffer entry, the
-// "Add formation" button) -- rebuilt on add/remove so row indices stay aligned.
+// One grouped panel of the selected formation's inputs: each FORMATION_GROUPS
+// section is a `.field-section-label` heading + a `.field-row` (cols-N for
+// multi-field groups) of labelled inputs, so nothing scrolls horizontally.
+// Inputs carry data-formation-metric/data-formation-row so the buffer sync can
+// address the row (`index` is the selected buffer position).
+function formationMetricControl(metric, row, index) {
+  var value = (row && row.values[metric.key]) || '';
+  var def = FORMATION_METRIC_BY_KEY[metric.key] || {};
+  var attr = 'data-formation-metric="' + esc(metric.key) + '" data-formation-row="' + index + '"';
+  if (def.type === 'select') {
+    var options = (def.options || []).map(function (option) {
+      return '<option ' + (String(value) === String(option) ? 'selected' : '') + '>' + esc(option) + '</option>';
+    }).join('');
+    return '<label>' + esc(metric.label) + '<select ' + attr + ' aria-label="' + esc(metric.label) + '">' + options + '</select></label>';
+  }
+  return '<label>' + esc(metric.label) + '<input type="number" step="any" ' + attr + ' value="' + esc(value) + '" aria-label="' + esc(metric.label) + '"></label>';
+}
+function formationPanelMarkup(row, index) {
+  return FORMATION_GROUPS.map(function (group) {
+    var colsClass = group.metrics.length > 1 ? ' cols-' + group.metrics.length : '';
+    var inner = group.metrics.map(function (metric) { return formationMetricControl(metric, row, index); }).join('');
+    return '<div class="field-section-label">' + esc(group.section) + '</div>' +
+      '<div class="field-row' + colsClass + '">' + inner + '</div>';
+  }).join('');
+}
+
+// Container inner markup: heading, the formation picker (canonical trio + stored
+// customs + "Add custom formation…") with a remove button on custom formations,
+// then the selected formation's grouped panel. Rebuilt whenever the picker
+// selection or the row set changes.
 function buildFormationsInner(field) {
   var phase = field.phase || 'quicklook';
   var rows = formationEdits[phase] || [];
-  var template = formationTemplate();
-  var header = '<div class="repeatable-head" style="grid-template-columns:' + template + '">' +
-    '<span class="repeatable-col-label">Formation</span>' +
-    FORMATION_METRICS.map(function (metric) { return '<span class="repeatable-col-label">' + esc(metric.label) + '</span>'; }).join('') +
-    '<span class="repeatable-col-label" aria-hidden="true"></span></div>';
-  var body = rows.map(function (row, index) { return formationRowMarkup(row, index, template); }).join('');
+  var selected = selectedFormationIndex(phase);
+  var row = rows[selected];
+  var pickerOptions = rows.map(function (item, index) {
+    return '<option value="' + index + '"' + (index === selected ? ' selected' : '') + '>' + esc(item.formation) + '</option>';
+  }).join('') + '<option value="__add__">Add custom formation&hellip;</option>';
+  var removeButton = (row && row.isCustom)
+    ? '<button type="button" class="icon-btn formation-remove" title="Remove formation" aria-label="Remove formation">&#10005;</button>'
+    : '';
+  var pickerRow = '<div class="formation-picker-row">' +
+    '<label class="formation-picker-label">Formation<select class="formation-picker" aria-label="Formation">' + pickerOptions + '</select></label>' +
+    removeButton + '</div>';
   return '<div class="repeatable-heading"><b>' + esc(field.label) + '</b></div>' +
-    '<div class="repeatable-sheet"><div class="repeatable-rows">' + header + body + '</div>' +
-    '<button type="button" class="ghost add-formation-row" data-formations-phase="' + esc(phase) + '">Add formation</button></div>';
+    pickerRow + '<div class="formation-panel">' + formationPanelMarkup(row, selected) + '</div>';
 }
 
 function renderFormationsField(field) {
   var phase = field.phase || 'quicklook';
   seedFormationEdits(phase);
+  formationSelected[phase] = 0; // SARH selected by default
   return '<div class="repeatable-field wide-field formations-field" data-formations-phase="' + esc(phase) + '">' +
     buildFormationsInner(field) + '</div>';
 }
 
-// Rebuild a container in place (keeping the node + its phase attr) after the row
-// set changes, then rewire its fresh inputs.
+// Rebuild a container in place (keeping the node + its phase attr) after the
+// picker selection or row set changes, then rewire its fresh inputs.
 function rerenderFormationContainer(container, phase) {
   container.innerHTML = buildFormationsInner(formationFieldForPhase(phase));
   bindFormationContainer(container);
 }
 
-// Wire one formations container: metric inputs write through to the buffer;
-// the formation select toggles the custom-name input and sets the row's name;
-// the name input normalizes on blur; remove/add mutate the buffer + re-render.
-// Per-element `fBound`/`fBtnBound` guards make re-binds after a re-render (which
-// replaces the inner DOM with unmarked elements) wire only the new nodes.
+// Prompt for a custom formation name, guard duplicates against the whole buffer
+// (canonical + custom), then append the new row, select it, and re-render. The
+// picker is snapped back to the current selection first because the prompt is
+// async (a cancel must leave the visible selection unchanged).
+function addCustomFormation(container, phase, picker) {
+  picker.value = String(selectedFormationIndex(phase));
+  promptDialog({ title: 'Add custom formation', message: 'Formation name', initialValue: '' }).then(function (name) {
+    if (name === null) return; // cancelled
+    var normalized = normalizeFormationName(name);
+    if (!isFilled(normalized)) return msg('Custom formation needs a name.', 'error');
+    var rows = formationEdits[phase] || [];
+    var duplicate = rows.some(function (item) { return normalizeFormationName(item.formation) === normalized; });
+    if (duplicate) return msg('Duplicate formation "' + normalized + '" — each formation may appear only once.', 'error');
+    rows.push(makeFormationRow(normalized, true, null));
+    formationSelected[phase] = rows.length - 1;
+    formationDirty[phase] = true;
+    rerenderFormationContainer(container, phase);
+  });
+}
+
+// Wire one formations container: the panel's metric inputs write through to the
+// selected buffer row; the picker either swaps which row's panel renders or (on
+// "Add custom formation…") prompts for a new one; the remove button (custom
+// formations only) drops the row and snaps the picker back to SARH. Per-element
+// `fBound`/`fBtnBound` guards make re-binds after a re-render (which replaces the
+// inner DOM with unmarked elements) wire only the new nodes.
 function bindFormationContainer(container) {
   var phase = container.getAttribute('data-formations-phase');
   all('[data-formation-metric]', container).forEach(function (element) {
@@ -352,53 +403,21 @@ function bindFormationContainer(container) {
     element.addEventListener('input', sync);
     element.addEventListener('change', sync);
   });
-  all('[data-formation-select]', container).forEach(function (select) {
-    if (select.dataset.fBound) return;
-    select.dataset.fBound = 'true';
-    select.addEventListener('change', function () {
-      var index = Number(select.getAttribute('data-formation-row'));
-      var row = formationEdits[phase][index];
-      var nameInput = container.querySelector('[data-formation-name][data-formation-row="' + index + '"]');
-      if (select.value === '__other__') {
-        row.isCustom = true;
-        row.formation = normalizeFormationName(nameInput ? nameInput.value : '');
-        if (nameInput) nameInput.classList.remove('hidden');
-      } else {
-        row.isCustom = false;
-        row.formation = select.value;
-        if (nameInput) nameInput.classList.add('hidden');
-      }
-      formationDirty[phase] = true;
-    });
-  });
-  all('[data-formation-name]', container).forEach(function (input) {
-    if (input.dataset.fBound) return;
-    input.dataset.fBound = 'true';
-    function sync() {
-      var index = Number(input.getAttribute('data-formation-row'));
-      formationEdits[phase][index].formation = input.value;
-      formationDirty[phase] = true;
-    }
-    input.addEventListener('input', sync);
-    input.addEventListener('blur', function () {
-      input.value = normalizeFormationName(input.value);
-      sync();
-    });
-  });
-  all('.remove-formation-row', container).forEach(function (button) {
-    if (button.dataset.fBtnBound) return;
-    button.dataset.fBtnBound = 'true';
-    button.addEventListener('click', function () {
-      formationEdits[phase].splice(Number(button.getAttribute('data-formation-row')), 1);
-      formationDirty[phase] = true;
+  all('.formation-picker', container).forEach(function (picker) {
+    if (picker.dataset.fBound) return;
+    picker.dataset.fBound = 'true';
+    picker.addEventListener('change', function () {
+      if (picker.value === '__add__') { addCustomFormation(container, phase, picker); return; }
+      formationSelected[phase] = Number(picker.value);
       rerenderFormationContainer(container, phase);
     });
   });
-  all('.add-formation-row', container).forEach(function (button) {
+  all('.formation-remove', container).forEach(function (button) {
     if (button.dataset.fBtnBound) return;
     button.dataset.fBtnBound = 'true';
     button.addEventListener('click', function () {
-      formationEdits[phase].push(makeFormationRow('', true, null));
+      formationEdits[phase].splice(selectedFormationIndex(phase), 1);
+      formationSelected[phase] = 0; // back to SARH
       formationDirty[phase] = true;
       rerenderFormationContainer(container, phase);
     });
@@ -449,10 +468,6 @@ function standaloneFieldMarkup(field, componentName, values) {
   var value = resolveFieldValue(field, values);
   if (field.type === 'formations') return renderFormationsField(field);
   if (field.type === 'repeatable') return renderRepeatableField(field, value);
-  if (field.type === 'summary') {
-    var summaryHtml = autoSummaryHtml(componentName);
-    return summaryHtml ? '<div class="summary-box conditional">' + summaryHtml + '</div>' : '';
-  }
   var hidden = field.showIf && !truthy(values[field.showIf]);
   var classes = (hidden ? ' conditional hidden' : ' conditional') + (field.type === 'text' ? ' wide-field' : '');
   return fieldMarkup(field, value, classes, ' data-show-if="' + esc(field.showIf || '') + '"');
@@ -543,24 +558,6 @@ export var LATEST_PIIP_SOURCES = [
   ['Pre-Drilling Resource Assessment', 'pre_drill_piip_gas_mean'],
   ['Lead Resource Assessment', 'lead_piip_gas_mean']
 ];
-
-export function autoSummaryHtml(componentName) {
-  if (componentName !== 'Resource Assessment Update') return '';
-  var rows = [];
-  function add(label, value) {
-    if (isFilled(value)) rows.push('<li><span>' + esc(label) + '</span><b>' + esc(value) + '</b></li>');
-  }
-  add('Dynamic OGIP (BCF)', val('Flowback Results', 'flowback_dynamic_ogip_bcf'));
-  // Same latest-first precedence as the well summary.
-  for (var i = 0; i < LATEST_PIIP_SOURCES.length; i += 1) {
-    var latest = val(LATEST_PIIP_SOURCES[i][0], LATEST_PIIP_SOURCES[i][1]);
-    if (isFilled(latest)) {
-      add('Latest Mean PIIP Gas (BCF) — ' + LATEST_PIIP_SOURCES[i][0], latest);
-      break;
-    }
-  }
-  return rows.length ? '<ul class="summary-list">' + rows.join('') + '</ul>' : '';
-}
 
 export function renderComponentFolder(info) {
   var previous = byId('component-folder-card');

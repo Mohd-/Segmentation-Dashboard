@@ -182,18 +182,6 @@ export function reservoirCosSummary(fieldMap) {
   if (!isFilled(primary.pct)) return '';
   return (primary.ref ? primary.ref + ': ' : '') + primary.pct + '%';
 }
-// First filled value across a [taskName, fieldKey] precedence list (newest
-// assessment first). Drives Mean Gas (lead) and Mean Post-Drill (well) — both
-// read the `_gas_mean` keys, differing only in how far down LATEST_PIIP_SOURCES
-// they look.
-function firstFilledField(sources) {
-  for (var i = 0; i < sources.length; i += 1) {
-    var value = (Store.allFields[sources[i][0]] || {})[sources[i][1]];
-    if (isFilled(value)) return value;
-  }
-  return '';
-}
-
 // Source-consistent P90/Mean/P10 gas trio. Picks the newest source step (same
 // LATEST_PIIP_SOURCES precedence used for the mean) whose `_gas_mean` is filled,
 // then reads that SAME step's p90/mean/p10 so the trio never mixes assessments.
@@ -232,6 +220,22 @@ function dedupeFormationsByPhase() {
 }
 function formationHasData(row) {
   return !!row && FORMATION_VALUE_KEYS.some(function (key) { return isFilled(row[key]); });
+}
+// First filled value from a plain list (used for the well's fluid/tops ladders,
+// which mix formation-derived values with legacy step-level fields).
+function firstFilledValue(values) {
+  for (var i = 0; i < values.length; i += 1) { if (isFilled(values[i])) return values[i]; }
+  return '';
+}
+// SARH's fluid at a specific phase, read straight from Store.formations (not the
+// newest-phase dedupe): the well's fluid ladder blends these per-phase SARH
+// fluids with the legacy step-level *_fluid_type fields.
+function sarhFluidAtPhase(phase) {
+  var rows = (Store.formations || []).filter(function (row) {
+    return String(row.formation || '').trim().toUpperCase() === 'SARH' && row.phase === phase;
+  });
+  for (var i = 0; i < rows.length; i += 1) { if (isFilled(rows[i].fluid)) return rows[i].fluid; }
+  return '';
 }
 // "tight" is DERIVED, never a default: the formation row must EXIST (it was
 // penetrated/logged in a BP step) AND read as non-pay — fluid 'Dry', or a blank
@@ -388,7 +392,15 @@ export function renderRightPanel(tasks) {
     var postDrillTrio = gasTrio(LATEST_PIIP_SOURCES.slice(0, 2));
     var meanPostDrill = postDrillTrio.mean;
     var prognosis = (Store.allFields['Well Proposal'] || {}).sarh_formation_prognosis_pre_drill;
+    // SARH top prefers the formation row; legacy wells stored the top at step
+    // level (final then quicklook), so fall back there before blanking.
     var topSarh = sarh ? sarh.top_tvdss_ft : '';
+    if (!isFilled(topSarh)) {
+      topSarh = firstFilledValue([
+        (Store.allFields['Final Log Analysis'] || {}).final_top_reservoir_tvdss_ft,
+        (Store.allFields['Quicklook Logs Interpretation'] || {}).quicklook_top_reservoir_tvdss_ft
+      ]);
+    }
     var metricsHtml = '<div class="summary-metrics">' +
       statCluster('Post-Drill Gas (BCF)', [
         { label: 'P90', value: postDrillTrio.p90 },
@@ -412,7 +424,18 @@ export function renderRightPanel(tasks) {
     // Flowback rate: the headline rate lives in a fluid-specific EAV field.
     // Petrophysical fluid precedence (newest authority first), mirroring the
     // formations phase precedence and the backend portfolio status order.
-    var fluid = firstFilledField([['Final Log Analysis', 'final_fluid_type'], ['Resource Assessment Update', 'resource_update_fluid_type'], ['Post-Drilling Resource Assessment', 'post_drill_fluid_type'], ['Quicklook Logs Interpretation', 'quicklook_fluid_type']]);
+    // Well fluid ladder (newest authority first), matching the backend: SARH's
+    // final-phase formation fluid, then legacy final_fluid_type, the two
+    // resource assessments' fluid, SARH's quicklook-phase fluid, then legacy
+    // quicklook_fluid_type.
+    var fluid = firstFilledValue([
+      sarhFluidAtPhase('final'),
+      (Store.allFields['Final Log Analysis'] || {}).final_fluid_type,
+      (Store.allFields['Resource Assessment Update'] || {}).resource_update_fluid_type,
+      (Store.allFields['Post-Drilling Resource Assessment'] || {}).post_drill_fluid_type,
+      sarhFluidAtPhase('quicklook'),
+      (Store.allFields['Quicklook Logs Interpretation'] || {}).quicklook_fluid_type
+    ]);
     var flowEntry = FLOWBACK_RATE_FIELDS[fluid] || FLOWBACK_RATE_FIELDS['Gas'];
     var flowValue = (Store.allFields['Flowback Results'] || {})[flowEntry.key];
     var flowbackHtml = '<div class="summary-metrics summary-section">' +

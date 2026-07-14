@@ -3,9 +3,10 @@
 The Portfolio is the analysis surface for BP-enabled wells PLUS fully-matured
 leads. Column sources each get pinned here -- gas-field derivation from the
 project name, seismic AR -> block-name mapping (config.AR_TO_SEISMIC_BLOCK,
-FIRST non-empty AR) with raw fallback, raw fluid precedence (final ->
-resource_update -> post_drill -> quicklook, final being the petrophysical
-authority), status (fluid -> Staked when Approval to Stake approved ->
+FIRST non-empty AR) with raw fallback, the well-fluid ladder (resolve_well_fluid:
+SARH 'final'-phase formation fluid -> legacy final_fluid_type -> resource_update
+-> post_drill -> SARH 'quicklook'-phase formation fluid -> legacy
+quicklook_fluid_type), status (fluid -> Staked when Approval to Stake approved ->
 Proposed default), mean-OGIP precedence (post-drill -> pre-drill -> lead),
 classification (BP Execution Gate beats legacy GHEER), and mature-lead
 membership (a prospect with every prospect step Approved).
@@ -44,6 +45,14 @@ def _row_for(client, pid):
 def _save_fields(client, pid, task_name, fields):
     task = get_task_by_name(client, pid, task_name)
     resp = client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields", json={"fields": fields})
+    assert resp.status_code == 200, resp.get_json()
+
+
+def _put_sarh_fluid(client, pid, phase, fluid):
+    """Upsert a SARH formation row carrying ``fluid`` at ``phase`` (the well
+    inherits SARH's per-formation fluid, replacing the old step-level select)."""
+    resp = client.put(f"/api/projects/{pid}/formations",
+                      json={"phase": phase, "rows": [{"formation": "SARH", "fluid": fluid}]})
     assert resp.status_code == 200, resp.get_json()
 
 
@@ -202,9 +211,12 @@ def test_fluid_wins_status_and_final_beats_quicklook(client):
     assert row["status"] == "Dry"
 
 
-def test_fluid_precedence_four_key_ladder(client):
-    """final -> resource_update -> post_drill -> quicklook, driven through the
-    API so record_status resolves the same ladder the raw fluid column does."""
+def test_fluid_precedence_legacy_eav_ladder_no_sarh_row(client):
+    """Old-well fallback: with NO SARH formation row, the legacy step-level EAV
+    keys still resolve down final -> resource_update -> post_drill -> quicklook,
+    driven through the API so record_status resolves the same ladder the raw
+    fluid column does. (Nothing writes final_/quicklook_fluid_type anymore -- the
+    step selects are gone -- but wells written before still populate this way.)"""
     pid = create_project(client, "STATUS-4", **BP_KWARGS)
     _save_fields(client, pid, "Quicklook Logs Interpretation", {"quicklook_fluid_type": "Gas"})
     _save_fields(client, pid, "Post-Drilling Resource Assessment",
@@ -219,11 +231,60 @@ def test_fluid_precedence_four_key_ladder(client):
     assert row["fluid"] == "Wet"
     assert row["status"] == "Wet"
 
-    # ...but loses to the final petrophysical read.
+    # ...but loses to the legacy final petrophysical read.
     _save_fields(client, pid, "Final Log Analysis", {"final_fluid_type": "Dry"})
     row = _row_for(client, pid)
     assert row["fluid"] == "Dry"
     assert row["status"] == "Dry"
+
+
+def test_sarh_final_phase_fluid_beats_everything(client):
+    """Top of the ladder: the SARH 'final'-phase formation fluid outranks every
+    lower rung, including the legacy final_fluid_type EAV."""
+    pid = create_project(client, "FLUID-SARH-1", **BP_KWARGS)
+    _save_fields(client, pid, "Quicklook Logs Interpretation", {"quicklook_fluid_type": "Gas"})
+    _save_fields(client, pid, "Post-Drilling Resource Assessment", {"post_drill_fluid_type": "Wet"})
+    _save_fields(client, pid, "Resource Assessment Update", {"resource_update_fluid_type": "Gas Condensate"})
+    _save_fields(client, pid, "Final Log Analysis", {"final_fluid_type": "Dry"})
+    _put_sarh_fluid(client, pid, "quicklook", "Water")
+    _put_sarh_fluid(client, pid, "final", "Oil")
+
+    row = _row_for(client, pid)
+    assert row["fluid"] == "Oil"    # SARH final beats the legacy final EAV
+    assert row["status"] == "Oil"
+
+
+def test_resource_update_and_post_drill_slot_between_sarh_phases(client):
+    """Rungs 3-4 sit between the two SARH phases: with only a SARH 'quicklook'
+    formation fluid present, the post_drill step fluid beats it, and a
+    resource_update revision beats post_drill -- none reaching the SARH final rung
+    (no final-phase row exists)."""
+    pid = create_project(client, "FLUID-SARH-2", **BP_KWARGS)
+    _put_sarh_fluid(client, pid, "quicklook", "Water")
+    _save_fields(client, pid, "Quicklook Logs Interpretation", {"quicklook_fluid_type": "Gas"})
+    row = _row_for(client, pid)
+    assert row["fluid"] == "Water"  # SARH quicklook beats legacy quicklook EAV
+
+    _save_fields(client, pid, "Post-Drilling Resource Assessment", {"post_drill_fluid_type": "Wet"})
+    assert _row_for(client, pid)["fluid"] == "Wet"  # post_drill beats SARH quicklook
+
+    _save_fields(client, pid, "Resource Assessment Update", {"resource_update_fluid_type": "Gas Condensate"})
+    row = _row_for(client, pid)
+    assert row["fluid"] == "Gas Condensate"  # resource_update beats post_drill
+    assert row["status"] == "Gas Condensate"
+
+
+def test_sarh_quicklook_fluid_beats_legacy_quicklook_eav(client):
+    """Bottom two rungs: the SARH 'quicklook'-phase formation fluid outranks the
+    legacy quicklook_fluid_type EAV."""
+    pid = create_project(client, "FLUID-SARH-3", **BP_KWARGS)
+    _save_fields(client, pid, "Quicklook Logs Interpretation", {"quicklook_fluid_type": "Gas"})
+    assert _row_for(client, pid)["fluid"] == "Gas"  # only the legacy EAV so far
+
+    _put_sarh_fluid(client, pid, "quicklook", "Water")
+    row = _row_for(client, pid)
+    assert row["fluid"] == "Water"
+    assert row["status"] == "Water"
 
 
 # ---------------------------------------------------------------------------

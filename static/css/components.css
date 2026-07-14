@@ -368,6 +368,7 @@
 .field-row { grid-column: 1 / -1; display: grid; gap: var(--space-2); align-items: start; }
 .field-row.cols-2 { grid-template-columns: repeat(2, 1fr); }
 .field-row.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.field-row.cols-4 { grid-template-columns: repeat(4, 1fr); }
 .field-section-label {
   grid-column: 1 / -1;
   font-size: var(--text-sm);
@@ -376,11 +377,16 @@
   margin-top: var(--space-2);
 }
 
-/* Formations multi-row editor (well-level formation values; detail-form.js).
-   Reuses the repeatable-field/.repeatable-row grid frame (one row per formation,
-   grid columns set inline). The formation cell stacks its dropdown above the
-   custom-name input (shown only for 'Other...' rows). */
-.formation-name-cell { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+/* Formations editor (well-level formation values; detail-form.js): a formation
+   picker above the selected formation's grouped panel. The panel reuses the
+   .field-row / .field-section-label idiom (each group its own grid) so nothing
+   scrolls horizontally at the card's normal width. */
+.formation-picker-row { display: flex; align-items: flex-end; gap: var(--space-2); margin-bottom: var(--space-2); }
+.formation-picker-label { flex: 1 1 auto; min-width: 0; }
+.formation-remove { flex: 0 0 auto; align-self: center; }
+.formation-panel { display: flex; flex-direction: column; gap: var(--space-1); }
+/* First section heading sits directly under the picker -- drop its extra top gap. */
+.formation-panel > .field-section-label:first-child { margin-top: 0; }
 
 /* =========================================================================
    Summary panel (right-hand rail)

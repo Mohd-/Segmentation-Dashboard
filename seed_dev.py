@@ -327,9 +327,14 @@ def _flowback_fields():
     }
 
 
-def _formation_row(formation):
+def _formation_row(formation, fluid=None):
     """One project_formations row; numeric fields are real numbers (not
-    strings) as upsert_project_formations expects for a clean coercion."""
+    strings) as upsert_project_formations expects for a clean coercion.
+
+    ``fluid`` overrides the random per-formation fluid: pass the WELL's fluid
+    for SARH rows (the well inherits SARH's fluid through
+    reporting.resolve_well_fluid) or "" to leave the row fluid-less (the
+    legacy-fallback well)."""
     top = round(random.uniform(8500, 12000), 1)
     thickness = round(random.uniform(30, 150), 1)
     return {
@@ -341,8 +346,15 @@ def _formation_row(formation):
         "swt_pct": round(random.uniform(18, 45), 1),
         "pay_ft": round(random.uniform(10, thickness), 1),
         "ngr_pct": round(random.uniform(4, 22), 1),
-        "fluid": random.choice(DRILLED_FLUIDS),
+        "fluid": random.choice(DRILLED_FLUIDS) if fluid is None else fluid,
     }
+
+
+def _phase_formation_rows(names, sarh_fluid):
+    """Formation rows for one phase upsert: SARH carries ``sarh_fluid`` (the
+    well-level fluid the resolve_well_fluid ladder inherits, or "" for none);
+    the other formations keep a random per-formation fluid."""
+    return [_formation_row(f, fluid=(sarh_fluid if f == "SARH" else None)) for f in names]
 
 
 def _prospect_step_fields(task_name, force_ar_one=False, force_pore_pressure=False):
@@ -532,26 +544,61 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
                                               {"bp_gate_classification": random.choice(GHEER_CLASSIFICATIONS)},
                                               changed_by="Seed Script")
 
+        # The well's fluid, inherited from its SARH formation rows through
+        # reporting.resolve_well_fluid (the step-level Quicklook / Final Log
+        # Analysis fluid selects are gone). i == 2 is pinned to Condensate so
+        # at least one well always exercises the flowback_liquid_rate_bpd /
+        # BPD unit path (schema.js's FLOWBACK_RATE_FIELDS) in the summary
+        # card. i == 5 (drilled, maturity 2) is the ONE legacy-fallback well:
+        # its fluid/tops are seeded ONLY through the retired step-level EAV
+        # keys -- which nothing writes anymore but resolve_well_fluid still
+        # reads as fallback rungs -- with NO fluid on its SARH formation rows
+        # and the kept post_drill/resource_update fluid selects left blank,
+        # so the ladder must fall all the way through to the legacy keys,
+        # exercising that path end-to-end like a well written before the
+        # multi-formation editor existed.
+        fluid = "Condensate" if i == 2 else random.choice(DRILLED_FLUIDS)
+        legacy_fluid_well = (i == 5)
+        sarh_fluid = "" if legacy_fluid_well else fluid
+
         if maturity >= 1:
-            workflow.save_task_dynamic_fields(session, by_name["Quicklook Logs Interpretation"]["task_id"],
-                                              {"quicklook_fluid_type": random.choice(DRILLED_FLUIDS)},
-                                              changed_by="Seed Script")
+            # Quicklook interpretation now writes per-formation rows (the
+            # step-level quicklook_fluid_type key was removed); the well
+            # inherits SARH's fluid.
+            workflow.upsert_project_formations(
+                session, pid, "quicklook", _phase_formation_rows(workflow.FORMATIONS, sarh_fluid),
+                changed_by="Seed Script", source_task_id=by_name["Quicklook Logs Interpretation"]["task_id"])
 
         if maturity == 2:
-            # One fluid value flows through post-drill/final/resource-update
-            # for coherence; the first maturity-2 well (i == 2) is pinned to
-            # Condensate so at least one well always exercises the
-            # flowback_liquid_rate_bpd / BPD unit path (schema.js's
-            # FLOWBACK_RATE_FIELDS) in the summary card.
-            fluid = "Condensate" if i == 2 else random.choice(DRILLED_FLUIDS)
+            post_drill_fields = _piip_fields("post_drill_piip")
+            resource_update_fields = _piip_fields("resource_update")
+            if legacy_fluid_well:
+                # Legacy EAV fluid + step-level tops on Quicklook / Final Log
+                # Analysis only (rungs 2 and 6 of the ladder); see the comment
+                # above for why this well seeds nothing else fluid-wise.
+                top = round(random.uniform(8500, 12000), 1)
+                workflow.save_task_dynamic_fields(
+                    session, by_name["Quicklook Logs Interpretation"]["task_id"],
+                    {"quicklook_fluid_type": fluid,
+                     "quicklook_top_reservoir_tvdss_ft": top,
+                     "quicklook_base_reservoir_tvdss_ft": round(top + random.uniform(30, 150), 1)},
+                    changed_by="Seed Script")
+                top = round(random.uniform(8500, 12000), 1)
+                workflow.save_task_dynamic_fields(
+                    session, by_name["Final Log Analysis"]["task_id"],
+                    {"final_fluid_type": fluid,
+                     "final_top_reservoir_tvdss_ft": top,
+                     "final_base_reservoir_tvdss_ft": round(top + random.uniform(30, 150), 1)},
+                    changed_by="Seed Script")
+            else:
+                # Steps 20/30 kept their step-level fluid selects; one fluid
+                # value flows through everything for coherence.
+                post_drill_fields["post_drill_fluid_type"] = fluid
+                resource_update_fields["resource_update_fluid_type"] = fluid
             workflow.save_task_dynamic_fields(session, by_name["Post-Drilling Resource Assessment"]["task_id"],
-                                              dict(_piip_fields("post_drill_piip"), post_drill_fluid_type=fluid),
-                                              changed_by="Seed Script")
-            workflow.save_task_dynamic_fields(session, by_name["Final Log Analysis"]["task_id"],
-                                              {"final_fluid_type": fluid}, changed_by="Seed Script")
+                                              post_drill_fields, changed_by="Seed Script")
             workflow.save_task_dynamic_fields(session, by_name["Resource Assessment Update"]["task_id"],
-                                              dict(_piip_fields("resource_update"), resource_update_fluid_type=fluid),
-                                              changed_by="Seed Script")
+                                              resource_update_fields, changed_by="Seed Script")
             workflow.save_task_dynamic_fields(session, by_name["Flowback Results"]["task_id"],
                                               _flowback_fields(), changed_by="Seed Script")
             # pda_booked on SOME (not all) maturity-2 wells, so the Portfolio
@@ -561,22 +608,21 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
                 workflow.save_task_dynamic_fields(session, by_name["PDA"]["task_id"],
                                                   {"pda_booked": "1"}, changed_by="Seed Script")
 
-            # A "few drilled wells" get formation interpretation rows across
-            # all 4 FORMATION_PHASES; the first maturity-2 well also gets a
-            # custom, non-canonical formation name (the 'Other...' free-text
-            # path) alongside the SARH/QASM/QWRH trio.
+            # Drilled wells get formation interpretation rows across the
+            # remaining FORMATION_PHASES (quicklook was written above), SARH
+            # carrying the well fluid at every phase it has rows for; the
+            # first maturity-2 well also gets a custom, non-canonical
+            # formation name (the 'Other...' free-text path) alongside the
+            # SARH/QASM/QWRH trio.
             custom = ["UNAYZAH"] if i == 2 else []
             workflow.upsert_project_formations(
-                session, pid, "quicklook", [_formation_row(f) for f in workflow.FORMATIONS],
-                changed_by="Seed Script", source_task_id=by_name["Quicklook Logs Interpretation"]["task_id"])
-            workflow.upsert_project_formations(
-                session, pid, "final", [_formation_row(f) for f in workflow.FORMATIONS + custom],
+                session, pid, "final", _phase_formation_rows(workflow.FORMATIONS + custom, sarh_fluid),
                 changed_by="Seed Script", source_task_id=by_name["Final Log Analysis"]["task_id"])
             workflow.upsert_project_formations(
-                session, pid, "post_drill", [_formation_row(f) for f in workflow.FORMATIONS],
+                session, pid, "post_drill", _phase_formation_rows(workflow.FORMATIONS, sarh_fluid),
                 changed_by="Seed Script", source_task_id=by_name["Post-Drilling Resource Assessment"]["task_id"])
             workflow.upsert_project_formations(
-                session, pid, "resource_update", [_formation_row(f) for f in workflow.FORMATIONS + custom],
+                session, pid, "resource_update", _phase_formation_rows(workflow.FORMATIONS + custom, sarh_fluid),
                 changed_by="Seed Script", source_task_id=by_name["Resource Assessment Update"]["task_id"])
     return project_ids
 
