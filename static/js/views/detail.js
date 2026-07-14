@@ -437,7 +437,18 @@ export function renderRightPanel(tasks) {
       (Store.allFields['Quicklook Logs Interpretation'] || {}).quicklook_fluid_type
     ]);
     var flowEntry = FLOWBACK_RATE_FIELDS[fluid] || FLOWBACK_RATE_FIELDS['Gas'];
-    var flowValue = (Store.allFields['Flowback Results'] || {})[flowEntry.key];
+    // Primary flowback values are stage #1 -- the first non-empty row of the
+    // Flowback Results stages mini-sheet (whose column keys reuse the retired
+    // flat key names). Only when NO stage row exists does the read fall back
+    // to the retired step-level flat key, so a stage row and legacy flat data
+    // never mix (single-vintage rule, like the Reservoir CoS primary row).
+    var flowbackFields = Store.allFields['Flowback Results'] || {};
+    var primaryStage = null;
+    parseRepeatableRows(flowbackFields.flowback_stages_rows || '[]').forEach(function (stage) {
+      if (primaryStage || !stage) return;
+      if (Object.keys(stage).some(function (key) { return isFilled(stage[key]); })) primaryStage = stage;
+    });
+    var flowValue = primaryStage ? primaryStage[flowEntry.key] : flowbackFields[flowEntry.key];
     var flowbackHtml = '<div class="summary-metrics summary-section">' +
       metricRow('Flowback Rate', isFilled(flowValue) ? flowValue + ' ' + flowEntry.unit : '', isFilled(fluid) ? fluid : 'Gas') +
       '</div>';

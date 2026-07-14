@@ -42,10 +42,12 @@ export function piip(prefix) {
 // portfolio status instead.
 export var FLUID_TYPES = ['', 'Dry', 'Gas', 'Water', 'Condensate', 'Liquid', 'Gas over Water'];
 // Flowback rate key + unit keyed by fluid type -- a well's headline flowback
-// rate lives in a different EAV field depending on what it produced. Gas / Gas
+// rate lives under a different key depending on what it produced. Gas / Gas
 // over Water report gas (MMSCFD); Condensate / Liquid report liquid (BPD);
 // Water reports water (BWPD). Dry/blank have no dedicated key -- the call site
-// falls back to the gas entry. Imported by the well summary card (WS5).
+// falls back to the gas entry. Imported by the well summary card (WS5). The
+// keys address a flowback STAGE row first (FLOWBACK_STAGE_COLUMNS reuses the
+// same names) and the retired step-level flat EAV keys as legacy fallback.
 export var FLOWBACK_RATE_FIELDS = {
   'Gas': { key: 'flowback_gas_rate_mmscfd', unit: 'MMSCFD' },
   'Gas over Water': { key: 'flowback_gas_rate_mmscfd', unit: 'MMSCFD' },
@@ -53,6 +55,21 @@ export var FLOWBACK_RATE_FIELDS = {
   'Liquid': { key: 'flowback_liquid_rate_bpd', unit: 'BPD' },
   'Water': { key: 'flowback_water_rate_bwpd', unit: 'BWPD' }
 };
+// One flowback stage (#1..#n) per row of the Flowback Results mini-sheet (EAV
+// key flowback_stages_rows, a JSON array exactly like reservoir_cos_rows).
+// The column keys deliberately reuse the retired step-level flat keys so
+// FLOWBACK_RATE_FIELDS and every reader address a stage row and legacy flat
+// data with the same name; readers treat the FIRST non-empty stage as the
+// well's primary flowback values, falling back to the flat keys only when no
+// stage row exists. The index column is display-only (the stage number).
+export var FLOWBACK_STAGE_COLUMNS = [
+  { key: 'stage', label: 'Stage', type: 'index' },
+  { key: 'flowback_gas_rate_mmscfd', label: 'Gas Rate (MMSCFD)', type: 'number' },
+  { key: 'flowback_water_rate_bwpd', label: 'Water Rate (BWPD)', type: 'number' },
+  { key: 'flowback_liquid_rate_bpd', label: 'Liquid Rate (BPD)', type: 'number' },
+  { key: 'flowback_choke_size_in', label: 'Choke Size (in)', type: 'number' },
+  { key: 'flowback_fwhp_psi', label: 'FWHP (psi)', type: 'number' }
+];
 // Formation data is well-level (project_formations via /api/projects/<id>/
 // formations), edited per phase across four steps -- phases quicklook /
 // post_drill / final / resource_update (pipeline order). The canonical trio
@@ -136,7 +153,19 @@ export var SCHEMA = {
   'SAD Model': [],
   'Executive Summary': [],
   'URED Update': [],
-  'Flowback Results': [{ key: 'flowback_gas_rate_mmscfd', label: 'Gas Rate (MMSCFD)', type: 'number' }, { key: 'flowback_water_rate_bwpd', label: 'Water Rate (BWPD)', type: 'number' }, { key: 'flowback_liquid_rate_bpd', label: 'Liquid Rate (BPD)', type: 'number' }, { key: 'flowback_choke_size_in', label: 'Choke Size (in)', type: 'number' }, { key: 'flowback_fwhp_psi', label: 'FWHP (psi)', type: 'number' }, { key: 'flowback_dynamic_area_km2', label: 'Dynamic Reservoir Area (km²)', type: 'number' }, { key: 'flowback_dynamic_ogip_bcf', label: 'Dynamic OGIP (BCF)', type: 'number' }, { key: 'flowback_sheet', label: 'Flowback Sheet', type: 'checkbox' }, { key: 'flowback_slide', label: 'Flowback Slide', type: 'checkbox' }],
+  // Per-stage measurements moved into the flowback_stages_rows mini-sheet
+  // (stage #1 is the primary read everywhere); the retired flat rate keys stay
+  // readable in old data via the readers' fallback but are no longer rendered.
+  // The formation dropdown (optionsFrom:'formations': canonical trio + the
+  // well's custom formations) names the tested formation, SARH by default.
+  'Flowback Results': [
+    { key: 'flowback_formation', label: 'Formation', type: 'select', optionsFrom: 'formations', value: 'SARH' },
+    { key: 'flowback_stages_rows', label: 'Flowback Stages', type: 'repeatable', columns: FLOWBACK_STAGE_COLUMNS },
+    { key: 'flowback_dynamic_area_km2', label: 'Dynamic Reservoir Area (km²)', type: 'number', row: 'flowback_dyn' },
+    { key: 'flowback_dynamic_ogip_bcf', label: 'Dynamic OGIP (BCF)', type: 'number', row: 'flowback_dyn' },
+    { key: 'flowback_sheet', label: 'Flowback Sheet', type: 'checkbox', row: 'flowback_docs' },
+    { key: 'flowback_slide', label: 'Flowback Slide', type: 'checkbox', row: 'flowback_docs' }
+  ],
   'SAD Update': [],
   // Same shape as Quicklook (formations picker replaces the step-level
   // tops/fluid keys, dropped here too); final_petrel is this step's unique

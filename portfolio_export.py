@@ -84,6 +84,7 @@ _PORTFOLIO_TASK_FIELD_KEYS: List[str] = [
     "seal_recent_activity_age", "seal_dip", "seal_azimuth_vs_shmax",
     "seal_fault_level_confidence", "seal_fracture_permeability",
     "seal_cos_pct", "seal_pore_pressure_gradient_psi_ft",
+    "flowback_stages_rows",
     "flowback_gas_rate_mmscfd", "flowback_water_rate_bwpd",
     "flowback_choke_size_in", "flowback_fwhp_psi",
 ] + [f"{prefix}_{suffix}" for prefix in _PIIP_PREFIXES
@@ -221,6 +222,39 @@ def _parse_reservoir_cos_primary_row(raw_rows_json) -> dict:
     return {}
 
 
+_FLOWBACK_STAGE_KEYS = (
+    "flowback_gas_rate_mmscfd", "flowback_water_rate_bwpd",
+    "flowback_liquid_rate_bpd", "flowback_choke_size_in", "flowback_fwhp_psi",
+)
+
+
+def _parse_flowback_primary_stage(raw_rows_json) -> dict:
+    """Return the PRIMARY stage of a flowback_stages_rows JSON blob, or {}.
+
+    The Flowback Results step stores per-stage measurements as a JSON array
+    (one row per stage #1..#n; column keys reuse the retired step-level flat
+    EAV key names -- schema.js FLOWBACK_STAGE_COLUMNS). The primary stage is
+    the FIRST row with any measurement filled; like the Reservoir CoS primary
+    row, every flowback column the export ships (Gas Rate, Water Rate, Choke
+    Size, WHP) reads this ONE stage so a row never mixes stages -- or a stage
+    with retired flat-key data. Malformed/absent JSON, or no non-empty stage,
+    yields {}: the caller then falls back to the retired flat keys (wells
+    written before the stages mini-sheet existed)."""
+    if not raw_rows_json:
+        return {}
+    try:
+        rows = json.loads(raw_rows_json)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(rows, list):
+        return {}
+    for row in rows:
+        row = row or {}
+        if any(_first_filled(row.get(key)) for key in _FLOWBACK_STAGE_KEYS):
+            return row
+    return {}
+
+
 def get_portfolio_export_rows(session) -> List[dict]:
     """One row per non-archived lead/well (_export_projects) for Excel.
 
@@ -315,6 +349,12 @@ def get_portfolio_export_rows(session) -> List[dict]:
         # available pay estimate.
         p50_pay = p50_pay or _first_filled(fields.get("reservoir_thickness_ft"))
 
+        # Flowback columns read the primary stage of the stages mini-sheet as
+        # one unit; only a well with NO stage rows falls back to the retired
+        # flat keys (same key names -- the source dict is simply swapped).
+        primary_stage = _parse_flowback_primary_stage(fields.get("flowback_stages_rows"))
+        flowback_src = primary_stage if primary_stage else fields
+
         rows.append({
             "Well Name": item["project_name"],
             "BP Year": item.get("year") or "",
@@ -349,10 +389,10 @@ def get_portfolio_export_rows(session) -> List[dict]:
             "FPPM": _first_filled(fields.get("seal_fracture_permeability")),
             "Seal CoS (%)": _first_filled(fields.get("seal_cos_pct")),
             "Pore Pressure Gradient (psi/ft)": _first_filled(fields.get("seal_pore_pressure_gradient_psi_ft")),
-            "Gas Rate (MMSCFD)": _first_filled(fields.get("flowback_gas_rate_mmscfd")),
-            "Water Rate (BWPD)": _first_filled(fields.get("flowback_water_rate_bwpd")),
-            "Choke Size (in)": _first_filled(fields.get("flowback_choke_size_in")),
-            "WHP (psi)": _first_filled(fields.get("flowback_fwhp_psi")),
+            "Gas Rate (MMSCFD)": _first_filled(flowback_src.get("flowback_gas_rate_mmscfd")),
+            "Water Rate (BWPD)": _first_filled(flowback_src.get("flowback_water_rate_bwpd")),
+            "Choke Size (in)": _first_filled(flowback_src.get("flowback_choke_size_in")),
+            "WHP (psi)": _first_filled(flowback_src.get("flowback_fwhp_psi")),
         })
     return rows
 

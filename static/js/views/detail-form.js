@@ -431,9 +431,24 @@ function bindFormationFields(root) {
   all('.formations-field', root).forEach(function (container) { bindFormationContainer(container); });
 }
 
+// Options for a standalone select with optionsFrom:'formations' (the Flowback
+// Results formation dropdown): the canonical trio plus any custom formations
+// already on the well (Store.formations, any phase, deduped), with a stored
+// value no longer in that set appended so old rows render selected instead of
+// silently blanking (same courtesy repeatableSelectOptions extends).
+function formationNameOptions(current) {
+  var names = FORMATIONS.slice();
+  (Store.formations || []).forEach(function (row) {
+    if (row && row.formation && names.indexOf(row.formation) < 0) names.push(row.formation);
+  });
+  if (isFilled(current) && names.map(String).indexOf(String(current)) < 0) names.push(current);
+  return names;
+}
 // Precedence: saved value ?? Store.project[field.defaultFrom] ?? field.value ?? ''.
 // defaultFrom prefills from a project column (e.g. Staking well X/Y from
 // lead_x/lead_y); the prefill persists as a normal dynamic field on save.
+// The Flowback formation select rides the field.value rung for its SARH
+// default.
 function resolveFieldValue(field, values) {
   var fallback = field.value || '';
   if (field.defaultFrom && Store.project && Store.project[field.defaultFrom] != null) {
@@ -449,7 +464,8 @@ function fieldMarkup(field, value, classes, showIfAttr) {
     return '<label class="calculated-output' + classes + '"' + showIfAttr + '>' + esc(field.label) + '<output>' + (isFilled(value) ? esc(value) + '%' : 'Calculated on save') + '</output></label>';
   }
   if (field.type === 'select') {
-    return '<label class="' + classes + '"' + showIfAttr + '>' + esc(field.label) + '<select data-field="' + esc(field.key) + '">' + (field.options || []).map(function (option) { return '<option ' + (String(value) === String(option) ? 'selected' : '') + '>' + esc(option) + '</option>'; }).join('') + '</select></label>';
+    var options = field.optionsFrom === 'formations' ? formationNameOptions(value) : (field.options || []);
+    return '<label class="' + classes + '"' + showIfAttr + '>' + esc(field.label) + '<select data-field="' + esc(field.key) + '">' + options.map(function (option) { return '<option ' + (String(value) === String(option) ? 'selected' : '') + '>' + esc(option) + '</option>'; }).join('') + '</select></label>';
   }
   if (field.type === 'checkbox') {
     return '<label class="check-label' + classes + '"' + showIfAttr + '><input type="checkbox" data-field="' + esc(field.key) + '" ' + (truthy(value) ? 'checked' : '') + '> ' + esc(field.label) + '</label>';
@@ -686,9 +702,10 @@ export function saveComponent(event) {
 }
 // Shared grid template so the header row and every data row line up: each
 // editable column is a flexible min-90px track, each readonly (calculated)
-// column a compact auto track, plus a trailing auto track for the row action.
+// or index column a compact auto track, plus a trailing auto track for the
+// row action.
 function repeatableTemplate(field) {
-  return (field.columns || []).map(function (col) { return col.readonly ? 'auto' : 'minmax(90px, 1fr)'; }).join(' ') + ' auto';
+  return (field.columns || []).map(function (col) { return (col.readonly || col.type === 'index') ? 'auto' : 'minmax(90px, 1fr)'; }).join(' ') + ' auto';
 }
 // The runtime map of seismic block -> AR list. Prefer /api/meta (Store.meta),
 // which is production-swappable; fall back to the schema.js boot map when meta
@@ -729,6 +746,12 @@ export function repeatableInputMarkup(field, row, rowIndex) {
     var dep = col.dependsOn ? ' data-depends-on="' + esc(col.dependsOn) + '"' : '';
     var attr = 'data-repeatable-input="' + esc(field.key) + '" data-repeatable-row="' + rowIndex + '" data-repeatable-column="' + esc(col.key) + '"' + dep;
     var aria = ' aria-label="' + esc(col.label) + '"';
+    // Index column: a display-only row-number chip (#1..#n, e.g. flowback
+    // stages). No data-repeatable-input attr, so getFields never harvests it;
+    // renumberIndexColumns re-stamps it after a mid-list removal.
+    if (col.type === 'index') {
+      return '<span class="repeatable-calc repeatable-index" title="' + esc(col.label) + '">#' + (rowIndex + 1) + '</span>';
+    }
     // Readonly calculated column: a compact brand-tinted value chip at the right
     // end of the row (server computes it on save; not harvested by getFields).
     if (col.readonly) {
@@ -751,6 +774,14 @@ export function renderRepeatableField(field, value) {
     return '<span class="repeatable-col-label">' + esc(col.label) + '</span>';
   }).join('') + '<span class="repeatable-col-label" aria-hidden="true"></span></div>';
   return '<div class="repeatable-field wide-field" data-repeatable="' + esc(field.key) + '"><div class="repeatable-heading"><b>' + esc(field.label) + '</b><button type="button" class="icon-btn add-repeatable-row" data-repeatable-key="' + esc(field.key) + '" title="Add row" aria-label="Add row">+</button></div><div class="repeatable-sheet"><div class="repeatable-rows">' + header + rows.map(function (row, index) { return repeatableInputMarkup(field, row || {}, index); }).join('') + '</div></div></div>';
+}
+// Re-stamp a container's display-only index chips (#1..#n) after a mid-list
+// removal so row numbers stay contiguous (rows without index columns are a
+// harmless no-op).
+function renumberIndexColumns(parent) {
+  all('.repeatable-row', parent).forEach(function (row, index) {
+    all('.repeatable-index', row).forEach(function (span) { span.textContent = '#' + (index + 1); });
+  });
 }
 // Repeatable field keys are globally unique across SCHEMA, so the "add row"
 // def resolves by key search rather than through Store.task.task_name -- the
@@ -792,6 +823,7 @@ export function bindRepeatableFields(root, onInput) {
       var rows = parent.querySelectorAll('.repeatable-row');
       if (rows.length === 1) { all('input,select', rows[0]).forEach(function (element) { element.value = ''; }); }
       else { button.closest('.repeatable-row').remove(); }
+      renumberIndexColumns(parent);
       handler();
     });
   });

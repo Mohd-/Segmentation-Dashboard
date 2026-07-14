@@ -538,6 +538,75 @@ def test_export_reservoir_cos_columns_read_one_primary_row(client):
     assert row[header.index("Seismic Block")] == "AR-777"
 
 
+def test_export_flowback_columns_read_primary_stage(client):
+    """The flowback columns come from the FIRST non-empty stage of the
+    flowback_stages_rows mini-sheet, as one unit: a well that also carries the
+    retired flat keys must not mix them in (single-vintage rule, mirroring the
+    Reservoir CoS primary row) -- even for a measurement the stage left blank."""
+    bp_pid = create_project(client, "EXPORT-BP-FB1", pipeline_type="bp",
+                             business_plan_enabled=True, business_plan_year=2030)
+    flowback_task = get_task_by_name(client, bp_pid, "Flowback Results")
+    resp = client.patch(f"/api/tasks/{flowback_task['task_id']}/dynamic-fields",
+                         json={"fields": {
+                             "flowback_stages_rows": json.dumps([
+                                 {"flowback_gas_rate_mmscfd": "", "flowback_water_rate_bwpd": "",
+                                  "flowback_choke_size_in": "", "flowback_fwhp_psi": ""},
+                                 {"flowback_gas_rate_mmscfd": "9.5", "flowback_water_rate_bwpd": "120",
+                                  "flowback_choke_size_in": "0.5", "flowback_fwhp_psi": ""},
+                                 {"flowback_gas_rate_mmscfd": "4.2"},
+                             ]),
+                             # Retired flat keys: must lose to the stage row wholesale.
+                             "flowback_gas_rate_mmscfd": "1.1",
+                             "flowback_fwhp_psi": "888",
+                         }})
+    assert resp.status_code == 200
+
+    resp = client.get("/api/export/excel")
+    assert resp.status_code == 200
+    workbook = openpyxl.load_workbook(io.BytesIO(resp.data))
+    ws_export = workbook["Portfolio Export"]
+    header = [cell.value for cell in ws_export[4]]
+    matching_rows = [row for row in ws_export.iter_rows(min_row=5, max_row=ws_export.max_row, values_only=True)
+                     if row[header.index("Well Name")] == "EXPORT-BP-FB1"]
+    assert len(matching_rows) == 1
+    row = matching_rows[0]
+    assert row[header.index("Gas Rate (MMSCFD)")] == "9.5"
+    assert row[header.index("Water Rate (BWPD)")] == "120"
+    assert row[header.index("Choke Size (in)")] == "0.5"
+    # The primary stage left WHP blank; the flat key's 888 must NOT leak in.
+    assert row[header.index("WHP (psi)")] in (None, "")
+
+
+def test_export_flowback_columns_fall_back_to_flat_keys(client):
+    """A well written before the stages mini-sheet existed (retired flat keys
+    only, no flowback_stages_rows) still fills the flowback columns."""
+    bp_pid = create_project(client, "EXPORT-BP-FB2", pipeline_type="bp",
+                             business_plan_enabled=True, business_plan_year=2030)
+    flowback_task = get_task_by_name(client, bp_pid, "Flowback Results")
+    resp = client.patch(f"/api/tasks/{flowback_task['task_id']}/dynamic-fields",
+                         json={"fields": {
+                             "flowback_gas_rate_mmscfd": "3.3",
+                             "flowback_water_rate_bwpd": "450",
+                             "flowback_choke_size_in": "0.75",
+                             "flowback_fwhp_psi": "2100",
+                         }})
+    assert resp.status_code == 200
+
+    resp = client.get("/api/export/excel")
+    assert resp.status_code == 200
+    workbook = openpyxl.load_workbook(io.BytesIO(resp.data))
+    ws_export = workbook["Portfolio Export"]
+    header = [cell.value for cell in ws_export[4]]
+    matching_rows = [row for row in ws_export.iter_rows(min_row=5, max_row=ws_export.max_row, values_only=True)
+                     if row[header.index("Well Name")] == "EXPORT-BP-FB2"]
+    assert len(matching_rows) == 1
+    row = matching_rows[0]
+    assert row[header.index("Gas Rate (MMSCFD)")] == "3.3"
+    assert row[header.index("Water Rate (BWPD)")] == "450"
+    assert row[header.index("Choke Size (in)")] == "0.75"
+    assert row[header.index("WHP (psi)")] == "2100"
+
+
 def test_export_includes_proposed_leads_with_latest_estimates(client):
     """The Portfolio Export sheet is one row per NON-ARCHIVED project: a
     still-maturing (Proposed) lead must appear, its estimate columns filled

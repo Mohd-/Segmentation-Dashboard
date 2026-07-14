@@ -311,20 +311,36 @@ def _staking_fields():
     return fields
 
 
-def _flowback_fields():
-    """Full Flowback Results field set, incl. the new
-    ``flowback_liquid_rate_bpd`` (BPD path for Condensate/Liquid fluids,
-    schema.js's FLOWBACK_RATE_FIELDS). All rate fields are filled regardless
-    of fluid type so a fluid-type change in the UI never reveals a blank."""
-    return {
-        "flowback_gas_rate_mmscfd": round(random.uniform(1, 15), 2),
-        "flowback_water_rate_bwpd": round(random.uniform(50, 800), 1),
-        "flowback_liquid_rate_bpd": round(random.uniform(100, 2500), 1),
-        "flowback_choke_size_in": round(random.uniform(0.25, 1.5), 3),
-        "flowback_fwhp_psi": round(random.uniform(500, 4500), 1),
+def _flowback_fields(legacy=False):
+    """Full Flowback Results field set. New-style wells carry the formation
+    dropdown (SARH, the schema default) plus 1-3 stage rows in the
+    flowback_stages_rows JSON mini-sheet (stage #1 is the primary read
+    everywhere); ``legacy=True`` writes the per-stage measurements ONLY
+    through the retired step-level flat keys instead -- like a well written
+    before the stages sheet existed -- exercising the readers' flat-key
+    fallback (detail.js flowback rate, portfolio_export flowback columns).
+    Every rate field is filled regardless of fluid type so a fluid-type
+    change in the UI never reveals a blank (incl. flowback_liquid_rate_bpd,
+    the BPD path for Condensate/Liquid fluids)."""
+    def _stage():
+        return {
+            "flowback_gas_rate_mmscfd": round(random.uniform(1, 15), 2),
+            "flowback_water_rate_bwpd": round(random.uniform(50, 800), 1),
+            "flowback_liquid_rate_bpd": round(random.uniform(100, 2500), 1),
+            "flowback_choke_size_in": round(random.uniform(0.25, 1.5), 3),
+            "flowback_fwhp_psi": round(random.uniform(500, 4500), 1),
+        }
+    fields = {
         "flowback_dynamic_area_km2": round(random.uniform(1, 20), 2),
         "flowback_dynamic_ogip_bcf": round(random.uniform(5, 60), 2),
     }
+    if legacy:
+        fields.update(_stage())
+    else:
+        fields["flowback_formation"] = "SARH"
+        fields["flowback_stages_rows"] = json.dumps(
+            [_stage() for _ in range(random.randint(1, 3))])
+    return fields
 
 
 def _formation_row(formation, fluid=None):
@@ -599,8 +615,12 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
                                               post_drill_fields, changed_by="Seed Script")
             workflow.save_task_dynamic_fields(session, by_name["Resource Assessment Update"]["task_id"],
                                               resource_update_fields, changed_by="Seed Script")
+            # The legacy-fallback well also keeps its flowback data in the
+            # retired flat keys (no stages sheet), so the flat-key fallback
+            # is exercised end-to-end alongside the legacy fluid ladder.
             workflow.save_task_dynamic_fields(session, by_name["Flowback Results"]["task_id"],
-                                              _flowback_fields(), changed_by="Seed Script")
+                                              _flowback_fields(legacy=legacy_fluid_well),
+                                              changed_by="Seed Script")
             # pda_booked on SOME (not all) maturity-2 wells, so the Portfolio
             # Export sheet's Booked column shows both 'Yes' and the blank/'No'
             # case.

@@ -361,6 +361,13 @@
   text-align: center;
   white-space: nowrap;
 }
+/* Display-only row-number chip (#1..#n, e.g. flowback stages): keeps the calc
+   chip's shape but muted -- it labels the row rather than reporting a result. */
+.repeatable-calc.repeatable-index {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-faint);
+}
 
 /* Grouped field rows (Staking option pairs, PIIP P90/Mean/P10 trios): a set of
    related fields sharing a schema `row` id render inside one full-width grid of
