@@ -1,7 +1,7 @@
 import { byId, all, esc, isFilled, msg } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName, Store, resetSelection } from '../state.js';
-import { BP_STAGES, PROSPECT_STAGES, DONE } from '../schema.js';
+import { BP_STAGES, PROSPECT_STAGES, DONE, SEISMIC_BLOCKS } from '../schema.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { canTransitionPhase, promoteProject, recallProject } from './transitions.js';
 import { loadComponent, LATEST_PIIP_SOURCES } from './detail-form.js';
@@ -146,12 +146,30 @@ export function parseRepeatableRows(value) {
     return Array.isArray(parsed) ? parsed : [];
   } catch (error) { return []; }
 }
+// Reverse-lookup a block name from an AR number using the seismic map (meta,
+// or the schema.js fallback). Used when a legacy row stored only the AR.
+function blockForAr(map, ar) {
+  if (!isFilled(ar) || !map) return '';
+  var names = Object.keys(map);
+  for (var i = 0; i < names.length; i += 1) {
+    if ((map[names[i]] || []).map(String).indexOf(String(ar)) >= 0) return names[i];
+  }
+  return '';
+}
 export function reservoirCosSummary(fieldMap) {
   var sourceMap = fieldMap || Store.allFields;
   var rows = parseRepeatableRows(((sourceMap['Reservoir CoS'] || {}).reservoir_cos_rows) || '[]');
+  var blocks = (Store.meta && Store.meta.seismic_blocks) || SEISMIC_BLOCKS;
   return rows.map(function (row) {
-    var ref = row.seismic_volume_ar_number ? 'AR ' + row.seismic_volume_ar_number + ': ' : '';
-    return isFilled(row.reservoir_cos_pct) ? ref + row.reservoir_cos_pct + '%' : '';
+    if (!isFilled(row.reservoir_cos_pct)) return '';
+    // Prefer the row's stored block; else reverse-lookup the AR in the map.
+    // Degrade to AR-only, then to bare percent, when the block is unknown.
+    var block = row.seismic_block || blockForAr(blocks, row.seismic_volume_ar_number);
+    var parts = [];
+    if (isFilled(block)) parts.push(block);
+    if (isFilled(row.seismic_volume_ar_number)) parts.push('AR ' + row.seismic_volume_ar_number);
+    var ref = parts.length ? parts.join(' · ') + ': ' : '';
+    return ref + row.reservoir_cos_pct + '%';
   }).filter(Boolean).join(' · ');
 }
 // Latest gas P90/P10 pair. Same source precedence as LATEST_PIIP_SOURCES

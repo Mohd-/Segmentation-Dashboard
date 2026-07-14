@@ -8,6 +8,16 @@ export var BP_STAGES = ['Well Delivery', 'Post-Drilling', 'Post-Testing'];
 export var STATUSES = ['Not Assigned', 'In Progress', 'Ready', 'Approved'];
 // The single done state: a component renders as done in the rail once Approved.
 export var DONE = { 'Approved': 1 };
+// Seismic blocks -> their AR (seismic volume) numbers. Boot fallback only; GET
+// /api/meta (Store.meta.seismic_blocks) is authoritative at runtime -- the map
+// is production-swappable there. Used by the Reservoir CoS mini-sheet's two
+// dependent dropdowns (Seismic Block -> AR Number).
+export var SEISMIC_BLOCKS = {
+  'Block A': ['2525', '345346', '6345345'],
+  'Block B': ['1201', '88421', '990017', '445120'],
+  'Block C': ['73310', '73311'],
+  'Block D': ['560001', '560002', '560003', '560004']
+};
 
 export function piip(prefix) {
   // Grouped layout: the gas P90/Mean/P10 trio sits under a 'Gas (BCF)' section
@@ -44,8 +54,16 @@ export var FORMATION_METRICS = [
   { key: 'ngr_pct', label: 'NGR (%)', type: 'number' },
   { key: 'fluid', label: 'Fluid', type: 'select', options: FLUID_TYPES }
 ];
+// The block/AR pair are dependent selects: the block column's options are the
+// keys of the seismic_blocks map (meta, or SEISMIC_BLOCKS fallback); the AR
+// column (optionsFrom the same map, dependsOn the row's block) offers only that
+// block's AR list. `optionsFrom` names the meta/schema map to read; `dependsOn`
+// names the sibling column whose value scopes the options. Keys are unchanged
+// (renaming EAV/row keys orphans stored data) -- seismic_volume_ar_number just
+// switched from free text to a select and got a shorter label.
 export var RESERVOIR_COS_COLUMNS = [
-  { key: 'seismic_volume_ar_number', label: 'Seismic Volume AR Number', type: 'text' },
+  { key: 'seismic_block', label: 'Seismic Block', type: 'select', optionsFrom: 'seismic_blocks' },
+  { key: 'seismic_volume_ar_number', label: 'AR Number', type: 'select', optionsFrom: 'seismic_blocks', dependsOn: 'seismic_block' },
   { key: 'amplitude_ratio', label: 'Amplitude Ratio', type: 'number' },
   { key: 'base_tight_sarah', label: 'Base Tight Sarah', type: 'number' },
   { key: 'pull_up', label: 'Pull-up', type: 'select', options: ['', 'No', 'Semi', 'Yes'] },

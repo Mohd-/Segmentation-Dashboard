@@ -209,23 +209,53 @@ def _piip_fields(prefix):
     }
 
 
+def _random_block_ar_pair():
+    """A coherent (block, ar) pair drawn from config.SEISMIC_BLOCK_AR_MAP, or
+    ("", "") when the map is empty (falls back to the synthetic _ar_number
+    behavior below so seeding still works with no seismic_blocks.json)."""
+    block_map = config.SEISMIC_BLOCK_AR_MAP
+    if not block_map:
+        return "", ""
+    block = random.choice(list(block_map.keys()))
+    ars = block_map.get(block) or []
+    if not ars:
+        return block, ""
+    return block, random.choice(ars)
+
+
 def _reservoir_cos_rows(force_ar_one=False):
     """A pre-scored Reservoir CoS Evaluations row set (see module docstring
     for why this bypasses the RF model instead of calling
     cos.calculate_reservoir_cos_rows)."""
     rows = []
     for _ in range(random.randint(1, 3)):
-        rows.append({
-            "seismic_volume_ar_number": _ar_number(random.randint(2, 40)),
+        block, ar = _random_block_ar_pair()
+        row = {
             "amplitude_ratio": round(random.uniform(0.1, 0.9), 2),
             "base_tight_sarah": round(random.uniform(0.1, 0.9), 2),
             "pull_up": random.choice(PULL_UP_OPTIONS),
             "reservoir_cos_pct": str(random.randint(20, 90)),
-        })
+        }
+        if block or ar:
+            row["seismic_block"] = block
+            row["seismic_volume_ar_number"] = ar
+        else:
+            row["seismic_block"] = ""
+            row["seismic_volume_ar_number"] = _ar_number(random.randint(2, 40))
+        rows.append(row)
     if force_ar_one:
-        # Demonstrates config.SEISMIC_BLOCK_NAMES's placeholder mapping
-        # ("AR-0000001" -> "JOHN 4") without editing config.py.
-        rows[-1]["seismic_volume_ar_number"] = _ar_number(1)
+        # Deterministically pins the last row to the FIRST block's FIRST AR
+        # in config.SEISMIC_BLOCK_AR_MAP, demonstrating the Portfolio's
+        # Block/AR mapping without editing config.py or seismic_blocks.json.
+        block_map = config.SEISMIC_BLOCK_AR_MAP
+        if block_map:
+            first_block = next(iter(block_map))
+            first_ars = block_map.get(first_block) or []
+            rows[-1]["seismic_block"] = first_block
+            rows[-1]["seismic_volume_ar_number"] = first_ars[0] if first_ars else ""
+        else:
+            rows[-1]["seismic_block"] = ""
+            rows[-1]["seismic_volume_ar_number"] = _ar_number(1)
     return json.dumps(rows, separators=(",", ":"))
 
 

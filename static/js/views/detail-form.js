@@ -1,7 +1,7 @@
 import { byId, all, esc, isFilled, truthy, msg } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName, currentRole, canManageAssignments, Store } from '../state.js';
-import { SCHEMA, FORMATIONS, FORMATION_METRICS } from '../schema.js';
+import { SCHEMA, FORMATIONS, FORMATION_METRICS, SEISMIC_BLOCKS } from '../schema.js';
 import { confirmDialog } from '../dialog.js';
 import { renderDetail, renderRightPanel, chooseInitialTask, tasksForPipeline, parseRepeatableRows, refreshAfterRecordChange, revealTaskStage } from './detail.js';
 import { refreshAllBoards } from './pipeline.js';
@@ -524,12 +524,44 @@ export function saveComponent(event) {
 function repeatableTemplate(field) {
   return (field.columns || []).map(function (col) { return col.readonly ? 'auto' : 'minmax(90px, 1fr)'; }).join(' ') + ' auto';
 }
+// The runtime map of seismic block -> AR list. Prefer /api/meta (Store.meta),
+// which is production-swappable; fall back to the schema.js boot map when meta
+// is absent (e.g. the meta call failed or predates the seismic_blocks key).
+function seismicBlocksMap() {
+  return (Store.meta && Store.meta.seismic_blocks) || SEISMIC_BLOCKS || {};
+}
+// Options for a `optionsFrom`-driven select column, scoped to the current row.
+// A column with `dependsOn` (the AR column) yields only its sibling block's AR
+// list; without it (the block column) it yields the block names. Both lead with
+// a blank option. `row` may be a plain object (initial render) or a lookup of
+// the sibling's current value.
+function repeatableColumnOptions(col, row) {
+  var map = seismicBlocksMap();
+  if (col.dependsOn) {
+    var block = row[col.dependsOn];
+    return [''].concat((block && map[block]) || []);
+  }
+  return [''].concat(Object.keys(map));
+}
+// Build the <option> list for a select column, appending the stored value as an
+// extra option when it is legacy data no longer present in the map (so old rows
+// render selected instead of silently blanking).
+function repeatableSelectOptions(col, row, value) {
+  var options = col.optionsFrom ? repeatableColumnOptions(col, row) : (col.options || []);
+  if (isFilled(value) && options.map(String).indexOf(String(value)) < 0) options = options.concat([value]);
+  return options.map(function (option) {
+    return '<option value="' + esc(option) + '" ' + (String(value) === String(option) ? 'selected' : '') + '>' + esc(option || 'Select') + '</option>';
+  }).join('');
+}
 export function repeatableInputMarkup(field, row, rowIndex) {
   var cols = field.columns || [];
   var style = ' style="grid-template-columns:' + repeatableTemplate(field) + '"';
   return '<div class="repeatable-row" data-repeatable-row="' + rowIndex + '"' + style + '>' + cols.map(function (col) {
     var value = row[col.key] == null ? '' : row[col.key];
-    var attr = 'data-repeatable-input="' + esc(field.key) + '" data-repeatable-row="' + rowIndex + '" data-repeatable-column="' + esc(col.key) + '"';
+    // A dependent column (AR) carries data-depends-on so bindRepeatableFields can
+    // rebuild its options when the sibling (block) select changes.
+    var dep = col.dependsOn ? ' data-depends-on="' + esc(col.dependsOn) + '"' : '';
+    var attr = 'data-repeatable-input="' + esc(field.key) + '" data-repeatable-row="' + rowIndex + '" data-repeatable-column="' + esc(col.key) + '"' + dep;
     var aria = ' aria-label="' + esc(col.label) + '"';
     // Readonly calculated column: a compact brand-tinted value chip at the right
     // end of the row (server computes it on save; not harvested by getFields).
@@ -537,7 +569,7 @@ export function repeatableInputMarkup(field, row, rowIndex) {
       return '<span class="repeatable-calc" title="' + esc(col.label) + '">' + (isFilled(value) ? esc(value) + '%' : '—') + '</span>';
     }
     if (col.type === 'select') {
-      return '<select ' + attr + aria + '>' + (col.options || []).map(function (option) { return '<option value="' + esc(option) + '" ' + (String(value) === String(option) ? 'selected' : '') + '>' + esc(option || 'Select') + '</option>'; }).join('') + '</select>';
+      return '<select ' + attr + aria + '>' + repeatableSelectOptions(col, row, value) + '</select>';
     }
     return '<input type="' + (col.type === 'number' ? 'number' : 'text') + '" step="any" ' + attr + aria + ' value="' + esc(value) + '">';
   }).join('') + '<button type="button" class="icon-btn remove-repeatable-row" data-repeatable-key="' + esc(field.key) + '" data-repeatable-row="' + rowIndex + '" title="Remove row" aria-label="Remove row">✕</button></div>';
@@ -594,6 +626,32 @@ export function bindRepeatableFields(root, onInput) {
       var rows = parent.querySelectorAll('.repeatable-row');
       if (rows.length === 1) { all('input,select', rows[0]).forEach(function (element) { element.value = ''; }); }
       else { button.closest('.repeatable-row').remove(); }
+      handler();
+    });
+  });
+
+  // Dependent selects (AR Number depends on Seismic Block): when the controlling
+  // select in the same row changes, rebuild the dependent's options from the
+  // seismic map and reset its value (the old AR belongs to another block), then
+  // run the usual handler. Guard is per-dependent so re-binds after add-row only
+  // wire freshly added rows. Works identically in the project editor (same
+  // render/bind path); no schema lookup here -- the column metadata was stamped
+  // onto data-depends-on / data-repeatable-column at render time.
+  all('[data-depends-on]', root).forEach(function (dependent) {
+    if (dependent.dataset.depBound) return;
+    dependent.dataset.depBound = 'true';
+    var row = dependent.closest('.repeatable-row');
+    if (!row) return;
+    var controlKey = dependent.getAttribute('data-depends-on');
+    var control = row.querySelector('[data-repeatable-column="' + controlKey + '"]');
+    if (!control) return;
+    control.addEventListener('change', function () {
+      var map = seismicBlocksMap();
+      var options = [''].concat((control.value && map[control.value]) || []);
+      dependent.innerHTML = options.map(function (option) {
+        return '<option value="' + esc(option) + '">' + esc(option || 'Select') + '</option>';
+      }).join('');
+      dependent.value = '';
       handler();
     });
   });

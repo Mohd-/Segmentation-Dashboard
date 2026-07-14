@@ -193,7 +193,7 @@ def get_portfolio_rows(session, year="All", activity="All"):
     from the task inputs at read time (one batched _bp_task_fields query):
     well name, gas field (project-name prefix before the first hyphen),
     seismic block (last non-empty Reservoir CoS AR number mapped through
-    config.SEISMIC_BLOCK_NAMES, raw AR fallback), classification (the GHEER
+    config.AR_TO_SEISMIC_BLOCK, raw AR fallback), classification (the GHEER
     step's input), BP year, fluid (final -> quicklook -> 'Not Drilled Yet'),
     mean OGIP (latest assessment first: resource update -> post-drill ->
     pre-drill -> lead) and total chance of success
@@ -248,7 +248,7 @@ def get_portfolio_rows(session, year="All", activity="All"):
             "project_id": item["project_id"],
             "well_name": item["project_name"],
             "gas_field": folders.parse_field_and_well(item["project_name"])[0],
-            "seismic_block": config.SEISMIC_BLOCK_NAMES.get(ar_number, ar_number) if ar_number else "",
+            "seismic_block": config.AR_TO_SEISMIC_BLOCK.get(ar_number, ar_number) if ar_number else "",
             "classification": _first_filled(fields.get("gheer_classification")),
             "year": item["year"],
             "fluid": _first_filled(fields.get("final_fluid_type"),

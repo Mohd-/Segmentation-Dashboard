@@ -295,6 +295,10 @@ def meta():
         # The 4 lifecycle statuses, straight from the domain layer.
         "statuses": workflow.STATUSES,
         "roles": ["supervisor", "staff", "employee"],
+        # Block name -> [AR number, ...], from config.SEISMIC_BLOCK_AR_MAP
+        # (seismic_blocks.json). Feeds the Reservoir CoS sheet's dependent
+        # Block/AR dropdowns -- this endpoint is their single source of truth.
+        "seismic_blocks": config.SEISMIC_BLOCK_AR_MAP,
     })
 
 

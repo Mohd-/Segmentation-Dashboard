@@ -24,6 +24,7 @@ state, never as a value frozen at import time.
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -124,16 +125,55 @@ SEED_USERS = [
 
 
 # ---------------------------------------------------------------------------
-# Seismic block dictionary (consumed by reporting.get_portfolio_rows)
+# Seismic block dictionary (consumed by reporting.get_portfolio_rows and the
+# /api/meta "seismic_blocks" field that feeds the Reservoir CoS sheet's
+# dependent Block/AR dropdowns)
 # ---------------------------------------------------------------------------
-# !!! PLACEHOLDER DICT -- EDIT BEFORE DEPLOYING !!!
-# Maps seismic volume AR numbers (format "AR-XXXXXXX", as entered in the
-# Reservoir CoS evaluations) to the human-readable field names shown in the
-# Portfolio "Seismic Block" column. AR numbers not found here fall back to
-# displaying the raw AR number, so an incomplete dictionary degrades gracefully.
-SEISMIC_BLOCK_NAMES = {
-    "AR-0000001": "JOHN 4",  # placeholder example -- replace with real entries
-}
+# !!! PLACEHOLDER FILE -- EDIT/REPLACE BEFORE DEPLOYING !!!
+# Production swaps out seismic_blocks.json (block name -> list of AR-number
+# strings) without touching code. SEISMIC_BLOCK_AR_MAP is that file's parsed
+# contents, loaded once at import time; AR_TO_SEISMIC_BLOCK is the reverse
+# index (AR -> block name) it's built from, used to label the Portfolio
+# "Seismic Block" column. AR numbers not found in the map fall back to
+# displaying the raw AR number, so an incomplete/missing file degrades
+# gracefully instead of crashing the app.
+SEISMIC_BLOCKS_FILE = Path(__file__).resolve().parent / "seismic_blocks.json"
+
+
+def _load_seismic_block_ar_map(path: Path) -> dict:
+    """Parse SEISMIC_BLOCKS_FILE into {block: [ar, ...]}, tolerating a missing
+    or malformed file (falls back to {} so the app still boots)."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    normalized: dict = {}
+    for block, ars in raw.items():
+        if not isinstance(ars, list):
+            continue
+        block_name = str(block).strip()
+        if not block_name:
+            continue
+        normalized[block_name] = [str(ar).strip() for ar in ars if str(ar).strip()]
+    return normalized
+
+
+def _invert_seismic_block_ar_map(block_ar_map: dict) -> dict:
+    """Reverse index {ar: block}, first block wins on a duplicate AR (should
+    not happen in a well-formed file, but stays graceful)."""
+    reverse: dict = {}
+    for block, ars in block_ar_map.items():
+        for ar in ars:
+            reverse.setdefault(ar, block)
+    return reverse
+
+
+SEISMIC_BLOCK_AR_MAP = _load_seismic_block_ar_map(SEISMIC_BLOCKS_FILE)
+
+# Reverse index {ar: block} for O(1) Portfolio lookups.
+AR_TO_SEISMIC_BLOCK = _invert_seismic_block_ar_map(SEISMIC_BLOCK_AR_MAP)
 
 
 # ---------------------------------------------------------------------------

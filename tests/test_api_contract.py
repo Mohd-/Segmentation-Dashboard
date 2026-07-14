@@ -46,6 +46,12 @@ def test_meta_shape_matches_workflow_constants(client):
     assert body["statuses"] == ["Not Assigned", "In Progress", "Ready", "Approved"]
     assert workflow.STATUSES == ["Not Assigned", "In Progress", "Ready", "Approved"]
     assert body["roles"] == ["supervisor", "staff", "employee"]
+    # Block name -> [AR number, ...], feeding the Portfolio's dependent
+    # Block/AR dropdowns (config.SEISMIC_BLOCK_AR_MAP, from seismic_blocks.json).
+    assert "seismic_blocks" in body
+    assert isinstance(body["seismic_blocks"], dict)
+    for ars in body["seismic_blocks"].values():
+        assert isinstance(ars, list)
 
 
 # ---------------------------------------------------------------------------
