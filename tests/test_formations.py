@@ -1,10 +1,11 @@
-"""Tests for well-level formation data (WS6, project_formations).
+"""Tests for well-level formation data (WS1, project_formations).
 
-Formation interpretation values (SARH / QASM / QWRH) belong to the WELL, not to
-a workflow step: GET/PUT /api/projects/<id>/formations, upsert keyed by
-(project, formation, phase), strict validation (including numeric coercion --
-measurement fields are REAL columns), one history event against the source
-task, and /detail exposure.
+Formation interpretation values (the canonical SARH / QASM / QWRH trio, plus
+custom user-entered names) belong to the WELL, not to a workflow step:
+GET/PUT /api/projects/<id>/formations, upsert keyed by (project, formation,
+phase), phase-scoped full replacement, strict validation (including numeric
+coercion -- measurement fields are REAL columns), one history event against
+the source task, and /detail exposure.
 """
 from __future__ import annotations
 
@@ -96,11 +97,30 @@ def test_formation_rows_ordered_by_phase_then_canonical_formation(client):
 # Validation
 # ---------------------------------------------------------------------------
 
-def test_unknown_formation_rejected(client):
+def test_custom_formation_normalized_and_ordered_after_canonical_trio(client):
+    pid = create_project(client, "FORM-CUSTOM-1")
+    resp = _put(client, pid, "quicklook", [
+        {"formation": "QWRH"}, {"formation": "SARH"},
+        {"formation": "  unayzah  "},
+    ])
+    assert resp.status_code == 200
+
+    rows = client.get(f"/api/projects/{pid}/formations").get_json()
+    assert [r["formation"] for r in rows] == ["SARH", "QWRH", "UNAYZAH"]
+
+
+def test_blank_custom_formation_name_rejected(client):
     pid = create_project(client, "FORM-BAD-1")
-    resp = _put(client, pid, "quicklook", [{"formation": "ARAB-D"}])
+    resp = _put(client, pid, "quicklook", [{"formation": "   "}])
     assert resp.status_code == 400
-    assert "Unknown formation" in resp.get_json()["detail"]
+    assert "required" in resp.get_json()["detail"].lower()
+
+
+def test_overlong_custom_formation_name_rejected(client):
+    pid = create_project(client, "FORM-BAD-1B")
+    resp = _put(client, pid, "quicklook", [{"formation": "X" * 41}])
+    assert resp.status_code == 400
+    assert "40 characters" in resp.get_json()["detail"]
 
 
 def test_unknown_phase_rejected(client):
@@ -108,6 +128,55 @@ def test_unknown_phase_rejected(client):
     resp = _put(client, pid, "post_test", [SARH_ROW])
     assert resp.status_code == 400
     assert "Unknown phase" in resp.get_json()["detail"]
+
+
+def test_round_trip_post_drill_and_resource_update_phases(client):
+    pid = create_project(client, "FORM-PHASE-1")
+    resp = _put(client, pid, "post_drill", [SARH_ROW])
+    assert resp.status_code == 200
+    resp = _put(client, pid, "resource_update", [{"formation": "QASM", "pay_ft": "15"}])
+    assert resp.status_code == 200
+
+    rows = client.get(f"/api/projects/{pid}/formations").get_json()
+    by_key = {(r["phase"], r["formation"]): r for r in rows}
+    assert by_key[("post_drill", "SARH")]["pay_ft"] == 60.0
+    assert by_key[("resource_update", "QASM")]["pay_ft"] == 15.0
+    # Pipeline order: quicklook, post_drill, final, resource_update.
+    assert [r["phase"] for r in rows] == ["post_drill", "resource_update"]
+
+
+def test_put_is_phase_scoped_full_replacement(client):
+    pid = create_project(client, "FORM-REPLACE-1")
+    _put(client, pid, "quicklook", [{"formation": "SARH"}, {"formation": "QASM"}])
+    _put(client, pid, "final", [{"formation": "SARH"}])
+
+    resp = _put(client, pid, "quicklook", [{"formation": "SARH"}])
+    assert resp.status_code == 200
+
+    rows = client.get(f"/api/projects/{pid}/formations").get_json()
+    by_key = {(r["phase"], r["formation"]) for r in rows}
+    assert by_key == {("quicklook", "SARH"), ("final", "SARH")}
+    # QASM was dropped from quicklook; the untouched 'final' phase survives.
+
+
+def test_duplicate_formation_in_payload_rejected(client):
+    pid = create_project(client, "FORM-DUP-1")
+    resp = _put(client, pid, "quicklook", [SARH_ROW])
+    assert resp.status_code == 200
+
+    # Two payload rows normalizing to the same name must 400 -- under the old
+    # last-wins collapse the full-replacement DELETE would then have dropped
+    # the user's original row (data loss from one mis-click).
+    dup = dict(SARH_ROW)
+    dup["pay_ft"] = "10"
+    resp = _put(client, pid, "quicklook", [{"formation": "  sarh "}, dup])
+    assert resp.status_code == 400
+    assert "Duplicate formation 'SARH'" in resp.get_json()["detail"]
+
+    # The stored row is untouched: rejected before any write.
+    rows = client.get(f"/api/projects/{pid}/formations").get_json()
+    assert len(rows) == 1
+    assert rows[0]["pay_ft"] == 60.0
 
 
 def test_unknown_field_rejected_not_silently_dropped(client):
@@ -166,6 +235,29 @@ def test_history_event_logged_against_source_task(client):
     assert event["task_name"] == "Quicklook Logs Interpretation"
     assert "SARH" in event["comment"] and "QWRH" in event["comment"]
     assert "quicklook" in event["comment"]
+
+
+def test_deletion_only_put_logs_history_event(client):
+    pid = create_project(client, "FORM-HISTORY-3")
+    quicklook = get_task_by_name(client, pid, "Quicklook Logs Interpretation")
+    resp = _put(client, pid, "quicklook", [SARH_ROW, {"formation": "QWRH", "pay_ft": "5"}],
+                source_task_id=quicklook["task_id"])
+    assert resp.status_code == 200
+
+    # An empty payload clears the phase: rows only get DELETEd, yet the change
+    # must still land in the audit trail (the log used to fire only when the
+    # payload carried rows).
+    resp = _put(client, pid, "quicklook", [], source_task_id=quicklook["task_id"])
+    assert resp.status_code == 200
+    assert client.get(f"/api/projects/{pid}/formations").get_json() == []
+
+    events = client.get(f"/api/activity?project_id={pid}").get_json()
+    formation_events = [e for e in events if e["action_type"] == "Formation Data Updated"]
+    assert len(formation_events) == 2  # one for the upsert, one for the clearing PUT
+    removal = next(e for e in formation_events if "Removed" in e["comment"])
+    assert removal["task_name"] == "Quicklook Logs Interpretation"
+    assert "SARH" in removal["comment"] and "QWRH" in removal["comment"]
+    assert "quicklook" in removal["comment"]
 
 
 def test_no_history_event_without_source_task(client):

@@ -75,9 +75,9 @@ from .promotion import (
 )
 from .summary import (
     calculate_total_cos,
+    first_reservoir_cos_row_value,
     get_project_dynamic_field_map,
     get_project_overview,
-    last_reservoir_cos_row_value,
     total_cos_from_fields,
 )
 from .users import find_active_user, get_active_users
@@ -104,8 +104,8 @@ __all__ = [
     # formations
     "get_project_formations", "upsert_project_formations",
     # summary
-    "calculate_total_cos", "get_project_dynamic_field_map",
-    "get_project_overview", "last_reservoir_cos_row_value",
+    "calculate_total_cos", "first_reservoir_cos_row_value",
+    "get_project_dynamic_field_map", "get_project_overview",
     "total_cos_from_fields",
     # history
     "log_task_event",

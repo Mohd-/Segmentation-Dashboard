@@ -63,12 +63,14 @@ def applicable_stages(pipeline_type):
     """
     return BP_EXECUTION_STAGES if str(pipeline_type or "prospect").lower() == "bp" else PROSPECT_STAGES
 
-# Well-level formation interpretation (project_formations). Fixed formation
-# list -- users never create formations. Rows are keyed by
-# (project, formation, phase); ``phase`` says which interpretation step the
-# values came from.
+# Well-level formation interpretation (project_formations). SARH/QASM/QWRH
+# are the canonical trio (always seeded/offered), but users may also add
+# custom formation names (normalized strip().upper(), enforced in
+# workflow.formations.upsert_project_formations, not a DB constraint). Rows
+# are keyed by (project, formation, phase); ``phase`` says which
+# interpretation step the values came from.
 FORMATIONS = ["SARH", "QASM", "QWRH"]
-FORMATION_PHASES = ["quicklook", "final"]
+FORMATION_PHASES = ["quicklook", "post_drill", "final", "resource_update"]
 FORMATION_VALUE_FIELDS = [
     "top_tvdss_ft", "base_tvdss_ft", "thickness_ft", "porosity_pct",
     "swt_pct", "pay_ft", "ngr_pct", "fluid",
@@ -141,8 +143,10 @@ _OVERVIEW_READ_SOURCES = {
     "quick_look_porosity": [("Quicklook Logs Interpretation", "quicklook_average_porosity_pct")],
     "quick_look_swt": [("Quicklook Logs Interpretation", "quicklook_average_swt_pct")],
     "flowback_results": [("Flowback Results", "flowback_gas_rate_mmscfd")],
-    # WS7: the Classification entered in the GHEER step feeds the Portfolio.
-    "classification": [("GHEER", "gheer_classification")],
+    # WS7: the Classification entered in the BP Execution Gate step feeds the
+    # Portfolio; GHEER is a read-fallback for rows entered before the move.
+    "classification": [("BP Execution Gate", "bp_gate_classification"),
+                       ("GHEER", "gheer_classification")],
 }
 
 # Overview keys with no feeding step in the current 31-step pipeline; kept as

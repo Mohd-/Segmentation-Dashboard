@@ -3,8 +3,8 @@
 There is no project_overview table: the /detail ``overview`` is composed from
 task_dynamic_fields at read time (_OVERVIEW_READ_SOURCES in constants.py),
 and the Total Chance of Success is recomputed from the Reservoir/Trap/Seal
-CoS inputs on every call. Nothing here writes anything, so the values can
-never go stale.
+CoS inputs on every call (Total CoS = FIRST non-blank reservoir_cos_pct x
+Trap x Seal). Nothing here writes anything, so the values can never go stale.
 """
 from __future__ import annotations
 
@@ -81,8 +81,8 @@ def _task_field_value(session, project_id, task_name, field_key):
     return "" if not row or row["field_value"] is None else str(row["field_value"]).strip()
 
 
-def last_reservoir_cos_row_value(raw_rows_json, key):
-    """Return the LAST non-empty ``key`` value from a reservoir_cos_rows JSON.
+def first_reservoir_cos_row_value(raw_rows_json, key):
+    """Return the FIRST non-empty ``key`` value from a reservoir_cos_rows JSON.
 
     Pure parsing helper shared by the final-Reservoir-CoS lookup (key
     'reservoir_cos_pct') and the Portfolio seismic-block column (key
@@ -96,7 +96,7 @@ def last_reservoir_cos_row_value(raw_rows_json, key):
         return ""
     if not isinstance(rows, list):
         return ""
-    for row in reversed(rows):
+    for row in rows:
         value = (row or {}).get(key)
         if value is not None and str(value).strip() != "":
             return str(value).strip()
@@ -107,12 +107,12 @@ def total_cos_from_fields(reservoir_rows_json, trap, seal):
     """Pure Total-CoS formula over already-fetched inputs; '' if any is missing.
 
     Total Chance of Success (the v18 replacement for the removed Presence CoS
-    step) = final Reservoir CoS (last non-blank row of reservoir_cos_rows) x
+    step) = final Reservoir CoS (FIRST non-blank row of reservoir_cos_rows) x
     Trap CoS x Seal CoS, as a whole-percent string. Shared by
     get_project_overview (per project) and reporting's batched BP-well reads so
     the formula exists in exactly one place.
     """
-    reservoir = last_reservoir_cos_row_value(reservoir_rows_json, "reservoir_cos_pct")
+    reservoir = first_reservoir_cos_row_value(reservoir_rows_json, "reservoir_cos_pct")
     values = cos.calculate_presence_cos(reservoir, str(trap or "").strip(), str(seal or "").strip())
     return str(values.get("presence_cos", "") or "")
 

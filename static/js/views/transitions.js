@@ -16,16 +16,20 @@ export function canTransitionPhase() {
 
 // Promote a lead to a BP well. `prospectTasks` are the record's prospect-stage
 // tasks (tasksForPipeline('prospect') at the call site) — used only for the
-// N-of-M progress line and the early-promotion warning. Resolves the /flags
-// response on confirm, null on cancel.
+// N-of-M progress line and the early-promotion warning. Falsy/empty (e.g.
+// portfolio mature-lead rows, which are 100% approved by definition) omits
+// both lines. Resolves the /flags response on confirm, null on cancel.
 export function promoteProject(project, prospectTasks, changedBy) {
   var tasks = prospectTasks || [];
   var approved = tasks.filter(function (task) { return DONE[task.status]; }).length;
   var year = Number(project.business_plan_year || new Date().getFullYear());
   if (year < 2026 || year > 2040) year = 2026;
-  var lines = [approved + ' of ' + tasks.length + ' prospect steps approved.'];
-  if (approved < tasks.length) {
-    lines.push('Promoting now switches this record to the Well Delivery stages before maturation is complete.');
+  var lines = [];
+  if (tasks.length) {
+    lines.push(approved + ' of ' + tasks.length + ' prospect steps approved.');
+    if (approved < tasks.length) {
+      lines.push('Promoting now switches this record to the Well Delivery stages before maturation is complete.');
+    }
   }
   lines.push('The record switches to the BP execution stages, a Lead Summary snapshot is captured, and the well appears in the Portfolio.');
   return confirmDialog({

@@ -267,6 +267,10 @@ def get_projects(session, search_text="", stage_filter="All", status_filter="All
                                         and int(item.pop("is_drilling") or 0) == 1) else 0
         item["active_well_enabled"] = int(item.get("active_well_enabled") or 0)
         item["health"] = health_from_target(item.get("target_date"), item.get("overall_status"))
+        # A fully-matured lead (every prospect step Approved) leaves the lead
+        # board and lives in the Portfolio until a supervisor promotes it.
+        if pipeline_filter == "prospect" and item.get("overall_status") == "Completed":
+            continue
         if stage_filter != "All" and item.get("current_stage") != stage_filter:
             continue
         if status_filter != "All" and item.get("overall_status") != status_filter:

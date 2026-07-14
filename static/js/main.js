@@ -9,8 +9,11 @@ import { performLogin, fetchUserOptions } from './auth.js';
 
 // The board status filters act on projects.overall_status, which only ever
 // holds these two values -- filling them with task statuses made the filter
-// dead for every other option.
+// dead for every other option. The prospect board excludes 'Completed':
+// mature (Completed) leads are no longer shown there (workflow/projects.py),
+// so the option would always yield an empty board.
 var PROJECT_STATUSES = ['In Progress', 'Completed'];
+var PROSPECT_STATUSES = ['In Progress'];
 
 export function showTab(name) {
   all('.tab').forEach(function (tab) { tab.classList.toggle('active', tab.id === 'tab-' + name); });
@@ -110,7 +113,7 @@ function fillAssigneeFilter(select, users) {
 }
 
 function boot() {
-  fillSelect(byId('prospect-status-filter'), PROJECT_STATUSES, true);
+  fillSelect(byId('prospect-status-filter'), PROSPECT_STATUSES, true);
   fillSelect(byId('bp-status-filter'), PROJECT_STATUSES, true);
   fillSelect(byId('portfolio-year-filter'), range(2026, 2040), true);
   fillSelect(byId('bp-year-filter'), range(2026, 2040), true);

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import portfolio_export
 import reporting
 import workflow
 from helpers import health_from_target
@@ -119,6 +120,15 @@ def export_to_excel(session, filepath):
             "progress_index": "Progress Index",
         })
 
+    # Portfolio Export + Staking Options: derived at export time (no stored
+    # export table -- see portfolio_export.py's module docstring for the
+    # rationale). Column list comes from the same shared constants
+    # portfolio_export.py exports, so a zero-row export still ships headers.
+    portfolio_export_df = pd.DataFrame(portfolio_export.get_portfolio_export_rows(session)).reindex(
+        columns=portfolio_export.PORTFOLIO_EXPORT_COLUMNS)
+    staking_df = pd.DataFrame(portfolio_export.get_staking_export_rows(session)).reindex(
+        columns=portfolio_export.STAKING_EXPORT_COLUMNS)
+
     _, stage_counts, owner_workload = reporting.dashboard_metrics(session)
     monthly_all = reporting.monthly_progress_metrics(session, limit=120)
     summary_rows = [
@@ -137,12 +147,16 @@ def export_to_excel(session, filepath):
             monthly_df.to_excel(writer, sheet_name="Monthly Progress", index=False, startrow=3)
         else:
             pd.DataFrame(columns=["Month", "Wells Created", "Components Completed", "Waiting Events", "Drill Updates", "Progress Index", "Cumulative Completed"]).to_excel(writer, sheet_name="Monthly Progress", index=False, startrow=3)
+        portfolio_export_df.to_excel(writer, sheet_name="Portfolio Export", index=False, startrow=3)
+        staking_df.to_excel(writer, sheet_name="Staking Options", index=False, startrow=3)
 
         book = writer.book
         ws_summary = writer.sheets["Executive Summary"]
         ws_overview = writer.sheets["Wells Overview"]
         ws_tasks = writer.sheets["Task Register"]
         ws_monthly = writer.sheets["Monthly Progress"]
+        ws_portfolio_export = writer.sheets["Portfolio Export"]
+        ws_staking = writer.sheets["Staking Options"]
 
         title_fill = PatternFill("solid", fgColor="0F2747")
         header_fill = PatternFill("solid", fgColor="163A6B")
@@ -230,6 +244,8 @@ def export_to_excel(session, filepath):
         style_sheet(ws_overview, "UR Segment Factory Tracker — Wells Overview", f"Executive export generated on {exported_at}")
         style_sheet(ws_tasks, "UR Segment Factory Tracker — Task Register", f"Detailed task register exported on {exported_at}")
         style_sheet(ws_monthly, "UR Segment Factory Tracker — Monthly Progress", f"Progress trend exported on {exported_at}")
+        style_sheet(ws_portfolio_export, "UR Segment Factory Tracker — Portfolio Export", f"BP wells + mature leads exported on {exported_at}")
+        style_sheet(ws_staking, "UR Segment Factory Tracker — Staking Options", f"Mature-lead staking options exported on {exported_at}")
 
         # Executive Summary enhancements
         ws_summary["D4"] = "Stage"

@@ -80,6 +80,45 @@ def test_seal_cos_missing_required_field_raises_named_error(client):
         })
 
 
+def test_seal_cos_survives_saves_without_form_inputs(client):
+    """A save whose payload carries no Seal CoS form inputs (comment-only full
+    save, or a dynamic-fields PATCH of unrelated keys) must NOT wipe the stored
+    seal_cos_pct with a blank-form recompute. Recompute fires only when the
+    payload contains at least one of the form's input keys."""
+    pid = create_project(client, "SEAL-KEEP-1")
+    seal = get_task_by_name(client, pid, "Seal CoS")
+    resp = client.patch(f"/api/tasks/{seal['task_id']}/dynamic-fields", json={"fields": {
+        "seal_recent_activity_age": "0.95",
+        "seal_fracture_permeability": "0.5",
+    }})
+    assert resp.status_code == 200
+    fields = client.get(f"/api/tasks/{seal['task_id']}/dynamic-fields").get_json()
+    assert fields.get("seal_cos_pct") == "48"
+
+    # Comment-only full save (the step editor's Save with an empty form diff).
+    resp = client.patch(f"/api/tasks/{seal['task_id']}",
+                        json={"comments": "reviewed, no changes", "fields": {}})
+    assert resp.status_code == 200
+    fields = client.get(f"/api/tasks/{seal['task_id']}/dynamic-fields").get_json()
+    assert fields.get("seal_cos_pct") == "48"
+
+    # Dynamic-fields save of an unrelated key.
+    resp = client.patch(f"/api/tasks/{seal['task_id']}/dynamic-fields",
+                        json={"fields": {"seal_pore_pressure_gradient_psi_ft": "0.62"}})
+    assert resp.status_code == 200
+    fields = client.get(f"/api/tasks/{seal['task_id']}/dynamic-fields").get_json()
+    assert fields.get("seal_cos_pct") == "48"
+
+    # A save carrying the inputs still recomputes as before.
+    resp = client.patch(f"/api/tasks/{seal['task_id']}/dynamic-fields", json={"fields": {
+        "seal_recent_activity_age": "0.95",
+        "seal_fracture_permeability": "0.6",
+    }})
+    assert resp.status_code == 200
+    fields = client.get(f"/api/tasks/{seal['task_id']}/dynamic-fields").get_json()
+    assert fields.get("seal_cos_pct") == "57"
+
+
 # ---------------------------------------------------------------------------
 # calculate_reservoir_cos_rows
 # ---------------------------------------------------------------------------
@@ -199,12 +238,12 @@ def test_total_cos_blank_if_any_component_missing(client):
     assert (_derisking(client, pid) or "") == ""
 
 
-def test_final_reservoir_cos_is_last_row_with_nonempty_pct(client):
+def test_final_reservoir_cos_is_first_row_with_nonempty_pct(client):
     """Saving raw reservoir_cos_rows JSON through the dynamic-fields endpoint
     bypasses the model recalculation (only the main task-save route on the
     Reservoir CoS task recomputes reservoir_cos_pct). This lets us pin the
-    "skip blank pct, use the last non-blank one" selection logic in
-    workflow.last_reservoir_cos_row_value via the derisking result."""
+    "skip blank pct, use the FIRST non-blank one" selection logic in
+    workflow.first_reservoir_cos_row_value via the derisking result."""
     pid = create_project(client, "PRESENCE-FINAL-1")
     reservoir = get_task_by_name(client, pid, "Reservoir CoS")
     trap = get_task_by_name(client, pid, "Trap CoS")
@@ -213,8 +252,7 @@ def test_final_reservoir_cos_is_last_row_with_nonempty_pct(client):
     raw_rows = json.dumps([
         {"reservoir_cos_pct": "40"},
         {"reservoir_cos_pct": ""},
-        {"reservoir_cos_pct": "65"},
-        {"reservoir_cos_pct": ""},
+        {"reservoir_cos_pct": "55"},
     ])
     client.patch(f"/api/tasks/{reservoir['task_id']}/dynamic-fields", json={
         "fields": {"reservoir_cos_rows": raw_rows},
@@ -224,8 +262,9 @@ def test_final_reservoir_cos_is_last_row_with_nonempty_pct(client):
         "seal_recent_activity_age": "0.95", "seal_fracture_permeability": "0.5",
     }})
 
-    # last non-blank reservoir pct (65) x trap (0.80) x seal (0.48)
-    expected = str(int(round(0.65 * 0.80 * 0.48 * 100)))
+    # FIRST non-blank reservoir pct (40) x trap (0.80) x seal (0.48) -> "15"
+    expected = str(int(round(0.40 * 0.80 * 0.48 * 100)))
+    assert expected == "15"
     assert _derisking(client, pid) == expected
 
 

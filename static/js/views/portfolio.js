@@ -1,26 +1,29 @@
 import { byId, all, esc, msg } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName } from '../state.js';
-import { canTransitionPhase, recallProject } from './transitions.js';
+import { canTransitionPhase, promoteProject, recallProject } from './transitions.js';
 import { openProjectEditor } from './project-editor.js';
 // Deliberate module cycle (portfolio → pipeline → portfolio): refreshAllBoards
 // is a hoisted function declaration and only called from event handlers, same
 // as the existing portfolio → project-editor → pipeline chain.
 import { refreshAllBoards } from './pipeline.js';
 
-// WS7: exactly the 8 analysis columns, in this order. `filter` selects the
+// Exactly the 8 analysis columns, in this order. `filter` selects the
 // column-filter control rendered in the second thead row ('text' = substring
 // input, 'multi' = distinct-value checklist popover (multi-select), null = no
 // column filter -- BP Year is covered by the toolbar select; Mean OGIP / Total
 // CoS get none per spec). `numeric` selects Number()-based sort with blanks-last
-// in both directions instead of localeCompare.
+// in both directions instead of localeCompare. The former `fluid` column is
+// now `status` (fluid value, or 'Staked'/'Proposed' for undrilled records --
+// see reporting.record_status); rows also carry `pipeline_type` and
+// `is_mature_lead`, consumed only by the Actions cell / stats below.
 var COLUMNS = [
   { key: 'well_name', label: 'Well Name', numeric: false, filter: 'text' },
   { key: 'gas_field', label: 'Gas Field', numeric: false, filter: 'multi' },
   { key: 'seismic_block', label: 'Seismic Block', numeric: false, filter: 'text' },
   { key: 'classification', label: 'Classification', numeric: false, filter: 'multi' },
   { key: 'year', label: 'BP Year', numeric: true, filter: null },
-  { key: 'fluid', label: 'Fluid', numeric: false, filter: 'multi' },
+  { key: 'status', label: 'Status', numeric: false, filter: 'multi' },
   { key: 'mean_ogip', label: 'Mean OGIP (BCF)', numeric: true, filter: null },
   { key: 'total_cos', label: 'Total CoS (%)', numeric: true, filter: null }
 ];
@@ -37,18 +40,24 @@ export function formatNumber(value) {
 
 // Stats follow the VISIBLE rowset (server + column filters applied) instead
 // of the fetch payload's server-computed summary -- mirrors the rounding
-// reporting.py does for the unfiltered case (round(sum, 1)).
+// reporting.py does for the unfiltered case (round(sum, 1)), and the same
+// is_mature_lead split reporting.get_portfolio_rows uses for its summary
+// object (business_plan_wells / mature_leads / cumulative_ogip).
 function renderPortfolioStats(rows) {
   var element = byId('portfolio-stats');
   if (!element) return;
+  var bpWells = 0;
+  var matureLeads = 0;
   var cumulativeOgip = 0;
   rows.forEach(function (row) {
+    if (row.is_mature_lead) matureLeads += 1; else bpWells += 1;
     var value = Number(row.mean_ogip);
     if (isFinite(value)) cumulativeOgip += value;
   });
   cumulativeOgip = Math.round(cumulativeOgip * 10) / 10;
   element.innerHTML =
-    '<div class="portfolio-stat"><small>Business Plan Wells</small><b>' + esc(rows.length) + '</b></div>' +
+    '<div class="portfolio-stat"><small>Business Plan Wells</small><b>' + esc(bpWells) + '</b></div>' +
+    '<div class="portfolio-stat"><small>Mature Leads</small><b>' + esc(matureLeads) + '</b></div>' +
     '<div class="portfolio-stat"><small>Cumulative OGIP (BCF)</small><b>' + esc(formatNumber(cumulativeOgip)) + '</b></div>';
 }
 
@@ -108,10 +117,14 @@ function visibleRows() {
 }
 
 function rowMarkup(row) {
-  // Supervisor-only trailing Actions cell: recall the well to the lead phase
-  // (transitions.js confirm + PATCH /flags).
+  // Supervisor-only trailing Actions cell: mature leads get Promote (year
+  // prompt + snapshot via transitions.js promoteProject), BP wells keep the
+  // existing Recall (transitions.js confirm + PATCH /flags).
+  var actionButton = row.is_mature_lead
+    ? '<button type="button" class="ghost portfolio-promote" data-project-id="' + esc(row.project_id) + '" data-project-name="' + esc(row.well_name || '') + '">Promote…</button>'
+    : '<button type="button" class="ghost danger-outline portfolio-recall" data-project-id="' + esc(row.project_id) + '" data-project-name="' + esc(row.well_name || '') + '">Recall</button>';
   var actionsCell = canTransitionPhase()
-    ? '<td class="portfolio-actions-cell"><button type="button" class="ghost danger-outline portfolio-recall" data-project-id="' + esc(row.project_id) + '" data-project-name="' + esc(row.well_name || '') + '">Recall</button></td>'
+    ? '<td class="portfolio-actions-cell">' + actionButton + '</td>'
     : '';
   return '<tr>' +
     '<td><a href="#" class="well-link" data-project-id="' + esc(row.project_id) + '">' + esc(row.well_name || '') + '</a></td>' +
@@ -119,7 +132,7 @@ function rowMarkup(row) {
     '<td>' + esc(row.seismic_block || '') + '</td>' +
     '<td>' + esc(row.classification || '') + '</td>' +
     '<td>' + esc(row.year || '') + '</td>' +
-    '<td>' + esc(row.fluid || '') + '</td>' +
+    '<td>' + esc(row.status || '') + '</td>' +
     '<td>' + esc(row.mean_ogip || '') + '</td>' +
     '<td>' + esc(row.total_cos || '') + '</td>' +
     actionsCell +
@@ -149,6 +162,22 @@ function renderBody(table) {
         if (result === null) return; // dialog cancelled
         refreshAllBoards(); // includes refreshPortfolio, so the row drops out
         msg('Recalled to lead phase.', 'success');
+      }).catch(function (error) { msg(error.message, 'error'); });
+    });
+  });
+  all('.portfolio-promote', tbody).forEach(function (button) {
+    button.addEventListener('click', function () {
+      var project = {
+        project_id: Number(button.getAttribute('data-project-id')),
+        project_name: button.getAttribute('data-project-name') || ''
+      };
+      // No prospectTasks here: portfolio mature leads are 100% approved by
+      // definition (that's how they entered the portfolio), so promoteProject
+      // omits the N-of-M line/warning when the argument is falsy.
+      promoteProject(project, null, currentUserName()).then(function (result) {
+        if (result === null) return; // dialog cancelled
+        refreshAllBoards(); // includes refreshPortfolio, so the row switches to BP + Recall
+        msg('Promoted to BP well.', 'success');
       }).catch(function (error) { msg(error.message, 'error'); });
     });
   });

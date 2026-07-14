@@ -156,13 +156,17 @@ class TaskDynamicField(Base):
 
 
 class ProjectFormation(Base):
-    """Per-well formation interpretation values (SARH / QASM / QWRH).
+    """Per-well formation interpretation values.
 
-    One row per (project, formation, phase). Formation data belongs to the
-    WELL, not to a workflow step: the quicklook and final interpretation
-    components edit these rows through the formations mini-sheet, and
-    ``source_task_id`` records which component last wrote them (also the anchor
-    for the "Formation Data Updated" history event).
+    ``formation`` accepts the canonical trio (SARH / QASM / QWRH) OR a custom,
+    user-entered name (normalized ``strip().upper()``, non-empty, <= 40 chars --
+    enforced by ``workflow.formations.upsert_project_formations``, not a DB
+    constraint). One row per (project, formation, phase). Formation data
+    belongs to the WELL, not to a workflow step: the quicklook, post-drill,
+    final and resource-update interpretation components edit these rows
+    through the formations mini-sheet, and ``source_task_id`` records which
+    component last wrote them (also the anchor for the "Formation Data
+    Updated" history event).
 
     Measurement columns are REAL (they are genuinely numeric and get computed
     on -- averages, ratios, comparisons); ``fluid`` stays TEXT (a free-text
@@ -190,8 +194,7 @@ class ProjectFormation(Base):
 
     __table_args__ = (
         UniqueConstraint("project_id", "formation", "phase"),
-        CheckConstraint("formation IN ('SARH','QASM','QWRH')"),
-        CheckConstraint("phase IN ('quicklook','final')"),
+        CheckConstraint("phase IN ('quicklook','post_drill','final','resource_update')"),
         Index("idx_project_formations_project", "project_id"),
         {"sqlite_autoincrement": True},
     )

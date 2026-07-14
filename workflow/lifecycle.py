@@ -25,6 +25,14 @@ from .history import log_task_event
 from .projects import _sync_completed_at, get_project
 from .users import find_active_user
 
+# The Seal CoS form's manual inputs (cos.calculate_seal_cos reads exactly
+# these). Their presence in a save payload is what marks it as a form save
+# rather than a comment-only update.
+_SEAL_COS_INPUT_KEYS = (
+    "seal_recent_activity_age", "seal_dip", "seal_azimuth_vs_shmax",
+    "seal_fault_level_confidence", "seal_fracture_permeability",
+)
+
 
 def get_project_tasks(session, project_id):
     """Return the active task rows for a project, ordered by sequence."""
@@ -123,15 +131,17 @@ def _apply_dynamic_fields(session, task, fields, changed_by, now):
 def save_task_dynamic_fields(session, task_id, fields, changed_by="Web User"):
     """Save a task's dynamic fields only (no status change, no revision check).
 
-    Seal CoS is recomputed on save. The Total Chance of Success needs no
-    recalculation trigger: it is computed at read time (calculate_total_cos)
-    from the stored Reservoir/Trap/Seal CoS inputs.
+    Seal CoS is recomputed when the payload carries the form's inputs (a
+    payload without them must not wipe the stored result with a blank-form
+    recompute). The Total Chance of Success needs no recalculation trigger:
+    it is computed at read time (calculate_total_cos) from the stored
+    Reservoir/Trap/Seal CoS inputs.
     """
     task = get_task(session, task_id)
     if not task:
         raise ValueError("Component not found.")
     fields = fields or {}
-    if task.get("task_name") == "Seal CoS":
+    if task.get("task_name") == "Seal CoS" and any(key in fields for key in _SEAL_COS_INPUT_KEYS):
         fields = dict(fields)
         fields["seal_cos_pct"] = cos.calculate_seal_cos(fields)
     now = utc_now_str()
@@ -227,8 +237,10 @@ def save_task(session, task_id, payload, changed_by="Web User", allow_priority_c
             fields["reservoir_cos_rows"] = cos.calculate_reservoir_cos_rows(fields.get("reservoir_cos_rows"))
 
         # Seal CoS is formula-derived, not manually entered. The result is stored
-        # as a whole-number percentage string, e.g., 44 for 44%.
-        if task.get("task_name") == "Seal CoS":
+        # as a whole-number percentage string, e.g., 44 for 44%. Recompute only
+        # when the payload carries the form's inputs -- a comment-only save must
+        # not wipe the stored result with a blank-form recompute.
+        if task.get("task_name") == "Seal CoS" and any(key in fields for key in _SEAL_COS_INPUT_KEYS):
             fields = dict(fields)
             fields["seal_cos_pct"] = cos.calculate_seal_cos(fields)
 

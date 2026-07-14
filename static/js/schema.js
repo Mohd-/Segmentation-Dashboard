@@ -35,13 +35,30 @@ export function piip(prefix) {
     { key: prefix + '_liquid_p10', label: 'P10', type: 'number', showIf: prefix + '_has_liquid', row: prefix + '_liquid' }
   ];
 }
-// WS7 vocabulary. Legacy stored values ('Wet'/'Tight') simply render
-// unselected on old projects; the stored data is untouched.
-export var FLUID_TYPES = ['', 'Not Drilled Yet', 'Dry', 'Gas', 'Water', 'Condensate', 'Liquid', 'Gas over Water'];
-// WS6: formation data is well-level (project_formations via /api/projects/<id>/
-// formations), not step-level. Fixed list -- users never create formations; the
-// old "add new formation" clone mechanism (quickNew/finalNew) is gone. Legacy
-// per-SARH task fields remain readable in old data (see FORMATION_METRICS'
+// Vocabulary. Legacy stored values ('Wet'/'Tight'/'Not Drilled Yet') simply
+// render unselected on old projects; the stored data is untouched. 'Not Drilled
+// Yet' is no longer a fluid-type choice: the token was dropped entirely and a
+// well's pre-drill state is now conveyed by the derived Proposed/Staked
+// portfolio status instead.
+export var FLUID_TYPES = ['', 'Dry', 'Gas', 'Water', 'Condensate', 'Liquid', 'Gas over Water'];
+// Flowback rate key + unit keyed by fluid type -- a well's headline flowback
+// rate lives in a different EAV field depending on what it produced. Gas / Gas
+// over Water report gas (MMSCFD); Condensate / Liquid report liquid (BPD);
+// Water reports water (BWPD). Dry/blank have no dedicated key -- the call site
+// falls back to the gas entry. Imported by the well summary card (WS5).
+export var FLOWBACK_RATE_FIELDS = {
+  'Gas': { key: 'flowback_gas_rate_mmscfd', unit: 'MMSCFD' },
+  'Gas over Water': { key: 'flowback_gas_rate_mmscfd', unit: 'MMSCFD' },
+  'Condensate': { key: 'flowback_liquid_rate_bpd', unit: 'BPD' },
+  'Liquid': { key: 'flowback_liquid_rate_bpd', unit: 'BPD' },
+  'Water': { key: 'flowback_water_rate_bwpd', unit: 'BWPD' }
+};
+// Formation data is well-level (project_formations via /api/projects/<id>/
+// formations), edited per phase across four steps -- phases quicklook /
+// post_drill / final / resource_update (pipeline order). The canonical trio
+// below always renders; users may add custom formations (names normalized
+// strip().upper(), <=40 chars) through the multi-row editor's 'Other...' option.
+// Legacy per-SARH task fields remain readable in old data (see FORMATION_METRICS'
 // legacy fallbacks in detail.js) but are no longer rendered as inputs.
 export var FORMATIONS = ['SARH', 'QASM', 'QWRH'];
 export var FORMATION_METRICS = [
@@ -76,7 +93,7 @@ export var SCHEMA = {
   'Seismic Signature Validation': [],
   'Reservoir CoS': [{ key: 'reservoir_cos_rows', label: 'Reservoir CoS Evaluations', type: 'repeatable', columns: RESERVOIR_COS_COLUMNS }],
   'Trap CoS': [{ key: 'sarah_quwarah_thickness_ft', label: 'Sarah-Quwarah Thickness (ft)', type: 'number' }, { key: 'trap_cos_pct', label: 'Trap CoS (%)', type: 'number' }],
-  'Seal CoS': [{ key: 'seal_recent_activity_age', label: 'Most recent age of activity', type: 'number' }, { key: 'seal_dip', label: 'Dip', type: 'number' }, { key: 'seal_azimuth_vs_shmax', label: 'Azimuth vs. SHmax', type: 'number' }, { key: 'seal_fault_level_confidence', label: 'Fault Level of Confidence', type: 'number' }, { key: 'seal_fracture_permeability', label: 'Fracture Permeability', type: 'number' }, { key: 'seal_cos_pct', label: 'Seal CoS (%)', type: 'number', readonly: true }],
+  'Seal CoS': [{ key: 'seal_recent_activity_age', label: 'Most recent age of activity', type: 'number' }, { key: 'seal_dip', label: 'Dip', type: 'number' }, { key: 'seal_azimuth_vs_shmax', label: 'Azimuth vs. SHmax', type: 'number' }, { key: 'seal_fault_level_confidence', label: 'Fault Level of Confidence', type: 'number' }, { key: 'seal_fracture_permeability', label: 'Fracture Permeability', type: 'number' }, { key: 'seal_pore_pressure_gradient_psi_ft', label: 'Pore Pressure Gradient (psi/ft)', type: 'number' }, { key: 'seal_cos_pct', label: 'Seal CoS (%)', type: 'number', readonly: true }],
   // v18: 'Presence CoS Evaluation' removed as a step -- the derived value is
   // surfaced as "Total Chance of Success" from /detail's overview.derisking.
   'Pre-Drilling Resource Assessment': piip('pre_drill_piip'),
@@ -99,7 +116,10 @@ export var SCHEMA = {
   // sarh_formation_prognosis_pre_drill keeps its key (renaming EAV keys
   // orphans stored data); only the label dropped "(Pre-Drill)".
   'Well Proposal': [{ key: 'sarh_formation_prognosis_pre_drill', label: 'SARH Formation Prognosis', type: 'text' }, { key: 'vsp_required', label: 'VSP Required?', type: 'select', options: ['', 'No', 'Yes'] }, { key: 'vsp_request_link', label: 'New Request Placeholder', type: 'link', value: '#' }, { key: 'urinsight_link', label: 'URINSIGHT', type: 'link', value: 'https://urinsight/', linkText: 'Create the well proposal in URINSIGHT' }],
-  'GHEER': [{ key: 'gheer_classification', label: 'Classification', type: 'select', options: ['', 'Development', 'Appraisal', 'Exploration'] }, { key: 'gheer_base_map', label: 'Base Map', type: 'checkbox' }, { key: 'gheer_offset_wells', label: 'Offset Wells', type: 'checkbox' }, { key: 'gheer_target_polygon', label: 'Target Drilling Polygon (50x50 m)', type: 'checkbox' }, { key: 'gheer_prognosis_tops', label: 'Prognosis Tops', type: 'checkbox' }, { key: 'gheer_depth_top_sarah_grid', label: 'Depth Top Sarah Formation Grid', type: 'checkbox' }, { key: 'gheer_drilling_hazards', label: 'Drilling Hazards', type: 'checkbox' }, { key: 'gheer_pore_pressure_fracture_gradient', label: 'Pore Pressure Gradient and Fracture Gradient', type: 'checkbox' }, { key: 'gheer_wellbore_stability', label: 'Wellbore Stability', type: 'checkbox' }],
+  // Classification moved to the BP Execution Gate (bp_gate_classification); the
+  // legacy gheer_classification key stays readable in old data via reporting's
+  // read-fallback but is no longer entered here.
+  'GHEER': [{ key: 'gheer_base_map', label: 'Base Map', type: 'checkbox' }, { key: 'gheer_offset_wells', label: 'Offset Wells', type: 'checkbox' }, { key: 'gheer_target_polygon', label: 'Target Drilling Polygon (50x50 m)', type: 'checkbox' }, { key: 'gheer_prognosis_tops', label: 'Prognosis Tops', type: 'checkbox' }, { key: 'gheer_depth_top_sarah_grid', label: 'Depth Top Sarah Formation Grid', type: 'checkbox' }, { key: 'gheer_drilling_hazards', label: 'Drilling Hazards', type: 'checkbox' }, { key: 'gheer_pore_pressure_fracture_gradient', label: 'Pore Pressure Gradient and Fracture Gradient', type: 'checkbox' }, { key: 'gheer_wellbore_stability', label: 'Wellbore Stability', type: 'checkbox' }],
   // WS6: per-SARH scalar fields + the quickNew clone block are replaced by the
   // well-level formations mini-sheet; reservoir depths and file checkboxes stay
   // as normal task fields.
@@ -112,11 +132,11 @@ export var SCHEMA = {
     { key: 'quicklook_las', label: 'Logs as LAS', type: 'checkbox' }
   ],
   'Aramco Picks': [],
-  'Post-Drilling Resource Assessment': piip('post_drill_piip'),
+  'Post-Drilling Resource Assessment': [{ key: 'post_drill_formations', label: 'Formation Interpretation (Post-Drill)', type: 'formations', phase: 'post_drill' }].concat(piip('post_drill_piip')).concat([{ key: 'post_drill_fluid_type', label: 'Fluid Type', type: 'select', options: FLUID_TYPES }]),
   'SAD Model': [],
   'Executive Summary': [],
   'URED Update': [],
-  'Flowback Results': [{ key: 'flowback_gas_rate_mmscfd', label: 'Gas Rate (MMSCFD)', type: 'number' }, { key: 'flowback_water_rate_bwpd', label: 'Water Rate (BWPD)', type: 'number' }, { key: 'flowback_choke_size_in', label: 'Choke Size (in)', type: 'number' }, { key: 'flowback_fwhp_psi', label: 'FWHP (psi)', type: 'number' }, { key: 'flowback_dynamic_area_km2', label: 'Dynamic Reservoir Area (km²)', type: 'number' }, { key: 'flowback_dynamic_ogip_bcf', label: 'Dynamic OGIP (BCF)', type: 'number' }, { key: 'flowback_sheet', label: 'Flowback Sheet', type: 'checkbox' }, { key: 'flowback_slide', label: 'Flowback Slide', type: 'checkbox' }],
+  'Flowback Results': [{ key: 'flowback_gas_rate_mmscfd', label: 'Gas Rate (MMSCFD)', type: 'number' }, { key: 'flowback_water_rate_bwpd', label: 'Water Rate (BWPD)', type: 'number' }, { key: 'flowback_liquid_rate_bpd', label: 'Liquid Rate (BPD)', type: 'number' }, { key: 'flowback_choke_size_in', label: 'Choke Size (in)', type: 'number' }, { key: 'flowback_fwhp_psi', label: 'FWHP (psi)', type: 'number' }, { key: 'flowback_dynamic_area_km2', label: 'Dynamic Reservoir Area (km²)', type: 'number' }, { key: 'flowback_dynamic_ogip_bcf', label: 'Dynamic OGIP (BCF)', type: 'number' }, { key: 'flowback_sheet', label: 'Flowback Sheet', type: 'checkbox' }, { key: 'flowback_slide', label: 'Flowback Slide', type: 'checkbox' }],
   'SAD Update': [],
   'Final Log Analysis': [
     { key: 'final_formations', label: 'Formation Interpretation (Final)', type: 'formations', phase: 'final' },
@@ -128,6 +148,12 @@ export var SCHEMA = {
     { key: 'final_petrel', label: 'Logs in Petrel', type: 'checkbox' }
   ],
   'PVAD Structural MTR': [{ key: 'pvad_mtr_link', label: 'Hyperlink Placeholder', type: 'text' }],
-  'Resource Assessment Update': piip('resource_update').concat([{ key: 'resource_update_note', label: '', type: 'summary' }]),
-  'Prospect Evaluation Presentation': [], 'Well Creation': [], 'BP Execution Gate': [], 'Site Preparation': [], 'Post-Well Outcome & Decision Gate': [], 'Executive Summary Final': [], 'PDA': [], 'Approval To Drill': []
+  'Resource Assessment Update': [{ key: 'resource_update_formations', label: 'Formation Interpretation (Resource Update)', type: 'formations', phase: 'resource_update' }].concat(piip('resource_update')).concat([{ key: 'resource_update_note', label: '', type: 'summary' }, { key: 'resource_update_fluid_type', label: 'Fluid Type', type: 'select', options: FLUID_TYPES }]),
+  'Prospect Evaluation Presentation': [], 'Well Creation': [],
+  // Classification lives here now (moved off GHEER); reporting reads the new key
+  // first, falling back to the legacy gheer_classification for old wells.
+  'BP Execution Gate': [{ key: 'bp_gate_classification', label: 'Classification', type: 'select', options: ['', 'Development', 'Appraisal', 'Exploration'] }],
+  'Site Preparation': [], 'Post-Well Outcome & Decision Gate': [], 'Executive Summary Final': [],
+  'PDA': [{ key: 'pda_booked', label: 'Booked', type: 'checkbox' }],
+  'Approval To Drill': []
 };

@@ -1,7 +1,7 @@
 import { byId, all, esc, isFilled, msg } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName, Store, resetSelection } from '../state.js';
-import { BP_STAGES, PROSPECT_STAGES, DONE, SEISMIC_BLOCKS } from '../schema.js';
+import { BP_STAGES, PROSPECT_STAGES, DONE, SEISMIC_BLOCKS, FLOWBACK_RATE_FIELDS } from '../schema.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { canTransitionPhase, promoteProject, recallProject } from './transitions.js';
 import { loadComponent, LATEST_PIIP_SOURCES } from './detail-form.js';
@@ -157,33 +157,101 @@ function blockForAr(map, ar) {
   return '';
 }
 export function reservoirCosSummary(fieldMap) {
+  // The primary Reservoir CoS is the FIRST non-empty row (the global first-row
+  // semantic — backend Total CoS and the portfolio read the same row), rendered
+  // as "Block · AR n: NN%". Prefer the row's stored block; else reverse-lookup
+  // the AR in the seismic map; degrade to AR-only, then bare percent.
   var sourceMap = fieldMap || Store.allFields;
   var rows = parseRepeatableRows(((sourceMap['Reservoir CoS'] || {}).reservoir_cos_rows) || '[]');
   var blocks = (Store.meta && Store.meta.seismic_blocks) || SEISMIC_BLOCKS;
-  return rows.map(function (row) {
-    if (!isFilled(row.reservoir_cos_pct)) return '';
-    // Prefer the row's stored block; else reverse-lookup the AR in the map.
-    // Degrade to AR-only, then to bare percent, when the block is unknown.
+  for (var i = 0; i < rows.length; i += 1) {
+    var row = rows[i];
+    if (!isFilled(row.reservoir_cos_pct)) continue;
     var block = row.seismic_block || blockForAr(blocks, row.seismic_volume_ar_number);
     var parts = [];
     if (isFilled(block)) parts.push(block);
     if (isFilled(row.seismic_volume_ar_number)) parts.push('AR ' + row.seismic_volume_ar_number);
     var ref = parts.length ? parts.join(' · ') + ': ' : '';
     return ref + row.reservoir_cos_pct + '%';
-  }).filter(Boolean).join(' · ');
-}
-// Latest gas P90/P10 pair. Same source precedence as LATEST_PIIP_SOURCES
-// (newest assessment first), but reading each step's <prefix>_gas_p90 /
-// <prefix>_gas_p10 keys (derived from the mean key). The first step with
-// either filled supplies both values.
-function latestGasPair() {
-  for (var i = 0; i < LATEST_PIIP_SOURCES.length; i += 1) {
-    var fields = Store.allFields[LATEST_PIIP_SOURCES[i][0]] || {};
-    var p90 = fields[LATEST_PIIP_SOURCES[i][1].replace('_gas_mean', '_gas_p90')];
-    var p10 = fields[LATEST_PIIP_SOURCES[i][1].replace('_gas_mean', '_gas_p10')];
-    if (isFilled(p90) || isFilled(p10)) return { p90: p90, p10: p10, source: LATEST_PIIP_SOURCES[i][0] };
   }
-  return { p90: '', p10: '', source: '' };
+  return '';
+}
+// First filled value across a [taskName, fieldKey] precedence list (newest
+// assessment first). Drives Mean Gas (lead) and Mean Post-Drill (well) — both
+// read the `_gas_mean` keys, differing only in how far down LATEST_PIIP_SOURCES
+// they look.
+function firstFilledField(sources) {
+  for (var i = 0; i < sources.length; i += 1) {
+    var value = (Store.allFields[sources[i][0]] || {})[sources[i][1]];
+    if (isFilled(value)) return value;
+  }
+  return '';
+}
+
+// "Actual" formation data resolves across phases newest-first: a formation's
+// row is taken from the latest phase that has it (final > resource_update >
+// post_drill > quicklook), matching the plan's flagged precedence.
+var FORMATION_ACTUAL_PHASES = ['final', 'resource_update', 'post_drill', 'quicklook'];
+var FORMATION_VALUE_KEYS = ['top_tvdss_ft', 'base_tvdss_ft', 'thickness_ft', 'porosity_pct', 'swt_pct', 'pay_ft', 'ngr_pct', 'fluid'];
+
+// Collapse Store.formations to one row per formation name, each taken at its
+// highest-precedence phase. Names compare upper-cased (custom names are stored
+// upper-cased; the canonical trio already is). Returns { NAME: {row, rank} }.
+function dedupeFormationsByPhase() {
+  var byName = {};
+  (Store.formations || []).forEach(function (row) {
+    var name = String(row.formation || '').trim().toUpperCase();
+    if (!name) return;
+    var rank = FORMATION_ACTUAL_PHASES.indexOf(row.phase);
+    if (rank < 0) rank = FORMATION_ACTUAL_PHASES.length;
+    if (!byName[name] || rank < byName[name].rank) byName[name] = { row: row, rank: rank };
+  });
+  return byName;
+}
+function formationHasData(row) {
+  return !!row && FORMATION_VALUE_KEYS.some(function (key) { return isFilled(row[key]); });
+}
+// One compact reservoir line: formation name + its filled metrics (thickness,
+// porosity, Sw, pay) and a fluid tag when present. A formation with no
+// meaningful values renders as "<name>: tight" (used for a barren SARH).
+function formationLine(name, row) {
+  if (!formationHasData(row)) {
+    return '<div class="summary-formation summary-formation-empty"><span class="summary-formation-name">' + esc(name) + '</span><span class="summary-formation-note">tight</span></div>';
+  }
+  var bits = [];
+  if (isFilled(row.thickness_ft)) bits.push(row.thickness_ft + ' ft');
+  if (isFilled(row.porosity_pct)) bits.push(row.porosity_pct + '% φ');
+  if (isFilled(row.swt_pct)) bits.push(row.swt_pct + '% Sw');
+  if (isFilled(row.pay_ft)) bits.push(row.pay_ft + ' ft pay');
+  var fluidTag = isFilled(row.fluid) ? '<span class="summary-formation-fluid">' + esc(row.fluid) + '</span>' : '';
+  return '<div class="summary-formation"><span class="summary-formation-name">' + esc(name) + '</span><span class="summary-formation-metrics">' + esc(bits.join(' · ')) + '</span>' + fluidTag + '</div>';
+}
+
+// Prediction-vs-Actual accordion open state. Module-level so it survives the
+// re-render after each save; reset when the selected project changes (mirrors
+// the rail-stage accordion's per-project guard).
+var pvaOpen = false;
+var pvaProjectId = null;
+
+function numOrNull(value) {
+  if (!isFilled(value)) return null;
+  var n = Number(value);
+  return isNaN(n) ? null : n;
+}
+// One predicted|actual comparison row. Δ appears only when both sides parse as
+// finite numbers (the Top-SARH predicted value is free text and often won't).
+function pvaRow(label, predicted, actual) {
+  var predHtml = isFilled(predicted) ? esc(predicted) : '—';
+  var actualHtml = isFilled(actual) ? esc(actual) : '—';
+  var pn = numOrNull(predicted), an = numOrNull(actual);
+  var deltaHtml = '<span class="summary-pva-delta"></span>';
+  if (pn !== null && an !== null) {
+    var delta = Math.round((an - pn) * 100) / 100;
+    deltaHtml = '<span class="summary-pva-delta ' + (delta >= 0 ? 'pos' : 'neg') + '">Δ ' + (delta > 0 ? '+' : '') + delta + '</span>';
+  }
+  return '<div class="summary-pva-row"><span class="summary-pva-label">' + esc(label) + '</span>' +
+    '<span class="summary-pva-cell">' + predHtml + '</span>' +
+    '<span class="summary-pva-cell">' + actualHtml + '</span>' + deltaHtml + '</div>';
 }
 
 // One compact metric row: label (+ optional source note) and its value (— when
@@ -242,10 +310,6 @@ export function renderRightPanel(tasks) {
   if (year < 2026 || year > 2040) year = 2026;
   var recordKind = String(Store.project.pipeline_type || '').toLowerCase() === 'bp' ? 'Well' : 'Lead';
 
-  var gas = latestGasPair();
-  var trapCos = (Store.allFields['Trap CoS'] || {}).trap_cos_pct;
-  var sealCos = (Store.allFields['Seal CoS'] || {}).seal_cos_pct;
-
   var progressHtml =
     '<div class="summary-progress"><div class="summary-progress-bar"><span style="width:' + percent + '%"></span></div>' +
     '<div class="summary-progress-figures"><b>' + percent + '%</b><small>' + completed + ' / ' + tasks.length + '</small></div></div>';
@@ -260,13 +324,77 @@ export function renderRightPanel(tasks) {
   var phaseHtml = '<div class="summary-phase"><span class="summary-phase-label">' +
     (isBP ? 'BP Well · ' + esc(Store.project.business_plan_year || year) : 'Lead') +
     '</span>' + phaseButtonHtml + '</div>';
-  var metricsHtml = '<div class="summary-metrics">' +
-    metricRow('P90 Gas (BCF)', gas.p90, gas.source) +
-    metricRow('P10 Gas (BCF)', gas.p10, gas.source) +
-    metricRow('Reservoir CoS (%)', reservoirCosSummary(), 'Reservoir CoS') +
-    metricRow('Trap CoS (%)', trapCos, 'Trap CoS') +
-    metricRow('Seal CoS (%)', sealCos, 'Seal CoS') +
-    '</div>';
+  // Phase-specific body: leads show volumetrics + chance-of-success; drilled BP
+  // wells show post-drill results per formation plus a predicted-vs-actual
+  // comparison against the frozen lead snapshot.
+  var bodyHtml;
+  if (isBP) {
+    // ---- Well card ----------------------------------------------------------
+    var deduped = dedupeFormationsByPhase();
+    var sarh = deduped['SARH'] ? deduped['SARH'].row : null;
+    // Mean Post-Drill: resource_update → post_drill only (the drilled results).
+    var meanPostDrill = firstFilledField(LATEST_PIIP_SOURCES.slice(0, 2));
+    var prognosis = (Store.allFields['Well Proposal'] || {}).sarh_formation_prognosis_pre_drill;
+    var topSarh = sarh ? sarh.top_tvdss_ft : '';
+    var metricsHtml = '<div class="summary-metrics">' +
+      metricRow('Mean Post-Drill (BCF)', meanPostDrill, 'Post-drill') +
+      metricRow('SARH Prognosis', prognosis, 'Well Proposal') +
+      metricRow('Top SARH (ft TVDSS)', topSarh) +
+      '</div>';
+
+    // Reservoirs: SARH always first (barren → "tight"); every other formation
+    // with any data follows, custom/non-gas included (fluid tag distinguishes).
+    var reservoirLines = [formationLine('SARH', sarh)];
+    Object.keys(deduped).sort().forEach(function (name) {
+      if (name === 'SARH' || !formationHasData(deduped[name].row)) return;
+      reservoirLines.push(formationLine(name, deduped[name].row));
+    });
+    var reservoirsHtml = '<div class="summary-section"><div class="summary-section-title">Reservoirs</div>' +
+      '<div class="summary-formations">' + reservoirLines.join('') + '</div></div>';
+
+    // Flowback rate: the headline rate lives in a fluid-specific EAV field.
+    // Petrophysical fluid precedence (newest authority first), mirroring the
+    // formations phase precedence and the backend portfolio status order.
+    var fluid = firstFilledField([['Final Log Analysis', 'final_fluid_type'], ['Resource Assessment Update', 'resource_update_fluid_type'], ['Post-Drilling Resource Assessment', 'post_drill_fluid_type'], ['Quicklook Logs Interpretation', 'quicklook_fluid_type']]);
+    var flowEntry = FLOWBACK_RATE_FIELDS[fluid] || FLOWBACK_RATE_FIELDS['Gas'];
+    var flowValue = (Store.allFields['Flowback Results'] || {})[flowEntry.key];
+    var flowbackHtml = '<div class="summary-metrics summary-section">' +
+      metricRow('Flowback Rate', isFilled(flowValue) ? flowValue + ' ' + flowEntry.unit : '', isFilled(fluid) ? fluid : 'Gas') +
+      '</div>';
+
+    // Prediction vs Actual: predicted values read the frozen lead snapshot,
+    // falling back to live fields where the plan allows.
+    if (Store.projectId !== pvaProjectId) { pvaOpen = false; pvaProjectId = Store.projectId; }
+    var snap = (Store.leadSummary && Store.leadSummary.fields) || {};
+    var predThickness = (snap['Thickness Estimation'] || {}).reservoir_thickness_ft;
+    if (!isFilled(predThickness)) predThickness = (Store.allFields['Thickness Estimation'] || {}).reservoir_thickness_ft;
+    var predMeanSources = [['Pre-Drilling Resource Assessment', 'pre_drill_piip_gas_mean'], ['Lead Resource Assessment', 'lead_piip_gas_mean']];
+    var predMean = '';
+    for (var si = 0; si < predMeanSources.length && !isFilled(predMean); si += 1) predMean = (snap[predMeanSources[si][0]] || {})[predMeanSources[si][1]] || '';
+    for (var li = 0; li < predMeanSources.length && !isFilled(predMean); li += 1) predMean = (Store.allFields[predMeanSources[li][0]] || {})[predMeanSources[li][1]] || '';
+    var pvaBodyHtml =
+      '<div class="summary-pva-head-row"><span class="summary-pva-label"></span><span class="summary-pva-cell summary-pva-colhead">Predicted</span><span class="summary-pva-cell summary-pva-colhead">Actual</span><span class="summary-pva-delta"></span></div>' +
+      pvaRow('Top SARH', prognosis, topSarh) +
+      pvaRow('Thickness (ft)', predThickness, sarh ? sarh.thickness_ft : '') +
+      pvaRow('Mean (BCF)', predMean, meanPostDrill);
+    var pvaHtml = '<div class="summary-pva">' +
+      '<button id="summary-pva-head" type="button" class="summary-pva-head' + (pvaOpen ? ' open' : '') + '" aria-expanded="' + pvaOpen + '"><span class="summary-pva-title">Prediction vs Actual</span><span class="summary-pva-chevron" aria-hidden="true"></span></button>' +
+      '<div id="summary-pva-body" class="summary-pva-body' + (pvaOpen ? '' : ' collapsed') + '">' + pvaBodyHtml + '</div></div>';
+
+    bodyHtml = metricsHtml + reservoirsHtml + flowbackHtml + pvaHtml;
+  } else {
+    // ---- Lead card ----------------------------------------------------------
+    var trapCos = (Store.allFields['Trap CoS'] || {}).trap_cos_pct;
+    var sealCos = (Store.allFields['Seal CoS'] || {}).seal_cos_pct;
+    bodyHtml = '<div class="summary-metrics">' +
+      metricRow('Mean Gas (BCF)', firstFilledField(LATEST_PIIP_SOURCES)) +
+      metricRow('Reservoir Thickness (ft)', (Store.allFields['Thickness Estimation'] || {}).reservoir_thickness_ft) +
+      metricRow('Reservoir CoS (%)', reservoirCosSummary(), 'Reservoir CoS') +
+      metricRow('Trap CoS (%)', trapCos, 'Trap CoS') +
+      metricRow('Seal CoS (%)', sealCos, 'Seal CoS') +
+      metricRow('Total CoS (%)', (Store.overview || {}).derisking, 'Product') +
+      '</div>';
+  }
   // Popover: what the compact card dropped but still needs a home. Phase moves
   // (promote/recall) live on the visible phase row, not here.
   var popoverHtml =
@@ -275,7 +403,7 @@ export function renderRightPanel(tasks) {
     '<div class="summary-popover-actions"><button id="rename-record" type="button" class="ghost">Rename ' + recordKind + '</button><button id="delete-record" type="button" class="danger">Archive ' + recordKind + '</button></div></div>';
 
   byId('summary-title').textContent = recordKind + ' Summary';
-  byId('lead-summary').innerHTML = progressHtml + phaseHtml + metricsHtml + popoverHtml;
+  byId('lead-summary').innerHTML = progressHtml + phaseHtml + bodyHtml + popoverHtml;
 
   var activeFlag = byId('summary-active-flag');
   if (activeFlag) activeFlag.addEventListener('change', function () { saveProjectFlags({ active_well_enabled: activeFlag.checked }); });
@@ -294,6 +422,17 @@ export function renderRightPanel(tasks) {
   var deleteButton = byId('delete-record');
   if (renameButton) renameButton.addEventListener('click', renameSelectedProject);
   if (deleteButton) deleteButton.addEventListener('click', deleteSelectedProject);
+  // Prediction-vs-Actual accordion (well card only; byId is null otherwise).
+  // Toggle in place so the surrounding card isn't re-rendered.
+  var pvaHead = byId('summary-pva-head');
+  if (pvaHead) pvaHead.addEventListener('click', function () {
+    pvaOpen = !pvaOpen;
+    pvaProjectId = Store.projectId;
+    pvaHead.classList.toggle('open', pvaOpen);
+    pvaHead.setAttribute('aria-expanded', String(pvaOpen));
+    var body = byId('summary-pva-body');
+    if (body) body.classList.toggle('collapsed', !pvaOpen);
+  });
   wireSummarySettings();
 }
 export function refreshAfterRecordChange(message) {

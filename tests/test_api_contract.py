@@ -7,11 +7,13 @@ us relative to a naive reading of the spec, a comment marks it.
 from __future__ import annotations
 
 import io
+import json
 
 import openpyxl
 import pytest
 
-from conftest import create_project, get_tasks
+import portfolio_export
+from conftest import create_project, get_task_by_name, get_tasks
 
 
 # ---------------------------------------------------------------------------
@@ -463,10 +465,129 @@ def test_activity_filters_by_project_id(client):
 
 def test_export_excel(client):
     create_project(client, "EXPORT-1")
+    # A BP well with a saved flowback field exercises the Portfolio Export
+    # composer's task-input read path (WS4), not just an empty sheet.
+    bp_pid = create_project(client, "EXPORT-BP-1", pipeline_type="bp",
+                             business_plan_enabled=True, business_plan_year=2030)
+    flowback_task = get_task_by_name(client, bp_pid, "Flowback Results")
+    resp = client.patch(f"/api/tasks/{flowback_task['task_id']}/dynamic-fields",
+                         json={"fields": {"flowback_dynamic_ogip_bcf": "12.5"}})
+    assert resp.status_code == 200
+
     resp = client.get("/api/export/excel")
     assert resp.status_code == 200
     assert resp.content_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     workbook = openpyxl.load_workbook(io.BytesIO(resp.data))
     assert workbook.sheetnames == [
         "Executive Summary", "Wells Overview", "Task Register", "Monthly Progress",
+        "Portfolio Export", "Staking Options",
     ]
+
+    ws_export = workbook["Portfolio Export"]
+    header = [cell.value for cell in ws_export[4]]
+    assert header == portfolio_export.PORTFOLIO_EXPORT_COLUMNS
+
+    well_col = header.index("Well Name")
+    dyn_mean_col = header.index("Dynamic Mean (BCF)")
+    matching_rows = [row for row in ws_export.iter_rows(min_row=5, max_row=ws_export.max_row, values_only=True)
+                     if row[well_col] == "EXPORT-BP-1"]
+    assert len(matching_rows) == 1
+    assert matching_rows[0][dyn_mean_col] == "12.5"
+
+    ws_staking = workbook["Staking Options"]
+    staking_header = [cell.value for cell in ws_staking[4]]
+    assert staking_header == portfolio_export.STAKING_EXPORT_COLUMNS
+
+    # The choke column header matches the field's inch scale (flowback_choke_size_in
+    # and the UI's 'Choke Size (in)'), not the legacy 1/64" convention.
+    assert "Choke Size (in)" in header
+
+
+def test_export_reservoir_cos_columns_read_one_primary_row(client):
+    """A blank leading reservoir_cos_rows row must not split the export between
+    vintages: Pull-up/Amplitude/BTS/CoS AND the Seismic Block AR all come from
+    the ONE primary row (first row with a CoS pct or AR number filled), so the
+    Excel row matches what the Portfolio UI derives."""
+    bp_pid = create_project(client, "EXPORT-BP-2", pipeline_type="bp",
+                             business_plan_enabled=True, business_plan_year=2030)
+    reservoir_task = get_task_by_name(client, bp_pid, "Reservoir CoS")
+    resp = client.patch(f"/api/tasks/{reservoir_task['task_id']}/dynamic-fields",
+                         json={"fields": {"reservoir_cos_rows": json.dumps([
+                             {"seismic_volume_ar_number": "", "reservoir_cos_pct": "",
+                              "pull_up": "", "amplitude_ratio": "", "base_tight_sarah": ""},
+                             {"seismic_volume_ar_number": "AR-777", "reservoir_cos_pct": "55",
+                              "pull_up": "Yes", "amplitude_ratio": "0.8", "base_tight_sarah": "0.6"},
+                         ])}})
+    assert resp.status_code == 200
+
+    resp = client.get("/api/export/excel")
+    assert resp.status_code == 200
+    workbook = openpyxl.load_workbook(io.BytesIO(resp.data))
+    ws_export = workbook["Portfolio Export"]
+    header = [cell.value for cell in ws_export[4]]
+    matching_rows = [row for row in ws_export.iter_rows(min_row=5, max_row=ws_export.max_row, values_only=True)
+                     if row[header.index("Well Name")] == "EXPORT-BP-2"]
+    assert len(matching_rows) == 1
+    row = matching_rows[0]
+    assert row[header.index("Pull-up")] == "Yes"
+    assert row[header.index("Amplitude Ratio")] == "0.8"
+    assert row[header.index("BTS")] == "0.6"
+    assert row[header.index("Reservoir CoS (%)")] == "55"
+    # AR-777 is unmapped in the shipped block map, so the raw AR shows -- and it
+    # comes from the SAME row as the four values above, never a different one.
+    assert row[header.index("Seismic Block")] == "AR-777"
+
+
+def test_export_includes_proposed_leads_with_latest_estimates(client):
+    """The Portfolio Export sheet is one row per NON-ARCHIVED project: a
+    still-maturing (Proposed) lead must appear, its estimate columns filled
+    from the latest available (lead-phase) inputs; a just-created bare lead
+    must appear too. The Staking Options sheet keeps its mature-leads-only
+    membership, so neither lead may show there."""
+    bare_pid = create_project(client, "EXPORT-LEAD-BARE")
+    lead_pid = create_project(client, "EXPORT-LEAD-1")
+    lead_ra_task = get_task_by_name(client, lead_pid, "Lead Resource Assessment")
+    resp = client.patch(f"/api/tasks/{lead_ra_task['task_id']}/dynamic-fields",
+                         json={"fields": {"lead_piip_gas_p90": "3.1",
+                                          "lead_piip_gas_mean": "7.5",
+                                          "lead_piip_gas_p10": "15.2"}})
+    assert resp.status_code == 200
+    area_task = get_task_by_name(client, lead_pid, "Reservoir Area Definition")
+    resp = client.patch(f"/api/tasks/{area_task['task_id']}/dynamic-fields",
+                         json={"fields": {"p90_area_km2": "2.4", "p10_area_km2": "9.8"}})
+    assert resp.status_code == 200
+    thickness_task = get_task_by_name(client, lead_pid, "Thickness Estimation")
+    resp = client.patch(f"/api/tasks/{thickness_task['task_id']}/dynamic-fields",
+                         json={"fields": {"reservoir_thickness_ft": "88"}})
+    assert resp.status_code == 200
+
+    resp = client.get("/api/export/excel")
+    assert resp.status_code == 200
+    workbook = openpyxl.load_workbook(io.BytesIO(resp.data))
+    ws_export = workbook["Portfolio Export"]
+    header = [cell.value for cell in ws_export[4]]
+    by_name = {row[header.index("Well Name")]: row
+               for row in ws_export.iter_rows(min_row=5, max_row=ws_export.max_row, values_only=True)}
+
+    lead_row = by_name["EXPORT-LEAD-1"]
+    assert lead_row[header.index("Status")] == "Proposed"
+    assert lead_row[header.index("BP Year")] in ("", None)
+    assert lead_row[header.index("OGIP P90 (BCF)")] == "3.1"
+    assert lead_row[header.index("OGIP Mean (BCF)")] == "7.5"
+    assert lead_row[header.index("OGIP P10 (BCF)")] == "15.2"
+    assert lead_row[header.index("P90 Area (km2)")] == "2.4"
+    assert lead_row[header.index("P10 Area (km2)")] == "9.8"
+    # An undrilled lead has no SARH formation row: P50 Pay falls back to the
+    # Thickness Estimation step's reservoir thickness estimate.
+    assert lead_row[header.index("P50 Pay Thickness (ft)")] == "88"
+
+    bare_row = by_name["EXPORT-LEAD-BARE"]
+    assert bare_row[header.index("Status")] == "Proposed"
+    assert bare_row[header.index("OGIP Mean (BCF)")] in ("", None)
+
+    ws_staking = workbook["Staking Options"]
+    staking_header = [cell.value for cell in ws_staking[4]]
+    staking_names = {row[staking_header.index("Lead Name")]
+                     for row in ws_staking.iter_rows(min_row=5, max_row=ws_staking.max_row, values_only=True)}
+    assert "EXPORT-LEAD-1" not in staking_names
+    assert "EXPORT-LEAD-BARE" not in staking_names

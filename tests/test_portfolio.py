@@ -1,19 +1,33 @@
-"""Tests for the WS7 Portfolio rework (reporting.get_portfolio_rows).
+"""Tests for the Portfolio rework (reporting.get_portfolio_rows).
 
-The Portfolio is the analysis surface for BP-enabled wells: 8 columns whose
-sources each get pinned here -- gas-field derivation from the project name,
-seismic AR -> block-name mapping (config.AR_TO_SEISMIC_BLOCK) with raw
-fallback, fluid precedence (final beats quicklook beats 'Not Drilled Yet'),
-mean-OGIP precedence (post-drill -> pre-drill -> lead), and the GHEER
-classification mirror.
+The Portfolio is the analysis surface for BP-enabled wells PLUS fully-matured
+leads. Column sources each get pinned here -- gas-field derivation from the
+project name, seismic AR -> block-name mapping (config.AR_TO_SEISMIC_BLOCK,
+FIRST non-empty AR) with raw fallback, raw fluid precedence (final ->
+resource_update -> post_drill -> quicklook, final being the petrophysical
+authority), status (fluid -> Staked when Approval to Stake approved ->
+Proposed default), mean-OGIP precedence (post-drill -> pre-drill -> lead),
+classification (BP Execution Gate beats legacy GHEER), and mature-lead
+membership (a prospect with every prospect step Approved).
 """
 from __future__ import annotations
 
 import json
 
-from conftest import create_project, get_task_by_name
+from conftest import create_project, get_task_by_name, get_tasks
 
 BP_KWARGS = {"business_plan_enabled": True, "business_plan_year": 2027}
+PROSPECT_STAGES = {"Lead Identification", "Risking", "Segmentation", "Pre-Well Delivery"}
+
+
+def _approve_all_prospect_tasks(client, pid):
+    """Approve every prospect-stage task so the lead matures (overall Completed)."""
+    for task in get_tasks(client, pid):
+        if task["stage_group"] in PROSPECT_STAGES and task["status"] != "Approved":
+            resp = client.patch(f"/api/tasks/{task['task_id']}", json={
+                "status": "Approved", "revision": task["revision"],
+            })
+            assert resp.status_code == 200, resp.get_json()
 
 
 def _rows(client, **query):
@@ -53,26 +67,31 @@ def test_gas_field_whole_name_when_no_hyphen(client):
 # Seismic block
 # ---------------------------------------------------------------------------
 
-def test_seismic_block_maps_last_nonempty_ar_number(client, monkeypatch):
+def test_seismic_block_maps_first_nonempty_ar_number(client, monkeypatch):
     import config
     monkeypatch.setattr(config, "AR_TO_SEISMIC_BLOCK", {"2525": "Block A"})
 
     pid = create_project(client, "SEISMIC-1", **BP_KWARGS)
+    # The mapped AR '2525' is the FIRST non-empty AR; the later AR-1111111 must
+    # be ignored under the first-non-empty rule.
     _save_fields(client, pid, "Reservoir CoS", {"reservoir_cos_rows": json.dumps([
-        {"seismic_volume_ar_number": "AR-1111111", "reservoir_cos_pct": "40"},
         {"seismic_volume_ar_number": "", "reservoir_cos_pct": "50"},
         {"seismic_volume_ar_number": "2525", "reservoir_cos_pct": ""},
+        {"seismic_volume_ar_number": "AR-1111111", "reservoir_cos_pct": "40"},
     ])})
     assert _row_for(client, pid)["seismic_block"] == "Block A"
 
 
-def test_seismic_block_falls_back_to_raw_ar_number(client, monkeypatch):
+def test_seismic_block_falls_back_to_raw_first_ar_number(client, monkeypatch):
     import config
-    monkeypatch.setattr(config, "AR_TO_SEISMIC_BLOCK", {})
+    monkeypatch.setattr(config, "AR_TO_SEISMIC_BLOCK", {"2525": "Block A"})
 
     pid = create_project(client, "SEISMIC-2", **BP_KWARGS)
+    # First non-empty AR is unmapped -> raw AR shows; the later mapped '2525'
+    # is not consulted.
     _save_fields(client, pid, "Reservoir CoS", {"reservoir_cos_rows": json.dumps([
         {"seismic_volume_ar_number": "AR-9999999"},
+        {"seismic_volume_ar_number": "2525"},
     ])})
     assert _row_for(client, pid)["seismic_block"] == "AR-9999999"
 
@@ -147,21 +166,64 @@ def test_ar_to_seismic_block_is_correct_inversion_of_shipped_map():
 
 
 # ---------------------------------------------------------------------------
-# Fluid precedence
+# Status (Proposed / Staked / fluid) + raw fluid precedence
 # ---------------------------------------------------------------------------
 
-def test_fluid_defaults_to_not_drilled_yet(client):
-    pid = create_project(client, "FLUID-1", **BP_KWARGS)
-    assert _row_for(client, pid)["fluid"] == "Not Drilled Yet"
+def test_status_defaults_to_proposed(client):
+    pid = create_project(client, "STATUS-1", **BP_KWARGS)
+    row = _row_for(client, pid)
+    assert row["status"] == "Proposed"
+    # The old 'Not Drilled Yet' fluid fallback is gone: raw fluid is ''.
+    assert row["fluid"] == ""
 
 
-def test_fluid_final_beats_quicklook_beats_default(client):
-    pid = create_project(client, "FLUID-2", **BP_KWARGS)
+def test_status_staked_when_approval_to_stake_approved(client):
+    pid = create_project(client, "STATUS-2", **BP_KWARGS)
+    task = get_task_by_name(client, pid, "Approval to Stake")
+    resp = client.patch(f"/api/tasks/{task['task_id']}", json={
+        "status": "Approved", "revision": task["revision"],
+    })
+    assert resp.status_code == 200, resp.get_json()
+    row = _row_for(client, pid)
+    assert row["status"] == "Staked"
+    assert row["fluid"] == ""  # no fluid recorded yet
+
+
+def test_fluid_wins_status_and_final_beats_quicklook(client):
+    pid = create_project(client, "STATUS-3", **BP_KWARGS)
     _save_fields(client, pid, "Quicklook Logs Interpretation", {"quicklook_fluid_type": "Gas"})
-    assert _row_for(client, pid)["fluid"] == "Gas"
+    row = _row_for(client, pid)
+    assert row["fluid"] == "Gas"
+    assert row["status"] == "Gas"  # a recorded fluid outranks Proposed/Staked
 
     _save_fields(client, pid, "Final Log Analysis", {"final_fluid_type": "Dry"})
-    assert _row_for(client, pid)["fluid"] == "Dry"
+    row = _row_for(client, pid)
+    assert row["fluid"] == "Dry"
+    assert row["status"] == "Dry"
+
+
+def test_fluid_precedence_four_key_ladder(client):
+    """final -> resource_update -> post_drill -> quicklook, driven through the
+    API so record_status resolves the same ladder the raw fluid column does."""
+    pid = create_project(client, "STATUS-4", **BP_KWARGS)
+    _save_fields(client, pid, "Quicklook Logs Interpretation", {"quicklook_fluid_type": "Gas"})
+    _save_fields(client, pid, "Post-Drilling Resource Assessment",
+                 {"post_drill_fluid_type": "Gas Condensate"})
+    row = _row_for(client, pid)
+    assert row["fluid"] == "Gas Condensate"  # post_drill beats quicklook
+    assert row["status"] == "Gas Condensate"
+
+    # A Resource Assessment Update revision beats post_drill and quicklook...
+    _save_fields(client, pid, "Resource Assessment Update", {"resource_update_fluid_type": "Wet"})
+    row = _row_for(client, pid)
+    assert row["fluid"] == "Wet"
+    assert row["status"] == "Wet"
+
+    # ...but loses to the final petrophysical read.
+    _save_fields(client, pid, "Final Log Analysis", {"final_fluid_type": "Dry"})
+    row = _row_for(client, pid)
+    assert row["fluid"] == "Dry"
+    assert row["status"] == "Dry"
 
 
 # ---------------------------------------------------------------------------
@@ -192,15 +254,25 @@ def test_summary_cumulative_ogip_sums_mean_ogip(client):
 
 
 # ---------------------------------------------------------------------------
-# Classification (GHEER mirror)
+# Classification (BP Execution Gate, with legacy GHEER fallback)
 # ---------------------------------------------------------------------------
 
-def test_classification_mirrors_from_gheer_save(client):
+def test_classification_falls_back_to_gheer_save(client):
     pid = create_project(client, "CLASS-1", **BP_KWARGS)
     assert _row_for(client, pid)["classification"] == ""
 
     _save_fields(client, pid, "GHEER", {"gheer_classification": "Appraisal"})
     assert _row_for(client, pid)["classification"] == "Appraisal"
+
+
+def test_classification_bp_gate_beats_gheer(client):
+    pid = create_project(client, "CLASS-2", **BP_KWARGS)
+    _save_fields(client, pid, "GHEER", {"gheer_classification": "Exploration"})
+    assert _row_for(client, pid)["classification"] == "Exploration"
+
+    # The BP Execution Gate value is the primary source and wins over GHEER.
+    _save_fields(client, pid, "BP Execution Gate", {"bp_gate_classification": "Development"})
+    assert _row_for(client, pid)["classification"] == "Development"
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +284,31 @@ def test_portfolio_scope_is_bp_enabled_only(client):
     pid = create_project(client, "IN-PORTFOLIO", **BP_KWARGS)
     rows = _rows(client)["rows"]
     assert [r["project_id"] for r in rows] == [pid]
+
+
+def test_portfolio_membership_includes_bp_wells_and_mature_leads(client):
+    fresh_pid = create_project(client, "FRESH-PROSPECT")            # not mature
+    bp_pid = create_project(client, "BP-WELL", pipeline_type="bp", **BP_KWARGS)
+    lead_pid = create_project(client, "MATURE-LEAD")
+    _approve_all_prospect_tasks(client, lead_pid)
+
+    payload = _rows(client)
+    by_id = {r["project_id"]: r for r in payload["rows"]}
+    assert set(by_id) == {bp_pid, lead_pid}                          # fresh prospect excluded
+
+    assert by_id[bp_pid]["is_mature_lead"] == 0
+    assert by_id[bp_pid]["pipeline_type"] == "bp"
+    assert by_id[lead_pid]["is_mature_lead"] == 1
+    assert by_id[lead_pid]["pipeline_type"] == "prospect"
+    assert by_id[lead_pid]["status"] in {"Proposed", "Staked"}
+
+    assert payload["summary"]["business_plan_wells"] == 1
+    assert payload["summary"]["mature_leads"] == 1
+
+    # A fully-matured lead leaves the prospect board; the fresh one stays.
+    prospect_ids = [r["project_id"] for r in client.get("/api/projects?pipeline_filter=prospect").get_json()]
+    assert lead_pid not in prospect_ids
+    assert fresh_pid in prospect_ids
 
 
 def test_portfolio_year_and_activity_filters(client):
