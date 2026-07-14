@@ -156,11 +156,12 @@ function blockForAr(map, ar) {
   }
   return '';
 }
-export function reservoirCosSummary(fieldMap) {
-  // The primary Reservoir CoS is the FIRST non-empty row (the global first-row
-  // semantic — backend Total CoS and the portfolio read the same row), rendered
-  // as "Block · AR n: NN%". Prefer the row's stored block; else reverse-lookup
-  // the AR in the seismic map; degrade to AR-only, then bare percent.
+// Primary Reservoir CoS row, split into its percent and a "Block · AR n"
+// reference. The primary is the FIRST non-empty row (the global first-row
+// semantic — backend Total CoS and the portfolio read the same row). Prefer the
+// row's stored block; else reverse-lookup the AR in the seismic map; degrade to
+// AR-only, then no reference. `{ pct, ref }` with empty strings when unresolved.
+export function reservoirCosPrimary(fieldMap) {
   var sourceMap = fieldMap || Store.allFields;
   var rows = parseRepeatableRows(((sourceMap['Reservoir CoS'] || {}).reservoir_cos_rows) || '[]');
   var blocks = (Store.meta && Store.meta.seismic_blocks) || SEISMIC_BLOCKS;
@@ -171,10 +172,15 @@ export function reservoirCosSummary(fieldMap) {
     var parts = [];
     if (isFilled(block)) parts.push(block);
     if (isFilled(row.seismic_volume_ar_number)) parts.push('AR ' + row.seismic_volume_ar_number);
-    var ref = parts.length ? parts.join(' · ') + ': ' : '';
-    return ref + row.reservoir_cos_pct + '%';
+    return { pct: String(row.reservoir_cos_pct), ref: parts.join(' · ') };
   }
-  return '';
+  return { pct: '', ref: '' };
+}
+// Legacy one-string form ("Block · AR n: NN%"), kept for back-compat callers.
+export function reservoirCosSummary(fieldMap) {
+  var primary = reservoirCosPrimary(fieldMap);
+  if (!isFilled(primary.pct)) return '';
+  return (primary.ref ? primary.ref + ': ' : '') + primary.pct + '%';
 }
 // First filled value across a [taskName, fieldKey] precedence list (newest
 // assessment first). Drives Mean Gas (lead) and Mean Post-Drill (well) — both
@@ -186,6 +192,22 @@ function firstFilledField(sources) {
     if (isFilled(value)) return value;
   }
   return '';
+}
+
+// Source-consistent P90/Mean/P10 gas trio. Picks the newest source step (same
+// LATEST_PIIP_SOURCES precedence used for the mean) whose `_gas_mean` is filled,
+// then reads that SAME step's p90/mean/p10 so the trio never mixes assessments.
+// `sources` is a [taskName, '<prefix>_gas_mean'] list; the trio keys share the
+// prefix. Returns empty strings when no source has a filled mean.
+function gasTrio(sources) {
+  for (var i = 0; i < sources.length; i += 1) {
+    var fields = Store.allFields[sources[i][0]] || {};
+    var meanKey = sources[i][1];
+    if (!isFilled(fields[meanKey])) continue;
+    var prefix = meanKey.replace(/_gas_mean$/, '');
+    return { p90: fields[prefix + '_gas_p90'], mean: fields[meanKey], p10: fields[prefix + '_gas_p10'] };
+  }
+  return { p90: '', mean: '', p10: '' };
 }
 
 // "Actual" formation data resolves across phases newest-first: a formation's
@@ -211,12 +233,24 @@ function dedupeFormationsByPhase() {
 function formationHasData(row) {
   return !!row && FORMATION_VALUE_KEYS.some(function (key) { return isFilled(row[key]); });
 }
+// "tight" is DERIVED, never a default: the formation row must EXIST (it was
+// penetrated/logged in a BP step) AND read as non-pay — fluid 'Dry', or a blank
+// fluid with zero pay. A missing row (no BP data) is NOT tight; it renders as a
+// dash. Generic across formations so any barren reservoir can read "tight".
+function formationIsTight(row) {
+  if (!row) return false;
+  var fluid = String(row.fluid || '').trim();
+  if (fluid === 'Dry') return true;
+  return fluid === '' && (row.pay_ft === 0 || String(row.pay_ft).trim() === '0');
+}
 // One compact reservoir line: formation name + its filled metrics (thickness,
-// porosity, Sw, pay) and a fluid tag when present. A formation with no
-// meaningful values renders as "<name>: tight" (used for a barren SARH).
+// porosity, Sw, pay) and a fluid tag when present. A row that reads as non-pay
+// renders "<name>: tight"; a missing/empty row renders an em dash (—) — SARH
+// defaults to a dash, not "tight", unless the data derives tight.
 function formationLine(name, row) {
-  if (!formationHasData(row)) {
-    return '<div class="summary-formation summary-formation-empty"><span class="summary-formation-name">' + esc(name) + '</span><span class="summary-formation-note">tight</span></div>';
+  var tight = formationIsTight(row);
+  if (tight || !formationHasData(row)) {
+    return '<div class="summary-formation summary-formation-empty"><span class="summary-formation-name">' + esc(name) + '</span><span class="summary-formation-note">' + (tight ? 'tight' : '—') + '</span></div>';
   }
   var bits = [];
   if (isFilled(row.thickness_ft)) bits.push(row.thickness_ft + ' ft');
@@ -259,6 +293,23 @@ function pvaRow(label, predicted, actual) {
 function metricRow(label, value, note) {
   var small = note ? '<small>' + esc(note) + '</small>' : '';
   return '<div class="summary-metric"><div class="summary-metric-label"><span>' + esc(label) + '</span>' + small + '</div><div class="summary-metric-value">' + (isFilled(value) ? esc(value) : '—') + '</div></div>';
+}
+
+// A stat cluster: a quiet group label over a row of sub-label/value columns
+// (sub-label sits above its value, columns aligned). `cols` is a list of
+// { label, value }; empty values render as — in place, so a cluster with no
+// values at all still renders once with all dashes (it is never hidden). An
+// optional `context` line (e.g. the Reservoir CoS "Block · AR n" reference)
+// sits quietly below the grid. Numbers read larger than the sub-labels.
+function statCluster(label, cols, context) {
+  var cells = cols.map(function (col) {
+    return '<div class="summary-cluster-col"><span class="summary-cluster-sub">' + esc(col.label) + '</span>' +
+      '<span class="summary-cluster-val">' + (isFilled(col.value) ? esc(col.value) : '—') + '</span></div>';
+  }).join('');
+  var contextHtml = isFilled(context) ? '<div class="summary-cluster-context">' + esc(context) + '</div>' : '';
+  return '<div class="summary-cluster"><div class="summary-cluster-label">' + esc(label) + '</div>' +
+    '<div class="summary-cluster-grid" style="grid-template-columns:repeat(' + cols.length + ',minmax(0,1fr))">' + cells + '</div>' +
+    contextHtml + '</div>';
 }
 
 // The gear popover, its outside-click/Escape dismissal, and the toggle button
@@ -332,13 +383,19 @@ export function renderRightPanel(tasks) {
     // ---- Well card ----------------------------------------------------------
     var deduped = dedupeFormationsByPhase();
     var sarh = deduped['SARH'] ? deduped['SARH'].row : null;
-    // Mean Post-Drill: resource_update → post_drill only (the drilled results).
-    var meanPostDrill = firstFilledField(LATEST_PIIP_SOURCES.slice(0, 2));
+    // Post-Drill Gas: source-consistent P90/Mean/P10 from resource_update else
+    // post_drill (the drilled results only). Mean feeds Prediction vs Actual.
+    var postDrillTrio = gasTrio(LATEST_PIIP_SOURCES.slice(0, 2));
+    var meanPostDrill = postDrillTrio.mean;
     var prognosis = (Store.allFields['Well Proposal'] || {}).sarh_formation_prognosis_pre_drill;
     var topSarh = sarh ? sarh.top_tvdss_ft : '';
     var metricsHtml = '<div class="summary-metrics">' +
-      metricRow('Mean Post-Drill (BCF)', meanPostDrill, 'Post-drill') +
-      metricRow('SARH Prognosis', prognosis, 'Well Proposal') +
+      statCluster('Post-Drill Gas (BCF)', [
+        { label: 'P90', value: postDrillTrio.p90 },
+        { label: 'Mean', value: postDrillTrio.mean },
+        { label: 'P10', value: postDrillTrio.p10 }
+      ]) +
+      metricRow('SARH Prognosis', prognosis) +
       metricRow('Top SARH (ft TVDSS)', topSarh) +
       '</div>';
 
@@ -386,13 +443,23 @@ export function renderRightPanel(tasks) {
     // ---- Lead card ----------------------------------------------------------
     var trapCos = (Store.allFields['Trap CoS'] || {}).trap_cos_pct;
     var sealCos = (Store.allFields['Seal CoS'] || {}).seal_cos_pct;
+    var leadGasTrio = gasTrio(LATEST_PIIP_SOURCES);
+    // Res CoS is the primary first-row percent; its "Block · AR n" reference
+    // rides along as the cluster's quiet context line (no bulky <small> label).
+    var resCos = reservoirCosPrimary();
     bodyHtml = '<div class="summary-metrics">' +
-      metricRow('Mean Gas (BCF)', firstFilledField(LATEST_PIIP_SOURCES)) +
+      statCluster('Gas (BCF)', [
+        { label: 'P90', value: leadGasTrio.p90 },
+        { label: 'Mean', value: leadGasTrio.mean },
+        { label: 'P10', value: leadGasTrio.p10 }
+      ]) +
       metricRow('Reservoir Thickness (ft)', (Store.allFields['Thickness Estimation'] || {}).reservoir_thickness_ft) +
-      metricRow('Reservoir CoS (%)', reservoirCosSummary(), 'Reservoir CoS') +
-      metricRow('Trap CoS (%)', trapCos, 'Trap CoS') +
-      metricRow('Seal CoS (%)', sealCos, 'Seal CoS') +
-      metricRow('Total CoS (%)', (Store.overview || {}).derisking, 'Product') +
+      statCluster('Chance of Success (%)', [
+        { label: 'Res', value: resCos.pct },
+        { label: 'Trap', value: trapCos },
+        { label: 'Seal', value: sealCos },
+        { label: 'Total', value: (Store.overview || {}).derisking }
+      ], resCos.ref) +
       '</div>';
   }
   // Popover: what the compact card dropped but still needs a home. Phase moves

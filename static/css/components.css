@@ -431,6 +431,19 @@ button.ghost.danger-outline:hover { background: var(--danger-100); }
 .summary-metric-label small { color: var(--text-faint); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .04em; overflow-wrap: anywhere; }
 .summary-metric-value { flex: 0 0 auto; color: var(--ink-900); font-size: var(--text-md); font-weight: 800; text-align: right; overflow-wrap: anywhere; }
 
+/* Stat cluster: a quiet group label over a row of aligned sub-label/value
+   columns (sub-label above its value). Numbers read larger than the sub-labels.
+   Shares the metric list's dividers and typography so clusters and single-value
+   metric rows stack consistently in the same card. */
+.summary-cluster { padding: var(--space-2) 0; border-top: 1px solid var(--gray-100); }
+.summary-metrics > .summary-cluster:first-child { border-top: 0; }
+.summary-cluster-label { color: var(--text-muted); font-size: var(--text-sm); font-weight: 700; margin-bottom: var(--space-1); overflow-wrap: anywhere; }
+.summary-cluster-grid { display: grid; gap: var(--space-2); align-items: end; }
+.summary-cluster-col { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.summary-cluster-sub { color: var(--text-faint); font-size: var(--text-xs); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.summary-cluster-val { color: var(--ink-900); font-size: var(--text-md); font-weight: 800; overflow-wrap: anywhere; }
+.summary-cluster-context { color: var(--text-faint); font-size: var(--text-xs); margin-top: var(--space-1); overflow-wrap: anywhere; }
+
 /* Gear popover: small floating panel anchored to the card header, hosting the
    Active Well flag and Rename/Archive that the compact card dropped. */
 .summary-popover {
