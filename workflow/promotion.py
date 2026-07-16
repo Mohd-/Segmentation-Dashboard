@@ -114,8 +114,11 @@ def set_business_plan(session, project_id, enabled, year=None, changed_by="Admin
     year_val = None
     if enabled_int:
         year_val = int(year or old.get("business_plan_year") or 0)
-        if year_val < 2026 or year_val > 2040:
-            raise ValueError("Select a business plan year from 2026 to 2040.")
+        # Floor is 1990, not 2026: promotion also lands imported historical
+        # wells (drilled pre-2026) here. The promote dialog UI still only
+        # offers 2026+.
+        if year_val < 1990 or year_val > 2040:
+            raise ValueError("Select a business plan year from 1990 to 2040.")
     with db.write_transaction(session):
         if enabled_int:
             _move_lead_to_bp_execution(session, project_id, year_val, changed_by)

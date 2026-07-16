@@ -29,7 +29,7 @@ def test_non_numeric_business_plan_year_returns_year_message(client):
         "business_plan_year": "not-a-year",
     })
     assert resp.status_code == 400
-    assert resp.get_json()["detail"] == "Select a business plan year from 2026 to 2040."
+    assert resp.get_json()["detail"] == "Select a business plan year from 1990 to 2040."
 
 
 def test_internal_error_returns_generic_500_without_leaking(client, monkeypatch):

@@ -19,12 +19,27 @@ from conftest import create_project, get_task_by_name, get_tasks
 
 BP_KWARGS = {"business_plan_enabled": True, "business_plan_year": 2027}
 PROSPECT_STAGES = {"Lead Identification", "Risking", "Segmentation", "Pre-Well Delivery"}
+BP_STAGES = {"Well Delivery", "Post-Drilling", "Post-Testing"}
 
 
 def _approve_all_prospect_tasks(client, pid):
     """Approve every prospect-stage task so the lead matures (overall Completed)."""
     for task in get_tasks(client, pid):
         if task["stage_group"] in PROSPECT_STAGES and task["status"] != "Approved":
+            resp = client.patch(f"/api/tasks/{task['task_id']}", json={
+                "status": "Approved", "revision": task["revision"],
+            })
+            assert resp.status_code == 200, resp.get_json()
+
+
+def _approve_all_bp_tasks(client, pid):
+    """Approve every BP-stage task so the well fully matures (overall Completed).
+
+    Mirrors _approve_all_prospect_tasks; used for the Excel import tool's
+    "historical well" case (a BP well drilled in the past, every step Approved).
+    """
+    for task in get_tasks(client, pid):
+        if task["stage_group"] in BP_STAGES and task["status"] != "Approved":
             resp = client.patch(f"/api/tasks/{task['task_id']}", json={
                 "status": "Approved", "revision": task["revision"],
             })
@@ -385,3 +400,56 @@ def test_portfolio_year_and_activity_filters(client):
 
     rows = _rows(client, activity="Non-Active")["rows"]
     assert [r["project_id"] for r in rows] == [pid_2027]
+
+
+# ---------------------------------------------------------------------------
+# Historical BP wells (Excel import): fully-approved BP wells leave the BP
+# board but stay in the Portfolio and the Excel export.
+# ---------------------------------------------------------------------------
+
+def test_completed_bp_well_leaves_bp_board_but_stays_in_portfolio_and_export(client):
+    """The Excel importer creates "historical wells": BP wells drilled in the
+    past (business_plan_year < 2026) whose steps are all Approved. Such a well
+    must drop off the BP execution board the same way a matured lead drops off
+    the prospect board (workflow/projects.py get_projects), while remaining
+    visible in the Portfolio (reporting.get_portfolio_rows) and the Excel
+    export (portfolio_export.get_portfolio_export_rows) -- those are separate
+    readers, untouched by the board's row-skip."""
+    import db as dbmod
+    import portfolio_export
+
+    pid = create_project(client, "HIST-1", pipeline_type="bp",
+                         business_plan_enabled=True, business_plan_year=2019)
+    _approve_all_bp_tasks(client, pid)
+
+    bp_ids = [r["project_id"] for r in client.get("/api/projects?pipeline_filter=bp").get_json()]
+    assert pid not in bp_ids
+
+    portfolio_ids = [r["project_id"] for r in _rows(client)["rows"]]
+    assert pid in portfolio_ids
+
+    session = dbmod.new_session()
+    try:
+        export_rows = portfolio_export.get_portfolio_export_rows(session)
+    finally:
+        session.close()
+    assert "HIST-1" in [row["Well Name"] for row in export_rows]
+
+
+# ---------------------------------------------------------------------------
+# Business-plan year floor: 1990, not 2026 (imported historical wells)
+# ---------------------------------------------------------------------------
+
+def test_business_plan_year_floor_admits_historical_years(client):
+    """1990 is the new floor (imported historical wells predate 2026); 1989
+    stays rejected."""
+    pid = create_project(client, "HIST-YEAR-1")
+    resp = client.patch(f"/api/projects/{pid}/flags", json={
+        "business_plan_enabled": True, "business_plan_year": 2019,
+    })
+    assert resp.status_code == 200, resp.get_json()
+
+    resp = client.patch(f"/api/projects/{pid}/flags", json={
+        "business_plan_enabled": True, "business_plan_year": 1989,
+    })
+    assert resp.status_code == 400

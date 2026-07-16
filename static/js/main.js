@@ -9,10 +9,12 @@ import { performLogin, fetchUserOptions } from './auth.js';
 
 // The board status filters act on projects.overall_status, which only ever
 // holds these two values -- filling them with task statuses made the filter
-// dead for every other option. The prospect board excludes 'Completed':
-// mature (Completed) leads are no longer shown there (workflow/projects.py),
-// so the option would always yield an empty board.
-var PROJECT_STATUSES = ['In Progress', 'Completed'];
+// dead for every other option. Both boards exclude 'Completed': a fully
+// matured lead leaves the prospect board and a fully-approved BP well
+// (drilled/finished, incl. imported historical wells) leaves the BP board
+// (workflow/projects.py get_projects), so the option would always yield an
+// empty board.
+var PROJECT_STATUSES = ['In Progress'];
 var PROSPECT_STATUSES = ['In Progress'];
 
 export function showTab(name) {
@@ -115,6 +117,10 @@ function fillAssigneeFilter(select, users) {
 function boot() {
   fillSelect(byId('prospect-status-filter'), PROSPECT_STATUSES, true);
   fillSelect(byId('bp-status-filter'), PROJECT_STATUSES, true);
+  // The portfolio year range is only a boot placeholder: the first unfiltered
+  // portfolio fetch replaces it with the distinct years actually present
+  // (views/portfolio.js), so imported historical (pre-2026) wells become
+  // selectable. The BP board select stays a fixed 2026+ planning range.
   fillSelect(byId('portfolio-year-filter'), range(2026, 2040), true);
   fillSelect(byId('bp-year-filter'), range(2026, 2040), true);
   ensureUsers().then(function (users) {

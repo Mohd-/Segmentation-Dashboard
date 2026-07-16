@@ -41,7 +41,8 @@ import reporting
 # ---------------------------------------------------------------------------
 
 PORTFOLIO_EXPORT_COLUMNS: List[str] = [
-    "Well Name", "BP Year", "Classification", "Field", "Seismic Block", "Status",
+    "X", "Y",
+    "Well Name", "BP Year", "Classification", "Field", "Seismic Block", "AR Number", "Status",
     "Dynamic Mean (BCF)", "Booked",
     "OGIP P90 (BCF)", "OGIP Mean (BCF)", "OGIP P10 (BCF)",
     "Condensate P90 (MMSTB)", "Condensate Mean (MMSTB)", "Condensate P10 (MMSTB)",
@@ -52,7 +53,7 @@ PORTFOLIO_EXPORT_COLUMNS: List[str] = [
     "SARH-QWRH Thickness (ft)", "Trap CoS (%)",
     "Most Recent Age of Fault", "Dip", "Azimuth vs SHmax", "Fault LoC", "FPPM",
     "Seal CoS (%)", "Pore Pressure Gradient (psi/ft)",
-    "Gas Rate (MMSCFD)", "Water Rate (BWPD)", "Choke Size (in)", "WHP (psi)",
+    "Gas Rate (MMSCFD)", "Water Rate (BWPD)", "Condensate Rate (BPD)", "Choke Size (in)", "WHP (psi)",
 ]
 
 STAKING_EXPORT_COLUMNS: List[str] = [
@@ -70,6 +71,7 @@ STAKING_EXPORT_COLUMNS: List[str] = [
 _PIIP_PREFIXES = ("resource_update", "post_drill_piip", "pre_drill_piip", "lead_piip")
 
 _PORTFOLIO_TASK_FIELD_KEYS: List[str] = [
+    "staking_well_x", "staking_well_y",
     "bp_gate_classification", "gheer_classification",
     "final_fluid_type", "resource_update_fluid_type",
     "post_drill_fluid_type", "quicklook_fluid_type",
@@ -86,7 +88,7 @@ _PORTFOLIO_TASK_FIELD_KEYS: List[str] = [
     "seal_cos_pct", "seal_pore_pressure_gradient_psi_ft",
     "flowback_stages_rows",
     "flowback_gas_rate_mmscfd", "flowback_water_rate_bwpd",
-    "flowback_choke_size_in", "flowback_fwhp_psi",
+    "flowback_liquid_rate_bpd", "flowback_choke_size_in", "flowback_fwhp_psi",
 ] + [f"{prefix}_{suffix}" for prefix in _PIIP_PREFIXES
      for suffix in ("gas_p90", "gas_mean", "gas_p10", "liquid_p90", "liquid_mean", "liquid_p10")]
 
@@ -182,9 +184,9 @@ def _export_projects(session):
 def _project_lead_xy(session, project_ids) -> Dict[int, dict]:
     """Batched {project_id: {'lead_x':..., 'lead_y':...}} -- one extra query.
 
-    _portfolio_projects (reporting.py, not touched by this module) does not
-    carry lead_x/lead_y, so the staking sheet fetches them itself rather than
-    asking WS2 to widen the shared query.
+    Neither _portfolio_projects (reporting.py, not touched by this module) nor
+    _export_projects carries lead_x/lead_y, so both sheets' X/Y columns fetch
+    them here rather than widening the shared queries.
     """
     if not project_ids:
         return {}
@@ -294,6 +296,7 @@ def get_portfolio_export_rows(session) -> List[dict]:
     task_fields = _task_fields(session, project_ids, _PORTFOLIO_TASK_FIELD_KEYS)
     formations = _sarh_formations(session, project_ids)
     stake_map = reporting._approval_to_stake_map(session, project_ids)
+    lead_xy = _project_lead_xy(session, project_ids)
 
     rows: List[dict] = []
     for item in projects:
@@ -355,12 +358,18 @@ def get_portfolio_export_rows(session) -> List[dict]:
         primary_stage = _parse_flowback_primary_stage(fields.get("flowback_stages_rows"))
         flowback_src = primary_stage if primary_stage else fields
 
+        # X/Y follow the Staking sheet's precedence: the staking step's own
+        # confirmed location wins, the project's lead_x/lead_y is the fallback.
+        xy = lead_xy.get(item["project_id"], {})
         rows.append({
+            "X": _first_filled(fields.get("staking_well_x"), xy.get("lead_x")),
+            "Y": _first_filled(fields.get("staking_well_y"), xy.get("lead_y")),
             "Well Name": item["project_name"],
             "BP Year": item.get("year") or "",
             "Classification": classification,
             "Field": field_name,
             "Seismic Block": seismic_block,
+            "AR Number": first_ar,
             "Status": status,
             "Dynamic Mean (BCF)": _first_filled(fields.get("flowback_dynamic_ogip_bcf")),
             "Booked": booked,
@@ -391,6 +400,7 @@ def get_portfolio_export_rows(session) -> List[dict]:
             "Pore Pressure Gradient (psi/ft)": _first_filled(fields.get("seal_pore_pressure_gradient_psi_ft")),
             "Gas Rate (MMSCFD)": _first_filled(flowback_src.get("flowback_gas_rate_mmscfd")),
             "Water Rate (BWPD)": _first_filled(flowback_src.get("flowback_water_rate_bwpd")),
+            "Condensate Rate (BPD)": _first_filled(flowback_src.get("flowback_liquid_rate_bpd")),
             "Choke Size (in)": _first_filled(flowback_src.get("flowback_choke_size_in")),
             "WHP (psi)": _first_filled(flowback_src.get("flowback_fwhp_psi")),
         })

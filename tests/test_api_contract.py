@@ -89,7 +89,8 @@ def test_create_project_name_too_long(client):
 
 @pytest.mark.parametrize("payload", [
     {"business_plan_enabled": True},
-    {"business_plan_enabled": True, "business_plan_year": 2025},
+    # Floor is 1990 (admits imported historical wells); 1989 stays invalid.
+    {"business_plan_enabled": True, "business_plan_year": 1989},
     {"business_plan_enabled": True, "business_plan_year": 2041},
 ])
 def test_create_project_bp_enabled_needs_valid_year(client, payload):
@@ -433,7 +434,8 @@ def test_business_plan_rows_and_portfolio_rows(client):
 
 
 def test_portfolio_rows_invalid_year(client):
-    resp = client.get("/api/portfolio/rows?year=1999")
+    # Floor is 1990 (admits imported historical wells); 1989 stays invalid.
+    resp = client.get("/api/portfolio/rows?year=1989")
     assert resp.status_code == 400
     assert "detail" in resp.get_json()
 
@@ -536,6 +538,7 @@ def test_export_reservoir_cos_columns_read_one_primary_row(client):
     # AR-777 is unmapped in the shipped block map, so the raw AR shows -- and it
     # comes from the SAME row as the four values above, never a different one.
     assert row[header.index("Seismic Block")] == "AR-777"
+    assert row[header.index("AR Number")] == "AR-777"
 
 
 def test_export_flowback_columns_read_primary_stage(client):
@@ -552,6 +555,7 @@ def test_export_flowback_columns_read_primary_stage(client):
                                  {"flowback_gas_rate_mmscfd": "", "flowback_water_rate_bwpd": "",
                                   "flowback_choke_size_in": "", "flowback_fwhp_psi": ""},
                                  {"flowback_gas_rate_mmscfd": "9.5", "flowback_water_rate_bwpd": "120",
+                                  "flowback_liquid_rate_bpd": "75",
                                   "flowback_choke_size_in": "0.5", "flowback_fwhp_psi": ""},
                                  {"flowback_gas_rate_mmscfd": "4.2"},
                              ]),
@@ -572,6 +576,7 @@ def test_export_flowback_columns_read_primary_stage(client):
     row = matching_rows[0]
     assert row[header.index("Gas Rate (MMSCFD)")] == "9.5"
     assert row[header.index("Water Rate (BWPD)")] == "120"
+    assert row[header.index("Condensate Rate (BPD)")] == "75"
     assert row[header.index("Choke Size (in)")] == "0.5"
     # The primary stage left WHP blank; the flat key's 888 must NOT leak in.
     assert row[header.index("WHP (psi)")] in (None, "")
@@ -587,6 +592,7 @@ def test_export_flowback_columns_fall_back_to_flat_keys(client):
                          json={"fields": {
                              "flowback_gas_rate_mmscfd": "3.3",
                              "flowback_water_rate_bwpd": "450",
+                             "flowback_liquid_rate_bpd": "60",
                              "flowback_choke_size_in": "0.75",
                              "flowback_fwhp_psi": "2100",
                          }})
@@ -603,8 +609,33 @@ def test_export_flowback_columns_fall_back_to_flat_keys(client):
     row = matching_rows[0]
     assert row[header.index("Gas Rate (MMSCFD)")] == "3.3"
     assert row[header.index("Water Rate (BWPD)")] == "450"
+    assert row[header.index("Condensate Rate (BPD)")] == "60"
     assert row[header.index("Choke Size (in)")] == "0.75"
     assert row[header.index("WHP (psi)")] == "2100"
+
+
+def test_export_xy_columns_and_fixed_layout(client):
+    """X/Y open the sheet with the project's lead coordinates, AR Number sits
+    8th (right after Seismic Block), and Condensate Rate follows Water Rate --
+    the fixed column layout external consumers of the sheet rely on."""
+    cols = portfolio_export.PORTFOLIO_EXPORT_COLUMNS
+    assert cols[:2] == ["X", "Y"]
+    assert cols[6] == "Seismic Block"
+    assert cols[7] == "AR Number"
+    assert cols[cols.index("Water Rate (BWPD)") + 1] == "Condensate Rate (BPD)"
+
+    create_project(client, "EXPORT-XY-1", lead_x=512345.5, lead_y=2871000)
+    resp = client.get("/api/export/excel")
+    assert resp.status_code == 200
+    workbook = openpyxl.load_workbook(io.BytesIO(resp.data))
+    ws_export = workbook["Portfolio Export"]
+    header = [cell.value for cell in ws_export[4]]
+    matching_rows = [row for row in ws_export.iter_rows(min_row=5, max_row=ws_export.max_row, values_only=True)
+                     if row[header.index("Well Name")] == "EXPORT-XY-1"]
+    assert len(matching_rows) == 1
+    row = matching_rows[0]
+    assert float(row[header.index("X")]) == 512345.5
+    assert float(row[header.index("Y")]) == 2871000
 
 
 def test_export_includes_proposed_leads_with_latest_estimates(client):

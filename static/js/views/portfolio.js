@@ -1,4 +1,4 @@
-import { byId, all, esc, msg } from '../dom.js';
+import { byId, all, esc, msg, fillSelect } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName } from '../state.js';
 import { canTransitionPhase, promoteProject, recallProject } from './transitions.js';
@@ -326,12 +326,38 @@ function renderHead(table) {
   updateSortIndicators(table);
 }
 
+// Distinct BP years present in a rowset, sorted ascending. Rows without a
+// year (mature leads) contribute nothing -- they only show under 'All',
+// matching the backend filter (reporting.get_portfolio_rows).
+function distinctYears(rows) {
+  var seen = {};
+  var years = [];
+  rows.forEach(function (row) {
+    if (row.year === null || row.year === undefined || row.year === '') return;
+    var text = String(row.year);
+    if (!seen[text]) { seen[text] = true; years.push(text); }
+  });
+  years.sort(function (a, b) { return Number(a) - Number(b); });
+  return years;
+}
+
 export function refreshPortfolio() {
   var year = byId('portfolio-year-filter').value || 'All';
   var activity = byId('portfolio-activity-filter').value || 'All';
   API.portfolioRows({ year: year, activity: activity }).then(function (payload) {
     state.rows = (payload && payload.rows) || [];
     state.filters = {};
+    // The year select's options track the data: a fully unfiltered fetch
+    // (both selects at 'All' -- the boot state) rebuilds them from the
+    // distinct years actually present, so imported historical wells
+    // (business_plan_year < 2026) are selectable. Filtered fetches never
+    // rebuild (a year-filtered rowset carries one year; an activity-filtered
+    // one can hide years) and an empty portfolio keeps the boot-time
+    // 2026-2040 default (main.js). fillSelect preserves the selection.
+    if (year === 'All' && activity === 'All') {
+      var years = distinctYears(state.rows);
+      if (years.length) fillSelect(byId('portfolio-year-filter'), years, true);
+    }
     var table = byId('portfolio-table');
     if (!table) return;
     renderHead(table);

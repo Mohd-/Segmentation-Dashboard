@@ -358,9 +358,13 @@ def get_portfolio_rows(session, year="All", activity="All"):
         try:
             selected_year_int = int(selected_year)
         except (TypeError, ValueError):
-            raise ValueError("Select a business plan year from 2026 to 2040.")
-        if selected_year_int < 2026 or selected_year_int > 2040:
-            raise ValueError("Select a business plan year from 2026 to 2040.")
+            raise ValueError("Select a business plan year from 1990 to 2040.")
+        # Floor is 1990, not 2026: imported historical wells carry a
+        # pre-2026 business_plan_year and must be filterable in the Portfolio
+        # (the UI year select offers the distinct years present in the data --
+        # static/js/views/portfolio.js).
+        if selected_year_int < 1990 or selected_year_int > 2040:
+            raise ValueError("Select a business plan year from 1990 to 2040.")
     else:
         selected_year_int = None
 

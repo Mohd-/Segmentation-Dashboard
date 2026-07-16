@@ -43,8 +43,9 @@ def test_promotion_sets_pipeline_type_and_captures_lead_summary(client):
 
 def test_promotion_year_validation(client):
     pid = create_project(client, "PROMO-YEAR-1")
+    # Floor is 1990 (admits imported historical wells); 1989 stays invalid.
     resp = client.patch(f"/api/projects/{pid}/flags", json={
-        "business_plan_enabled": True, "business_plan_year": 2025,
+        "business_plan_enabled": True, "business_plan_year": 1989,
     })
     assert resp.status_code == 400
 

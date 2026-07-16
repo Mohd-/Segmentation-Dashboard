@@ -42,12 +42,14 @@ def add_project(session, project_name, start_date=None, target_date=None, change
         try:
             year_val = int(business_plan_year)
         except (TypeError, ValueError):
-            raise ValueError("Select a business plan year from 2026 to 2040.")
+            raise ValueError("Select a business plan year from 1990 to 2040.")
     else:
         year_val = None
     bp_enabled = 1 if business_plan_enabled or year_val else 0
-    if bp_enabled and (year_val is None or year_val < 2026 or year_val > 2040):
-        raise ValueError("Select a business plan year from 2026 to 2040.")
+    # Floor is 1990, not 2026: the Excel importer creates historical BP wells
+    # drilled in the past. The promote dialog UI still only offers 2026+.
+    if bp_enabled and (year_val is None or year_val < 1990 or year_val > 2040):
+        raise ValueError("Select a business plan year from 1990 to 2040.")
 
     # Friendly duplicate check up front; the IntegrityError catch below still
     # covers the race where another request inserts the same name in between.
@@ -268,8 +270,13 @@ def get_projects(session, search_text="", stage_filter="All", status_filter="All
         item["active_well_enabled"] = int(item.get("active_well_enabled") or 0)
         item["health"] = health_from_target(item.get("target_date"), item.get("overall_status"))
         # A fully-matured lead (every prospect step Approved) leaves the lead
-        # board and lives in the Portfolio until a supervisor promotes it.
-        if pipeline_filter == "prospect" and item.get("overall_status") == "Completed":
+        # board for the Portfolio until a supervisor promotes it; a
+        # fully-approved BP well (drilled/finished, including imported
+        # historical wells) likewise leaves the BP execution board, while
+        # both stay visible in the Portfolio and the Excel export
+        # (reporting.py / portfolio_export.py are separate readers, untouched
+        # here).
+        if pipeline_filter in ("prospect", "bp") and item.get("overall_status") == "Completed":
             continue
         if stage_filter != "All" and item.get("current_stage") != stage_filter:
             continue
