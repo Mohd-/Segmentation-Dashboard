@@ -38,12 +38,20 @@ export function openDetail(projectId, pipeline) {
     Store.overview = detail.overview || null;
     Store.formations = detail.formations || [];
     renderDetail();
-    loadComponent(chooseInitialTask(tasksForPipeline(Store.pipeline)));
     // The detail shell is the page's last visible section, so aligning its
     // TOP under the sticky header is often unreachable (not enough document
     // below it) and the scroll stalls partway. Scroll to the document bottom
-    // instead: the shell fills the viewport from below.
-    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
+    // instead: the shell fills the viewport from below. loadComponent fills
+    // the form fields ASYNCHRONOUSLY (fetches fields + folder info), which
+    // grows the document after the scroll target would otherwise be computed
+    // -- so wait for that render to settle (Promise.resolve tolerates
+    // loadComponent returning undefined when there's no task) and scroll on
+    // the next frame, once the grown document's height is final.
+    Promise.resolve(loadComponent(chooseInitialTask(tasksForPipeline(Store.pipeline)))).then(function () {
+      requestAnimationFrame(function () {
+        window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
+      });
+    });
   }).catch(function (error) { msg(error.message, 'error'); });
 }
 // Monochrome stage glyphs for the rail headers (must read at ~14px).

@@ -98,7 +98,7 @@ export function loadComponent(task) {
   renderPriorityChip(task);
   byId('comments').placeholder = commentPlaceholder(task.task_name);
   byId('comments').value = task.comments || '';
-  Promise.all([API.fields(task.task_id), API.componentFolder(Store.projectId, task.task_id)]).then(function (results) {
+  return Promise.all([API.fields(task.task_id), API.componentFolder(Store.projectId, task.task_id)]).then(function (results) {
     renderFields(task.task_name, results[0] || {});
     renderComponentFolder(results[1] || {});
     renderRightPanel(tasksForPipeline(Store.pipeline));
@@ -473,9 +473,18 @@ function fieldMarkup(field, value, classes, showIfAttr) {
   if (field.type === 'text') {
     return '<label class="' + classes + '"' + showIfAttr + '>' + esc(field.label) + '<input data-field="' + esc(field.key) + '" value="' + esc(value) + '"></label>';
   }
+  if (field.type === 'radio') {
+    // Horizontal radio group: one input per option, all sharing a name unique
+    // to the field key. No blank option -- unset/legacy '' values simply leave
+    // every radio unchecked (see getFields' radio branch).
+    var radioOptions = (field.options || []).map(function (option) {
+      return '<label class="radio-option"><input type="radio" name="radio-' + esc(field.key) + '" data-field="' + esc(field.key) + '" value="' + esc(option) + '" ' + (String(value) === String(option) ? 'checked' : '') + '> ' + esc(option) + '</label>';
+    }).join('');
+    return '<div class="radio-group' + classes + '"' + showIfAttr + ' role="radiogroup" aria-labelledby="radio-label-' + esc(field.key) + '"><span class="radio-group-label" id="radio-label-' + esc(field.key) + '">' + esc(field.label) + '</span><div class="radio-options">' + radioOptions + '</div></div>';
+  }
   if (field.type === 'link') {
     // Link cards never toggle; data-show-if is intentionally omitted.
-    return '<div class="summary-box' + classes + '"><b>' + esc(field.label) + '</b><p><a href="' + esc(field.value || '#') + '" target="_blank" rel="noreferrer">' + esc(field.linkText || 'New Request') + '</a></p></div>';
+    return '<div class="summary-box' + classes + '"><p><a href="' + esc(field.value || '#') + '" target="_blank" rel="noreferrer">' + esc(field.linkText || 'New Request') + '</a></p></div>';
   }
   return '<label class="' + classes + '"' + showIfAttr + '>' + esc(field.label) + '<input type="number" step="any" data-field="' + esc(field.key) + '" value="' + esc(value) + '"></label>';
 }
@@ -485,6 +494,8 @@ function standaloneFieldMarkup(field, componentName, values) {
   if (field.type === 'formations') return renderFormationsField(field);
   if (field.type === 'repeatable') return renderRepeatableField(field, value);
   var hidden = field.showIf && !truthy(values[field.showIf]);
+  // .radio-group already forces grid-column:1/-1 in CSS, so only 'text' needs
+  // the wide-field class here.
   var classes = (hidden ? ' conditional hidden' : ' conditional') + (field.type === 'text' ? ' wide-field' : '');
   return fieldMarkup(field, value, classes, ' data-show-if="' + esc(field.showIf || '') + '"');
 }
@@ -604,7 +615,17 @@ export function getFields(root) {
   root = root || byId('dynamic-fields');
   var fields = {};
   all('[data-field]', root).forEach(function (element) {
-    fields[element.getAttribute('data-field')] = element.type === 'checkbox' ? (element.checked ? '1' : '') : element.value;
+    var key = element.getAttribute('data-field');
+    // Radio: several inputs share one data-field key (one per option), so a
+    // plain last-write-wins forEach would take whichever option is LAST in the
+    // DOM regardless of which is checked. Seed '' once per key (unset/legacy
+    // reads as no radio checked) and only the checked input overwrites it.
+    if (element.type === 'radio') {
+      if (!(key in fields)) fields[key] = '';
+      if (element.checked) fields[key] = element.value;
+      return;
+    }
+    fields[key] = element.type === 'checkbox' ? (element.checked ? '1' : '') : element.value;
   });
   all('[data-repeatable]', root).forEach(function (container) {
     var key = container.getAttribute('data-repeatable');
@@ -719,6 +740,11 @@ function seismicBlocksMap() {
 // a blank option. `row` may be a plain object (initial render) or a lookup of
 // the sibling's current value.
 function repeatableColumnOptions(col, row) {
+  // A formation select column (per-stage Flowback formation) reuses the same
+  // option set as the standalone Flowback dropdown: canonical trio + this well's
+  // custom formations, with the row's current value appended by
+  // formationNameOptions when it is legacy/custom and otherwise absent.
+  if (col.optionsFrom === 'formations') return formationNameOptions(row[col.key]);
   var map = seismicBlocksMap();
   if (col.dependsOn) {
     var block = row[col.dependsOn];
@@ -758,7 +784,13 @@ export function repeatableInputMarkup(field, row, rowIndex) {
       return '<span class="repeatable-calc" title="' + esc(col.label) + '">' + (isFilled(value) ? esc(value) + '%' : '—') + '</span>';
     }
     if (col.type === 'select') {
-      return '<select ' + attr + aria + '>' + repeatableSelectOptions(col, row, value) + '</select>';
+      // Honor a column-level default (col.value, e.g. Flowback formation's
+      // 'SARH'): a row with no saved value renders that default selected so a
+      // freshly added row shows it and a save harvests it. Only when col.value
+      // is declared -- select columns without a default (seismic blocks) keep
+      // their genuinely-blank rows blank.
+      var selectValue = (col.value != null && !isFilled(value)) ? col.value : value;
+      return '<select ' + attr + aria + '>' + repeatableSelectOptions(col, row, selectValue) + '</select>';
     }
     var ghost = col.placeholder ? ' placeholder="' + esc(col.placeholder) + '"' : '';
     return '<input type="' + (col.type === 'number' ? 'number' : 'text') + '" step="any" ' + attr + aria + ghost + ' value="' + esc(value) + '">';

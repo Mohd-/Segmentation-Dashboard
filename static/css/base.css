@@ -166,8 +166,8 @@
 /* Dark-theme scoped spot-fixes: the few places where a single token can't
    serve both its text and background/fill uses (see block header above). */
 :root[data-theme="dark"] .rig-mark {
-  /* light-mode end stop was --ink-800, now light → keep an all-teal gradient */
-  background: linear-gradient(155deg, var(--brand-600), var(--brand-700));
+  /* Brighter blue so the mark holds against dark surfaces; white strokes stay legible. */
+  background: linear-gradient(155deg, #3b82f6, #1e40af);
 }
 :root[data-theme="dark"] button.danger {
   /* --danger-700 is light red text here; fill solid so white stays legible */
@@ -225,9 +225,13 @@ a { color: var(--brand-700); }
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-md);
-  background: linear-gradient(155deg, var(--brand-600), var(--ink-800));
+  /* Brand-mark blue: local to the rig mark, intentionally distinct from the
+     teal brand tokens used everywhere else. White SVG strokes ride on top. */
+  background: linear-gradient(155deg, #2563eb, #1e40af);
   color: var(--white);
 }
+/* The compass-N SVG fills the mark box at the old glyph's optical size (1em). */
+.rig-mark svg { display: block; }
 /* Shared brand-title typography: the header lockup and the full-page login
    card (.login-brand, components.css) reuse the same markup. */
 .app-header h1, .login-brand h1 {
@@ -238,6 +242,10 @@ a { color: var(--brand-700); }
 }
 .header-actions { display: flex; align-items: center; gap: var(--space-4); color: var(--text-faint); font-size: var(--text-sm); }
 .user-chip { white-space: nowrap; }
+/* Matches the ghost button look (button.ghost in components/base) since the
+   ghost selectors are button-scoped and won't reach this <a>. */
+.header-link { text-decoration: none; background: var(--surface); border: 1px solid var(--border-strong); color: var(--ink-800); font-size: var(--text-sm); font-weight: 600; padding: 8px 14px; border-radius: var(--radius-sm); white-space: nowrap; }
+.header-link:hover { background: var(--gray-050); }
 
 .tabs {
   height: 44px;

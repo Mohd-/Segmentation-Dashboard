@@ -762,8 +762,11 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
                            .get("flowback_stages_rows") if is_update else None)
             stages = _merge_primary_json_row(stored_blob, stage_contribution, _flowback_primary)
             if stages is None:
+                # Fresh flowback: the sole stage row carries its own formation
+                # (SARH default). The --update merge path never sets this, so an
+                # update cannot clobber a user-chosen per-stage formation.
+                stage_contribution["flowback_formation"] = "SARH"
                 stages = [stage_contribution]
-                flowback_payload["flowback_formation"] = "SARH"
             flowback_payload["flowback_stages_rows"] = json.dumps(stages, separators=(",", ":"))
         if flowback_payload:
             _save(session, tid("Flowback Results"), flowback_payload, data_bearing)

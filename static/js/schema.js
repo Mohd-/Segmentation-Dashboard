@@ -66,6 +66,7 @@ export var FLOWBACK_STAGE_COLUMNS = [
   { key: 'stage', label: 'Stage', type: 'index' },
   { key: 'flowback_top_md', label: 'Top', type: 'number', placeholder: 'Depth (MD)' },
   { key: 'flowback_base_md', label: 'Base', type: 'number', placeholder: 'Depth (MD)' },
+  { key: 'flowback_formation', label: 'Formation', type: 'select', optionsFrom: 'formations', value: 'SARH' },
   { key: 'flowback_gas_rate_mmscfd', label: 'Gas Rate (MMSCFD)', type: 'number' },
   { key: 'flowback_water_rate_bwpd', label: 'Water Rate (BWPD)', type: 'number' },
   { key: 'flowback_liquid_rate_bpd', label: 'Liquid Rate (BPD)', type: 'number' },
@@ -135,7 +136,7 @@ export var SCHEMA = {
   'Approval to Stake': [],
   // sarh_formation_prognosis_pre_drill keeps its key (renaming EAV keys
   // orphans stored data); only the label dropped "(Pre-Drill)".
-  'Well Proposal': [{ key: 'sarh_formation_prognosis_pre_drill', label: 'SARH Formation Prognosis', type: 'text' }, { key: 'vsp_required', label: 'VSP Required?', type: 'select', options: ['', 'No', 'Yes'] }, { key: 'vsp_request_link', label: 'New Request Placeholder', type: 'link', value: '#' }, { key: 'urinsight_link', label: 'URINSIGHT', type: 'link', value: 'https://urinsight/', linkText: 'Create the well proposal in URINSIGHT' }],
+  'Well Proposal': [{ key: 'sarh_formation_prognosis_pre_drill', label: 'SARH Formation Prognosis', type: 'text' }, { key: 'vsp_required', label: 'VSP Required?', type: 'select', options: ['No', 'Yes'] }, { key: 'vsp_request_link', label: 'New Request Placeholder', type: 'link', value: '#' }, { key: 'urinsight_link', label: 'URINSIGHT', type: 'link', value: 'https://urinsight/', linkText: 'Create the well proposal in URINSIGHT' }],
   // Classification moved to the BP Execution Gate (bp_gate_classification); the
   // legacy gheer_classification key stays readable in old data via reporting's
   // read-fallback but is no longer entered here.
@@ -158,10 +159,10 @@ export var SCHEMA = {
   // Per-stage measurements moved into the flowback_stages_rows mini-sheet
   // (stage #1 is the primary read everywhere); the retired flat rate keys stay
   // readable in old data via the readers' fallback but are no longer rendered.
-  // The formation dropdown (optionsFrom:'formations': canonical trio + the
-  // well's custom formations) names the tested formation, SARH by default.
+  // Each stage row carries its own Formation column (optionsFrom:'formations':
+  // canonical trio + the well's custom formations) naming the tested formation,
+  // SARH by default.
   'Flowback Results': [
-    { key: 'flowback_formation', label: 'Formation', type: 'select', optionsFrom: 'formations', value: 'SARH' },
     { key: 'flowback_stages_rows', label: 'Flowback Stages', type: 'repeatable', columns: FLOWBACK_STAGE_COLUMNS },
     { key: 'flowback_dynamic_area_km2', label: 'Dynamic Reservoir Area (km²)', type: 'number', row: 'flowback_dyn' },
     { key: 'flowback_dynamic_ogip_bcf', label: 'Dynamic OGIP (BCF)', type: 'number', row: 'flowback_dyn' },
@@ -188,8 +189,8 @@ export var SCHEMA = {
   'Well Creation': [{ key: 'well_name', label: 'Well Name', type: 'text', defaultFrom: 'project_name' }],
   // Classification lives here now (moved off GHEER); reporting reads the new key
   // first, falling back to the legacy gheer_classification for old wells.
-  'BP Execution Gate': [{ key: 'bp_gate_classification', label: 'Classification', type: 'select', options: ['', 'Development', 'Appraisal', 'Exploration'] }],
+  'BP Execution Gate': [{ key: 'bp_gate_classification', label: 'Classification', type: 'radio', options: ['Development', 'Appraisal', 'Exploration'] }],
   'Site Preparation': [], 'Post-Well Outcome & Decision Gate': [], 'Executive Summary Final': [],
-  'PDA': [{ key: 'pda_booked', label: 'Booked', type: 'checkbox' }],
+  'PDA': [{ key: 'pda_booked', label: 'Booked', type: 'checkbox' }, { key: 'pda_urinsight_link', label: 'URINSIGHT', type: 'link', value: 'https://urinsight/', linkText: 'Open URINSIGHT' }],
   'Approval To Drill': []
 };

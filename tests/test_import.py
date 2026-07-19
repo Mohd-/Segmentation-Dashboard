@@ -375,7 +375,10 @@ def test_update_merges_json_minisheets_preserving_siblings(client, app_modules, 
                                           changed_by="Test")
         stages = json.loads(workflow.get_task_dynamic_fields(
             session, tasks["Flowback Results"]["task_id"])["flowback_stages_rows"])
-        stages.append({"flowback_gas_rate_mmscfd": "3"})
+        # Fresh import writes the SARH default in-row (per-stage), not step-level.
+        assert len(stages) == 1
+        assert stages[0]["flowback_formation"] == "SARH"
+        stages.append({"flowback_gas_rate_mmscfd": "3", "flowback_formation": "KHUFF"})
         workflow.save_task_dynamic_fields(session, tasks["Flowback Results"]["task_id"],
                                           {"flowback_stages_rows": json.dumps(stages)},
                                           changed_by="Test")
@@ -405,6 +408,10 @@ def test_update_merges_json_minisheets_preserving_siblings(client, app_modules, 
         assert merged_stages[0]["flowback_choke_size_in"] == "0.5"
         assert str(merged_stages[0]["flowback_gas_rate_mmscfd"]) == "8"   # sibling keys intact
         assert str(merged_stages[0]["flowback_water_rate_bwpd"]) == "200"
+        # The update merge never sets flowback_formation, so the in-row values
+        # (primary's SARH default + the user-chosen KHUFF on stage 2) survive.
+        assert merged_stages[0]["flowback_formation"] == "SARH"
+        assert merged_stages[1]["flowback_formation"] == "KHUFF"
     finally:
         session.close()
 

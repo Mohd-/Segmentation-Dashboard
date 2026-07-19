@@ -264,6 +264,23 @@
 }
 .check-label input { width: auto; }
 
+/* Horizontal radio group (e.g. BP Execution Gate classification): a quiet
+   label over a row of option pills that wraps on narrow screens. */
+.radio-group { grid-column: 1 / -1; display: flex; flex-direction: column; gap: var(--space-2); }
+.radio-group-label { font-size: var(--text-sm); font-weight: 700; color: var(--text-muted); }
+.radio-options { display: flex; flex-flow: row wrap; gap: var(--space-2); }
+.radio-option {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+.radio-option input { width: auto; }
+
 /* Standalone calculated output (e.g. Seal CoS %): a slim full-width row — muted
    label at left, brand-tinted value chip at right — not a fat banner. */
 .dynamic-fields > .calculated-output {
@@ -294,7 +311,6 @@
   background: var(--surface-sunken);
   color: var(--text-muted);
 }
-.summary-box b { color: var(--ink-800); }
 /* Compact single-row file-location card: folder glyph, UNC path (mono,
    ellipsized) and the copy icon-button. */
 .folder-card {

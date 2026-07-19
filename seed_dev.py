@@ -312,9 +312,9 @@ def _staking_fields():
 
 
 def _flowback_fields(legacy=False):
-    """Full Flowback Results field set. New-style wells carry the formation
-    dropdown (SARH, the schema default) plus 1-3 stage rows in the
-    flowback_stages_rows JSON mini-sheet (stage #1 is the primary read
+    """Full Flowback Results field set. New-style wells carry 1-3 stage rows in
+    the flowback_stages_rows JSON mini-sheet, each row carrying its own
+    per-stage Formation column (SARH, the schema default); stage #1 is the primary read
     everywhere); ``legacy=True`` writes the per-stage measurements ONLY
     through the retired step-level flat keys instead -- like a well written
     before the stages sheet existed -- exercising the readers' flat-key
@@ -324,6 +324,7 @@ def _flowback_fields(legacy=False):
     the BPD path for Condensate/Liquid fluids)."""
     def _stage():
         return {
+            "flowback_formation": "SARH",
             "flowback_gas_rate_mmscfd": round(random.uniform(1, 15), 2),
             "flowback_water_rate_bwpd": round(random.uniform(50, 800), 1),
             "flowback_liquid_rate_bpd": round(random.uniform(100, 2500), 1),
@@ -337,7 +338,6 @@ def _flowback_fields(legacy=False):
     if legacy:
         fields.update(_stage())
     else:
-        fields["flowback_formation"] = "SARH"
         fields["flowback_stages_rows"] = json.dumps(
             [_stage() for _ in range(random.randint(1, 3))])
     return fields
