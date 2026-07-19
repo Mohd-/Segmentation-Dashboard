@@ -1,4 +1,4 @@
-import { byId, all, esc, isFilled, msg } from '../dom.js';
+import { byId, all, esc, isFilled, msg, fmtNum } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName, Store, resetSelection } from '../state.js';
 import { BP_STAGES, PROSPECT_STAGES, DONE, SEISMIC_BLOCKS, FLOWBACK_RATE_FIELDS } from '../schema.js';
@@ -39,7 +39,11 @@ export function openDetail(projectId, pipeline) {
     Store.formations = detail.formations || [];
     renderDetail();
     loadComponent(chooseInitialTask(tasksForPipeline(Store.pipeline)));
-    byId('detail-shell').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // The detail shell is the page's last visible section, so aligning its
+    // TOP under the sticky header is often unreachable (not enough document
+    // below it) and the scroll stalls partway. Scroll to the document bottom
+    // instead: the shell fills the viewport from below.
+    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
   }).catch(function (error) { msg(error.message, 'error'); });
 }
 // Monochrome stage glyphs for the rail headers (must read at ~14px).
@@ -257,10 +261,10 @@ function formationLine(name, row) {
     return '<div class="summary-formation summary-formation-empty"><span class="summary-formation-name">' + esc(name) + '</span><span class="summary-formation-note">' + (tight ? 'tight' : '—') + '</span></div>';
   }
   var bits = [];
-  if (isFilled(row.thickness_ft)) bits.push(row.thickness_ft + ' ft');
-  if (isFilled(row.porosity_pct)) bits.push(row.porosity_pct + '% φ');
-  if (isFilled(row.swt_pct)) bits.push(row.swt_pct + '% Sw');
-  if (isFilled(row.pay_ft)) bits.push(row.pay_ft + ' ft pay');
+  if (isFilled(row.thickness_ft)) bits.push(fmtNum(row.thickness_ft) + ' ft');
+  if (isFilled(row.porosity_pct)) bits.push(fmtNum(row.porosity_pct) + '% φ');
+  if (isFilled(row.swt_pct)) bits.push(fmtNum(row.swt_pct) + '% Sw');
+  if (isFilled(row.pay_ft)) bits.push(fmtNum(row.pay_ft) + ' ft pay');
   var fluidTag = isFilled(row.fluid) ? '<span class="summary-formation-fluid">' + esc(row.fluid) + '</span>' : '';
   return '<div class="summary-formation"><span class="summary-formation-name">' + esc(name) + '</span><span class="summary-formation-metrics">' + esc(bits.join(' · ')) + '</span>' + fluidTag + '</div>';
 }
@@ -279,12 +283,12 @@ function numOrNull(value) {
 // One predicted|actual comparison row. Δ appears only when both sides parse as
 // finite numbers (the Top-SARH predicted value is free text and often won't).
 function pvaRow(label, predicted, actual) {
-  var predHtml = isFilled(predicted) ? esc(predicted) : '—';
-  var actualHtml = isFilled(actual) ? esc(actual) : '—';
+  var predHtml = isFilled(predicted) ? esc(fmtNum(predicted)) : '—';
+  var actualHtml = isFilled(actual) ? esc(fmtNum(actual)) : '—';
   var pn = numOrNull(predicted), an = numOrNull(actual);
   var deltaHtml = '<span class="summary-pva-delta"></span>';
   if (pn !== null && an !== null) {
-    var delta = Math.round((an - pn) * 100) / 100;
+    var delta = Math.round((an - pn) * 10) / 10;
     deltaHtml = '<span class="summary-pva-delta ' + (delta >= 0 ? 'pos' : 'neg') + '">Δ ' + (delta > 0 ? '+' : '') + delta + '</span>';
   }
   return '<div class="summary-pva-row"><span class="summary-pva-label">' + esc(label) + '</span>' +
@@ -294,9 +298,10 @@ function pvaRow(label, predicted, actual) {
 
 // One compact metric row: label (+ optional source note) and its value (— when
 // blank). Kept tiny so the summary card stays far denser than the old tiles.
+// Numeric values render rounded to 1 decimal (fmtNum passes text through).
 function metricRow(label, value, note) {
   var small = note ? '<small>' + esc(note) + '</small>' : '';
-  return '<div class="summary-metric"><div class="summary-metric-label"><span>' + esc(label) + '</span>' + small + '</div><div class="summary-metric-value">' + (isFilled(value) ? esc(value) : '—') + '</div></div>';
+  return '<div class="summary-metric"><div class="summary-metric-label"><span>' + esc(label) + '</span>' + small + '</div><div class="summary-metric-value">' + (isFilled(value) ? esc(fmtNum(value)) : '—') + '</div></div>';
 }
 
 // A stat cluster: a quiet group label over a row of sub-label/value columns
@@ -308,7 +313,7 @@ function metricRow(label, value, note) {
 function statCluster(label, cols, context) {
   var cells = cols.map(function (col) {
     return '<div class="summary-cluster-col"><span class="summary-cluster-sub">' + esc(col.label) + '</span>' +
-      '<span class="summary-cluster-val">' + (isFilled(col.value) ? esc(col.value) : '—') + '</span></div>';
+      '<span class="summary-cluster-val">' + (isFilled(col.value) ? esc(fmtNum(col.value)) : '—') + '</span></div>';
   }).join('');
   var contextHtml = isFilled(context) ? '<div class="summary-cluster-context">' + esc(context) + '</div>' : '';
   return '<div class="summary-cluster"><div class="summary-cluster-label">' + esc(label) + '</div>' +
@@ -450,7 +455,7 @@ export function renderRightPanel(tasks) {
     });
     var flowValue = primaryStage ? primaryStage[flowEntry.key] : flowbackFields[flowEntry.key];
     var flowbackHtml = '<div class="summary-metrics summary-section">' +
-      metricRow('Flowback Rate', isFilled(flowValue) ? flowValue + ' ' + flowEntry.unit : '', isFilled(fluid) ? fluid : 'Gas') +
+      metricRow('Flowback Rate', isFilled(flowValue) ? fmtNum(flowValue) + ' ' + flowEntry.unit : '', isFilled(fluid) ? fluid : 'Gas') +
       '</div>';
 
     // Prediction vs Actual: predicted values read the frozen lead snapshot,

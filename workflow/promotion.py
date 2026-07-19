@@ -86,12 +86,16 @@ def _move_lead_to_bp_execution(session, project_id: int, year_val: int, changed_
 
 
 def _move_bp_to_lead_phase(session, project_id: int, changed_by: str):
-    """Return a promoted BP Well to Prospect Maturation without data loss.
+    """Return a promoted BP Well to the lead phase without data loss.
 
     The reverse of promotion, and equally pure: only the project's
     pipeline_type and BP flags/year move. Task rows and their data (including
     entered BP progress) survive untouched; the board pointers re-derive from
-    the prospect stages on the next read.
+    the prospect stages on the next read. That derivation is what routes the
+    two recall outcomes: a fully matured record (every prospect step Approved)
+    derives as Completed, so it stays OFF the maturation board and inside the
+    Portfolio's mature-lead arm, while a record promoted before maturation
+    finished returns to the board exactly where it left off.
     """
     project = get_project(session, project_id)
     if not project:

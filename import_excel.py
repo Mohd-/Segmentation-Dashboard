@@ -82,11 +82,17 @@ from portfolio_export import PORTFOLIO_EXPORT_COLUMNS
 # assign and approve through the real lifecycle.
 IMPORT_USER = "External Import"
 
-# The non-empty fluid vocabulary (schema.js FLUID_TYPES, minus the blank option)
-# plus the two dry markers a Status cell may carry. Matched case-insensitively;
-# the canonical casing is what gets stored.
+# The non-empty fluid vocabulary (schema.js FLUID_TYPES, minus the blank
+# option), matched case-insensitively; the canonical casing is what gets
+# stored. External sheets also write "Tight" (or "Dry/Tight") for a dry well
+# and may spell Gas over Water with a slash -- those alias to the canonical
+# values instead of erroring the row.
 _FLUID_CANONICAL = {name.lower(): name for name in
                     ("Dry", "Gas", "Water", "Condensate", "Liquid", "Gas over Water")}
+_FLUID_CANONICAL.update({
+    "tight": "Dry", "dry/tight": "Dry", "dry / tight": "Dry",
+    "gas/water": "Gas over Water",
+})
 
 # Canonical select vocabularies (schema.js) for cells that feed <select> inputs:
 # matched case-insensitively so "yes"/"EXPLORATION" render selected in the UI;
@@ -910,6 +916,15 @@ def import_rows(session, rows, update=False) -> ImportReport:
             warnings, notes = _import_record(session, row, record_type, year, fluid, pid, is_update)
             warnings = xy_warnings + warnings
         except Exception as exc:  # keep the batch going; report the failure verbatim
+            # Recover the session FIRST: a failure can leave it mid-transaction
+            # (worst case, a commit that died partway strands it in the
+            # 'prepared' state where every statement raises InvalidRequestError
+            # -- including the cleanup delete below and the next row's
+            # _find_project). rollback() on an already-clean session is a no-op.
+            try:
+                session.rollback()
+            except Exception:
+                pass
             reason = str(exc)
             if created_pid is not None:
                 # Undo the partial create so a re-run of the corrected sheet is

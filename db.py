@@ -271,7 +271,15 @@ def write_transaction(session):
         session.rollback()
         raise
     else:
-        session.commit()
+        try:
+            session.commit()
+        except Exception:
+            # A commit that fails partway (e.g. SQLite "database is locked" at
+            # COMMIT time) strands the session transaction in the 'prepared'
+            # state, where EVERY later statement raises InvalidRequestError.
+            # Roll back so the session stays usable and re-raise the real error.
+            session.rollback()
+            raise
 
 
 # ---------------------------------------------------------------------------

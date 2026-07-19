@@ -760,7 +760,8 @@ export function repeatableInputMarkup(field, row, rowIndex) {
     if (col.type === 'select') {
       return '<select ' + attr + aria + '>' + repeatableSelectOptions(col, row, value) + '</select>';
     }
-    return '<input type="' + (col.type === 'number' ? 'number' : 'text') + '" step="any" ' + attr + aria + ' value="' + esc(value) + '">';
+    var ghost = col.placeholder ? ' placeholder="' + esc(col.placeholder) + '"' : '';
+    return '<input type="' + (col.type === 'number' ? 'number' : 'text') + '" step="any" ' + attr + aria + ghost + ' value="' + esc(value) + '">';
   }).join('') + '<button type="button" class="icon-btn remove-repeatable-row" data-repeatable-key="' + esc(field.key) + '" data-repeatable-row="' + rowIndex + '" title="Remove row" aria-label="Remove row">✕</button></div>';
 }
 export function renderRepeatableField(field, value) {

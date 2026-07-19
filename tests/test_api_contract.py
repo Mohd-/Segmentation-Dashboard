@@ -203,6 +203,85 @@ def test_rename_project_too_long(client):
     assert resp.status_code == 400
 
 
+def test_rename_project_duplicate_name_rejected(client):
+    pid = create_project(client, "RENAME-DUP-1")
+    create_project(client, "RENAME-DUP-2")
+    resp = client.patch(f"/api/projects/{pid}/rename", json={"new_name": "RENAME-DUP-2"})
+    assert resp.status_code == 400
+    assert "already exists" in resp.get_json()["detail"]
+    assert client.get(f"/api/projects/{pid}").get_json()["project_name"] == "RENAME-DUP-1"
+
+
+# ---------------------------------------------------------------------------
+# Well Creation step: well_name override (renames the project itself)
+# ---------------------------------------------------------------------------
+
+def _rename_event_count(client, project_id):
+    from conftest import raw_sqlite_connect
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM task_history WHERE project_id = ? "
+            "AND action_type IN ('Lead Renamed', 'Well Renamed')", (project_id,)).fetchone()
+        return row["n"]
+    finally:
+        conn.close()
+
+
+def test_well_creation_well_name_renames_project(client):
+    """Saving well_name on the Well Creation step renames the project itself:
+    projects.project_name is the single source of truth (the form prefills
+    from it), so the value is never stored as a dynamic field."""
+    pid = create_project(client, "WCN-1")
+    task = get_task_by_name(client, pid, "Well Creation")
+    resp = client.patch(f"/api/tasks/{task['task_id']}",
+                        json={"fields": {"well_name": "WCN-1-REAL"}})
+    assert resp.status_code == 200
+    assert client.get(f"/api/projects/{pid}").get_json()["project_name"] == "WCN-1-REAL"
+    fields = client.get(f"/api/tasks/{task['task_id']}/dynamic-fields").get_json()
+    assert "well_name" not in fields
+    assert _rename_event_count(client, pid) == 1
+
+
+def test_well_creation_well_name_via_dynamic_fields_patch(client):
+    """The fields-only save path (PATCH /dynamic-fields) applies the same
+    rename override as the full component save."""
+    pid = create_project(client, "WCN-2")
+    task = get_task_by_name(client, pid, "Well Creation")
+    resp = client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
+                        json={"fields": {"well_name": "WCN-2-REAL"}})
+    assert resp.status_code == 200
+    assert client.get(f"/api/projects/{pid}").get_json()["project_name"] == "WCN-2-REAL"
+    fields = client.get(f"/api/tasks/{task['task_id']}/dynamic-fields").get_json()
+    assert "well_name" not in fields
+
+
+def test_well_creation_blank_or_same_well_name_is_noop(client):
+    """A blank well_name keeps the current name; re-saving the current name
+    logs no spurious 'Renamed' audit event."""
+    pid = create_project(client, "WCN-3")
+    task = get_task_by_name(client, pid, "Well Creation")
+    resp = client.patch(f"/api/tasks/{task['task_id']}",
+                        json={"fields": {"well_name": "   "}})
+    assert resp.status_code == 200
+    assert client.get(f"/api/projects/{pid}").get_json()["project_name"] == "WCN-3"
+    resp = client.patch(f"/api/tasks/{task['task_id']}",
+                        json={"fields": {"well_name": "WCN-3"}})
+    assert resp.status_code == 200
+    assert _rename_event_count(client, pid) == 0
+
+
+def test_well_creation_duplicate_well_name_rejected(client):
+    pid = create_project(client, "WCN-4")
+    create_project(client, "WCN-5")
+    task = get_task_by_name(client, pid, "Well Creation")
+    resp = client.patch(f"/api/tasks/{task['task_id']}",
+                        json={"fields": {"well_name": "WCN-5"}})
+    assert resp.status_code == 400
+    assert "already exists" in resp.get_json()["detail"]
+    assert client.get(f"/api/projects/{pid}").get_json()["project_name"] == "WCN-4"
+
+
 # ---------------------------------------------------------------------------
 # DELETE / PATCH restore
 # ---------------------------------------------------------------------------
@@ -580,6 +659,41 @@ def test_export_flowback_columns_read_primary_stage(client):
     assert row[header.index("Choke Size (in)")] == "0.5"
     # The primary stage left WHP blank; the flat key's 888 must NOT leak in.
     assert row[header.index("WHP (psi)")] in (None, "")
+
+
+def test_export_flowback_depth_only_stage_is_not_primary(client):
+    """A stage row carrying only Top/Base depths (the stage sheet's first two
+    columns) is not data-bearing: the export's primary-stage pick still lands
+    on the first row with a rate/choke/WHP measurement, and the depth keys
+    round-trip untouched inside the stored flowback_stages_rows blob."""
+    bp_pid = create_project(client, "EXPORT-BP-FB3", pipeline_type="bp",
+                             business_plan_enabled=True, business_plan_year=2030)
+    flowback_task = get_task_by_name(client, bp_pid, "Flowback Results")
+    resp = client.patch(f"/api/tasks/{flowback_task['task_id']}/dynamic-fields",
+                         json={"fields": {
+                             "flowback_stages_rows": json.dumps([
+                                 {"flowback_top_md": "11200", "flowback_base_md": "11450"},
+                                 {"flowback_top_md": "11500", "flowback_base_md": "11720",
+                                  "flowback_gas_rate_mmscfd": "6.1", "flowback_choke_size_in": "0.5"},
+                             ]),
+                         }})
+    assert resp.status_code == 200
+
+    stored = client.get(f"/api/tasks/{flowback_task['task_id']}/dynamic-fields").get_json()
+    rows = json.loads(stored["flowback_stages_rows"])
+    assert rows[0] == {"flowback_top_md": "11200", "flowback_base_md": "11450"}
+
+    resp = client.get("/api/export/excel")
+    assert resp.status_code == 200
+    workbook = openpyxl.load_workbook(io.BytesIO(resp.data))
+    ws_export = workbook["Portfolio Export"]
+    header = [cell.value for cell in ws_export[4]]
+    matching_rows = [row for row in ws_export.iter_rows(min_row=5, max_row=ws_export.max_row, values_only=True)
+                     if row[header.index("Well Name")] == "EXPORT-BP-FB3"]
+    assert len(matching_rows) == 1
+    row = matching_rows[0]
+    assert row[header.index("Gas Rate (MMSCFD)")] == "6.1"
+    assert row[header.index("Choke Size (in)")] == "0.5"
 
 
 def test_export_flowback_columns_fall_back_to_flat_keys(client):

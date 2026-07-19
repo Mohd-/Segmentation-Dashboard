@@ -435,6 +435,10 @@
 button.ghost.danger-outline { color: var(--danger-700); border-color: var(--danger-500); }
 button.ghost.danger-outline:hover { background: var(--danger-100); }
 
+/* Green sibling of danger-outline for compact constructive actions (promote). */
+button.ghost.success-outline { color: var(--success-700); border-color: var(--success-500); }
+button.ghost.success-outline:hover { background: var(--success-100); }
+
 /* Tight label/value list — denser than the old summary-item tile grid. */
 .summary-metrics { display: flex; flex-direction: column; }
 .summary-metric { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) 0; border-top: 1px solid var(--gray-100); }
@@ -616,7 +620,7 @@ button.ghost.danger-outline:hover { background: var(--danger-100); }
 .portfolio-stat b { display: block; margin-top: 6px; color: var(--ink-900); font-size: 24px; }
 .portfolio-table tbody tr { cursor: default; }
 .portfolio-table tbody tr:hover { background: var(--surface); }
-/* WS7 columns: 1 Well Name, 2 Gas Field, 3 Seismic Block, 4 Classification,
+/* WS7 columns: 1 Well Name, 2 Field, 3 Seismic Block, 4 Classification,
    5 BP Year, 6 Fluid, 7 Mean OGIP (numeric), 8 Total CoS (numeric). Column
    widths/alignment key off nth-child, so they hold regardless of which <tr>
    (sort header vs. filter header) is being styled. */
@@ -670,6 +674,14 @@ button.ghost.danger-outline:hover { background: var(--danger-100); }
   background: var(--surface);
 }
 .portfolio-filter-input:focus { border-color: var(--brand-500); box-shadow: 0 0 0 2px var(--brand-100); }
+
+/* Numeric min/max filter pair (Mean OGIP / Total CoS): two compact number
+   inputs sharing the cell; native spinners are hidden -- they would eat most
+   of the tiny inputs' width. */
+.portfolio-filter-range { display: flex; gap: 4px; }
+.portfolio-filter-range .portfolio-filter-input { min-width: 0; -moz-appearance: textfield; appearance: textfield; }
+.portfolio-filter-range .portfolio-filter-input::-webkit-outer-spin-button,
+.portfolio-filter-range .portfolio-filter-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 
 /* Multi-select filter: a trigger button styled like .portfolio-filter-input,
    plus a checklist popover anchored under the cell so several values can be
@@ -747,13 +759,14 @@ button.ghost.danger-outline:hover { background: var(--danger-100); }
 .portfolio-table .well-link:hover { text-decoration: underline; }
 
 /* Supervisor-only trailing Actions column: unsortable header + compact
-   per-row Recall button (ghost + danger-outline). */
+   per-row buttons -- Recall (ghost + danger-outline) and Promote (ghost +
+   success-outline) share one size so the column reads uniformly. */
 .portfolio-actions-th { white-space: nowrap; }
 /* Not sortable: undo the first-row th sorting affordances. */
 .portfolio-table thead tr:first-child th.portfolio-actions-th { cursor: default; }
 .portfolio-table thead tr:first-child th.portfolio-actions-th:hover { color: inherit; }
 .portfolio-actions-cell { white-space: nowrap; text-align: right; }
-.portfolio-recall { padding: 3px 10px; font-size: var(--text-xs); font-weight: 700; }
+.portfolio-recall, .portfolio-promote { padding: 3px 10px; font-size: var(--text-xs); font-weight: 700; }
 
 /* =========================================================================
    Audit tab

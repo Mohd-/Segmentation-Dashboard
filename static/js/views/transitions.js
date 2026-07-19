@@ -55,7 +55,7 @@ export function recallProject(project, changedBy) {
   var name = project.project_name || 'this well';
   return confirmDialog({
     title: 'Recall to Lead Phase',
-    message: 'This returns "' + name + '" to the lead maturation stages and removes it from the Business Plan portfolio.\nAll entered data, audit history and the promotion snapshot are preserved.',
+    message: 'This removes "' + name + '" from the Business Plan.\nA fully matured lead (all prospect steps approved) stays in the Portfolio; otherwise the record returns to the maturation board exactly where it left off.\nAll entered data, audit history and the promotion snapshot are preserved.',
     confirmLabel: 'Recall',
     danger: true
   }).then(function (confirmed) {

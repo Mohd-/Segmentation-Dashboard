@@ -16,6 +16,18 @@ export function range(start, end) {
   return values;
 }
 export function isFilled(value) { return value !== null && value !== undefined && String(value).trim() !== ''; }
+// Display-side rounding for read-only numeric cells (portfolio table, summary
+// cards): long decimals (float artifacts, over-precise entries) overflow the
+// compact layouts, so a numeric value renders with at most 1 decimal digit.
+// Anything non-numeric (blanks, labels, free text) passes through untouched,
+// so callers can wrap any value without pre-checking. Never use this on values
+// going back into an input: it must not truncate what the user stored.
+export function fmtNum(value) {
+  if (!isFilled(value)) return value;
+  var numeric = Number(value);
+  if (!isFinite(numeric)) return value;
+  return String(Math.round(numeric * 10) / 10);
+}
 export function truthy(value) { return ['1', 'true', 'yes', 'on'].indexOf(String(value || '').toLowerCase()) >= 0; }
 export function msg(message, type) {
   var el = byId('app-message');

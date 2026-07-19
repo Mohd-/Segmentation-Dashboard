@@ -64,6 +64,8 @@ export var FLOWBACK_RATE_FIELDS = {
 // stage row exists. The index column is display-only (the stage number).
 export var FLOWBACK_STAGE_COLUMNS = [
   { key: 'stage', label: 'Stage', type: 'index' },
+  { key: 'flowback_top_md', label: 'Top', type: 'number', placeholder: 'Depth (MD)' },
+  { key: 'flowback_base_md', label: 'Base', type: 'number', placeholder: 'Depth (MD)' },
   { key: 'flowback_gas_rate_mmscfd', label: 'Gas Rate (MMSCFD)', type: 'number' },
   { key: 'flowback_water_rate_bwpd', label: 'Water Rate (BWPD)', type: 'number' },
   { key: 'flowback_liquid_rate_bpd', label: 'Liquid Rate (BPD)', type: 'number' },
@@ -179,7 +181,11 @@ export var SCHEMA = {
   ],
   'PVAD Structural MTR': [{ key: 'pvad_mtr_link', label: 'Hyperlink Placeholder', type: 'text' }],
   'Resource Assessment Update': [{ key: 'resource_update_formations', label: 'Formation Interpretation (Resource Update)', type: 'formations', phase: 'resource_update' }].concat(piip('resource_update')).concat([{ key: 'resource_update_fluid_type', label: 'Fluid Type', type: 'select', options: FLUID_TYPES }]),
-  'Prospect Evaluation Presentation': [], 'Well Creation': [],
+  'Prospect Evaluation Presentation': [],
+  // well_name is never stored as a task field: the backend save hook pops it
+  // and renames the project itself (projects.project_name stays the single
+  // source of truth), so the input always prefills from the live name.
+  'Well Creation': [{ key: 'well_name', label: 'Well Name', type: 'text', defaultFrom: 'project_name' }],
   // Classification lives here now (moved off GHEER); reporting reads the new key
   // first, falling back to the legacy gheer_classification for old wells.
   'BP Execution Gate': [{ key: 'bp_gate_classification', label: 'Classification', type: 'select', options: ['', 'Development', 'Appraisal', 'Exploration'] }],

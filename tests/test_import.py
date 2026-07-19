@@ -540,6 +540,81 @@ def test_multisheet_workbook_picks_best_matching_sheet(tmp_path):
     assert rows[0]["BP Year"] == "2027"
 
 
+def test_tight_and_slash_status_aliases(client, app_modules, tmp_path):
+    """External sheets write "Tight" (a dry well) and may spell Gas over Water
+    with a slash; both alias to the canonical fluid instead of erroring the
+    row, and the canonical value is what stores/exports/shows as the status."""
+    import import_excel
+    import reporting
+
+    # Tight is a FLUID status: classification demands a BP Year like any
+    # drilled well, proving the token was recognized (not "unknown Status").
+    record_type, errors = import_excel.classify_row({"Well Name": "T", "Status": "Tight"})
+    assert record_type is None
+    assert any("BP Year" in e for e in errors)
+
+    rows = [{"Well Name": "TGT-1", "BP Year": 2027, "Status": "Tight"},
+            {"Well Name": "GOW-1", "BP Year": 2027, "Status": "gas/water"}]
+    _write_sheet(tmp_path / "tgt.xlsx", rows, header_row=1)
+
+    session = _session(app_modules)
+    try:
+        report = import_excel.import_rows(session, import_excel.parse_workbook(str(tmp_path / "tgt.xlsx")))
+        outcomes = {r.well_name: r.outcome for r in report.results}
+        assert outcomes == {"TGT-1": "created", "GOW-1": "created"}, report.format()
+
+        portfolio = {r["well_name"]: r for r in reporting.get_portfolio_rows(session)["rows"]}
+        assert portfolio["TGT-1"]["status"] == "Dry"
+        assert portfolio["GOW-1"]["status"] == "Gas over Water"
+
+        exported = _export_by_name(session)
+        assert exported["TGT-1"]["Status"] == "Dry"
+        assert exported["GOW-1"]["Status"] == "Gas over Water"
+    finally:
+        session.close()
+
+
+def test_commit_failure_mid_batch_recovers_and_continues(client, app_modules, tmp_path):
+    """A commit that dies mid-row (e.g. SQLite 'database is locked' at COMMIT
+    time) must not strand the session in the 'prepared' state and kill the
+    batch: the failing row reports an error (its partial project cleaned up)
+    and every later row still imports. Regression for the two-layer fix --
+    db.write_transaction now rolls back a failed commit, and import_rows
+    rolls back before its cleanup/next row."""
+    import import_excel
+
+    rows = [{"Well Name": "CF-1", "Status": "Proposed", "P90 Area (km2)": 1},
+            {"Well Name": "CF-2", "Status": "Proposed", "P90 Area (km2)": 2}]
+    _write_sheet(tmp_path / "cf.xlsx", rows, header_row=1)
+
+    session = _session(app_modules)
+    real_commit = session.commit
+    calls = {"count": 0}
+
+    def flaky_commit():
+        calls["count"] += 1
+        # Call #1 seeds the import user, #2 creates CF-1; #3 is a field save
+        # inside CF-1's record -- failing THERE leaves a committed partial
+        # project for the cleanup path to remove.
+        if calls["count"] == 3:
+            raise RuntimeError("simulated commit failure")
+        real_commit()
+
+    session.commit = flaky_commit
+    try:
+        report = import_excel.import_rows(session, import_excel.parse_workbook(str(tmp_path / "cf.xlsx")))
+        outcomes = {r.well_name: (r.outcome, r.reason) for r in report.results}
+        assert outcomes["CF-1"][0] == "error"
+        assert "simulated commit failure" in outcomes["CF-1"][1]
+        assert "partially created project removed" in outcomes["CF-1"][1]
+        assert _pid(session, "CF-1") is None          # cleanup delete succeeded
+        assert outcomes["CF-2"] == ("created", "")    # the batch kept going
+        assert _pid(session, "CF-2") is not None
+    finally:
+        session.commit = real_commit
+        session.close()
+
+
 def test_xy_coordinates_create_and_update(client, app_modules, tmp_path):
     """X/Y land on projects.lead_x/lead_y at create; --update overwrites them
     with non-blank cells and a blank cell never erases a stored coordinate."""

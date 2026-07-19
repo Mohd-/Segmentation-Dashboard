@@ -389,6 +389,13 @@ def update_project_name(session, project_id, new_name, changed_by="Admin", lead_
     old = get_project(session, project_id)
     if not old:
         raise ValueError("Lead / well not found.")
+    # Friendly duplicate check up front; the IntegrityError catch below still
+    # covers the race where another request takes the name in between.
+    duplicate = db.fetch_one(session,
+                             "SELECT 1 AS present FROM projects WHERE project_name = :project_name AND project_id != :project_id",
+                             {"project_name": new_name, "project_id": project_id})
+    if duplicate:
+        raise ValueError("A lead / well with this name already exists.")
     updates: Dict[str, Any] = {"project_name": new_name, "last_updated": utc_now_str()}
     old_default_folder = folders.default_lead_folder_path(old.get("project_name") or "")
     if not old.get("lead_folder_path") or old.get("lead_folder_path") == old_default_folder:
@@ -400,6 +407,17 @@ def update_project_name(session, project_id, new_name, changed_by="Admin", lead_
     # Column names come from the fixed allowlisted keys above (never user input);
     # only the values are bound parameters.
     assignments = ", ".join([f"{k} = :{k}" for k in updates])
+    try:
+        _rename_project(session, project_id, old, new_name, assignments, updates, changed_by)
+    except IntegrityError as exc:
+        # UNIQUE(project_name) race lost to a concurrent rename/insert.
+        if "unique" in str(getattr(exc, "orig", None) or exc).lower():
+            raise ValueError("A lead / well with this name already exists.") from exc
+        raise
+
+
+def _rename_project(session, project_id, old, new_name, assignments, updates, changed_by):
+    """The transactional body of update_project_name (validation done by caller)."""
     with db.write_transaction(session):
         db.execute(session, f"UPDATE projects SET {assignments} WHERE project_id = :project_id",
                    dict(updates, project_id=project_id))

@@ -1,5 +1,6 @@
-import { byId, all, esc, msg, fillSelect } from '../dom.js';
+import { byId, all, esc, msg, fillSelect, fmtNum } from '../dom.js';
 import { API } from '../api.js';
+import { FLUID_TYPES } from '../schema.js';
 import { currentUserName } from '../state.js';
 import { canTransitionPhase, promoteProject, recallProject } from './transitions.js';
 import { openProjectEditor } from './project-editor.js';
@@ -9,56 +10,52 @@ import { openProjectEditor } from './project-editor.js';
 import { refreshAllBoards } from './pipeline.js';
 
 // Exactly the 8 analysis columns, in this order. `filter` selects the
-// column-filter control rendered in the second thead row ('text' = substring
-// input, 'multi' = distinct-value checklist popover (multi-select), null = no
-// column filter -- BP Year is covered by the toolbar select; Mean OGIP / Total
-// CoS get none per spec). `numeric` selects Number()-based sort with blanks-last
+// column-filter control rendered in the second thead row: 'text' = substring
+// input, 'multi' = distinct-value checklist popover (multi-select; BP Year's
+// discrete values fit this, layered over the toolbar's server-side year
+// select), 'range' = numeric min/max pair for the continuous measures (Mean
+// OGIP / Total CoS). `numeric` selects Number()-based sort with blanks-last
 // in both directions instead of localeCompare. The former `fluid` column is
 // now `status` (fluid value, or 'Staked'/'Proposed' for undrilled records --
 // see reporting.record_status); rows also carry `pipeline_type` and
 // `is_mature_lead`, consumed only by the Actions cell / stats below.
+// The full status vocabulary (reporting.record_status): every fluid a record
+// can carry plus the two undrilled markers. The Status checklist always offers
+// ALL of these -- a data-driven list alone hides whichever statuses happen to
+// be absent from the current rowset, reading as if they don't exist.
+var STATUS_OPTIONS = FLUID_TYPES.filter(function (value) { return value !== ''; })
+  .concat(['Proposed', 'Staked']);
+
 var COLUMNS = [
   { key: 'well_name', label: 'Well Name', numeric: false, filter: 'text' },
-  { key: 'gas_field', label: 'Gas Field', numeric: false, filter: 'multi' },
+  { key: 'gas_field', label: 'Field', numeric: false, filter: 'multi' },
   { key: 'seismic_block', label: 'Seismic Block', numeric: false, filter: 'text' },
   { key: 'classification', label: 'Classification', numeric: false, filter: 'multi' },
-  { key: 'year', label: 'BP Year', numeric: true, filter: null },
-  { key: 'status', label: 'Status', numeric: false, filter: 'multi' },
-  { key: 'mean_ogip', label: 'Mean OGIP (BCF)', numeric: true, filter: null },
-  { key: 'total_cos', label: 'Total CoS (%)', numeric: true, filter: null }
+  { key: 'year', label: 'BP Year', numeric: true, filter: 'multi' },
+  { key: 'status', label: 'Status', numeric: false, filter: 'multi', options: STATUS_OPTIONS },
+  { key: 'mean_ogip', label: 'Mean OGIP (BCF)', numeric: true, filter: 'range' },
+  { key: 'total_cos', label: 'Total CoS (%)', numeric: true, filter: 'range' }
 ];
 
 // Module-level state per spec: fetched once per refreshPortfolio(), then
 // sort/filter changes re-render locally without refetching.
 var state = { rows: [], sortKey: null, sortDir: 1, filters: {} };
 
-export function formatNumber(value) {
-  var numeric = Number(value);
-  if (!isFinite(numeric)) return '0.0';
-  return numeric.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-}
-
 // Stats follow the VISIBLE rowset (server + column filters applied) instead
-// of the fetch payload's server-computed summary -- mirrors the rounding
-// reporting.py does for the unfiltered case (round(sum, 1)), and the same
+// of the fetch payload's server-computed summary, using the same
 // is_mature_lead split reporting.get_portfolio_rows uses for its summary
-// object (business_plan_wells / mature_leads / cumulative_ogip).
+// object (business_plan_wells / mature_leads).
 function renderPortfolioStats(rows) {
   var element = byId('portfolio-stats');
   if (!element) return;
   var bpWells = 0;
   var matureLeads = 0;
-  var cumulativeOgip = 0;
   rows.forEach(function (row) {
     if (row.is_mature_lead) matureLeads += 1; else bpWells += 1;
-    var value = Number(row.mean_ogip);
-    if (isFinite(value)) cumulativeOgip += value;
   });
-  cumulativeOgip = Math.round(cumulativeOgip * 10) / 10;
   element.innerHTML =
     '<div class="portfolio-stat"><small>Business Plan Wells</small><b>' + esc(bpWells) + '</b></div>' +
-    '<div class="portfolio-stat"><small>Mature Leads</small><b>' + esc(matureLeads) + '</b></div>' +
-    '<div class="portfolio-stat"><small>Cumulative OGIP (BCF)</small><b>' + esc(formatNumber(cumulativeOgip)) + '</b></div>';
+    '<div class="portfolio-stat"><small>Mature Leads</small><b>' + esc(matureLeads) + '</b></div>';
 }
 
 function distinctValues(key) {
@@ -74,6 +71,21 @@ function distinctValues(key) {
   return values;
 }
 
+// Checklist options for a 'multi' column: the distinct data values, unioned
+// with the column's fixed vocabulary when it declares one (Status) so every
+// legal value is always offered, even with no matching row yet. Numeric
+// columns (BP Year) sort by value, not lexically.
+function filterValues(col) {
+  var values = distinctValues(col.key);
+  (col.options || []).forEach(function (value) {
+    if (values.indexOf(value) < 0) values.push(value);
+  });
+  values.sort(col.numeric
+    ? function (a, b) { return Number(a) - Number(b); }
+    : function (a, b) { return a.localeCompare(b); });
+  return values;
+}
+
 function applyFilters(rows) {
   return rows.filter(function (row) {
     return COLUMNS.every(function (col) {
@@ -83,6 +95,18 @@ function applyFilters(rows) {
       if (col.filter === 'text') {
         if (!filterValue) return true;
         return cellValue.toLowerCase().indexOf(String(filterValue).toLowerCase()) >= 0;
+      }
+      // 'range': {min, max} strings; an unset bound doesn't constrain. Once
+      // either bound is set, blank/non-numeric cells drop out (a row with no
+      // value can't satisfy a numeric constraint).
+      if (col.filter === 'range') {
+        var hasMin = filterValue.min !== '' && isFinite(Number(filterValue.min));
+        var hasMax = filterValue.max !== '' && isFinite(Number(filterValue.max));
+        if (!hasMin && !hasMax) return true;
+        var numeric = Number(cellValue);
+        if (cellValue === '' || !isFinite(numeric)) return false;
+        return (!hasMin || numeric >= Number(filterValue.min)) &&
+          (!hasMax || numeric <= Number(filterValue.max));
       }
       // 'multi': array of selected values; an empty/absent array = no filter.
       return !filterValue.length || filterValue.indexOf(cellValue) >= 0;
@@ -121,7 +145,7 @@ function rowMarkup(row) {
   // prompt + snapshot via transitions.js promoteProject), BP wells keep the
   // existing Recall (transitions.js confirm + PATCH /flags).
   var actionButton = row.is_mature_lead
-    ? '<button type="button" class="ghost portfolio-promote" data-project-id="' + esc(row.project_id) + '" data-project-name="' + esc(row.well_name || '') + '">Promote…</button>'
+    ? '<button type="button" class="ghost success-outline portfolio-promote" data-project-id="' + esc(row.project_id) + '" data-project-name="' + esc(row.well_name || '') + '">Promote…</button>'
     : '<button type="button" class="ghost danger-outline portfolio-recall" data-project-id="' + esc(row.project_id) + '" data-project-name="' + esc(row.well_name || '') + '">Recall</button>';
   var actionsCell = canTransitionPhase()
     ? '<td class="portfolio-actions-cell">' + actionButton + '</td>'
@@ -133,8 +157,8 @@ function rowMarkup(row) {
     '<td>' + esc(row.classification || '') + '</td>' +
     '<td>' + esc(row.year || '') + '</td>' +
     '<td>' + esc(row.status || '') + '</td>' +
-    '<td>' + esc(row.mean_ogip || '') + '</td>' +
-    '<td>' + esc(row.total_cos || '') + '</td>' +
+    '<td>' + esc(fmtNum(row.mean_ogip) || '') + '</td>' +
+    '<td>' + esc(fmtNum(row.total_cos) || '') + '</td>' +
     actionsCell +
     '</tr>';
 }
@@ -208,9 +232,18 @@ function renderFilterCell(col) {
     return '<th class="portfolio-filter-cell"><input type="text" class="portfolio-filter-input" data-key="' + col.key +
       '" value="' + esc(textValue) + '" placeholder="Filter…" aria-label="Filter ' + esc(col.label) + '"></th>';
   }
+  if (col.filter === 'range') {
+    var range = state.filters[col.key] || { min: '', max: '' };
+    return '<th class="portfolio-filter-cell"><div class="portfolio-filter-range">' +
+      '<input type="number" class="portfolio-filter-input" data-key="' + col.key + '" data-bound="min" value="' +
+      esc(range.min) + '" placeholder="Min" aria-label="Minimum ' + esc(col.label) + '">' +
+      '<input type="number" class="portfolio-filter-input" data-key="' + col.key + '" data-bound="max" value="' +
+      esc(range.max) + '" placeholder="Max" aria-label="Maximum ' + esc(col.label) + '">' +
+      '</div></th>';
+  }
   if (col.filter === 'multi') {
     var selected = state.filters[col.key] || [];
-    var optionsHtml = distinctValues(col.key).map(function (value) {
+    var optionsHtml = filterValues(col).map(function (value) {
       var checked = selected.indexOf(value) >= 0 ? ' checked' : '';
       return '<label class="portfolio-filter-option"><input type="checkbox" value="' + esc(value) + '"' + checked +
         '><span>' + esc(value) + '</span></label>';
@@ -283,9 +316,20 @@ function renderHead(table) {
       renderBody(table);
     });
   });
+  // One handler covers both filter-input shapes: a plain text input stores its
+  // string; a range input (marked by data-bound="min"/"max") stores into its
+  // column's {min, max} pair.
   all('.portfolio-filter-input', table).forEach(function (input) {
     input.addEventListener('input', function () {
-      state.filters[input.getAttribute('data-key')] = input.value;
+      var key = input.getAttribute('data-key');
+      var bound = input.getAttribute('data-bound');
+      if (bound) {
+        var range = state.filters[key] || { min: '', max: '' };
+        range[bound] = input.value;
+        state.filters[key] = range;
+      } else {
+        state.filters[key] = input.value;
+      }
       renderBody(table);
     });
   });
