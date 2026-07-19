@@ -25,12 +25,14 @@
 
   /* Semantic */
   --success-700: #1c6b41;
+  --success-600: #27804d;
   --success-500: #2f8f57;
   --success-100: #e5f6ec;
   --warning-700: #9a5b00;
   --warning-500: #c8820f;
   --warning-100: #fdf1de;
   --danger-700: #8a2620;
+  --danger-600: #a03a33;
   --danger-500: #b5423a;
   --danger-100: #fbeae8;
   --info-700: #1d5a8a;
@@ -57,16 +59,20 @@
   --space-8: 32px;
   --space-10: 40px;
 
-  --radius-sm: 7px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --radius-lg: 8px;
   --radius-pill: 999px;
 
   --shadow-sm: 0 1px 2px rgba(16, 40, 60, .06);
-  --shadow-md: 0 8px 20px rgba(16, 40, 60, .08);
-  --shadow-lg: 0 18px 40px rgba(16, 40, 60, .14);
+  --shadow-md: 0 4px 12px rgba(16, 40, 60, .10);
+  --shadow-lg: 0 12px 28px rgba(16, 40, 60, .16);
 
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-sans: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* Condensed industrial "log sheet" voice: Bahnschrift is Windows' DIN; the
+     rest are Mac/dev-preview and legacy Windows fallbacks. No webfonts (stock
+     enterprise Win10/11 image must resolve every name). */
+  --font-display: "Bahnschrift", "DIN Alternate", "Franklin Gothic Medium", "Arial Narrow", "Segoe UI", sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
 
   --text-xs: 11px;
@@ -77,9 +83,6 @@
   --text-xl: 28px;
 
   --transition: 140ms ease;
-
-  --bp-tablet: 1100px;
-  --bp-mobile: 640px;
 
   color-scheme: light;
 }
@@ -104,9 +107,9 @@
      saturated for borders/fills.
    - Shadows deepen (dark UIs cast near-black, softer shadows).
    Conflicts resolved with scoped overrides below the block: --ink-800 is text
-   everywhere except the .rig-mark gradient; the -700 greens/reds are text but
-   also the bottom stop of the save/danger button gradients; --white stays #fff
-   (button/glyph text) so --surface is overridden directly rather than via it.
+   everywhere except the .rig-mark fill; --white stays #fff (button/glyph text)
+   so --surface is overridden directly rather than via it. Button fills are flat
+   -500/-600 semantic tokens (theme-safe), so no per-button dark override.
    ========================================================================= */
 :root[data-theme="dark"] {
   /* Brand ink — now LIGHT (used as heading/text colors) */
@@ -133,12 +136,14 @@
 
   /* Semantic — low-alpha tint bg, lightened text, saturated line/fill */
   --success-700: #57c98a;
+  --success-600: #2fae68;
   --success-500: #269a5b;
   --success-100: rgba(38, 154, 91, .16);
   --warning-700: #edc25e;
   --warning-500: #d3941f;
   --warning-100: rgba(211, 148, 31, .16);
   --danger-700: #ef8a83;
+  --danger-600: #d9645d;
   --danger-500: #cf5049;
   --danger-100: rgba(207, 80, 73, .16);
   --info-700: #79b6e4;
@@ -157,8 +162,8 @@
 
   /* Shadows — deeper, softer against dark surfaces */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, .4);
-  --shadow-md: 0 8px 22px rgba(0, 0, 0, .5);
-  --shadow-lg: 0 18px 40px rgba(0, 0, 0, .6);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, .5);
+  --shadow-lg: 0 12px 28px rgba(0, 0, 0, .6);
 
   color-scheme: dark;
 }
@@ -166,12 +171,8 @@
 /* Dark-theme scoped spot-fixes: the few places where a single token can't
    serve both its text and background/fill uses (see block header above). */
 :root[data-theme="dark"] .rig-mark {
-  /* Brighter blue so the mark holds against dark surfaces; white strokes stay legible. */
-  background: linear-gradient(155deg, #3b82f6, #1e40af);
-}
-:root[data-theme="dark"] button.danger {
-  /* --danger-700 is light red text here; fill solid so white stays legible */
-  background: var(--danger-500);
+  /* Brighter flat blue so the mark holds against dark surfaces; white strokes stay legible. */
+  background: #2b57d6;
 }
 
 /* =========================================================================
@@ -181,9 +182,7 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background:
-    radial-gradient(1200px 480px at 12% -10%, var(--brand-050), transparent 60%),
-    var(--bg);
+  background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
   font-size: var(--text-base);
@@ -194,7 +193,7 @@ h1, h2, h3, h4, p { margin: 0; }
 a { color: var(--brand-700); }
 ::selection { background: var(--brand-100); }
 ::-webkit-scrollbar { height: 10px; width: 10px; }
-::-webkit-scrollbar-thumb { background: var(--gray-300); border-radius: var(--radius-pill); }
+::-webkit-scrollbar-thumb { background: var(--gray-300); border-radius: 3px; }
 ::-webkit-scrollbar-track { background: transparent; }
 
 .hidden { display: none !important; }
@@ -226,8 +225,9 @@ a { color: var(--brand-700); }
   justify-content: center;
   border-radius: var(--radius-md);
   /* Brand-mark blue: local to the rig mark, intentionally distinct from the
-     teal brand tokens used everywhere else. White SVG strokes ride on top. */
-  background: linear-gradient(155deg, #2563eb, #1e40af);
+     teal brand tokens used everywhere else. Flat fill; white SVG strokes ride
+     on top. */
+  background: #1e40af;
   color: var(--white);
 }
 /* The compass-N SVG fills the mark box at the old glyph's optical size (1em). */
@@ -235,8 +235,9 @@ a { color: var(--brand-700); }
 /* Shared brand-title typography: the header lockup and the full-page login
    card (.login-brand, components.css) reuse the same markup. */
 .app-header h1, .login-brand h1 {
+  font-family: var(--font-display);
   font-size: var(--text-md);
-  letter-spacing: .04em;
+  letter-spacing: .06em;
   text-transform: uppercase;
   color: var(--ink-900);
 }
@@ -261,20 +262,21 @@ a { color: var(--brand-700); }
 }
 .tabs button {
   flex: 0 0 auto;
-  min-width: 180px;
+  min-width: auto;
   background: transparent;
   border: 0;
   border-bottom: 3px solid transparent;
   border-radius: 0;
   box-shadow: none;
   color: var(--text-muted);
+  font-family: var(--font-display);
   font-size: var(--text-sm);
   font-weight: 700;
-  letter-spacing: .04em;
+  letter-spacing: .06em;
   text-transform: uppercase;
-  padding: 0 var(--space-3);
+  padding: 0 var(--space-5);
 }
-.tabs button:hover { color: var(--ink-900); }
+.tabs button:hover { color: var(--ink-900); background: transparent; }
 .tabs button.active { color: var(--brand-700); border-bottom-color: var(--brand-600); }
 
 main { max-width: 1760px; margin: 0 auto; padding: var(--space-6); }
@@ -292,7 +294,7 @@ main { max-width: 1760px; margin: 0 auto; padding: var(--space-6); }
   margin-bottom: var(--space-3);
   box-shadow: var(--shadow-sm);
 }
-.panel h3 { font-size: var(--text-base); color: var(--ink-800); margin-bottom: var(--space-3); }
+.panel h3 { font-family: var(--font-display); letter-spacing: .03em; font-size: var(--text-base); color: var(--ink-800); margin-bottom: var(--space-3); }
 
 /* =========================================================================
    Forms — inputs, selects, textareas, buttons
@@ -316,9 +318,9 @@ input:focus, select:focus, textarea:focus {
 }
 input::placeholder { color: var(--text-faint); }
 
-/* Buttons: the gradient default is reserved for primary actions (Create Lead,
-   Add Well, Save Updates, Submit/Approve). Everything supportive should carry
-   .secondary (flat) or .ghost (outline) instead. */
+/* Buttons: flat solid fills — primary is reserved for the main actions (Create
+   Lead, Add Well, Save Updates, Submit/Approve). Everything supportive should
+   carry .secondary (flat) or .ghost (outline) instead. */
 button {
   font: inherit;
   font-weight: 600;
@@ -327,21 +329,25 @@ button {
   padding: 8px 14px;
   border: 1px solid transparent;
   cursor: pointer;
-  transition: filter var(--transition), box-shadow var(--transition), transform var(--transition);
-  background: linear-gradient(180deg, var(--brand-600), var(--brand-700));
+  transition: background var(--transition), box-shadow var(--transition), transform var(--transition);
+  background: var(--brand-600);
   color: var(--white);
   box-shadow: var(--shadow-sm);
 }
-button:hover { filter: brightness(1.05); }
+/* Contract: this rule has specificity (0,1,1) and outranks class-level rest
+   styles (0,1,0). Any button variant with its own resting background must also
+   assert its own hover background, or it will fill solid teal here. */
+button:hover { background: var(--brand-700); }
 button:active { transform: translateY(1px); }
-button:disabled { opacity: .6; cursor: not-allowed; filter: none; transform: none; }
+button:disabled { opacity: .6; cursor: not-allowed; transform: none; }
 button:focus-visible, [role="tab"]:focus-visible, a:focus-visible { outline: 2px solid var(--brand-500); outline-offset: 2px; }
 
 button.secondary { background: var(--gray-100); color: var(--ink-800); border-color: var(--border-strong); box-shadow: none; }
-button.secondary:hover { background: var(--gray-200); filter: none; }
+button.secondary:hover { background: var(--gray-200); }
 button.ghost { background: var(--surface); border-color: var(--border-strong); color: var(--ink-800); box-shadow: none; }
 button.ghost:hover { background: var(--gray-050); }
-button.danger { background: linear-gradient(180deg, var(--danger-500), var(--danger-700)); }
+button.danger { background: var(--danger-500); }
+button.danger:hover { background: var(--danger-600); }
 
 .icon-btn {
   width: 30px;
@@ -349,7 +355,7 @@ button.danger { background: linear-gradient(180deg, var(--danger-500), var(--dan
   padding: 0; /* neutralize button padding when used on a <button> */
   border: none;
   box-shadow: none;
-  border-radius: var(--radius-pill);
+  border-radius: 3px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -358,7 +364,7 @@ button.danger { background: linear-gradient(180deg, var(--danger-500), var(--dan
   font-weight: 800;
   font-size: var(--text-base);
 }
-button.icon-btn:hover { background: var(--brand-100); filter: brightness(.97); }
+button.icon-btn:hover { background: var(--brand-100); }
 
 .create-grid, .toolbar {
   display: grid;
@@ -373,8 +379,9 @@ button.icon-btn:hover { background: var(--brand-100); filter: brightness(.97); }
    Tables
    ========================================================================= */
 table { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: var(--radius-md); overflow: hidden; }
-th, td { text-align: left; padding: 12px 13px; border-bottom: 1px solid var(--gray-100); font-size: var(--text-sm); }
-th { color: var(--ink-800); background: var(--gray-050); text-transform: uppercase; letter-spacing: .04em; font-size: var(--text-xs); }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--gray-100); font-size: var(--text-sm); }
+td { font-variant-numeric: tabular-nums; }
+th { font-family: var(--font-display); color: var(--ink-800); background: var(--gray-050); text-transform: uppercase; letter-spacing: .05em; font-size: var(--text-xs); }
 tbody tr:hover { background: var(--brand-050); }
 tbody tr[data-index] { cursor: pointer; }
 .empty-state { color: var(--text-faint); text-align: center; padding: var(--space-5); }

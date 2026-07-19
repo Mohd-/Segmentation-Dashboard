@@ -1,4 +1,4 @@
-import { byId, all, esc, compact, statusChip, priorityChip, msg } from '../dom.js';
+import { byId, all, esc, compact, statusSlug, priorityChip, msg } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName, Store } from '../state.js';
 import { PROSPECT_STAGES, BP_STAGES } from '../schema.js';
@@ -26,11 +26,13 @@ export function renderPipeline(element, projects, stages, pipeline) {
   element.innerHTML = stages.map(function (stage) {
     var cards = grouped[stage] || [];
     var cardHtml = cards.length ? cards.map(function (project) {
-      return '<button type="button" class="pipeline-card" data-project-id="' + project.project_id + '" data-pipeline="' + pipeline + '">' +
+      var statusValue = project.overall_status || 'In Progress';
+      var priorityValue = project.current_task_priority || 'Medium';
+      return '<button type="button" class="pipeline-card status-' + statusSlug(statusValue) + '" data-project-id="' + project.project_id + '" data-pipeline="' + pipeline + '">' +
         '<strong>' + esc(project.project_name) + '</strong>' +
         '<span class="pipeline-card-component">' + esc(compact(project.current_task || 'No current component', 44)) + '</span>' +
-        '<span class="pipeline-card-meta">' + statusChip(project.overall_status || 'In Progress') + priorityChip(project.current_task_priority || 'Medium') + '</span>' +
-        '<span class="pipeline-card-assignee">Assignee: ' + esc(project.current_owner || 'Unassigned') + '</span>' +
+        '<span class="pipeline-card-meta">' + '<span class="card-status">' + esc(statusValue) + '</span>' + (priorityValue !== 'Medium' ? priorityChip(priorityValue) : '') + '</span>' +
+        '<span class="pipeline-card-assignee">' + esc(project.current_owner || 'Unassigned') + '</span>' +
         '</button>';
     }).join('') : '<div class="pipeline-empty">No leads / wells in this stage.</div>';
     return '<section class="pipeline-column"><header><h3>' + esc(stage) + '</h3><span>' + cards.length + '</span></header><div class="pipeline-cards">' + cardHtml + '</div></section>';

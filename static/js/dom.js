@@ -66,9 +66,13 @@ export function table(element, headings, rows, onClick) {
     });
   }
 }
+export function statusSlug(status) {
+  var value = status || '-';
+  return String(value).toLowerCase().replace(/\s+/g, '-');
+}
 export function statusChip(status) {
   var value = status || '-';
-  return '<span class="status ' + String(value).toLowerCase().replace(/\s+/g, '-') + '">' + esc(value) + '</span>';
+  return '<span class="status ' + statusSlug(value) + '">' + esc(value) + '</span>';
 }
 export function priorityChip(priority) {
   var value = priority || 'Medium';

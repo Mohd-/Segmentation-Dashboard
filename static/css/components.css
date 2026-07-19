@@ -1,13 +1,18 @@
 /* =========================================================================
    Chips — status / priority
    ========================================================================= */
-.status {
+/* Squared "stamps" — a printed/log-sheet mark, not a soft SaaS pill. Shared
+   shape for both status and priority; the variant rules below only swap color. */
+.status, .priority {
   display: inline-flex;
   align-items: center;
-  border-radius: var(--radius-pill);
-  padding: 4px 10px;
+  border-radius: 3px;
+  padding: 2px 8px;
+  font-family: var(--font-display);
   font-size: var(--text-xs);
-  font-weight: 700;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .05em;
   border: 1px solid var(--border-strong);
   background: var(--gray-050);
   color: var(--text-muted);
@@ -18,24 +23,13 @@
 .status.approved { background: var(--success-100); color: var(--success-700); border-color: var(--success-500); }
 .status.not-assigned { background: var(--gray-100); color: var(--text-faint); }
 
-.priority {
-  display: inline-flex;
-  align-items: center;
-  border-radius: var(--radius-pill);
-  padding: 4px 10px;
-  font-size: var(--text-xs);
-  font-weight: 700;
-  border: 1px solid var(--border-strong);
-  background: var(--gray-050);
-  color: var(--text-muted);
-}
 .priority-low { color: var(--text-faint); }
 .priority-medium { background: var(--info-100); color: var(--info-700); border-color: var(--info-500); }
 .priority-high { background: var(--warning-100); color: var(--warning-700); border-color: var(--warning-500); }
 
 /* Slim New Lead disclosure: just the toggle button when collapsed; the form
    reveals below it on open. */
-.new-lead-panel { padding: var(--space-3); }
+.new-lead-panel { padding: var(--space-2) var(--space-3); }
 .new-lead-panel #new-lead-body { margin-top: var(--space-3); }
 
 /* =========================================================================
@@ -49,7 +43,7 @@
 .pipeline-board {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: minmax(260px, 1fr);
+  grid-auto-columns: minmax(240px, 1fr);
   gap: var(--space-4);
   padding: 2px 2px 12px;
   overflow-x: auto;
@@ -71,39 +65,61 @@
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
-.pipeline-column h3 { font-size: var(--text-xs); color: var(--ink-800); text-transform: uppercase; letter-spacing: .045em; }
+.pipeline-column h3 { font-family: var(--font-display); font-size: var(--text-xs); color: var(--ink-800); text-transform: uppercase; letter-spacing: .06em; }
 .pipeline-column > header span {
-  min-width: 24px;
-  height: 24px;
+  min-width: 22px;
+  height: 20px;
   padding: 0 6px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius-pill);
+  border-radius: 3px;
   border: 1px solid var(--border-strong);
   background: var(--surface);
   color: var(--brand-700);
-  font-weight: 800;
+  font-family: var(--font-display);
+  font-weight: 700;
   font-size: var(--text-xs);
 }
-.pipeline-cards { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); }
+.pipeline-cards { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2); }
 .pipeline-card {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   width: 100%;
-  padding: var(--space-3);
+  padding: 10px 12px;
   background: var(--surface);
   border: 1px solid var(--border);
+  /* Core-sample status stripe on the left edge (variants below); the JS agent
+     adds the .status-* class to the card. Default: strong neutral. */
+  border-left: 3px solid var(--border-strong);
   border-radius: var(--radius-sm);
   text-align: left;
   box-shadow: var(--shadow-sm);
-  transition: border-color var(--transition), box-shadow var(--transition), transform var(--transition);
+  transition: border-color var(--transition), box-shadow var(--transition);
 }
-.pipeline-card:hover { border-color: var(--brand-500); box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.pipeline-card:hover { border-color: var(--brand-500); background: var(--surface); }
+.pipeline-card.status-not-assigned, .pipeline-card.status-not-started { border-left-color: var(--gray-300); }
+.pipeline-card.status-in-progress { border-left-color: var(--info-500); }
+.pipeline-card.status-ready { border-left-color: var(--warning-500); }
+.pipeline-card.status-approved, .pipeline-card.status-completed { border-left-color: var(--success-500); }
 .pipeline-card strong { font-size: var(--text-base); color: var(--ink-900); line-height: 1.25; }
 .pipeline-card-component { font-size: var(--text-sm); color: var(--text-faint); min-height: 15px; }
-.pipeline-card-meta { display: flex; flex-wrap: wrap; gap: 6px; }
+.pipeline-card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+/* Small colored workflow-status readout in the card meta (JS agent's markup).
+   Default muted; colored per the same .status-* class on the parent card. */
+.card-status {
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--text-muted);
+}
+.pipeline-card.status-in-progress .card-status { color: var(--info-700); }
+.pipeline-card.status-ready .card-status { color: var(--warning-700); }
+.pipeline-card.status-approved .card-status,
+.pipeline-card.status-completed .card-status { color: var(--success-700); }
 .pipeline-card-assignee { font-size: var(--text-sm); color: var(--text-muted); border-top: 1px solid var(--gray-100); padding-top: var(--space-2); }
 .pipeline-empty { padding: var(--space-5) var(--space-3); color: var(--text-faint); font-size: var(--text-sm); text-align: center; }
 
@@ -153,10 +169,11 @@
   border-radius: 0;
   box-shadow: none;
   color: var(--text-faint);
+  font-family: var(--font-display);
   font-size: var(--text-xs);
-  font-weight: 800;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: .05em;
+  letter-spacing: .06em;
   cursor: pointer;
 }
 .rail-stage:first-child .rail-stage-head { border-top: 0; }
@@ -177,6 +194,8 @@
   text-align: left;
   background: var(--surface);
   border: 1px solid var(--border);
+  /* Core-sample status stripe, same idiom as .pipeline-card (variants below). */
+  border-left: 3px solid var(--border-strong);
   border-radius: var(--radius-sm);
   padding: 6px 8px;
   color: var(--text);
@@ -185,7 +204,7 @@
   background: var(--gray-100);
   color: var(--brand-700);
   border: 1px solid transparent;
-  border-radius: var(--radius-pill);
+  border-radius: 3px;
   width: 22px;
   height: 22px;
   display: flex;
@@ -195,8 +214,16 @@
   font-size: var(--text-xs);
 }
 .component-item b { font-size: var(--text-sm); }
+/* Re-assert resting surface on hover (global button:hover would fill teal).
+   .component-item.active (0,2,0) still outranks this (0,1,1), so an active
+   item keeps its brand-050 fill on hover. */
+.component-item:hover { background: var(--surface); }
 .component-item.active { border-color: var(--brand-500); background: var(--brand-050); }
-/* Number badge tinted by status — same token trios as the .status chips. */
+/* Left stripe + number badge tinted by status — same token trios as .status. */
+.component-item.status-not-assigned { border-left-color: var(--gray-300); }
+.component-item.status-in-progress { border-left-color: var(--info-500); }
+.component-item.status-ready { border-left-color: var(--warning-500); }
+.component-item.status-approved { border-left-color: var(--success-500); }
 .component-item.status-not-assigned .component-num { background: var(--gray-100); color: var(--text-faint); }
 .component-item.status-in-progress .component-num { background: var(--info-100); color: var(--info-700); border-color: var(--info-500); }
 .component-item.status-ready .component-num { background: var(--warning-100); color: var(--warning-700); border-color: var(--warning-500); }
@@ -213,7 +240,7 @@
 .component-number {
   background: var(--gray-100);
   color: var(--brand-700);
-  border-radius: var(--radius-pill);
+  border-radius: 3px;
   width: 28px;
   height: 28px;
   display: flex;
@@ -222,7 +249,7 @@
   font-weight: 700;
   font-size: var(--text-sm);
 }
-.editor-head h2 { font-size: var(--text-lg); color: var(--ink-900); }
+.editor-head h2 { font-family: var(--font-display); letter-spacing: .02em; font-size: var(--text-lg); color: var(--ink-900); }
 /* Right-aligned control cluster: the assignee select leads, then the priority
    chip and status chip, all sitting at the end of the editor head. margin-left:
    auto on the first item (assignee) pushes the whole group right so it reads
@@ -230,6 +257,13 @@
 .editor-priority-chip { box-shadow: none; cursor: pointer; }
 /* Non-supervisors see the value, but it is not a toggle for them. */
 .editor-priority-chip-static { cursor: default; }
+/* The supervisor priority toggle is the only .priority chip that is a <button>
+   (plain-span .priority chips never fire the button hover). Re-assert each
+   variant's resting tint on hover so it doesn't fill teal from button:hover.
+   Scoped to button.priority so the non-button chips elsewhere are untouched. */
+button.priority:hover { background: var(--gray-050); }
+button.priority.priority-medium:hover { background: var(--info-100); }
+button.priority.priority-high:hover { background: var(--warning-100); }
 .editor-assignee {
   margin-left: auto;
   width: auto;
@@ -237,7 +271,7 @@
   padding: 4px 10px;
   font-size: var(--text-xs);
   font-weight: 700;
-  border-radius: var(--radius-pill);
+  border-radius: 3px;
   border: 1px solid var(--border-strong);
   background: var(--surface-sunken);
   color: var(--text-muted);
@@ -248,7 +282,9 @@
 .wide-field { grid-column: 1 / -1; }
 .conditional.hidden { display: none !important; }
 
-.check-label {
+/* Boxed control rows: a checkbox card (.check-label) and the horizontal radio
+   options (.radio-option) share the same bordered-row shape. */
+.check-label, .radio-option {
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -257,29 +293,18 @@
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   padding: 10px 12px;
-  /* Bottom-align the checkbox card with neighboring inputs so rows mixing
-     checkboxes with label+input columns keep a straight baseline. */
-  align-self: end;
-  min-height: 42px;
 }
-.check-label input { width: auto; }
+.check-label input, .radio-option input { width: auto; }
+/* Bottom-align the checkbox card with neighboring inputs so rows mixing
+   checkboxes with label+input columns keep a straight baseline. */
+.check-label { align-self: end; min-height: 42px; }
 
 /* Horizontal radio group (e.g. BP Execution Gate classification): a quiet
    label over a row of option pills that wraps on narrow screens. */
 .radio-group { grid-column: 1 / -1; display: flex; flex-direction: column; gap: var(--space-2); }
 .radio-group-label { font-size: var(--text-sm); font-weight: 700; color: var(--text-muted); }
 .radio-options { display: flex; flex-flow: row wrap; gap: var(--space-2); }
-.radio-option {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: var(--space-2);
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  padding: 10px 12px;
-}
-.radio-option input { width: auto; }
+/* .radio-option shape shares the .check-label rule above. */
 
 /* Standalone calculated output (e.g. Seal CoS %): a slim full-width row — muted
    label at left, brand-tinted value chip at right — not a fat banner. */
@@ -342,7 +367,8 @@
 .summary-list b { color: var(--ink-900); text-align: right; }
 
 .action-row { display: flex; gap: var(--space-3); justify-content: space-between; }
-.action-row button:last-child { margin-left: auto; background: linear-gradient(180deg, var(--success-500), var(--success-700)); }
+.action-row button:last-child { margin-left: auto; background: var(--success-500); }
+.action-row button:last-child:hover { background: var(--success-600); }
 
 /* Repeatable field (e.g. Reservoir CoS evaluations) rendered as a compact
    mini-spreadsheet: one muted header row of column labels, then slim rows of
@@ -359,10 +385,11 @@
 .repeatable-rows { display: grid; gap: var(--space-1) var(--space-2); align-items: center; }
 .repeatable-head, .repeatable-row { display: contents; }
 .repeatable-col-label {
+  font-family: var(--font-display);
   font-size: var(--text-xs);
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: .04em;
+  letter-spacing: .05em;
   color: var(--text-faint);
   align-self: end;
 }
@@ -377,6 +404,7 @@
   color: var(--brand-700);
   font-size: var(--text-xs);
   font-weight: 800;
+  font-variant-numeric: tabular-nums;
   text-align: center;
   white-space: nowrap;
 }
@@ -397,6 +425,8 @@
 .field-row.cols-4 { grid-template-columns: repeat(4, 1fr); }
 .field-section-label {
   grid-column: 1 / -1;
+  font-family: var(--font-display);
+  letter-spacing: .03em;
   font-size: var(--text-sm);
   font-weight: 800;
   color: var(--ink-800);
@@ -430,9 +460,9 @@
   overflow-y: auto;
 }
 .summary-card { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--space-4); max-width: 100%; }
-.summary-card h3 { color: var(--brand-700); text-transform: uppercase; letter-spacing: .05em; font-size: var(--text-sm); }
+.summary-card h3 { font-family: var(--font-display); color: var(--brand-700); text-transform: uppercase; letter-spacing: .06em; font-size: var(--text-sm); }
 .summary-card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-3); }
-.summary-card-head .icon-btn { flex: 0 0 auto; width: 24px; height: 24px; font-size: 18px; }
+.summary-card-head .icon-btn { flex: 0 0 auto; width: 24px; height: 24px; font-size: var(--text-md); }
 .summary-content { min-width: 0; }
 
 /* Compact completion progress: slim bar with % + count beside it. */
@@ -440,7 +470,7 @@
 .summary-progress-bar { flex: 1; min-width: 0; height: 8px; border-radius: var(--radius-pill); background: var(--surface-sunken); border: 1px solid var(--border); overflow: hidden; }
 .summary-progress-bar span { display: block; height: 100%; background: var(--brand-500); border-radius: var(--radius-pill); }
 .summary-progress-figures { flex: 0 0 auto; display: flex; align-items: baseline; gap: var(--space-2); }
-.summary-progress-figures b { font-size: var(--text-lg); color: var(--brand-700); }
+.summary-progress-figures b { font-family: var(--font-display); font-variant-numeric: tabular-nums; font-size: var(--text-lg); color: var(--brand-700); }
 .summary-progress-figures small { color: var(--text-faint); font-size: var(--text-xs); }
 
 /* Phase row: current phase (Lead / BP Well · year) + the supervisor-only
@@ -465,7 +495,7 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .summary-metric-label { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .summary-metric-label span { color: var(--text-muted); font-size: var(--text-sm); font-weight: 700; overflow-wrap: anywhere; }
 .summary-metric-label small { color: var(--text-faint); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .04em; overflow-wrap: anywhere; }
-.summary-metric-value { flex: 0 0 auto; color: var(--ink-900); font-size: var(--text-md); font-weight: 800; text-align: right; overflow-wrap: anywhere; }
+.summary-metric-value { flex: 0 0 auto; font-family: var(--font-display); font-variant-numeric: tabular-nums; color: var(--ink-900); font-size: var(--text-md); font-weight: 800; text-align: right; overflow-wrap: anywhere; }
 
 /* Stat cluster: a quiet group label over a row of aligned sub-label/value
    columns (sub-label above its value). Numbers read larger than the sub-labels.
@@ -477,7 +507,7 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .summary-cluster-grid { display: grid; gap: var(--space-2); align-items: end; }
 .summary-cluster-col { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .summary-cluster-sub { color: var(--text-faint); font-size: var(--text-xs); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
-.summary-cluster-val { color: var(--ink-900); font-size: var(--text-md); font-weight: 800; overflow-wrap: anywhere; }
+.summary-cluster-val { font-family: var(--font-display); font-variant-numeric: tabular-nums; color: var(--ink-900); font-size: var(--text-md); font-weight: 800; overflow-wrap: anywhere; }
 .summary-cluster-context { color: var(--text-faint); font-size: var(--text-xs); margin-top: var(--space-1); overflow-wrap: anywhere; }
 
 /* Gear popover: small floating panel anchored to the card header, hosting the
@@ -506,13 +536,13 @@ button.ghost.success-outline:hover { background: var(--success-100); }
    metrics + fluid tag). A barren formation shows a "tight" note (SARH always
    renders, tight or not). Grouped under a small muted section title. */
 .summary-section { margin-top: var(--space-3); }
-.summary-section-title { color: var(--text-faint); font-size: var(--text-xs); font-weight: 800; text-transform: uppercase; letter-spacing: .05em; margin-bottom: var(--space-1); }
+.summary-section-title { font-family: var(--font-display); color: var(--text-faint); font-size: var(--text-xs); font-weight: 800; text-transform: uppercase; letter-spacing: .06em; margin-bottom: var(--space-1); }
 .summary-formations { display: flex; flex-direction: column; }
 .summary-formation { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-2); padding: var(--space-2) 0; border-top: 1px solid var(--gray-100); }
 .summary-formation:first-child { border-top: 0; }
 .summary-formation-name { flex: 0 0 auto; color: var(--ink-900); font-size: var(--text-sm); font-weight: 800; }
 .summary-formation-metrics { flex: 1 1 auto; min-width: 0; text-align: right; color: var(--text-muted); font-size: var(--text-xs); overflow-wrap: anywhere; }
-.summary-formation-fluid { flex: 0 0 auto; color: var(--brand-700); background: var(--brand-050); border-radius: var(--radius-pill); padding: 1px 8px; font-size: var(--text-xs); font-weight: 700; }
+.summary-formation-fluid { flex: 0 0 auto; color: var(--brand-700); background: var(--brand-050); border-radius: 3px; padding: 2px 8px; font-family: var(--font-display); font-size: var(--text-xs); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
 .summary-formation-empty .summary-formation-note { flex: 1 1 auto; text-align: right; color: var(--text-faint); font-size: var(--text-xs); font-style: italic; }
 
 /* Prediction vs Actual: a collapsible mirror of the rail accordion (chevron
@@ -530,10 +560,11 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   border: none;
   box-shadow: none;
   color: var(--text-faint);
+  font-family: var(--font-display);
   font-size: var(--text-xs);
   font-weight: 800;
   text-transform: uppercase;
-  letter-spacing: .05em;
+  letter-spacing: .06em;
   cursor: pointer;
 }
 .summary-pva-head:hover { color: var(--brand-700); background: none; }
@@ -546,9 +577,9 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .summary-pva-head-row, .summary-pva-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: baseline; gap: var(--space-2); padding: var(--space-1) 0; }
 .summary-pva-row { border-top: 1px solid var(--gray-100); }
 .summary-pva-label { color: var(--text-muted); font-size: var(--text-sm); font-weight: 700; overflow-wrap: anywhere; }
-.summary-pva-cell { text-align: right; color: var(--ink-900); font-size: var(--text-sm); font-weight: 700; min-width: 40px; overflow-wrap: anywhere; }
+.summary-pva-cell { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-900); font-size: var(--text-sm); font-weight: 700; min-width: 40px; overflow-wrap: anywhere; }
 .summary-pva-colhead { color: var(--text-faint); font-size: var(--text-xs); font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
-.summary-pva-delta { text-align: right; font-size: var(--text-xs); font-weight: 800; min-width: 44px; }
+.summary-pva-delta { text-align: right; font-variant-numeric: tabular-nums; font-size: var(--text-xs); font-weight: 800; min-width: 44px; }
 .summary-pva-delta.pos { color: var(--success-700); }
 .summary-pva-delta.neg { color: var(--danger-700); }
 
@@ -573,7 +604,7 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   padding-bottom: var(--space-4);
 }
 .pe-head-titles { flex: 1; min-width: 0; }
-.pe-head-titles h2 { font-size: var(--text-lg); color: var(--ink-900); }
+.pe-head-titles h2 { font-family: var(--font-display); letter-spacing: .02em; font-size: var(--text-lg); color: var(--ink-900); }
 .pe-subtitle { color: var(--text-faint); font-size: var(--text-sm); }
 
 /* Stage heading: the rail-stage-head visual language (muted, uppercase,
@@ -582,10 +613,11 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   padding: var(--space-2) 0 var(--space-1);
   border-top: 1px solid var(--gray-100);
   color: var(--text-faint);
+  font-family: var(--font-display);
   font-size: var(--text-xs);
   font-weight: 800;
   text-transform: uppercase;
-  letter-spacing: .05em;
+  letter-spacing: .06em;
 }
 .pe-stage-head:first-of-type { border-top: 0; }
 
@@ -609,13 +641,16 @@ button.ghost.success-outline:hover { background: var(--success-100); }
    grid of the project-level columns, and its own action row (Save / Archive). */
 .pe-phase-row { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); }
 .pe-phase-chip {
-  padding: 4px 10px;
-  border-radius: var(--radius-pill);
+  padding: 2px 8px;
+  border-radius: 3px;
   border: 1px solid var(--brand-500);
   background: var(--brand-050);
   color: var(--brand-700);
+  font-family: var(--font-display);
   font-size: var(--text-xs);
-  font-weight: 800;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .05em;
   white-space: nowrap;
 }
 .pe-phase-btn { padding: 5px 10px; font-size: var(--text-xs); font-weight: 700; white-space: nowrap; }
@@ -635,8 +670,8 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .portfolio-toolbar { grid-template-columns: minmax(180px, 260px) minmax(180px, 260px); justify-content: start; }
 .portfolio-stats { display: grid; grid-template-columns: repeat(2, minmax(180px, 370px)); gap: var(--space-3); margin: 0 0 var(--space-4); }
 .portfolio-stat { padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-sunken); }
-.portfolio-stat small { display: block; color: var(--text-muted); font-size: var(--text-xs); font-weight: 800; text-transform: uppercase; letter-spacing: .045em; }
-.portfolio-stat b { display: block; margin-top: 6px; color: var(--ink-900); font-size: 24px; }
+.portfolio-stat small { display: block; font-family: var(--font-display); color: var(--text-muted); font-size: var(--text-xs); font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
+.portfolio-stat b { display: block; margin-top: 6px; font-family: var(--font-display); font-variant-numeric: tabular-nums; color: var(--ink-900); font-size: var(--text-xl); }
 .portfolio-table tbody tr { cursor: default; }
 .portfolio-table tbody tr:hover { background: var(--surface); }
 /* WS7 columns: 1 Well Name, 2 Field, 3 Seismic Block, 4 Classification,
@@ -666,6 +701,7 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   letter-spacing: inherit;
   cursor: pointer;
 }
+.portfolio-table .th-sort:hover { background: none; }
 .portfolio-table th.sorted-asc::after,
 .portfolio-table th.sorted-desc::after {
   position: absolute;
@@ -692,7 +728,7 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   border: 1px solid var(--border-strong);
   background: var(--surface);
 }
-.portfolio-filter-input:focus { border-color: var(--brand-500); box-shadow: 0 0 0 2px var(--brand-100); }
+.portfolio-filter-input:focus { border-color: var(--brand-500); box-shadow: 0 0 0 3px var(--brand-100); }
 
 /* Numeric min/max filter pair (Mean OGIP / Total CoS): two compact number
    inputs sharing the cell; native spinners are hidden -- they would eat most
@@ -723,7 +759,8 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   box-shadow: none;
   cursor: pointer;
 }
-.portfolio-filter-trigger:focus-visible { border-color: var(--brand-500); box-shadow: 0 0 0 2px var(--brand-100); }
+.portfolio-filter-trigger:hover { background: var(--surface); }
+.portfolio-filter-trigger:focus-visible { border-color: var(--brand-500); box-shadow: 0 0 0 3px var(--brand-100); }
 .portfolio-filter-trigger-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .portfolio-filter-caret { flex: none; font-size: 9px; color: var(--text-muted); }
 .portfolio-filter-popover {
@@ -811,7 +848,8 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .app-dialog-form p { color: var(--text-muted); font-size: var(--text-sm); white-space: pre-line; }
 .app-dialog-select-label { gap: 3px; color: var(--text-muted); font-size: var(--text-sm); font-weight: 700; }
 .app-dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-2); }
-#app-dialog-confirm.danger { background: linear-gradient(180deg, var(--danger-500), var(--danger-700)); }
+#app-dialog-confirm.danger { background: var(--danger-500); }
+#app-dialog-confirm.danger:hover { background: var(--danger-600); }
 .login-error { color: var(--danger-700); font-size: var(--text-sm); }
 
 /* =========================================================================
@@ -878,13 +916,4 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 :root[data-theme="dark"] .app-dialog::backdrop {
   /* deeper scrim than the light rgba(13,36,56,.45) so the dialog reads */
   background: rgba(0, 0, 0, .6);
-}
-:root[data-theme="dark"] #app-dialog-confirm.danger {
-  /* --danger-700 is light red text in dark; fill solid to keep white legible */
-  background: var(--danger-500);
-}
-:root[data-theme="dark"] .action-row button:last-child {
-  /* success gradient bottom stop (--success-700) is light green in dark;
-     fill solid saturated green so the white "Save" label stays legible */
-  background: var(--success-500);
 }
