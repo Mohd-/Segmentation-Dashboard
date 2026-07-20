@@ -346,15 +346,18 @@
 
 /* Repeatable field (e.g. Reservoir CoS evaluations) rendered as a compact
    mini-spreadsheet: one muted header row of column labels, then slim rows of
-   bare inputs. Each row's grid-template-columns is set inline (see
-   repeatableTemplate) so the header and every data row stay aligned. The sheet
-   scrolls horizontally if the columns can't fit the editor column. */
+   bare inputs. A single grid-template-columns (see repeatableTemplate) is set
+   inline on .repeatable-rows; the header and every data row are display:contents
+   so all cells share those tracks and the labels sit exactly over their fields.
+   The sheet scrolls horizontally if the columns can't fit the editor column. */
 .repeatable-field { grid-column: 1 / -1; border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-4); background: var(--surface-sunken); }
 .repeatable-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-3); }
 .repeatable-sheet { overflow-x: auto; }
-.repeatable-rows { display: grid; gap: var(--space-1); }
-.repeatable-head, .repeatable-row { display: grid; gap: var(--space-2); align-items: center; }
-.repeatable-row { padding: var(--space-1) 0; }
+/* Single grid for the whole sheet: the column template (set inline from
+   repeatableTemplate) lives here, and the header + every data row are
+   display:contents so their cells share these exact tracks and stay aligned. */
+.repeatable-rows { display: grid; gap: var(--space-1) var(--space-2); align-items: center; }
+.repeatable-head, .repeatable-row { display: contents; }
 .repeatable-col-label {
   font-size: var(--text-xs);
   font-weight: 700;
@@ -848,9 +851,9 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   .component-rail, .summary-panel { position: static; max-height: none; overflow-y: visible; }
   .dynamic-fields { grid-template-columns: 1fr; }
   .pe-properties-grid { grid-template-columns: 1fr; }
-  /* The mini-spreadsheet keeps its inline column template and relies on
-     .repeatable-sheet's own horizontal scroll when the narrower editor column
-     can't fit every column. */
+  /* The mini-spreadsheet keeps its single inline column template (on
+     .repeatable-rows) and relies on .repeatable-sheet's own horizontal scroll
+     when the narrower editor column can't fit every column. */
 }
 @media (max-width: 640px) {
   .pipeline-board { grid-auto-columns: minmax(230px, 86vw); }

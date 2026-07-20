@@ -764,8 +764,10 @@ function repeatableSelectOptions(col, row, value) {
 }
 export function repeatableInputMarkup(field, row, rowIndex) {
   var cols = field.columns || [];
-  var style = ' style="grid-template-columns:' + repeatableTemplate(field) + '"';
-  return '<div class="repeatable-row" data-repeatable-row="' + rowIndex + '"' + style + '>' + cols.map(function (col) {
+  // No per-row column template: the row is display:contents and inherits the
+  // single grid declared once on .repeatable-rows, so header labels, inputs and
+  // calc chips all share one track set and stay column-aligned.
+  return '<div class="repeatable-row" data-repeatable-row="' + rowIndex + '">' + cols.map(function (col) {
     var value = row[col.key] == null ? '' : row[col.key];
     // A dependent column (AR) carries data-depends-on so bindRepeatableFields can
     // rebuild its options when the sibling (block) select changes.
@@ -802,11 +804,12 @@ export function renderRepeatableField(field, value) {
   var cols = field.columns || [];
   // One muted header row of column labels (kept out of the .repeatable-row set
   // so it is not counted by getFields/bindRepeatableFields) plus a trailing
-  // spacer aligned with the row-action button.
-  var header = '<div class="repeatable-head" style="grid-template-columns:' + repeatableTemplate(field) + '">' + cols.map(function (col) {
+  // spacer aligned with the row-action button. The column template lives once on
+  // the .repeatable-rows grid below; the header is display:contents like a row.
+  var header = '<div class="repeatable-head">' + cols.map(function (col) {
     return '<span class="repeatable-col-label">' + esc(col.label) + '</span>';
   }).join('') + '<span class="repeatable-col-label" aria-hidden="true"></span></div>';
-  return '<div class="repeatable-field wide-field" data-repeatable="' + esc(field.key) + '"><div class="repeatable-heading"><b>' + esc(field.label) + '</b><button type="button" class="icon-btn add-repeatable-row" data-repeatable-key="' + esc(field.key) + '" title="Add row" aria-label="Add row">+</button></div><div class="repeatable-sheet"><div class="repeatable-rows">' + header + rows.map(function (row, index) { return repeatableInputMarkup(field, row || {}, index); }).join('') + '</div></div></div>';
+  return '<div class="repeatable-field wide-field" data-repeatable="' + esc(field.key) + '"><div class="repeatable-heading"><b>' + esc(field.label) + '</b><button type="button" class="icon-btn add-repeatable-row" data-repeatable-key="' + esc(field.key) + '" title="Add row" aria-label="Add row">+</button></div><div class="repeatable-sheet"><div class="repeatable-rows" style="grid-template-columns:' + repeatableTemplate(field) + '">' + header + rows.map(function (row, index) { return repeatableInputMarkup(field, row || {}, index); }).join('') + '</div></div></div>';
 }
 // Re-stamp a container's display-only index chips (#1..#n) after a mid-list
 // removal so row numbers stay contiguous (rows without index columns are a
