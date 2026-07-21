@@ -82,7 +82,10 @@ function renderActionButtons(task) {
   var returnButton = byId('return-component');
   if (submitButton) submitButton.classList.toggle('hidden', !(status === 'In Progress' && (manage || isAssignee)));
   if (approveButton) approveButton.classList.toggle('hidden', !(status === 'Ready' && role === 'supervisor'));
-  if (returnButton) returnButton.classList.toggle('hidden', !(status === 'Ready' && role === 'supervisor'));
+  // A supervisor may return any Ready component; everyone else may return
+  // only work assigned to them. The backend enforces the same rule.
+  if (returnButton) returnButton.classList.toggle('hidden',
+    !(status === 'Ready' && (role === 'supervisor' || isAssignee)));
 }
 
 export function loadComponent(task) {

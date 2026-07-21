@@ -265,12 +265,10 @@ function filterGroupMarkup(col) {
 }
 
 // One column header: a title button that opens a pop-over combining Sort
-// (two directional options) and Filter (type-appropriate). The last two
-// (right-most) columns anchor their menu to the right edge so it can't be
-// clipped by the panel's overflow.
-function columnHeaderMarkup(col, index) {
+// (two directional options) and Filter (type-appropriate). The menu is placed
+// against the viewport when opened so table/panel overflow cannot clip it.
+function columnHeaderMarkup(col) {
   var labels = sortLabels(col);
-  var alignRight = index >= COLUMNS.length - 2;
   var sortMark = state.sortKey === col.key ? (state.sortDir === 1 ? '▲' : '▼') : '';
   var filtered = columnIsFiltered(col);
   return '<th data-key="' + col.key + '" aria-sort="none">' +
@@ -282,7 +280,7 @@ function columnHeaderMarkup(col, index) {
         '<span class="pf-caret" aria-hidden="true">▾</span>' +
       '</span>' +
     '</button>' +
-    '<div class="pf-popover' + (alignRight ? ' pf-popover--right' : '') + '" hidden>' +
+    '<div class="pf-popover" hidden>' +
       '<div class="pf-pop-group">' +
         '<div class="pf-pop-title">Sort</div>' +
         '<button type="button" class="pf-sort-opt' + (isSortActive(col, 1) ? ' is-active' : '') + '" data-dir="1">' + labels.asc + '</button>' +
@@ -303,6 +301,32 @@ function closePortfolioPopovers() {
   all('.pf-col-trigger', document).forEach(function (trigger) { trigger.setAttribute('aria-expanded', 'false'); });
 }
 
+// Fixed positioning lets the menu escape every overflow boundary around the
+// table. Clamp it to the viewport and, when necessary, open above the header.
+function placePortfolioPopover(trigger, popover) {
+  var margin = 8;
+  var triggerRect = trigger.getBoundingClientRect();
+  popover.style.left = '0px';
+  popover.style.right = 'auto';
+  popover.style.top = '0px';
+  popover.style.maxHeight = '320px';
+
+  var width = popover.offsetWidth;
+  var height = popover.offsetHeight;
+  var left = triggerRect.left + 6;
+  if (left + width > window.innerWidth - margin) left = window.innerWidth - width - margin;
+  left = Math.max(margin, left);
+
+  var below = triggerRect.bottom - 2;
+  var above = triggerRect.top - height + 2;
+  var top = (below + height > window.innerHeight - margin && above >= margin) ? above : below;
+  var availableHeight = Math.max(120, window.innerHeight - top - margin);
+
+  popover.style.left = Math.round(left) + 'px';
+  popover.style.top = Math.round(top) + 'px';
+  popover.style.maxHeight = Math.min(320, availableHeight) + 'px';
+}
+
 // Outside-click + Escape dismissal is wired to the document ONCE: renderHead can
 // run again after a refetch, but these listeners key off live DOM queries so a
 // single registration keeps working across rebuilds.
@@ -320,6 +344,8 @@ function wirePortfolioDismiss() {
   document.addEventListener('keydown', function (event) {
     if (event.key === 'Escape') closePortfolioPopovers();
   });
+  window.addEventListener('resize', closePortfolioPopovers);
+  window.addEventListener('scroll', closePortfolioPopovers);
 }
 
 // Reflect current sort/filter state onto the (persistent) header without a
@@ -363,7 +389,11 @@ function renderHead(table) {
     trigger.addEventListener('click', function () {
       var wasOpen = !popover.hidden;
       closePortfolioPopovers();
-      if (!wasOpen) { popover.hidden = false; trigger.setAttribute('aria-expanded', 'true'); }
+      if (!wasOpen) {
+        popover.hidden = false;
+        placePortfolioPopover(trigger, popover);
+        trigger.setAttribute('aria-expanded', 'true');
+      }
     });
     // Sort options: pick a direction, or click the active one again to clear.
     all('.pf-sort-opt', th).forEach(function (opt) {

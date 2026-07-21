@@ -27,7 +27,7 @@ export function currentRole() {
   return Store.user ? (Store.user.role || 'employee') : 'supervisor';
 }
 
-// supervisor/staff manage assignment; only a supervisor approves/returns.
+// Supervisor/staff manage assignment; approval remains supervisor-only.
 export function canManageAssignments() {
   var role = currentRole();
   return role === 'supervisor' || role === 'staff';

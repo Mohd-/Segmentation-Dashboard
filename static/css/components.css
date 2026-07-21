@@ -716,13 +716,14 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .pf-filter-mark.is-on { background: var(--brand-600); }
 .pf-caret { font-size: 9px; color: var(--text-muted); }
 
-/* The pop-over itself: a compact card anchored under the column, resetting the
-   header's uppercase/spaced type so its controls read normally. */
+/* The pop-over itself: a compact card positioned against the viewport by
+   portfolio.js. Fixed positioning keeps it outside the table/panel overflow
+   boundary so the full menu remains visible. */
 .pf-popover {
-  position: absolute;
-  top: calc(100% - 2px);
-  left: 6px;
-  z-index: 30;
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 100;
   display: flex;
   flex-direction: column;
   min-width: 210px;
@@ -738,8 +739,6 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   font-weight: 400;
 }
 .pf-popover[hidden] { display: none; }
-/* Right-most columns anchor to the right edge so the menu can't be clipped. */
-.pf-popover--right { left: auto; right: 6px; }
 .pf-pop-group { display: flex; flex-direction: column; gap: 3px; padding: 4px 2px; }
 .pf-pop-group + .pf-pop-group { border-top: 1px solid var(--border); }
 .pf-pop-title {

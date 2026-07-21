@@ -145,7 +145,7 @@ def test_employee_cannot_assign(client):
     assert resp.status_code == 403
 
 
-def test_employee_cannot_approve_or_return(client):
+def test_only_supervisor_can_approve_and_only_assignee_or_supervisor_can_return(client):
     pid = create_project(client, "ROLES-APPROVE-1")
     task = get_tasks(client, pid)[0]
     _login(client, "Supervisor")
@@ -156,15 +156,34 @@ def test_employee_cannot_approve_or_return(client):
     resp = _transition(client, task["task_id"], "approve", ready["revision"])
     assert resp.status_code == 403
     resp = _transition(client, task["task_id"], "return", ready["revision"])
-    assert resp.status_code == 403
+    assert resp.status_code == 200
+    returned = resp.get_json()["task"]
+    assert returned["status"] == "In Progress"
 
     # Staff may not approve either -- supervisor only.
     _login(client, "Staff Member")
-    resp = _transition(client, task["task_id"], "approve", ready["revision"])
+    resp = _transition(client, task["task_id"], "approve", returned["revision"])
     assert resp.status_code == 403
 
+    # Staff can return a different Ready component just like an employee.
     _login(client, "Supervisor")
-    resp = _transition(client, task["task_id"], "approve", ready["revision"])
+    staff_task = get_tasks(client, pid)[1]
+    staff_assigned = _assign(client, staff_task["task_id"], "Staff Member", staff_task["revision"])
+    staff_ready = _transition(client, staff_task["task_id"], "submit", staff_assigned["revision"]).get_json()["task"]
+    _login(client, "Staff Member")
+    resp = _transition(client, staff_task["task_id"], "return", staff_ready["revision"])
+    assert resp.status_code == 200
+    assert resp.get_json()["task"]["status"] == "In Progress"
+
+    _login(client, "Supervisor")
+    ready_again = _transition(client, task["task_id"], "submit", returned["revision"]).get_json()["task"]
+    _login(client, "Staff Member")
+    resp = _transition(client, task["task_id"], "return", ready_again["revision"])
+    assert resp.status_code == 403
+    assert "assigned to you" in resp.get_json()["detail"]
+
+    _login(client, "Supervisor")
+    resp = _transition(client, task["task_id"], "approve", ready_again["revision"])
     assert resp.status_code == 200
 
 

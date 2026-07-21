@@ -514,7 +514,7 @@ export function renderRightPanel(tasks) {
   var popoverHtml =
     '<div id="summary-settings" class="summary-popover hidden" role="dialog" aria-label="Manage ' + recordKind.toLowerCase() + '">' +
     '<label class="summary-popover-check"><input id="summary-active-flag" type="checkbox" ' + (isActive ? 'checked' : '') + '> Active Well</label>' +
-    '<div class="summary-popover-actions"><button id="rename-record" type="button" class="ghost">Rename ' + recordKind + '</button><button id="delete-record" type="button" class="danger">Archive ' + recordKind + '</button></div></div>';
+    '<div class="summary-popover-actions"><button id="rename-record" type="button" class="ghost">Rename ' + recordKind + '</button><button id="delete-record" type="button" class="danger">Delete ' + recordKind + '</button></div></div>';
 
   byId('summary-title').textContent = recordKind + ' Summary';
   byId('lead-summary').innerHTML = progressHtml + phaseHtml + bodyHtml + popoverHtml;
@@ -581,9 +581,9 @@ export async function deleteSelectedProject() {
   var recordKind = String(Store.project.pipeline_type || '').toLowerCase() === 'bp' ? 'Well' : 'Lead';
   var name = Store.project.project_name || recordKind;
   var confirmed = await confirmDialog({
-    title: 'Archive ' + recordKind,
-    message: 'Archive ' + recordKind.toLowerCase() + ' "' + name + '"? Its components, saved inputs, and audit trail will be preserved.',
-    confirmLabel: 'Archive',
+    title: 'Delete ' + recordKind,
+    message: 'Delete ' + recordKind.toLowerCase() + ' "' + name + '"? Its components, saved inputs, and audit trail will be preserved.',
+    confirmLabel: 'Delete',
     danger: true
   });
   if (!confirmed) return;
@@ -592,7 +592,7 @@ export async function deleteSelectedProject() {
     byId('detail-shell').classList.add('hidden');
     refreshAllBoards();
     refreshAudit();
-    msg(recordKind + ' archived.', 'success');
+    msg(recordKind + ' deleted.', 'success');
   }).catch(function (error) { msg(error.message, 'error'); });
 }
 

@@ -74,7 +74,7 @@ function phaseRowMarkup(project) {
 
 // Properties card: the project-level columns (name, lead X/Y, active well)
 // saved via PATCH /rename + PATCH /flags, the phase row (promote/recall), and
-// the Archive danger action.
+// the Delete danger action (the backend keeps its recoverable soft-delete).
 function propertiesMarkup(project) {
   var isActive = Number(project.active_well_enabled || 0) === 1;
   return '<div class="pe-component pe-properties">' +
@@ -88,7 +88,7 @@ function propertiesMarkup(project) {
     '</div>' +
     '<div class="pe-properties-actions">' +
     '<button id="pe-save-props" type="button">Save Properties</button>' +
-    '<button id="pe-archive" type="button" class="danger">Archive</button>' +
+    '<button id="pe-archive" type="button" class="danger">Delete</button>' +
     '</div></div>';
 }
 
@@ -303,7 +303,7 @@ function saveProperties() {
   });
 }
 
-// The editor's own Archive: same confirm copy as detail.js's version, but it
+// The editor's own Delete action: same confirm copy as detail.js's version, but it
 // hides the editor (not the detail shell) and returns to the portfolio.
 // refreshAllBoards covers the portfolio table too, so the archived record
 // drops out of every view.
@@ -311,9 +311,9 @@ async function archiveProject() {
   var recordKind = String((Store.project || {}).pipeline_type || '').toLowerCase() === 'bp' ? 'Well' : 'Lead';
   var name = (Store.project || {}).project_name || recordKind;
   var confirmed = await confirmDialog({
-    title: 'Archive ' + recordKind,
-    message: 'Archive ' + recordKind.toLowerCase() + ' "' + name + '"? Its components, saved inputs, and audit trail will be preserved.',
-    confirmLabel: 'Archive',
+    title: 'Delete ' + recordKind,
+    message: 'Delete ' + recordKind.toLowerCase() + ' "' + name + '"? Its components, saved inputs, and audit trail will be preserved.',
+    confirmLabel: 'Delete',
     danger: true
   });
   if (!confirmed) return;
@@ -323,6 +323,6 @@ async function archiveProject() {
     byId('tab-portfolio').scrollIntoView({ behavior: 'smooth', block: 'start' });
     refreshAllBoards();
     refreshAudit();
-    msg(recordKind + ' archived.', 'success');
+    msg(recordKind + ' deleted.', 'success');
   }).catch(function (error) { msg(error.message, 'error'); });
 }

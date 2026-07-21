@@ -424,14 +424,18 @@ def transition_task(session, task_id, action, changed_by="Web User", expected_re
     - ``submit``: "In Progress" -> "Ready". Supervisors/staff may submit any
       component; an 'employee' may only submit a component assigned to them
       (case-insensitive name match against ``actor_name`` -> PermissionError
-      / 403 otherwise). The supervisor-only gates for approve/return live in
-      the route (require_role).
+      / 403 otherwise). The supervisor-only gate for approve lives in the
+      route (require_role).
     - ``approve``: "Ready" -> "Approved" (stamps actual_finish, backfills
       actual_start like save_task does for done statuses).
-    - ``return``: "Ready" -> "In Progress" (clears actual_finish if set).
+    - ``return``: "Ready" -> "In Progress" for supervisors or the component's
+      assignee (clears actual_finish if set). Other users receive 403.
 
-    Wrong from-state or an unknown action -> ValueError (400). Optimistic
-    locking mirrors save_task (StaleRevisionError -> 409). One history event is
+    Wrong from-state or an unknown action -> ValueError (400). The supervisor-
+    only gate for ``approve`` lives in the route; the assignee check for
+    ``return`` lives here because it needs the task row. Optimistic locking
+    mirrors save_task (StaleRevisionError -> 409).
+    One history event is
     logged with the old/new status; completed_at is re-synced (approve can
     complete the applicable set, return reopens it). Returns the fresh task
     row.
@@ -450,6 +454,10 @@ def transition_task(session, task_id, action, changed_by="Web User", expected_re
             assigned = (task.get("assigned_to") or "").strip().lower()
             if assigned != (actor_name or "").strip().lower():
                 raise PermissionError("Forbidden: you can only submit components assigned to you.")
+        if action_key == "return" and actor_role != "supervisor":
+            assigned = (task.get("assigned_to") or "").strip().lower()
+            if assigned != (actor_name or "").strip().lower():
+                raise PermissionError("Forbidden: you can only return components assigned to you.")
         _check_expected_revision(task, expected_revision)
 
         old_status = task.get("status") or "Not Assigned"

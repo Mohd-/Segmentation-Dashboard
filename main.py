@@ -183,7 +183,7 @@ def require_role(*roles: str) -> None:
     """Raise PermissionError (-> 403) unless the current role is one of ``roles``.
 
     Consumers: POST /api/tasks/<id>/assign (supervisor, staff), the
-    approve/return actions of POST /api/tasks/<id>/transition (supervisor),
+    approve actions of POST /api/tasks/<id>/transition (supervisor),
     business_plan_enabled changes via PATCH /api/projects/<id>/flags
     (supervisor), and PATCH /api/tasks/<id>/priority (supervisor). Priority is
     also guarded on the Save path: PATCH /api/tasks/<id> passes
@@ -493,15 +493,16 @@ def assign_task(task_id):
 
 @app.post("/api/tasks/<int:task_id>/transition")
 def transition_task(task_id):
-    """Lifecycle actions: submit (assignee/staff/supervisor), approve/return (supervisor).
+    """Lifecycle actions: submit, approve (supervisor), and return (supervisor/assignee).
 
-    The approve/return supervisor gate lives here (require_role); the
-    employee-must-be-assignee rule for submit needs the task row, so it is
-    enforced in workflow.transition_task using the session identity passed in.
+    The approve supervisor gate lives here (require_role). Return is available
+    to supervisors and the task's assignee. The assignee checks for return and
+    employee submit both need the task row, so they are enforced in
+    workflow.transition_task using the session identity passed in.
     """
     payload = request.get_json(silent=True) or {}
     action = str(payload.get("action") or "").strip().lower()
-    if action in {"approve", "return"}:
+    if action == "approve":
         require_role("supervisor")
     session = db.get_session()
     task_after = workflow.transition_task(

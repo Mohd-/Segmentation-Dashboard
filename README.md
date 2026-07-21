@@ -76,7 +76,8 @@ change records whatever `changed_by` name the client sends (the front-end sends
 "Web User" when nobody is signed in). Known users live in the `users` table,
 seeded from the `SEED_USERS` placeholder list in `config.py` (edit it before
 deploying); each user has a role — `supervisor`, `staff` or `employee` — that
-gates assignment and approve/return actions.
+gates assignment and approval actions. A Ready component can be returned by a
+supervisor or by the user assigned to that component.
 
 - `POST /api/login` `{"name": "...", "passcode": "..."}` — starts a session.
   The name must match an active `users` row (case-insensitive; 401 `Unknown
@@ -196,7 +197,7 @@ v16 also ships a full backend refactor:
 ### v17: Users, roles, and the 4-status lifecycle
 
 - Component statuses collapse to an implicit 4-state lifecycle — **Not Assigned → In Progress** (assignment) **→ Ready** (submit) **→ Approved** (supervisor) — with Return sending Ready back to In Progress. "Not Applicable" remains internal-only. Existing databases migrate their old status vocabulary automatically.
-- New `users` table with roles (`supervisor` / `staff` / `employee`), seeded from the `SEED_USERS` list in `config.py`. Login now requires a known active user (see Authentication above); approve/return are supervisor-only and an employee may only submit components assigned to them.
+- New `users` table with roles (`supervisor` / `staff` / `employee`), seeded from the `SEED_USERS` list in `config.py`. Login now requires a known active user (see Authentication above); approval is supervisor-only, Return is available to supervisors and the component's assignee, and an employee may only submit components assigned to them.
 - Front-end: sign-in dialog with automatic 401 retry, header identity chip, assignee dropdowns and per-board assignee filters fed by `/api/users`.
 - New endpoints: `GET /api/meta` (authoritative stage/status/role lists), `GET /api/users`, `POST /api/tasks/<id>/assign` (with optional cascade to later unassigned steps), `POST /api/tasks/<id>/transition` (submit/approve/return). Removed: `GET /api/open-folder` (the per-component folder card remains).
 
