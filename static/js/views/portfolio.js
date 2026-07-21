@@ -208,65 +208,99 @@ function renderBody(table) {
   renderPortfolioStats(rows);
 }
 
-function updateSortIndicators(table) {
-  all('th[data-key]', table).forEach(function (th) {
-    var isSorted = th.getAttribute('data-key') === state.sortKey;
-    th.classList.toggle('sorted-asc', isSorted && state.sortDir === 1);
-    th.classList.toggle('sorted-desc', isSorted && state.sortDir === -1);
-    th.setAttribute('aria-sort', isSorted ? (state.sortDir === 1 ? 'ascending' : 'descending') : 'none');
-  });
+function colByKey(key) {
+  return COLUMNS.filter(function (c) { return c.key === key; })[0];
 }
 
-// Trigger label for a 'multi' column: "All" when nothing is picked, the value
-// itself for exactly one, otherwise "N selected".
-function filterLabel(key) {
-  var selected = state.filters[key];
-  if (!selected || !selected.length) return 'All';
-  if (selected.length === 1) return selected[0];
-  return selected.length + ' selected';
+// Sort-direction labels read naturally per column type: value order for the
+// numeric measures, alphabetical for text/categorical columns.
+function sortLabels(col) {
+  return col.numeric
+    ? { asc: 'Low → High', desc: 'High → Low' }
+    : { asc: 'A → Z', desc: 'Z → A' };
 }
 
-function renderFilterCell(col) {
+function isSortActive(col, dir) {
+  return state.sortKey === col.key && state.sortDir === dir;
+}
+
+function isFilledBound(value) { return value !== '' && value != null; }
+
+// Whether a column currently constrains the rowset -- drives the header's
+// "filtered" dot and is the single source of truth for the filter marks.
+function columnIsFiltered(col) {
+  var filterValue = state.filters[col.key];
+  if (filterValue == null) return false;
+  if (col.filter === 'range') return isFilledBound(filterValue.min) || isFilledBound(filterValue.max);
+  if (col.filter === 'multi') return !!(filterValue && filterValue.length);
+  return !!filterValue; // text
+}
+
+// The Filter section of a column's pop-over, shaped to the column type:
+// free-text "contains", a numeric min/max pair, or a scrolling checklist.
+function filterGroupMarkup(col) {
   if (col.filter === 'text') {
     var textValue = state.filters[col.key] || '';
-    return '<th class="portfolio-filter-cell"><input type="text" class="portfolio-filter-input" data-key="' + col.key +
-      '" value="' + esc(textValue) + '" placeholder="Filter…" aria-label="Filter ' + esc(col.label) + '"></th>';
+    return '<label class="pf-field-label">Contains' +
+      '<input type="text" class="portfolio-filter-input" data-key="' + col.key + '" value="' + esc(textValue) +
+      '" placeholder="Type to filter…" aria-label="Filter ' + esc(col.label) + '"></label>';
   }
   if (col.filter === 'range') {
     var range = state.filters[col.key] || { min: '', max: '' };
-    return '<th class="portfolio-filter-cell"><div class="portfolio-filter-range">' +
+    return '<div class="portfolio-filter-range">' +
       '<input type="number" class="portfolio-filter-input" data-key="' + col.key + '" data-bound="min" value="' +
       esc(range.min) + '" placeholder="Min" aria-label="Minimum ' + esc(col.label) + '">' +
       '<input type="number" class="portfolio-filter-input" data-key="' + col.key + '" data-bound="max" value="' +
       esc(range.max) + '" placeholder="Max" aria-label="Maximum ' + esc(col.label) + '">' +
-      '</div></th>';
+      '</div>';
   }
-  if (col.filter === 'multi') {
-    var selected = state.filters[col.key] || [];
-    var optionsHtml = filterValues(col).map(function (value) {
-      var checked = selected.indexOf(value) >= 0 ? ' checked' : '';
-      return '<label class="portfolio-filter-option"><input type="checkbox" value="' + esc(value) + '"' + checked +
-        '><span>' + esc(value) + '</span></label>';
-    }).join('');
-    // The trigger button carries data-key (not the th) so the sort handler's
-    // th[data-key] lookup on the header row never picks up filter cells.
-    return '<th class="portfolio-filter-cell portfolio-filter-multi">' +
-      '<button type="button" class="portfolio-filter-trigger" data-key="' + col.key +
-      '" aria-haspopup="true" aria-expanded="false" aria-label="Filter ' + esc(col.label) + '">' +
-      '<span class="portfolio-filter-trigger-label">' + esc(filterLabel(col.key)) + '</span>' +
-      '<span class="portfolio-filter-caret" aria-hidden="true">▾</span></button>' +
-      '<div class="portfolio-filter-popover" hidden>' +
-      '<div class="portfolio-filter-clear-row"><button type="button" class="portfolio-filter-clear">Clear</button></div>' +
-      optionsHtml + '</div></th>';
-  }
-  return '<th class="portfolio-filter-cell"></th>';
+  // 'multi': the same checklist as before, now living inside the column menu.
+  var selected = state.filters[col.key] || [];
+  var optionsHtml = filterValues(col).map(function (value) {
+    var checked = selected.indexOf(value) >= 0 ? ' checked' : '';
+    return '<label class="portfolio-filter-option"><input type="checkbox" value="' + esc(value) + '"' + checked +
+      '><span>' + esc(value) + '</span></label>';
+  }).join('');
+  return '<div class="pf-multi-list">' + optionsHtml + '</div>';
 }
 
-// Only one checklist popover is open at a time; closing simply hides every one
-// currently in the DOM (queried live, so it survives renderHead rebuilds).
+// One column header: a title button that opens a pop-over combining Sort
+// (two directional options) and Filter (type-appropriate). The last two
+// (right-most) columns anchor their menu to the right edge so it can't be
+// clipped by the panel's overflow.
+function columnHeaderMarkup(col, index) {
+  var labels = sortLabels(col);
+  var alignRight = index >= COLUMNS.length - 2;
+  var sortMark = state.sortKey === col.key ? (state.sortDir === 1 ? '▲' : '▼') : '';
+  var filtered = columnIsFiltered(col);
+  return '<th data-key="' + col.key + '" aria-sort="none">' +
+    '<button type="button" class="pf-col-trigger" aria-haspopup="true" aria-expanded="false">' +
+      '<span class="pf-col-label">' + esc(col.label) + '</span>' +
+      '<span class="pf-col-affix">' +
+        '<span class="pf-sort-mark" aria-hidden="true">' + sortMark + '</span>' +
+        '<span class="pf-filter-mark' + (filtered ? ' is-on' : '') + '" aria-hidden="true"></span>' +
+        '<span class="pf-caret" aria-hidden="true">▾</span>' +
+      '</span>' +
+    '</button>' +
+    '<div class="pf-popover' + (alignRight ? ' pf-popover--right' : '') + '" hidden>' +
+      '<div class="pf-pop-group">' +
+        '<div class="pf-pop-title">Sort</div>' +
+        '<button type="button" class="pf-sort-opt' + (isSortActive(col, 1) ? ' is-active' : '') + '" data-dir="1">' + labels.asc + '</button>' +
+        '<button type="button" class="pf-sort-opt' + (isSortActive(col, -1) ? ' is-active' : '') + '" data-dir="-1">' + labels.desc + '</button>' +
+      '</div>' +
+      '<div class="pf-pop-group">' +
+        '<div class="pf-pop-title">Filter</div>' +
+        filterGroupMarkup(col) +
+      '</div>' +
+      '<div class="pf-pop-foot"><button type="button" class="pf-clear-filter">Clear filter</button></div>' +
+    '</div></th>';
+}
+
+// Only one column menu is open at a time; closing hides every one currently in
+// the DOM (queried live, so it survives renderHead rebuilds).
 function closePortfolioPopovers() {
-  all('.portfolio-filter-popover', document).forEach(function (popover) { popover.hidden = true; });
-  all('.portfolio-filter-trigger', document).forEach(function (trigger) { trigger.setAttribute('aria-expanded', 'false'); });
+  all('.pf-popover', document).forEach(function (popover) { popover.hidden = true; });
+  all('.pf-col-trigger', document).forEach(function (trigger) { trigger.setAttribute('aria-expanded', 'false'); });
 }
 
 // Outside-click + Escape dismissal is wired to the document ONCE: renderHead can
@@ -278,9 +312,9 @@ function wirePortfolioDismiss() {
   dismissWired = true;
   document.addEventListener('click', function (event) {
     var target = event.target;
-    // Clicks on a trigger (its own handler toggles) or inside a popover
-    // (checkbox / Clear) must not close it; everything else dismisses.
-    if (target.closest && (target.closest('.portfolio-filter-trigger') || target.closest('.portfolio-filter-popover'))) return;
+    // Clicks on a column trigger (its own handler toggles) or anywhere inside a
+    // menu (sort option, filter input, checkbox, Clear) must not close it.
+    if (target.closest && (target.closest('.pf-col-trigger') || target.closest('.pf-popover'))) return;
     closePortfolioPopovers();
   });
   document.addEventListener('keydown', function (event) {
@@ -288,65 +322,80 @@ function wirePortfolioDismiss() {
   });
 }
 
-// Rebuilds thead (header row + filter row) -- only called when the fetched
-// dataset changes, so typing in a filter input never fights the DOM for
-// focus (filter/sort changes only call renderBody).
-function renderHead(table) {
-  // Supervisor-only trailing Actions column (per-row Recall): one unsortable
-  // header th (no data-key) and one empty filter cell to keep the rows aligned.
-  var actionsHead = canTransitionPhase() ? '<th class="portfolio-actions-th">Actions</th>' : '';
-  var actionsFilter = canTransitionPhase() ? '<th class="portfolio-filter-cell"></th>' : '';
-  table.innerHTML =
-    '<thead>' +
-    '<tr>' + COLUMNS.map(function (col) {
-      return '<th data-key="' + col.key + '" aria-sort="none"><button type="button" class="th-sort">' + esc(col.label) + '</button></th>';
-    }).join('') + actionsHead + '</tr>' +
-    '<tr class="portfolio-filter-row">' + COLUMNS.map(renderFilterCell).join('') + actionsFilter + '</tr>' +
-    '</thead><tbody></tbody>';
-  // Handler lives on the th, not the inner .th-sort button: the CSS makes the
-  // whole cell (padding and the ▲/▼ zone included) read as clickable, and
-  // button clicks / keyboard activation bubble up to the th anyway.
+// Reflect current sort/filter state onto the (persistent) header without a
+// thead rebuild: aria-sort, the inline ▲/▼ mark, the active sort option, and
+// the per-column "filtered" dot. Called after every sort/filter change so the
+// open menu keeps its DOM (and any focused input) intact.
+function refreshHeaderState(table) {
   all('th[data-key]', table).forEach(function (th) {
-    th.addEventListener('click', function () {
-      var key = th.getAttribute('data-key');
-      if (state.sortKey !== key) { state.sortKey = key; state.sortDir = 1; }
-      else if (state.sortDir === 1) { state.sortDir = -1; }
-      else { state.sortKey = null; state.sortDir = 1; }
-      updateSortIndicators(table);
-      renderBody(table);
+    var key = th.getAttribute('data-key');
+    var col = colByKey(key);
+    var isSorted = key === state.sortKey;
+    th.classList.toggle('sorted-asc', isSorted && state.sortDir === 1);
+    th.classList.toggle('sorted-desc', isSorted && state.sortDir === -1);
+    th.setAttribute('aria-sort', isSorted ? (state.sortDir === 1 ? 'ascending' : 'descending') : 'none');
+    var sortMark = th.querySelector('.pf-sort-mark');
+    if (sortMark) sortMark.textContent = isSorted ? (state.sortDir === 1 ? '▲' : '▼') : '';
+    all('.pf-sort-opt', th).forEach(function (opt) {
+      opt.classList.toggle('is-active', isSorted && Number(opt.getAttribute('data-dir')) === state.sortDir);
     });
+    var filtered = col && columnIsFiltered(col);
+    var filterMark = th.querySelector('.pf-filter-mark');
+    if (filterMark) filterMark.classList.toggle('is-on', !!filtered);
   });
-  // One handler covers both filter-input shapes: a plain text input stores its
-  // string; a range input (marked by data-bound="min"/"max") stores into its
-  // column's {min, max} pair.
-  all('.portfolio-filter-input', table).forEach(function (input) {
-    input.addEventListener('input', function () {
-      var key = input.getAttribute('data-key');
-      var bound = input.getAttribute('data-bound');
-      if (bound) {
-        var range = state.filters[key] || { min: '', max: '' };
-        range[bound] = input.value;
-        state.filters[key] = range;
-      } else {
-        state.filters[key] = input.value;
-      }
-      renderBody(table);
-    });
-  });
-  // Multi-select checklist popovers. Toggling a checkbox re-renders only the
-  // tbody + stats and rewrites the trigger label in place -- the thead is left
-  // intact so the open popover keeps its state (see renderHead's contract).
-  all('.portfolio-filter-multi', table).forEach(function (cell) {
-    var trigger = cell.querySelector('.portfolio-filter-trigger');
-    var popover = cell.querySelector('.portfolio-filter-popover');
-    var labelEl = cell.querySelector('.portfolio-filter-trigger-label');
-    var key = trigger.getAttribute('data-key');
+}
+
+// Rebuilds thead -- only called when the fetched dataset changes, so typing in
+// a filter input or an open menu never fights the DOM for focus (sort/filter
+// changes only re-render tbody + refreshHeaderState in place).
+function renderHead(table) {
+  // Supervisor-only trailing Actions column (per-row Recall/Promote): one
+  // unsortable header th with no data-key, so it grows no column menu.
+  var actionsHead = canTransitionPhase() ? '<th class="portfolio-actions-th">Actions</th>' : '';
+  table.innerHTML =
+    '<thead><tr>' + COLUMNS.map(columnHeaderMarkup).join('') + actionsHead + '</tr></thead><tbody></tbody>';
+
+  all('th[data-key]', table).forEach(function (th) {
+    var key = th.getAttribute('data-key');
+    var trigger = th.querySelector('.pf-col-trigger');
+    var popover = th.querySelector('.pf-popover');
+    // Title toggles this column's menu (closing any other first).
     trigger.addEventListener('click', function () {
       var wasOpen = !popover.hidden;
       closePortfolioPopovers();
       if (!wasOpen) { popover.hidden = false; trigger.setAttribute('aria-expanded', 'true'); }
     });
-    all('input[type="checkbox"]', popover).forEach(function (box) {
+    // Sort options: pick a direction, or click the active one again to clear.
+    all('.pf-sort-opt', th).forEach(function (opt) {
+      opt.addEventListener('click', function () {
+        var dir = Number(opt.getAttribute('data-dir'));
+        if (state.sortKey === key && state.sortDir === dir) { state.sortKey = null; state.sortDir = 1; }
+        else { state.sortKey = key; state.sortDir = dir; }
+        refreshHeaderState(table);
+        renderBody(table);
+      });
+    });
+    // One handler covers both filter-input shapes: a plain text input stores its
+    // string; a range input (marked by data-bound="min"/"max") stores into its
+    // column's {min, max} pair.
+    all('.portfolio-filter-input', th).forEach(function (input) {
+      input.addEventListener('input', function () {
+        var bound = input.getAttribute('data-bound');
+        if (bound) {
+          var range = state.filters[key] || { min: '', max: '' };
+          range[bound] = input.value;
+          state.filters[key] = range;
+        } else {
+          state.filters[key] = input.value;
+        }
+        refreshHeaderState(table);
+        renderBody(table);
+      });
+    });
+    // Multi-select checklist: toggling a checkbox re-renders only tbody + stats
+    // and refreshes the header marks; the thead is left intact so the open menu
+    // keeps its state.
+    all('.portfolio-filter-option input[type="checkbox"]', th).forEach(function (box) {
       box.addEventListener('change', function () {
         var selected = state.filters[key] || [];
         if (box.checked) {
@@ -355,19 +404,21 @@ function renderHead(table) {
           selected = selected.filter(function (value) { return value !== box.value; });
         }
         state.filters[key] = selected;
-        labelEl.textContent = filterLabel(key);
+        refreshHeaderState(table);
         renderBody(table);
       });
     });
-    cell.querySelector('.portfolio-filter-clear').addEventListener('click', function () {
-      state.filters[key] = [];
-      all('input[type="checkbox"]', popover).forEach(function (box) { box.checked = false; });
-      labelEl.textContent = filterLabel(key);
+    // Clear filter (this column only): drop its filter state and reset controls.
+    th.querySelector('.pf-clear-filter').addEventListener('click', function () {
+      delete state.filters[key];
+      all('.portfolio-filter-input', th).forEach(function (input) { input.value = ''; });
+      all('.portfolio-filter-option input[type="checkbox"]', th).forEach(function (box) { box.checked = false; });
+      refreshHeaderState(table);
       renderBody(table);
     });
   });
   wirePortfolioDismiss();
-  updateSortIndicators(table);
+  refreshHeaderState(table);
 }
 
 // Distinct BP years present in a rowset, sorted ascending. Rows without a
