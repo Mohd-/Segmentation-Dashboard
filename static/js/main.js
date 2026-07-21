@@ -1,10 +1,12 @@
 import { byId, all, esc, fillSelect, range } from './dom.js';
-import { Store } from './state.js';
+import { Store, currentProjectPipeline } from './state.js';
 import { API } from './api.js';
+import { activateTab, scrollToTab } from './navigation.js';
 import { refreshProspect, refreshBP, createLead } from './views/pipeline.js';
 import { refreshPortfolio } from './views/portfolio.js';
 import { refreshAudit } from './views/audit.js';
 import { saveComponent, assignComponent, transitionComponent, cyclePriorityChip, ensureUsers } from './views/detail-form.js';
+import { openProjectEditor } from './views/project-editor.js';
 import { performLogin, fetchUserOptions } from './auth.js';
 
 // The board status filters act on projects.overall_status, which only ever
@@ -18,12 +20,7 @@ var PROJECT_STATUSES = ['In Progress'];
 var PROSPECT_STATUSES = ['In Progress'];
 
 export function showTab(name) {
-  all('.tab').forEach(function (tab) { tab.classList.toggle('active', tab.id === 'tab-' + name); });
-  all('.tabs button').forEach(function (button) {
-    var isActive = button.getAttribute('data-tab') === name;
-    button.classList.toggle('active', isActive);
-    button.setAttribute('aria-selected', String(isActive));
-  });
+  activateTab(name);
   byId('detail-shell').classList.add('hidden');
   byId('project-editor').classList.add('hidden');
   if (name === 'prospect') refreshProspect();
@@ -96,7 +93,15 @@ export function wire() {
   safeOn('submit-component', 'click', function () { transitionComponent('submit'); });
   safeOn('approve-component', 'click', function () { transitionComponent('approve'); });
   safeOn('return-component', 'click', function () { transitionComponent('return'); });
-  safeOn('back-to-overview', 'click', function () { byId('detail-shell').classList.add('hidden'); byId('tab-' + Store.pipeline).scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+  safeOn('back-to-overview', 'click', function () {
+    var pipeline = currentProjectPipeline();
+    activateTab(pipeline);
+    byId('detail-shell').classList.add('hidden');
+    scrollToTab(pipeline);
+  });
+  safeOn('open-project-editor', 'click', function () {
+    if (Store.projectId) openProjectEditor(Store.projectId);
+  });
   ['prospect-status-filter', 'prospect-assignee-filter'].forEach(function (id) { safeOn(id, 'input', refreshProspect); safeOn(id, 'change', refreshProspect); });
   ['bp-year-filter', 'bp-status-filter', 'bp-assignee-filter'].forEach(function (id) { safeOn(id, 'input', refreshBP); safeOn(id, 'change', refreshBP); });
   ['portfolio-year-filter', 'portfolio-activity-filter'].forEach(function (id) { safeOn(id, 'change', refreshPortfolio); });

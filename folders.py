@@ -23,6 +23,14 @@ import config
 import db
 
 
+# Kept local to this path-only module to avoid importing the workflow package
+# (workflow.projects imports folders.py). These are the persisted stage_group
+# values whose component files belong under the Leads share.
+_PROSPECT_STAGE_GROUPS = {
+    "Lead Identification", "Risking", "Segmentation", "Pre-Well Delivery",
+}
+
+
 # ---------------------------------------------------------------------------
 # Pure name/path helpers
 # ---------------------------------------------------------------------------
@@ -131,8 +139,13 @@ def get_component_folder_link(session, project_id: int, task_id: int) -> Dict[st
     requires_folder = task_name in config.COMPONENT_FILE_SECTIONS
     field_name, well_name = parse_field_and_well(project.get("project_name") or "")
     section = _safe_folder_name(task_name)
-    server_path = config.WELL_OVERVIEW_DIRECTORY_ROOT / field_name / well_name / "Component Files" / section
-    unc_path = _windows_join(config.WINDOWS_WELL_SHARE_ROOT, field_name, well_name, "Component Files", section)
+    is_prospect_step = task.get("stage_group") in _PROSPECT_STAGE_GROUPS
+    server_root = (config.LEAD_COMPONENT_DIRECTORY_ROOT if is_prospect_step
+                   else config.WELL_OVERVIEW_DIRECTORY_ROOT)
+    windows_root = (config.WINDOWS_LEAD_COMPONENT_SHARE_ROOT if is_prospect_step
+                    else config.WINDOWS_WELL_SHARE_ROOT)
+    server_path = server_root / field_name / well_name / "Component Files" / section
+    unc_path = _windows_join(windows_root, field_name, well_name, "Component Files", section)
     return {
         "requires_folder": 1 if requires_folder else 0,
         "path": unc_path,

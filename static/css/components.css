@@ -148,8 +148,33 @@
 }
 
 .rail-head { border-bottom: 1px solid var(--border); padding-bottom: var(--space-3); margin-bottom: var(--space-3); }
+.rail-nav { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.rail-nav button { flex: 1 1 120px; padding: 6px 8px; font-size: var(--text-xs); }
+.rail-switch-pipeline { border-color: var(--brand-500); color: var(--brand-700); }
 .rail-head h3 { margin: var(--space-3) 0 4px; font-size: var(--text-base); color: var(--ink-800); }
 .rail-head p { color: var(--text-faint); font-size: var(--text-sm); }
+.rail-head .detail-view-note {
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  border-left: 3px solid var(--info-500);
+  background: var(--info-100);
+  color: var(--info-700);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+}
+.rail-all-fields {
+  margin-top: var(--space-2);
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--brand-700);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.rail-all-fields:hover { background: none; color: var(--brand-600); }
 
 .component-list { display: flex; flex-direction: column; gap: var(--space-1); overflow-y: auto; flex: 1; min-height: 0; padding-right: 2px; }
 
@@ -278,6 +303,8 @@ button.priority.priority-high:hover { background: var(--warning-100); }
 }
 
 .component-form { display: flex; flex-direction: column; gap: var(--space-3); }
+.component-form.reference-only { opacity: .82; }
+.component-form.reference-only :disabled { cursor: not-allowed; }
 .dynamic-fields { display: grid; grid-template-columns: repeat(3, minmax(160px, 1fr)); gap: var(--space-2); align-items: start; }
 .wide-field { grid-column: 1 / -1; }
 .conditional.hidden { display: none !important; }
@@ -585,7 +612,7 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 
 /* =========================================================================
    Project editor — the full-project "all fields" view (views/project-editor.js)
-   opened from a Portfolio well name. A flat stack: head, properties card, then
+   opened as a secondary action from pipeline detail. A flat stack: head, properties card, then
    one card per component grouped under non-interactive stage headings.
    ========================================================================= */
 .project-editor {

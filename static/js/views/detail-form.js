@@ -1,6 +1,6 @@
 import { byId, all, esc, isFilled, truthy, msg } from '../dom.js';
 import { API } from '../api.js';
-import { currentUserName, currentRole, canManageAssignments, Store } from '../state.js';
+import { currentUserName, currentRole, canManageAssignments, isCurrentPipelineView, Store } from '../state.js';
 import { SCHEMA, FORMATIONS, FORMATION_METRICS, SEISMIC_BLOCKS } from '../schema.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { renderDetail, renderRightPanel, chooseInitialTask, tasksForPipeline, parseRepeatableRows, refreshAfterRecordChange, revealTaskStage } from './detail.js';
@@ -34,18 +34,22 @@ function renderPriorityChip(task) {
   var chip = byId('component-priority-chip');
   if (!chip) return;
   var value = task.priority || 'Medium';
-  var editable = canSetPriority();
+  var currentView = isCurrentPipelineView();
+  var editable = canSetPriority() && currentView;
+  chip.disabled = !editable;
   chip.textContent = value;
   chip.className = 'priority editor-priority-chip priority-' + String(value).toLowerCase() +
     (editable ? '' : ' editor-priority-chip-static');
-  chip.title = 'Priority: ' + value + (editable ? ' — click to change' : ' — set by a supervisor');
+  chip.title = 'Priority: ' + value + (editable
+    ? ' — click to change'
+    : (currentView ? ' — set by a supervisor' : ' — reference view'));
 }
 
 // Cycles Low -> Medium -> High -> Low via the dedicated priority endpoint
 // (PATCH /api/tasks/<id>/priority; no revision check server-side), then
 // refreshes so the chip and boards adopt the new value + task revision.
 export function cyclePriorityChip() {
-  if (!Store.task || !canSetPriority()) return;
+  if (!Store.task || !canSetPriority() || !isCurrentPipelineView()) return;
   var next = PRIORITY_CYCLE[Store.task.priority || 'Medium'] || 'Medium';
   API.priority(Store.task.task_id, { priority: next, changed_by: currentUserName() })
     .then(function () { return refreshAfterRecordChange('Priority set to ' + next + '.'); })
@@ -67,7 +71,7 @@ function renderAssigneeSelect(task) {
     select.value = current;
     // Only supervisors/staff assign (anonymous dev mode acts as supervisor,
     // matching the backend's current_role()).
-    select.disabled = !canManageAssignments();
+    select.disabled = !canManageAssignments() || !isCurrentPipelineView();
   });
 }
 
@@ -75,22 +79,36 @@ function renderActionButtons(task) {
   var status = task.status || 'Not Assigned';
   var role = currentRole();
   var manage = canManageAssignments();
+  var editable = isCurrentPipelineView();
   var isAssignee = !!(Store.user && Store.user.name &&
     String(Store.user.name).toLowerCase() === String(task.assigned_to || '').toLowerCase());
   var submitButton = byId('submit-component');
   var approveButton = byId('approve-component');
   var returnButton = byId('return-component');
-  if (submitButton) submitButton.classList.toggle('hidden', !(status === 'In Progress' && (manage || isAssignee)));
-  if (approveButton) approveButton.classList.toggle('hidden', !(status === 'Ready' && role === 'supervisor'));
+  if (submitButton) submitButton.classList.toggle('hidden', !(editable && status === 'In Progress' && (manage || isAssignee)));
+  if (approveButton) approveButton.classList.toggle('hidden', !(editable && status === 'Ready' && role === 'supervisor'));
   // A supervisor may return any Ready component; everyone else may return
   // only work assigned to them. The backend enforces the same rule.
   if (returnButton) returnButton.classList.toggle('hidden',
-    !(status === 'Ready' && (role === 'supervisor' || isAssignee)));
+    !(editable && status === 'Ready' && (role === 'supervisor' || isAssignee)));
+}
+
+function setComponentReferenceMode(referenceOnly) {
+  var form = byId('component-form');
+  if (!form) return;
+  all('input, select, textarea', form).forEach(function (control) { control.disabled = referenceOnly; });
+  all('.add-repeatable-row, .remove-repeatable-row, .formation-remove', form).forEach(function (button) {
+    button.disabled = referenceOnly;
+  });
+  var saveButton = byId('save-component');
+  if (saveButton) saveButton.disabled = referenceOnly;
+  form.classList.toggle('reference-only', referenceOnly);
 }
 
 export function loadComponent(task) {
   if (!task) return;
   Store.task = task;
+  setComponentReferenceMode(!isCurrentPipelineView());
   all('.component-item').forEach(function (button) { button.classList.toggle('active', Number(button.getAttribute('data-task-id')) === task.task_id); });
   revealTaskStage(task);
   byId('component-number').textContent = String(task.sequence_no || '');
@@ -104,6 +122,7 @@ export function loadComponent(task) {
   return Promise.all([API.fields(task.task_id), API.componentFolder(Store.projectId, task.task_id)]).then(function (results) {
     renderFields(task.task_name, results[0] || {});
     renderComponentFolder(results[1] || {});
+    setComponentReferenceMode(!isCurrentPipelineView());
     renderRightPanel(tasksForPipeline(Store.pipeline));
   }).catch(function (error) { msg(error.message, 'error'); });
 }
@@ -113,6 +132,7 @@ export function loadComponent(task) {
 // later still-unassigned step of this pipeline.
 export function assignComponent() {
   if (!Store.task) return;
+  if (!isCurrentPipelineView()) return msg('Switch back to the current pipeline to change assignments.', 'error');
   var select = byId('assigned-to');
   var assignee = select.value;
   var previous = Store.task.assigned_to || '';
@@ -148,6 +168,7 @@ var TRANSITION_MESSAGES = {
 
 export function transitionComponent(action) {
   if (!Store.task) return;
+  if (!isCurrentPipelineView()) return msg('Switch back to the current pipeline to change workflow status.', 'error');
   API.transition(Store.task.task_id, {
     action: action,
     revision: Store.task.revision,
@@ -670,6 +691,7 @@ export function fallbackCopy(text) {
 export function saveComponent(event) {
   event.preventDefault();
   if (!Store.task) return;
+  if (!isCurrentPipelineView()) return msg('Switch back to the current pipeline to save changes.', 'error');
   var fields = getFields();
   // A component with a formations mini-sheet also PUTs the touched phase's
   // well-level rows alongside the dynamic-field save.

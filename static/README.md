@@ -26,9 +26,9 @@ static/
     main.js                   boots the app: wires up the tab buttons and the four static forms
     views/
       pipeline.js              Prospect Maturation + Business Plan Execution tabs (the kanban-style boards)
-      detail.js                the right-hand detail panel: compact summary card, rename/archive, BP/Active flags
+      detail.js                the right-hand detail panel: compact summary card, rename/delete, BP/Active flags
       detail-form.js           the middle detail panel: the component form itself, dynamic fields, repeatable rows
-      project-editor.js         the "all fields" editor for one project, opened from a Portfolio well name
+      project-editor.js         the secondary "all fields" editor opened from pipeline detail
       portfolio.js              Portfolio tab
       audit.js                  Audit Trail tab
 ```
@@ -51,7 +51,7 @@ There's no router and no client-side page framework. It works like this:
    that tab's HTML from scratch. There's no diffing — every refresh throws away the old markup
    and builds new markup. This is simple and always correct, at the cost of being not
    performance-optimal — completely fine at this app's size, don't "fix" it.
-4. Clicking a pipeline card calls `openDetail(projectId, pipeline)` in `views/detail.js`, which
+4. Clicking a pipeline card or a Portfolio well name calls `openDetail(projectId, pipeline)` in `views/detail.js`, which
    fetches that lead/well's full detail payload and fills in `#detail-shell`.
 
 ## 3. The design system — how to restyle things

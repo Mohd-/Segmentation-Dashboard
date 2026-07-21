@@ -3,10 +3,10 @@ import { API } from '../api.js';
 import { FLUID_TYPES } from '../schema.js';
 import { currentUserName } from '../state.js';
 import { canTransitionPhase, promoteProject, recallProject } from './transitions.js';
-import { openProjectEditor } from './project-editor.js';
+import { openDetail } from './detail.js';
 // Deliberate module cycle (portfolio → pipeline → portfolio): refreshAllBoards
 // is a hoisted function declaration and only called from event handlers, same
-// as the existing portfolio → project-editor → pipeline chain.
+// as the existing detail → pipeline → portfolio chain.
 import { refreshAllBoards } from './pipeline.js';
 
 // Exactly the 8 analysis columns, in this order. `filter` selects the
@@ -151,7 +151,7 @@ function rowMarkup(row) {
     ? '<td class="portfolio-actions-cell">' + actionButton + '</td>'
     : '';
   return '<tr>' +
-    '<td><a href="#" class="well-link" data-project-id="' + esc(row.project_id) + '">' + esc(row.well_name || '') + '</a></td>' +
+    '<td><a href="#" class="well-link" data-project-id="' + esc(row.project_id) + '" data-pipeline="' + esc(row.pipeline_type === 'bp' ? 'bp' : 'prospect') + '" title="Open in ' + (row.pipeline_type === 'bp' ? 'Business Plan Execution' : 'Prospect Maturation') + '">' + esc(row.well_name || '') + '</a></td>' +
     '<td>' + esc(row.gas_field || '') + '</td>' +
     '<td>' + esc(row.seismic_block || '') + '</td>' +
     '<td>' + esc(row.classification || '') + '</td>' +
@@ -173,7 +173,7 @@ function renderBody(table) {
   all('.well-link', tbody).forEach(function (link) {
     link.addEventListener('click', function (event) {
       event.preventDefault();
-      openProjectEditor(Number(link.getAttribute('data-project-id')));
+      openDetail(Number(link.getAttribute('data-project-id')), link.getAttribute('data-pipeline'));
     });
   });
   all('.portfolio-recall', tbody).forEach(function (button) {

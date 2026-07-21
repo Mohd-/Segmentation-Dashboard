@@ -27,6 +27,18 @@ export function currentRole() {
   return Store.user ? (Store.user.role || 'employee') : 'supervisor';
 }
 
+// The project's persisted phase is the authority for which pipeline is
+// operational. Store.pipeline may intentionally point at the other phase
+// while a user is reviewing its history/future structure in reference mode.
+export function currentProjectPipeline() {
+  return String((Store.project || {}).pipeline_type || 'prospect').toLowerCase() === 'bp'
+    ? 'bp' : 'prospect';
+}
+
+export function isCurrentPipelineView() {
+  return Store.pipeline === currentProjectPipeline();
+}
+
 // Supervisor/staff manage assignment; approval remains supervisor-only.
 export function canManageAssignments() {
   var role = currentRole();

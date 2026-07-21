@@ -8,14 +8,16 @@ What does NOT belong here:
 - The metric calculations themselves (reporting.py / workflow.py) -- this module
   only lays them out.
 
-pandas reads the task register straight off the SQLAlchemy connection; the
-project rows and derived metrics come from the workflow/reporting layers (board
-pointers are derived, not stored).
+The task register uses the shared SQL helpers, while project rows and derived
+metrics come from the workflow/reporting layers (board pointers are derived,
+not stored). Keeping raw SQL behind ``db.fetch_all`` makes the export portable
+across SQLAlchemy 1.4/2.x and SQLite/Postgres deployments.
 """
 from __future__ import annotations
 
 from datetime import datetime
 
+import db
 import portfolio_export
 import reporting
 import workflow
@@ -43,14 +45,18 @@ def export_to_excel(session, filepath):
     if Font is None or get_column_letter is None:
         raise RuntimeError("openpyxl styling tools are not available in this environment.")
 
-    connection = session.connection()
     # Board pointers (current stage/task/owner, overall status, stage started)
     # are derived, not stored -- go through workflow.get_projects so the export
     # carries the same derived values as the board. Archived projects are
     # excluded, matching every other surface of the app.
     projects = workflow.get_projects(session)
     projects_df = pd.DataFrame(projects)
-    tasks_df = pd.read_sql_query("SELECT * FROM project_tasks", connection)
+    # Do not pass a plain SQL string to pandas.read_sql_query. Older pandas
+    # releases call SQLAlchemy Connection.execute(string), which SQLAlchemy 2.x
+    # rejects with ObjectNotExecutableError in production. The application's
+    # shared helper wraps the statement with sqlalchemy.text() and returns the
+    # same list-of-dicts shape on every supported database.
+    tasks_df = pd.DataFrame(db.fetch_all(session, "SELECT * FROM project_tasks"))
 
     if not projects_df.empty:
         for col in ["project_id", "project_name", "overall_status", "current_stage", "current_task",

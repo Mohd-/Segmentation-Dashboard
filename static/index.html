@@ -16,7 +16,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/css/base.css?v=5">
-  <link rel="stylesheet" href="/static/css/components.css?v=12">
+  <link rel="stylesheet" href="/static/css/components.css?v=13">
 </head>
 <body>
   <section id="login-page" class="login-page hidden">
@@ -109,9 +109,14 @@
     <section id="detail-shell" class="detail-shell panel hidden" aria-live="polite">
       <aside class="component-rail">
         <div class="rail-head">
-          <button id="back-to-overview" class="ghost" type="button">&larr; Back to Pipeline</button>
+          <div class="rail-nav">
+            <button id="back-to-overview" class="ghost" type="button">&larr; Back to Pipeline</button>
+            <button id="switch-pipeline-view" class="ghost rail-switch-pipeline" type="button">View Other Pipeline</button>
+          </div>
           <h3 id="detail-name">Select Lead / Well</h3>
           <p id="detail-subtitle">Choose a pipeline card to open its components.</p>
+          <p id="detail-view-note" class="detail-view-note hidden"></p>
+          <button id="open-project-editor" class="link-button rail-all-fields" type="button">Edit all project fields</button>
         </div>
         <div id="component-list" class="component-list"></div>
       </aside>
@@ -193,6 +198,6 @@
     </form>
   </dialog>
 
-  <script type="module" src="/static/js/main.js?v=10"></script>
+  <script type="module" src="/static/js/main.js?v=11"></script>
 </body>
 </html>

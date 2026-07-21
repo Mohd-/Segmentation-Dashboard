@@ -1,6 +1,7 @@
 import { byId, all, esc, isFilled, msg, fmtNum } from '../dom.js';
 import { API } from '../api.js';
-import { currentUserName, Store, resetSelection } from '../state.js';
+import { currentUserName, currentProjectPipeline, isCurrentPipelineView, Store, resetSelection } from '../state.js';
+import { activateTab } from '../navigation.js';
 import { BP_STAGES, PROSPECT_STAGES, DONE, SEISMIC_BLOCKS, FLOWBACK_RATE_FIELDS } from '../schema.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { canTransitionPhase, promoteProject, recallProject } from './transitions.js';
@@ -25,7 +26,11 @@ export function chooseInitialTask(tasks) {
 }
 export function openDetail(projectId, pipeline) {
   Store.projectId = projectId;
-  Store.pipeline = pipeline || 'prospect';
+  Store.pipeline = pipeline === 'bp' ? 'bp' : 'prospect';
+  // Portfolio opens a record from a different top-level tab. Activate the
+  // operating pipeline immediately so the tab highlight, board context and
+  // detail panel all agree; card clicks are harmlessly idempotent here.
+  activateTab(Store.pipeline);
   // One record view at a time: the full-project editor and the pipeline detail
   // are mutually exclusive panels.
   byId('project-editor').classList.add('hidden');
@@ -37,6 +42,11 @@ export function openDetail(projectId, pipeline) {
     Store.leadSummary = detail.lead_summary || null;
     Store.overview = detail.overview || null;
     Store.formations = detail.formations || [];
+    // Reconcile against the fresh server-side project. The Portfolio payload
+    // is only a navigation hint and may have been rendered before a supervisor
+    // promoted/recalled the record in another session.
+    Store.pipeline = currentProjectPipeline();
+    activateTab(Store.pipeline);
     renderDetail();
     // The detail shell is the page's last visible section, so aligning its
     // TOP under the sticky header is often unreachable (not enough document
@@ -101,9 +111,24 @@ export function revealTaskStage(task) {
 
 export function renderDetail() {
   var tasks = tasksForPipeline(Store.pipeline);
+  var currentPipeline = currentProjectPipeline();
+  var currentLabel = currentPipeline === 'bp' ? 'Business Plan Execution' : 'Prospect Maturation';
+  var viewLabel = Store.pipeline === 'bp' ? 'Business Plan Execution' : 'Prospect Maturation';
+  var otherPipeline = Store.pipeline === 'bp' ? 'prospect' : 'bp';
+  var otherLabel = otherPipeline === 'bp' ? 'Business Plan Execution' : 'Prospect Maturation';
+  var isReference = !isCurrentPipelineView();
   byId('detail-name').textContent = Store.project.project_name || 'Lead / Well';
-  byId('detail-subtitle').textContent = Store.pipeline === 'bp' ? 'Business Plan Execution' : 'Prospect Maturation';
-  byId('back-to-overview').textContent = '← Back to ' + (Store.pipeline === 'bp' ? 'Business Plan Execution' : 'Prospect Maturation');
+  byId('detail-subtitle').textContent = viewLabel + (isReference ? ' · Reference view' : ' · Current phase');
+  byId('back-to-overview').textContent = '← Back to ' + currentLabel;
+  var switchButton = byId('switch-pipeline-view');
+  switchButton.textContent = isReference ? '← Back to ' + currentLabel : 'View ' + otherLabel + ' →';
+  switchButton.setAttribute('aria-label', switchButton.textContent + ' for ' + (Store.project.project_name || 'this record'));
+  var viewNote = byId('detail-view-note');
+  viewNote.textContent = isReference
+    ? 'Reference only — switch back to ' + currentLabel + ' to edit components or change workflow status.'
+    : '';
+  viewNote.classList.toggle('hidden', !isReference);
+  switchButton.onclick = function () { switchPipelineView(); };
   // Accordion state is per-project: a fresh selection starts fully collapsed
   // (revealTaskStage opens the selected task's stage right after this render).
   if (Store.projectId !== openStageProjectId) { openStage = null; openStageProjectId = Store.projectId; }
@@ -149,6 +174,22 @@ export function renderDetail() {
     });
   });
   renderRightPanel(tasks);
+}
+
+// Review the same record's other phase without changing its persisted phase.
+// The non-operating pipeline is deliberately read-only (detail-form.js) so a
+// historical/future check cannot assign or advance inactive components.
+export function switchPipelineView() {
+  if (!Store.projectId || !Store.project) return;
+  Store.pipeline = Store.pipeline === 'bp' ? 'prospect' : 'bp';
+  Store.task = null;
+  activateTab(Store.pipeline);
+  renderDetail();
+  Promise.resolve(loadComponent(chooseInitialTask(tasksForPipeline(Store.pipeline)))).then(function () {
+    requestAnimationFrame(function () {
+      byId('detail-shell').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
 }
 
 export function parseRepeatableRows(value) {
@@ -373,6 +414,8 @@ export function renderRightPanel(tasks) {
   var percent = tasks.length ? Math.round((completed / tasks.length) * 100) : 0;
 
   var isBP = Number(Store.project.business_plan_enabled || 0) === 1;
+  var viewingBP = Store.pipeline === 'bp';
+  var referenceOnly = !isCurrentPipelineView();
   var isActive = Number(Store.project.active_well_enabled || 0) === 1;
   var year = Number(Store.project.business_plan_year || new Date().getFullYear());
   if (year < 2026 || year > 2040) year = 2026;
@@ -384,7 +427,7 @@ export function renderRightPanel(tasks) {
   // Phase row: where the record sits (Lead vs BP Well · year) plus the
   // supervisor-only transition action (transitions.js owns the confirm + PATCH).
   var phaseButtonHtml = '';
-  if (canTransitionPhase()) {
+  if (canTransitionPhase() && !referenceOnly) {
     phaseButtonHtml = isBP
       ? '<button id="summary-phase-action" type="button" class="ghost danger-outline summary-phase-btn">Recall to Lead Phase…</button>'
       : '<button id="summary-phase-action" type="button" class="ghost summary-phase-btn">Promote to BP Well…</button>';
@@ -396,7 +439,7 @@ export function renderRightPanel(tasks) {
   // wells show post-drill results per formation plus a predicted-vs-actual
   // comparison against the frozen lead snapshot.
   var bodyHtml;
-  if (isBP) {
+  if (viewingBP) {
     // ---- Well card ----------------------------------------------------------
     var deduped = dedupeFormationsByPhase();
     var sarh = deduped['SARH'] ? deduped['SARH'].row : null;
@@ -516,8 +559,20 @@ export function renderRightPanel(tasks) {
     '<label class="summary-popover-check"><input id="summary-active-flag" type="checkbox" ' + (isActive ? 'checked' : '') + '> Active Well</label>' +
     '<div class="summary-popover-actions"><button id="rename-record" type="button" class="ghost">Rename ' + recordKind + '</button><button id="delete-record" type="button" class="danger">Delete ' + recordKind + '</button></div></div>';
 
-  byId('summary-title').textContent = recordKind + ' Summary';
+  byId('summary-title').textContent = viewingBP ? 'Well Summary' : 'Lead Summary';
   byId('lead-summary').innerHTML = progressHtml + phaseHtml + bodyHtml + popoverHtml;
+
+  // Record-level actions stay with the operating pipeline too. This avoids a
+  // "reference only" view exposing a hidden phase/flag mutation through the
+  // summary gear while still leaving the explicit all-fields editor available
+  // as a separate, deliberate workflow.
+  var settingsToggle = byId('summary-settings-toggle');
+  if (settingsToggle) {
+    settingsToggle.disabled = referenceOnly;
+    settingsToggle.title = referenceOnly ? 'Return to the current pipeline to manage this record' : 'Manage lead / well';
+    settingsToggle.setAttribute('aria-label', settingsToggle.title);
+    settingsToggle.setAttribute('aria-expanded', 'false');
+  }
 
   var activeFlag = byId('summary-active-flag');
   if (activeFlag) activeFlag.addEventListener('change', function () { saveProjectFlags({ active_well_enabled: activeFlag.checked }); });

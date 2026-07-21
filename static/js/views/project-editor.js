@@ -1,6 +1,7 @@
 import { byId, all, esc, msg, statusChip } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName, Store, resetSelection } from '../state.js';
+import { activateTab, scrollToTab } from '../navigation.js';
 import { SCHEMA } from '../schema.js';
 import { confirmDialog } from '../dialog.js';
 import { canTransitionPhase, promoteProject, recallProject } from './transitions.js';
@@ -13,11 +14,10 @@ import { refreshAllBoards } from './pipeline.js';
 import { refreshAudit } from './audit.js';
 
 // The full-project editor: one flat page exposing EVERY field of a project --
-// its properties plus every component's schema fields + comments -- opened by
-// clicking a well name in the Portfolio table. It shares the same single Store
-// as the pipeline detail view (one record open at a time); openProjectEditor
-// hides #detail-shell, and both showTab and openDetail hide #project-editor, so
-// the three never show together.
+// its properties plus every component's schema fields + comments. It is a
+// secondary action from pipeline detail (Portfolio names now open the correct
+// pipeline directly). It shares the same single Store as the detail view; only
+// one record workspace is visible at a time.
 export function openProjectEditor(projectId) {
   Store.projectId = projectId;
   byId('detail-shell').classList.add('hidden');
@@ -166,7 +166,8 @@ function bindEditor() {
 
 function backToPortfolio() {
   byId('project-editor').classList.add('hidden');
-  byId('tab-portfolio').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  activateTab('portfolio');
+  scrollToTab('portfolio');
 }
 
 // Re-render the phase row in place (chip + action button) and rebind its
@@ -320,7 +321,8 @@ async function archiveProject() {
   API.deleteProject(Store.projectId).then(function () {
     resetSelection();
     byId('project-editor').classList.add('hidden');
-    byId('tab-portfolio').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    activateTab('portfolio');
+    scrollToTab('portfolio');
     refreshAllBoards();
     refreshAudit();
     msg(recordKind + ' deleted.', 'success');

@@ -68,6 +68,31 @@ def test_create_project_valid(client):
     assert "folder_path" in body
 
 
+def test_component_folder_uses_leads_for_prospect_steps_and_wells_for_bp_steps(client):
+    """Folder roots follow the component's stage, not just the record's current
+    pipeline, so historical prospect steps remain under Leads after promotion."""
+    pid = create_project(client, "PATH-1", pipeline_type="bp",
+                         business_plan_enabled=True, business_plan_year=2030)
+    prospect_task = get_task_by_name(client, pid, "Reservoir Area Definition")
+    bp_task = get_task_by_name(client, pid, "Well Proposal")
+
+    prospect = client.get(
+        f"/api/projects/{pid}/component-folder/{prospect_task['task_id']}"
+    ).get_json()
+    bp = client.get(
+        f"/api/projects/{pid}/component-folder/{bp_task['task_id']}"
+    ).get_json()
+
+    assert prospect["unc_path"].startswith("\\\\aramco.com\\ecc\\data\\NAUGAD\\Leads\\")
+    assert prospect["server_path"].startswith("/mnt/leads/")
+    assert prospect["unc_path"].endswith(
+        r"PATH\PATH-1\Component Files\Reservoir Area Definition"
+    )
+    assert bp["unc_path"].startswith("\\\\aramco.com\\ecc\\data\\NAUGAD\\Wells\\")
+    assert bp["server_path"].startswith("/mnt/wells/")
+    assert bp["unc_path"].endswith(r"PATH\PATH-1\Component Files\Well Proposal")
+
+
 def test_create_project_empty_name(client):
     resp = client.post("/api/projects", json={"project_name": ""})
     assert resp.status_code == 400
@@ -582,6 +607,23 @@ def test_export_excel(client):
     # The choke column header matches the field's inch scale (flowback_choke_size_in
     # and the UI's 'Choke Size (in)'), not the legacy 1/64" convention.
     assert "Choke Size (in)" in header
+
+
+def test_export_does_not_execute_raw_sql_through_pandas(client, monkeypatch):
+    """Production can combine pandas with SQLAlchemy 2.x, where a plain SQL
+    string is not executable. The export must use the dialect-safe db helper."""
+    import export_excel
+
+    create_project(client, "EXPORT-SQL-1")
+
+    def reject_raw_pandas_sql(*_args, **_kwargs):
+        raise AssertionError("Export bypassed db.fetch_all")
+
+    monkeypatch.setattr(export_excel.pd, "read_sql_query", reject_raw_pandas_sql)
+    resp = client.get("/api/export/excel")
+    assert resp.status_code == 200
+    assert resp.content_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    resp.close()
 
 
 def test_export_reservoir_cos_columns_read_one_primary_row(client):

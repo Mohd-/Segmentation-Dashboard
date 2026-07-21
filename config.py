@@ -190,6 +190,14 @@ AR_TO_SEISMIC_BLOCK = _invert_seismic_block_ar_map(SEISMIC_BLOCK_AR_MAP)
 WELL_OVERVIEW_DIRECTORY_ROOT = Path("/mnt/wells")
 WINDOWS_WELL_SHARE_ROOT = r"\\aramco.com\ecc\data\NAUGAD\Wells"
 
+# Supporting files for Prospect Maturation components live under the parallel
+# Leads share. BP Execution component folders continue to use the Wells roots
+# above. folders.get_component_folder_link selects between them from the task's
+# stage group, so a promoted well's historical prospect components still point
+# to Leads.
+LEAD_COMPONENT_DIRECTORY_ROOT = Path("/mnt/leads")
+WINDOWS_LEAD_COMPONENT_SHARE_ROOT = r"\\aramco.com\ecc\data\NAUGAD\Leads"
+
 # Separate lead-workflow directory used only by the Task Update stage buttons:
 #   Open Identification Folder, Open Risking Folder, Open Segmentation Folder
 # Example client path: \\aramco.com\ecc\data\NAUGAD\Lead_Workflow\MDFT\MDFT-3\Leads\Identification
@@ -219,7 +227,8 @@ LEAD_WORKFLOW_SECTION_KEYS = {
 }
 
 # Components where users typically need a physical/share location for supporting files.
-# The app automatically generates: ROOT / Field / Well / Component Files / Component Name
+# The app automatically generates: Leads-or-Wells ROOT / Field / Well /
+# Component Files / Component Name
 COMPONENT_FILE_SECTIONS = {
     # First eight Prospect Maturation components require generated file
     # locations. (v18 removed the Presence CoS Evaluation step.)

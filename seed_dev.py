@@ -141,7 +141,8 @@ def _complete_task(session, task, assignee, role_by_name, approver, cycle=False)
     task = workflow.transition_task(session, task["task_id"], "submit", changed_by=assignee,
                                      actor_role=role, actor_name=assignee)
     if cycle:
-        task = workflow.transition_task(session, task["task_id"], "return", changed_by=approver)
+        task = workflow.transition_task(session, task["task_id"], "return", changed_by=approver,
+                                        actor_role="supervisor", actor_name=approver)
         task = workflow.transition_task(session, task["task_id"], "submit", changed_by=assignee,
                                          actor_role=role, actor_name=assignee)
     return workflow.transition_task(session, task["task_id"], "approve", changed_by=approver)

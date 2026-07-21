@@ -8,7 +8,8 @@ portfolio-level reporting. The backend is Flask + SQLite (SQLAlchemy underneath)
 the front-end is vanilla JS served from `static/`.
 
 New to the codebase? Read `ARCHITECTURE.md` for the module map and
-`CONTRIBUTING.md` for step-by-step recipes for common changes.
+`CONTRIBUTING.md` for step-by-step recipes for common changes. Confirmed defects
+awaiting implementation are tracked in `KNOWN_ISSUES.md`.
 
 ## Quickstart
 
