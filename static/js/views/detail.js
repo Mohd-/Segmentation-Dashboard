@@ -240,9 +240,10 @@ export function reservoirCosSummary(fieldMap) {
 // then reads that SAME step's p90/mean/p10 so the trio never mixes assessments.
 // `sources` is a [taskName, '<prefix>_gas_mean'] list; the trio keys share the
 // prefix. Returns empty strings when no source has a filled mean.
-function gasTrio(sources) {
+function gasTrio(sources, fieldMap) {
+  var sourceMap = fieldMap || Store.allFields;
   for (var i = 0; i < sources.length; i += 1) {
-    var fields = Store.allFields[sources[i][0]] || {};
+    var fields = sourceMap[sources[i][0]] || {};
     var meanKey = sources[i][1];
     if (!isFilled(fields[meanKey])) continue;
     var prefix = meanKey.replace(/_gas_mean$/, '');
@@ -318,11 +319,39 @@ function formationLine(name, row) {
   return '<div class="summary-formation"><span class="summary-formation-name">' + esc(name) + '</span><span class="summary-formation-metrics">' + esc(bits.join(' · ')) + '</span>' + fluidTag + '</div>';
 }
 
-// Prediction-vs-Actual accordion open state. Module-level so it survives the
-// re-render after each save; reset when the selected project changes (mirrors
-// the rail-stage accordion's per-project guard).
-var pvaOpen = false;
-var pvaProjectId = null;
+// Well-card fold open state, keyed by fold id ('pva', 'lead'). Module-level so
+// it survives the re-render after each save; reset when the selected project
+// changes (mirrors the rail-stage accordion's per-project guard).
+var openFolds = {};
+var foldProjectId = null;
+
+// One collapsible section of the well card: chevron header + collapsed body.
+// `id` is the fold key; the rendered ids are summary-fold-<id>[-body], which
+// wireFolds() binds after the card is written.
+function foldSection(id, title, bodyHtml) {
+  var isOpen = !!openFolds[id];
+  return '<div class="summary-fold">' +
+    '<button id="summary-fold-' + id + '" type="button" class="summary-fold-head' + (isOpen ? ' open' : '') +
+    '" data-fold="' + id + '" aria-expanded="' + isOpen + '" aria-controls="summary-fold-' + id + '-body">' +
+    '<span class="summary-fold-title">' + esc(title) + '</span>' +
+    '<span class="summary-fold-chevron" aria-hidden="true"></span></button>' +
+    '<div id="summary-fold-' + id + '-body" class="summary-fold-body' + (isOpen ? '' : ' collapsed') + '">' + bodyHtml + '</div></div>';
+}
+// Toggle each rendered fold in place so the surrounding card isn't re-rendered.
+function wireFolds() {
+  all('.summary-fold-head').forEach(function (head) {
+    head.addEventListener('click', function () {
+      var id = head.getAttribute('data-fold');
+      var isOpen = !openFolds[id];
+      openFolds[id] = isOpen;
+      foldProjectId = Store.projectId;
+      head.classList.toggle('open', isOpen);
+      head.setAttribute('aria-expanded', String(isOpen));
+      var body = byId('summary-fold-' + id + '-body');
+      if (body) body.classList.toggle('collapsed', !isOpen);
+    });
+  });
+}
 
 function numOrNull(value) {
   if (!isFilled(value)) return null;
@@ -370,20 +399,74 @@ function statCluster(label, cols, context) {
     contextHtml + '</div>';
 }
 
+// The lead phase's own PIIP mean sources (the tail of LATEST_PIIP_SOURCES,
+// which leads with the two post-drill assessments). Used wherever a LEAD value
+// is wanted from a drilled well: Prediction vs Actual's predicted mean and the
+// well card's Lead Summary fold, neither of which may read post-drill numbers.
+var LEAD_PIIP_SOURCES = LATEST_PIIP_SOURCES.slice(2);
+
+// The lead-phase field map as seen from the well card: the snapshot frozen at
+// promotion wins field by field, with the live lead tasks (which stay active
+// after promotion) filling any gap -- the same snapshot-then-live precedence
+// Prediction vs Actual uses for its predicted column. A record with no
+// snapshot (never promoted through the lead phase) reads entirely live.
+function leadFieldSource() {
+  var frozen = (Store.leadSummary && Store.leadSummary.fields) || {};
+  var live = Store.allFields || {};
+  var merged = {};
+  Object.keys(live).concat(Object.keys(frozen)).forEach(function (task) {
+    if (merged[task]) return;
+    var liveFields = live[task] || {};
+    var frozenFields = frozen[task] || {};
+    var fields = {};
+    Object.keys(liveFields).concat(Object.keys(frozenFields)).forEach(function (key) {
+      fields[key] = isFilled(frozenFields[key]) ? frozenFields[key] : liveFields[key];
+    });
+    merged[task] = fields;
+  });
+  return merged;
+}
+
+// The lead card's body: volumetrics + chance-of-success, over a given field map
+// and gas-mean source list. Rendered on its own for a lead record and inside
+// the well card's Lead Summary fold for a promoted one. Total CoS comes from
+// /detail's overview (derived at read time from the still-active lead CoS
+// steps), never recomputed here.
+function leadMetricsHtml(fieldMap, gasSources) {
+  var resCos = reservoirCosPrimary(fieldMap);
+  var trio = gasTrio(gasSources, fieldMap);
+  return '<div class="summary-metrics">' +
+    statCluster('Gas (BCF)', [
+      { label: 'P90', value: trio.p90 },
+      { label: 'Mean', value: trio.mean },
+      { label: 'P10', value: trio.p10 }
+    ]) +
+    metricRow('Reservoir Thickness (ft)', (fieldMap['Thickness Estimation'] || {}).reservoir_thickness_ft) +
+    statCluster('Chance of Success (%)', [
+      { label: 'Res', value: resCos.pct },
+      { label: 'Trap', value: (fieldMap['Trap CoS'] || {}).trap_cos_pct },
+      { label: 'Seal', value: (fieldMap['Seal CoS'] || {}).seal_cos_pct },
+      { label: 'Total', value: (Store.overview || {}).derisking }
+    ], resCos.ref) +
+    '</div>';
+}
+
 // The gear popover, its outside-click/Escape dismissal, and the toggle button
 // (static in index.html) are wired once — the button and document persist
 // across re-renders, so byId resolves the freshly rendered popover at call
 // time and no listeners stack.
+function closeSummarySettings() {
+  var popover = byId('summary-settings');
+  if (popover) popover.classList.add('hidden');
+  var toggle = byId('summary-settings-toggle');
+  if (toggle) toggle.setAttribute('aria-expanded', 'false');
+}
 var summarySettingsWired = false;
 function wireSummarySettings() {
   if (summarySettingsWired) return;
   summarySettingsWired = true;
   var toggle = byId('summary-settings-toggle');
-  function close() {
-    var popover = byId('summary-settings');
-    if (popover) popover.classList.add('hidden');
-    if (toggle) toggle.setAttribute('aria-expanded', 'false');
-  }
+  var close = closeSummarySettings;
   if (toggle) toggle.addEventListener('click', function (event) {
     event.stopPropagation();
     var popover = byId('summary-settings');
@@ -424,17 +507,12 @@ export function renderRightPanel(tasks) {
   var progressHtml =
     '<div class="summary-progress"><div class="summary-progress-bar"><span style="width:' + percent + '%"></span></div>' +
     '<div class="summary-progress-figures"><b>' + percent + '%</b><small>' + completed + ' / ' + tasks.length + '</small></div></div>';
-  // Phase row: where the record sits (Lead vs BP Well · year) plus the
-  // supervisor-only transition action (transitions.js owns the confirm + PATCH).
-  var phaseButtonHtml = '';
-  if (canTransitionPhase() && !referenceOnly) {
-    phaseButtonHtml = isBP
-      ? '<button id="summary-phase-action" type="button" class="ghost danger-outline summary-phase-btn">Recall to Lead Phase…</button>'
-      : '<button id="summary-phase-action" type="button" class="ghost summary-phase-btn">Promote to BP Well…</button>';
-  }
+  // Phase row: where the record sits (Lead vs BP Well · year). The phase MOVE
+  // itself is a gear-popover action (see popoverHtml) -- rare, irreversible
+  // without a counter-move, and supervisor-only, so it stays off the card face.
   var phaseHtml = '<div class="summary-phase"><span class="summary-phase-label">' +
     (isBP ? 'BP Well · ' + esc(Store.project.business_plan_year || year) : 'Lead') +
-    '</span>' + phaseButtonHtml + '</div>';
+    '</span></div>';
   // Phase-specific body: leads show volumetrics + chance-of-success; drilled BP
   // wells show post-drill results per formation plus a predicted-vs-actual
   // comparison against the frozen lead snapshot.
@@ -509,54 +587,57 @@ export function renderRightPanel(tasks) {
       metricRow('Flowback Rate', isFilled(flowValue) ? fmtNum(flowValue) + ' ' + flowEntry.unit : '', isFilled(fluid) ? fluid : 'Gas') +
       '</div>';
 
+    // Folds are per-project, like the rail accordion: a fresh selection starts
+    // with every fold collapsed.
+    if (Store.projectId !== foldProjectId) { openFolds = {}; foldProjectId = Store.projectId; }
+
     // Prediction vs Actual: predicted values read the frozen lead snapshot,
     // falling back to live fields where the plan allows.
-    if (Store.projectId !== pvaProjectId) { pvaOpen = false; pvaProjectId = Store.projectId; }
     var snap = (Store.leadSummary && Store.leadSummary.fields) || {};
     var predThickness = (snap['Thickness Estimation'] || {}).reservoir_thickness_ft;
     if (!isFilled(predThickness)) predThickness = (Store.allFields['Thickness Estimation'] || {}).reservoir_thickness_ft;
-    var predMeanSources = [['Pre-Drilling Resource Assessment', 'pre_drill_piip_gas_mean'], ['Lead Resource Assessment', 'lead_piip_gas_mean']];
     var predMean = '';
-    for (var si = 0; si < predMeanSources.length && !isFilled(predMean); si += 1) predMean = (snap[predMeanSources[si][0]] || {})[predMeanSources[si][1]] || '';
-    for (var li = 0; li < predMeanSources.length && !isFilled(predMean); li += 1) predMean = (Store.allFields[predMeanSources[li][0]] || {})[predMeanSources[li][1]] || '';
-    var pvaBodyHtml =
+    for (var si = 0; si < LEAD_PIIP_SOURCES.length && !isFilled(predMean); si += 1) predMean = (snap[LEAD_PIIP_SOURCES[si][0]] || {})[LEAD_PIIP_SOURCES[si][1]] || '';
+    for (var li = 0; li < LEAD_PIIP_SOURCES.length && !isFilled(predMean); li += 1) predMean = (Store.allFields[LEAD_PIIP_SOURCES[li][0]] || {})[LEAD_PIIP_SOURCES[li][1]] || '';
+    var pvaHtml = foldSection('pva', 'Prediction vs Actual',
       '<div class="summary-pva-head-row"><span class="summary-pva-label"></span><span class="summary-pva-cell summary-pva-colhead">Predicted</span><span class="summary-pva-cell summary-pva-colhead">Actual</span><span class="summary-pva-delta"></span></div>' +
       pvaRow('Top SARH', prognosis, topSarh) +
       pvaRow('Thickness (ft)', predThickness, sarh ? sarh.thickness_ft : '') +
-      pvaRow('Mean (BCF)', predMean, meanPostDrill);
-    var pvaHtml = '<div class="summary-pva">' +
-      '<button id="summary-pva-head" type="button" class="summary-pva-head' + (pvaOpen ? ' open' : '') + '" aria-expanded="' + pvaOpen + '"><span class="summary-pva-title">Prediction vs Actual</span><span class="summary-pva-chevron" aria-hidden="true"></span></button>' +
-      '<div id="summary-pva-body" class="summary-pva-body' + (pvaOpen ? '' : ' collapsed') + '">' + pvaBodyHtml + '</div></div>';
+      pvaRow('Mean (BCF)', predMean, meanPostDrill));
 
-    bodyHtml = metricsHtml + reservoirsHtml + flowbackHtml + pvaHtml;
+    // Lead Summary: the same card the lead phase shows, over the frozen
+    // snapshot (see leadFieldSource) and the lead's own gas sources -- the
+    // volumetrics and chance-of-success this well was drilled on. Kept folded
+    // so the well card still opens on its post-drill results.
+    var captured = Store.leadSummary && Store.leadSummary.captured_at;
+    var capturedNote = captured
+      ? '<div class="summary-fold-note">Captured at promotion · ' + esc(String(captured).slice(0, 10)) +
+        (Store.leadSummary.captured_by ? ' · ' + esc(Store.leadSummary.captured_by) : '') + '</div>'
+      : '';
+    var leadHtml = foldSection('lead', 'Lead Summary',
+      leadMetricsHtml(leadFieldSource(), LEAD_PIIP_SOURCES) + capturedNote);
+
+    bodyHtml = metricsHtml + reservoirsHtml + flowbackHtml + pvaHtml + leadHtml;
   } else {
     // ---- Lead card ----------------------------------------------------------
-    var trapCos = (Store.allFields['Trap CoS'] || {}).trap_cos_pct;
-    var sealCos = (Store.allFields['Seal CoS'] || {}).seal_cos_pct;
-    var leadGasTrio = gasTrio(LATEST_PIIP_SOURCES);
     // Res CoS is the primary first-row percent; its "Block · AR n" reference
     // rides along as the cluster's quiet context line (no bulky <small> label).
-    var resCos = reservoirCosPrimary();
-    bodyHtml = '<div class="summary-metrics">' +
-      statCluster('Gas (BCF)', [
-        { label: 'P90', value: leadGasTrio.p90 },
-        { label: 'Mean', value: leadGasTrio.mean },
-        { label: 'P10', value: leadGasTrio.p10 }
-      ]) +
-      metricRow('Reservoir Thickness (ft)', (Store.allFields['Thickness Estimation'] || {}).reservoir_thickness_ft) +
-      statCluster('Chance of Success (%)', [
-        { label: 'Res', value: resCos.pct },
-        { label: 'Trap', value: trapCos },
-        { label: 'Seal', value: sealCos },
-        { label: 'Total', value: (Store.overview || {}).derisking }
-      ], resCos.ref) +
-      '</div>';
+    bodyHtml = leadMetricsHtml(Store.allFields, LATEST_PIIP_SOURCES);
   }
-  // Popover: what the compact card dropped but still needs a home. Phase moves
-  // (promote/recall) live on the visible phase row, not here.
+  // Popover: what the compact card dropped but still needs a home -- the Active
+  // Well flag, the phase move, and rename/delete. The phase button is
+  // supervisor-only (canTransitionPhase) and, like every action in here, is
+  // withheld from the reference view; transitions.js owns the confirm + PATCH.
+  var phaseButtonHtml = '';
+  if (canTransitionPhase() && !referenceOnly) {
+    phaseButtonHtml = '<div class="summary-popover-actions">' + (isBP
+      ? '<button id="summary-phase-action" type="button" class="ghost danger-outline">Recall to Lead Phase…</button>'
+      : '<button id="summary-phase-action" type="button" class="ghost">Promote to BP Well…</button>') + '</div>';
+  }
   var popoverHtml =
     '<div id="summary-settings" class="summary-popover hidden" role="dialog" aria-label="Manage ' + recordKind.toLowerCase() + '">' +
     '<label class="summary-popover-check"><input id="summary-active-flag" type="checkbox" ' + (isActive ? 'checked' : '') + '> Active Well</label>' +
+    phaseButtonHtml +
     '<div class="summary-popover-actions"><button id="rename-record" type="button" class="ghost">Rename ' + recordKind + '</button><button id="delete-record" type="button" class="danger">Delete ' + recordKind + '</button></div></div>';
 
   byId('summary-title').textContent = viewingBP ? 'Well Summary' : 'Lead Summary';
@@ -578,6 +659,9 @@ export function renderRightPanel(tasks) {
   if (activeFlag) activeFlag.addEventListener('change', function () { saveProjectFlags({ active_well_enabled: activeFlag.checked }); });
   var phaseAction = byId('summary-phase-action');
   if (phaseAction) phaseAction.addEventListener('click', function () {
+    // Hand off to the confirm dialog with the popover already dismissed, so a
+    // cancelled move doesn't leave the gear menu hanging open behind it.
+    closeSummarySettings();
     var actor = currentUserName();
     var transition = isBP
       ? recallProject(Store.project, actor)
@@ -591,17 +675,9 @@ export function renderRightPanel(tasks) {
   var deleteButton = byId('delete-record');
   if (renameButton) renameButton.addEventListener('click', renameSelectedProject);
   if (deleteButton) deleteButton.addEventListener('click', deleteSelectedProject);
-  // Prediction-vs-Actual accordion (well card only; byId is null otherwise).
-  // Toggle in place so the surrounding card isn't re-rendered.
-  var pvaHead = byId('summary-pva-head');
-  if (pvaHead) pvaHead.addEventListener('click', function () {
-    pvaOpen = !pvaOpen;
-    pvaProjectId = Store.projectId;
-    pvaHead.classList.toggle('open', pvaOpen);
-    pvaHead.setAttribute('aria-expanded', String(pvaOpen));
-    var body = byId('summary-pva-body');
-    if (body) body.classList.toggle('collapsed', !pvaOpen);
-  });
+  // Prediction-vs-Actual / Lead Summary folds (well card only; the lead card
+  // renders none, so this is a no-op there).
+  wireFolds();
   wireSummarySettings();
 }
 export function refreshAfterRecordChange(message) {
