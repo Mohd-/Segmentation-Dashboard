@@ -23,6 +23,7 @@ from .constants import (
 )
 from .history import log_task_event
 from .projects import _sync_completed_at, get_project, update_project_name
+from .summary import _task_field_value
 from .users import find_active_user
 
 # The Seal CoS form's manual inputs (cos.calculate_seal_cos reads exactly
@@ -32,6 +33,47 @@ _SEAL_COS_INPUT_KEYS = (
     "seal_recent_activity_age", "seal_dip", "seal_azimuth_vs_shmax",
     "seal_fault_level_confidence", "seal_fracture_permeability",
 )
+
+
+def _apply_stub_cos_calculations(session, task, fields):
+    """Trap CoS / initial (Lead) Resource Assessment recompute hooks.
+
+    Mirrors the Seal CoS recompute pattern (fire only on the owning task's
+    save), but both formulas are still STUBS in cos.py: a ``None`` return
+    means "not computed" and the stored / manually entered values stay
+    untouched, so manual entry keeps working until the approved formulas
+    land. The cross-task inputs (the Reservoir Area Definition areas and the
+    Thickness Estimation SARH thickness) are fetched here because cos.py must
+    stay database-free -- same division of labor as Presence CoS.
+
+    Shared by save_task and save_task_dynamic_fields. Returns ``fields``
+    (copied only when something was computed).
+    """
+    task_name = task.get("task_name")
+    project_id = task["project_id"]
+    if task_name == "Trap CoS" and "sarah_quwarah_thickness_ft" in fields:
+        computed = cos.calculate_trap_cos(
+            _task_field_value(session, project_id, "Thickness Estimation", "formation_thickness_ft"),
+            fields.get("sarah_quwarah_thickness_ft"),
+        )
+        if computed is not None:
+            fields = dict(fields)
+            fields["trap_cos_pct"] = computed
+    if task_name == "Lead Resource Assessment":
+        method = fields.get("lead_calculation_method")
+        if method is None:
+            method = _task_field_value(session, project_id, "Lead Resource Assessment",
+                                       "lead_calculation_method")
+        computed = cos.calculate_initial_resource_assessment(
+            _task_field_value(session, project_id, "Reservoir Area Definition", "p90_area_km2"),
+            _task_field_value(session, project_id, "Reservoir Area Definition", "p10_area_km2"),
+            _task_field_value(session, project_id, "Thickness Estimation", "formation_thickness_ft"),
+            method,
+        )
+        if computed:
+            fields = dict(fields)
+            fields.update(computed)
+    return fields
 
 
 def _pop_well_name_override(task, fields):
@@ -170,6 +212,7 @@ def save_task_dynamic_fields(session, task_id, fields, changed_by="Web User"):
     if task.get("task_name") == "Seal CoS" and any(key in fields for key in _SEAL_COS_INPUT_KEYS):
         fields = dict(fields)
         fields["seal_cos_pct"] = cos.calculate_seal_cos(fields)
+    fields = _apply_stub_cos_calculations(session, task, fields)
     now = utc_now_str()
     with db.write_transaction(session):
         _apply_dynamic_fields(session, task, fields, changed_by, now)
@@ -273,6 +316,10 @@ def save_task(session, task_id, payload, changed_by="Web User", allow_priority_c
         if task.get("task_name") == "Seal CoS" and any(key in fields for key in _SEAL_COS_INPUT_KEYS):
             fields = dict(fields)
             fields["seal_cos_pct"] = cos.calculate_seal_cos(fields)
+
+        # Trap CoS / initial Resource Assessment recompute hooks (stub
+        # formulas in cos.py; a None result leaves stored values untouched).
+        fields = _apply_stub_cos_calculations(session, task, fields)
 
         _apply_dynamic_fields(session, task, fields, changed_by, now)
 

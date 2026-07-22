@@ -269,6 +269,83 @@ def test_final_reservoir_cos_is_first_row_with_nonempty_pct(client):
 
 
 # ---------------------------------------------------------------------------
+# Trap CoS / initial Resource Assessment stubs (formulas pending)
+# ---------------------------------------------------------------------------
+# These pin the STUB contract the save-path wiring relies on: None = "not
+# computed", so stored/manual values survive every save until the approved
+# formulas land in cos.py. When a formula is implemented, replace the
+# None-assertions here with real expected values.
+
+def test_trap_cos_stub_returns_none(client):
+    import cos
+    assert cos.calculate_trap_cos("", "") is None          # nothing entered
+    assert cos.calculate_trap_cos("120", "") is None       # partial input
+    assert cos.calculate_trap_cos("120", "250") is None    # formula pending
+    assert cos.calculate_trap_cos("abc", "250") is None    # non-numeric
+
+
+def test_initial_resource_assessment_stub_returns_none(client):
+    import cos
+    assert cos.calculate_initial_resource_assessment("", "", "") is None
+    assert cos.calculate_initial_resource_assessment("5", "12", "") is None
+    assert cos.calculate_initial_resource_assessment("5", "12", "110", "GRV") is None
+
+
+def test_trap_cos_save_keeps_manual_value_while_stub_pending(client):
+    """Saving the Trap CoS form (with the cross-task SARH thickness present)
+    must keep the manually entered trap_cos_pct while calculate_trap_cos still
+    returns None -- both through the dynamic-fields PATCH and the full save."""
+    pid = create_project(client, "TRAP-STUB-1")
+    thickness = get_task_by_name(client, pid, "Thickness Estimation")
+    resp = client.patch(f"/api/tasks/{thickness['task_id']}/dynamic-fields",
+                        json={"fields": {"formation_thickness_ft": "120"}})
+    assert resp.status_code == 200
+
+    trap = get_task_by_name(client, pid, "Trap CoS")
+    resp = client.patch(f"/api/tasks/{trap['task_id']}/dynamic-fields", json={"fields": {
+        "sarah_quwarah_thickness_ft": "250",
+        "trap_cos_pct": "55",
+    }})
+    assert resp.status_code == 200
+    fields = client.get(f"/api/tasks/{trap['task_id']}/dynamic-fields").get_json()
+    assert fields.get("trap_cos_pct") == "55"
+
+    resp = client.patch(f"/api/tasks/{trap['task_id']}", json={"fields": {
+        "sarah_quwarah_thickness_ft": "260",
+        "trap_cos_pct": "60",
+    }})
+    assert resp.status_code == 200
+    fields = client.get(f"/api/tasks/{trap['task_id']}/dynamic-fields").get_json()
+    assert fields.get("trap_cos_pct") == "60"
+
+
+def test_lead_resource_assessment_save_keeps_manual_values_while_stub_pending(client):
+    """Saving the Lead Resource Assessment step (areas + SARH thickness already
+    on their own tasks) must keep the manually entered PIIP trio while
+    calculate_initial_resource_assessment still returns None."""
+    pid = create_project(client, "LEADRA-STUB-1")
+    areas = get_task_by_name(client, pid, "Reservoir Area Definition")
+    client.patch(f"/api/tasks/{areas['task_id']}/dynamic-fields",
+                 json={"fields": {"p90_area_km2": "5", "p10_area_km2": "12"}})
+    thickness = get_task_by_name(client, pid, "Thickness Estimation")
+    client.patch(f"/api/tasks/{thickness['task_id']}/dynamic-fields",
+                 json={"fields": {"formation_thickness_ft": "110"}})
+
+    lead_ra = get_task_by_name(client, pid, "Lead Resource Assessment")
+    resp = client.patch(f"/api/tasks/{lead_ra['task_id']}/dynamic-fields", json={"fields": {
+        "lead_calculation_method": "GRV",
+        "lead_piip_gas_p90": "2.5",
+        "lead_piip_gas_mean": "4.0",
+        "lead_piip_gas_p10": "7.5",
+    }})
+    assert resp.status_code == 200
+    fields = client.get(f"/api/tasks/{lead_ra['task_id']}/dynamic-fields").get_json()
+    assert fields.get("lead_piip_gas_p90") == "2.5"
+    assert fields.get("lead_piip_gas_mean") == "4.0"
+    assert fields.get("lead_piip_gas_p10") == "7.5"
+
+
+# ---------------------------------------------------------------------------
 # segment_class quadrants
 # ---------------------------------------------------------------------------
 
