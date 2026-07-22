@@ -19,7 +19,8 @@ directly from the route.
 Identity: POST /api/login matches the supplied name (case-insensitively)
 against the ``users`` table (seeded from config.SEED_USERS) and stores the
 canonical name plus role in the signed Flask session; unknown names are 401.
-The passcode check (config.SHARED_PASSCODE) still applies first when
+Rows with a per-user password_hash (add_users.py) require that password;
+otherwise the shared passcode (config.SHARED_PASSCODE) applies when
 configured. ``actor()`` stamps the session name into every changed_by, falling
 back to the client-supplied value for anonymous users so the unmodified
 front-end keeps working. When config.AUTH_REQUIRED is on, every /api/* route
@@ -29,6 +30,7 @@ session. Role gating: ``current_role()`` / ``require_role()`` (PermissionError
 """
 from __future__ import annotations
 
+import gzip
 import os
 import secrets
 from datetime import date
@@ -39,6 +41,7 @@ from typing import Optional
 from flask import Flask, jsonify, request, send_file, send_from_directory
 from flask import session as flask_session
 from werkzeug.exceptions import HTTPException
+from werkzeug.security import check_password_hash
 
 import config
 import db
@@ -65,6 +68,41 @@ app.teardown_appcontext(db.remove_session)
 def json_response(data, status=200):
     response = jsonify(data)
     response.status_code = status
+    return response
+
+
+# Gzip floor: bodies below this stay uncompressed (the header overhead and CPU
+# aren't worth it for a few hundred bytes; every large surface -- the boards,
+# portfolio, activity -- is tens to hundreds of KB).
+_COMPRESS_MIN_BYTES = 1024
+
+
+@app.after_request
+def _gzip_json_response(response):
+    """Gzip successful JSON responses for clients that accept it.
+
+    Stdlib-only (no flask-compress / brotli dependency): the wins here are
+    ~10x on the list payloads, which matters for remote/VPN users. File and
+    streamed responses are skipped via direct_passthrough (the Excel download
+    is already a compressed container), as are non-2xx bodies and anything
+    already carrying a Content-Encoding. Vary: Accept-Encoding is set on
+    every considered response -- including uncompressed ones -- so a cache
+    can never hand a gzipped body to a client that didn't ask for it.
+    """
+    if (response.direct_passthrough
+            or response.mimetype != "application/json"
+            or not 200 <= response.status_code < 300
+            or response.headers.get("Content-Encoding")):
+        return response
+    response.vary.add("Accept-Encoding")
+    if "gzip" not in request.headers.get("Accept-Encoding", "").lower():
+        return response
+    data = response.get_data()
+    if len(data) < _COMPRESS_MIN_BYTES:
+        return response
+    # set_data refreshes Content-Length itself.
+    response.set_data(gzip.compress(data, compresslevel=6))
+    response.headers["Content-Encoding"] = "gzip"
     return response
 
 
@@ -214,24 +252,34 @@ def require_login_when_enabled():
 def login():
     """Start a session: {"name": ..., "passcode": ...} -> {"ok", "name", "role"}.
 
-    Name is required (trimmed, 1-80 chars). The passcode is only checked when
-    config.SHARED_PASSCODE is configured; otherwise login is name-only (see
-    config.py for the trusted-network rationale). The name must then match an
-    active row in the ``users`` table (case-insensitive); unknown names get
-    401. The session stores the DB row's canonical casing and role, so audit
-    trails never fork on "alice" vs "Alice".
+    Name is required (trimmed, 1-80 chars) and must match an active row in the
+    ``users`` table (case-insensitive); unknown names get 401. The single
+    front-end Passcode input then satisfies exactly ONE check:
+    - a row with a ``password_hash`` (set via add_users.py) requires that
+      per-user password (``passcode`` carries it; a ``password`` key is
+      accepted too) -- the shared passcode does NOT also apply, because the
+      login form has only one secret box;
+    - otherwise the shared config.SHARED_PASSCODE is required when configured,
+      and login is name-only when it is not (see config.py for the
+      trusted-network rationale).
+    The session stores the DB row's canonical casing and role, so audit trails
+    never fork on "alice" vs "Alice".
     """
     payload = request.get_json(silent=True) or {}
     name = str(payload.get("name") or "").strip()
     if not name or len(name) > 80:
         raise ValueError("Name must be 1 to 80 characters.")
-    if config.SHARED_PASSCODE:
-        supplied = str(payload.get("passcode") or "")
-        if not secrets.compare_digest(supplied, config.SHARED_PASSCODE):
-            return error_response("Invalid passcode.", 401)
     user = workflow.find_active_user(db.get_session(), name)
     if not user:
         return error_response("Unknown user.", 401)
+    if user.get("password_hash"):
+        supplied = str(payload.get("password") or payload.get("passcode") or "")
+        if not check_password_hash(user["password_hash"], supplied):
+            return error_response("Invalid password.", 401)
+    elif config.SHARED_PASSCODE:
+        supplied = str(payload.get("passcode") or "")
+        if not secrets.compare_digest(supplied, config.SHARED_PASSCODE):
+            return error_response("Invalid passcode.", 401)
     flask_session["name"] = user["name"]
     flask_session["role"] = user["role"]
     return json_response({"ok": True, "name": user["name"], "role": user["role"]})
@@ -308,10 +356,26 @@ def health():
                           "backend": "Flask", "db": db.current_display()})
 
 
+# The list/board projection: exactly what the list surfaces consume (pipeline
+# board cards + their filters, the audit-log project dropdown). Everything else
+# the full row carries (lead_folder_path, coordinates, dates, revision, ...)
+# only matters on a single-project surface, which uses GET /api/projects/<id>
+# and stays full-row. Trimming here halves the board payload at a few hundred
+# wells. Pinned by test_list_projects_row_shape -- widen deliberately, not by
+# reverting to the raw row.
+_PROJECT_LIST_FIELDS = (
+    "project_id", "project_name", "pipeline_type",
+    "current_stage", "current_task", "current_owner",
+    "overall_status", "current_task_priority", "health",
+    "business_plan_year", "active_well_enabled", "active_drilling",
+    "has_high_priority_tasks",
+)
+
+
 @app.get("/api/projects")
 def list_projects():
     session = db.get_session()
-    return json_response(workflow.get_projects(
+    rows = workflow.get_projects(
         session,
         request.args.get("search", ""),
         request.args.get("stage_filter", "All"),
@@ -320,7 +384,8 @@ def list_projects():
         request.args.get("health_filter", "All"),
         request.args.get("sort_key", "Well Name"),
         request.args.get("pipeline_filter", "All"),
-    ))
+    )
+    return json_response([{key: row.get(key) for key in _PROJECT_LIST_FIELDS} for row in rows])
 
 
 @app.post("/api/projects")

@@ -26,13 +26,13 @@ python main.py
 The app serves at <http://127.0.0.1:8020>. On first start it creates
 `pipeline_tracker.db` beside `main.py` and seeds it from `models.py`.
 
-**Dev note:** the app is pre-deployment, so the database is throwaway --
-`models.py` is the single source of truth for the schema, with no migration
-path preserving old data. If you change a model, delete `pipeline_tracker.db`
-(and its `-shm`/`-wal` sidecars) and restart; the app regenerates a fresh
-database from the current models. Booting against a database stamped with a
-newer schema version than the code knows raises a clear `RuntimeError` telling
-you to do exactly that (see `migrations.py`).
+**Schema note:** `models.py` is the single source of truth for the current
+schema (fresh databases are created straight from it), and existing databases
+are upgraded **in place** at startup by the numbered migration steps in
+`migrations.py` -- no data is ever discarded on a schema change. Booting
+against a database stamped with a NEWER schema version than the code knows
+raises a clear `RuntimeError` (the code is older than the database; update
+the code rather than downgrading the database).
 
 ## Configuration
 

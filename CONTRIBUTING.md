@@ -21,10 +21,11 @@ Recipes for the changes you will actually be asked to make. Read
    unions (use `Optional[...]`, `Dict[...]` from `typing`), parenthesized
    multi-line `with` groups, `tomllib`, `except*`, `typing.Self`. Every module
    starts with `from __future__ import annotations`.
-4. **Pre-deployment, the database is throwaway** — a schema change is an edit
-   to `models.py` plus deleting the dev `.db` (recipe 5). There are no shipped
-   migration steps yet; once the app is in production the rule becomes "never
-   edit a shipped step — append a new numbered one".
+4. **Schema changes ship as numbered migrations** — databases now hold real
+   lead/well data that must be carried forward. A schema change is an edit to
+   `models.py` PLUS a guarded, append-only `(version, fn)` step in
+   `migrations.py` with `LATEST_SCHEMA_VERSION` bumped (recipe 5). Never edit
+   a shipped step — append a new numbered one.
 5. **Every behavior change lands with a test** in the same change. The suite is
    the contract: `.venv/bin/pytest tests/ -q`.
 6. **Domain function conventions:** `session` is always the first argument,
@@ -140,26 +141,27 @@ You DO need backend work when:
 
 ## Recipe 5: Change the schema
 
-Pre-deployment, `models.py` IS the schema and the database is throwaway —
-there is no migration to write:
+`models.py` stays the single source of truth for the CURRENT shape (fresh
+databases are created straight from it), but existing databases hold real
+lead/well data and upgrade **in place** at startup:
 
 1. Edit the model in `models.py` (new column, new table, changed type or
    constraint).
-2. Delete your dev database (`pipeline_tracker.db` plus `-shm`/`-wal`) and
-   restart — bootstrap regenerates it from the current models. Tests need
-   nothing: each test bootstraps its own fresh file.
+2. Append a `(version, fn)` step to `MIGRATIONS` in `migrations.py` with the
+   next integer version and bump `LATEST_SCHEMA_VERSION` to match. Steps are
+   append-only (never edit a shipped one) and guarded-idempotent (check
+   before altering, so a database already carrying the change passes through
+   unchanged). Exception: a purely **additive table** needs no step —
+   `create_all` creates missing tables on every bootstrap.
 3. Update whatever reads/writes the column (`workflow/` SQL, `export_excel.py`
    column lists) and the tests that pin the schema
    (`tests/test_bootstrap.py` compares `sqlite_master` against
    `models.Base.metadata`, so a drifting model/DB pair fails loudly).
-
-The numbered-migration framework resumes at **first production deployment**,
-once field databases hold data that must be carried forward. From then on:
-each change is an idempotent `(version, fn)` step appended to `MIGRATIONS` in
-`migrations.py` with `LATEST_SCHEMA_VERSION` bumped, never editing a shipped
-step, and every step lands with an upgrade-and-replay test (bootstrap a fresh
-DB, reshape it to the OLD form with raw sqlite3, re-bootstrap, assert — then
-bootstrap once more and assert nothing changed).
+4. Land an upgrade-and-replay test with the step (see
+   `test_migration_v2_upgrades_a_v1_database_in_place`): bootstrap a fresh
+   DB, reshape it to the OLD form with raw sqlite3, re-bootstrap, assert the
+   upgrade and that existing rows survived — then bootstrap once more and
+   assert nothing changed.
 
 ## Recipe 6: Run and debug locally
 

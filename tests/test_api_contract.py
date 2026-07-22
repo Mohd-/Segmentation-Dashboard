@@ -138,18 +138,25 @@ def test_create_project_bp_enabled_valid_year_ok(client):
 # ---------------------------------------------------------------------------
 
 def test_list_projects_row_shape(client):
+    """The list endpoint returns EXACTLY the board projection -- no more, no
+    less. The full row (dates, folder path, coordinates, revision, ...) is a
+    single-project concern served by GET /api/projects/<id>; the projection
+    exists to keep the 300+-row board payload small, so a key added here must
+    be a deliberate main._PROJECT_LIST_FIELDS change, not a raw-row leak."""
+    import main
+
     create_project(client, "ROWSHAPE-1")
     resp = client.get("/api/projects")
     assert resp.status_code == 200
     rows = resp.get_json()
     assert len(rows) == 1
-    row = rows[0]
-    for key in (
-        "project_id", "project_name", "current_stage", "current_task", "health",
-        "current_task_priority", "has_high_priority_tasks", "active_drilling",
-        "active_well_enabled",
-    ):
-        assert key in row, key
+    assert set(rows[0].keys()) == set(main._PROJECT_LIST_FIELDS)
+    # The single-project route stays full-row (the editor/detail surfaces
+    # read promotion flags, dates and folder path from it).
+    full = client.get(f"/api/projects/{rows[0]['project_id']}").get_json()
+    for key in ("start_date", "target_date", "lead_folder_path", "revision",
+                "business_plan_enabled"):
+        assert key in full, key
 
 
 def test_list_projects_search_filter(client):
@@ -585,7 +592,7 @@ def test_export_excel(client):
     assert resp.content_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     workbook = openpyxl.load_workbook(io.BytesIO(resp.data))
     assert workbook.sheetnames == [
-        "Executive Summary", "Wells Overview", "Task Register", "Monthly Progress",
+        "Executive Summary", "Wells Overview", "Monthly Progress",
         "Portfolio Export", "Staking Options",
     ]
 
@@ -868,3 +875,41 @@ def test_export_status_reads_sarh_formation_fluid(client):
                      if row[header.index("Well Name")] == "EXPORT-FLUID-1"]
     assert len(matching_rows) == 1
     assert matching_rows[0][header.index("Status")] == "Oil"
+
+
+# ---------------------------------------------------------------------------
+# Response compression (stdlib gzip after_request)
+# ---------------------------------------------------------------------------
+
+def test_json_gzipped_only_for_accepting_clients(client):
+    """A large JSON response is gzipped exactly when the client advertises
+    gzip support; the decompressed bytes are the identical JSON either way,
+    and Vary: Accept-Encoding is set on both so caches can't cross the two."""
+    import gzip as gz
+
+    for i in range(10):
+        create_project(client, f"GZIP-{i}")
+
+    plain = client.get("/api/projects")
+    assert plain.headers.get("Content-Encoding") is None
+    assert "Accept-Encoding" in (plain.headers.get("Vary") or "")
+
+    zipped = client.get("/api/projects", headers={"Accept-Encoding": "gzip"})
+    assert zipped.headers.get("Content-Encoding") == "gzip"
+    assert "Accept-Encoding" in (zipped.headers.get("Vary") or "")
+    assert gz.decompress(zipped.data) == plain.data
+    assert len(zipped.data) < len(plain.data)
+
+
+def test_small_json_and_file_downloads_stay_uncompressed(client):
+    """Bodies under the size floor and non-JSON downloads are left alone --
+    the Excel file is already a compressed container and streams via
+    direct_passthrough."""
+    small = client.get("/api/health", headers={"Accept-Encoding": "gzip"})
+    assert small.headers.get("Content-Encoding") is None
+
+    export = client.get("/api/export/excel", headers={"Accept-Encoding": "gzip"})
+    assert export.status_code == 200
+    assert export.headers.get("Content-Encoding") is None
+    # Still a valid xlsx (zip magic), not double-compressed.
+    assert export.data[:2] == b"PK"

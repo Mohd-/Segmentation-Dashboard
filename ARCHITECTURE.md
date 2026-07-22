@@ -24,11 +24,12 @@ of what belongs in it.
   `fetch_one` / `fetch_all` plus `write_transaction` / `begin_write`. No
   business logic or report SQL.
 
-- **migrations.py** — schema bootstrap, pre-deployment flavor: `create_all`,
-  seed base data (users + the commitment row), stamp `schema_version` 1, and
-  refuse (clear `RuntimeError`) any database stamped with a newer version. The
-  numbered-migration skeleton (`MIGRATIONS = [(version, fn), ...]`) is empty
-  and resumes at first production deployment.
+- **migrations.py** — schema bootstrap plus in-place upgrades: `create_all`
+  (fresh DBs get the full current shape; existing DBs get newly-added tables),
+  the append-only `MIGRATIONS = [(version, fn), ...]` steps dispatched against
+  the stored `schema_version`, base-data seeding (users + the commitment row),
+  and the current-version stamp. Databases stamped newer than the code are
+  refused (clear `RuntimeError`).
 
 - **workflow/** — the domain, a package (`import workflow` exposes the full
   public API via `__init__.py` re-exports). Every function takes a `session`
@@ -152,18 +153,18 @@ The two legitimate stored copies are **historical facts**, not caches:
 promotion) and `projects.completed_at` (when the applicable set first became
 fully approved — stamped/cleared by `_sync_completed_at` in the write paths).
 
-## Schema bootstrap (pre-deployment)
+## Schema bootstrap & migrations
 
-Nothing is deployed yet, so the database is throwaway and `models.py` IS the
-schema. At startup `migrations.run` refuses a database stamped with a newer
-`schema_version` than the code knows (clear `RuntimeError`: delete the `.db`
-and its `-shm`/`-wal` sidecars, restart), then runs `create_all`, seeds base
-data (users from `config.SEED_USERS`, the commitment row) and stamps
-`schema_version` 1. A schema change is: edit `models.py`, delete the dev
-`.db`, restart. The numbered-migration framework (append-only
-`MIGRATIONS = [(version, fn), ...]` steps, never editing a shipped one)
-resumes at first production deployment, when field data must be carried
-forward instead of discarded.
+`models.py` IS the current schema: a fresh database is created straight from
+it by `create_all` and stamped `LATEST_SCHEMA_VERSION`. Existing databases
+hold real lead/well data and upgrade **in place**: at startup `migrations.run`
+refuses a database stamped with a NEWER `schema_version` than the code knows
+(clear `RuntimeError` -- update the code, never downgrade the database), lets
+`create_all` add any newly-modeled tables, applies every `MIGRATIONS` step
+newer than the stored version in ascending order, seeds base data (users from
+`config.SEED_USERS`, the commitment row) and stamps the current version.
+Steps are append-only (never edit a shipped one) and guarded-idempotent, and
+each lands with an upgrade-and-replay test (CONTRIBUTING.md recipe 5).
 
 ## Design decisions
 

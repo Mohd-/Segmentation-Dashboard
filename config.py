@@ -117,6 +117,8 @@ SESSION_COOKIE_SECURE = os.environ.get("SEGMENT_TRACKER_COOKIE_SECURE", "false")
 # seeding is idempotent, so renaming here adds NEW users -- deactivate old rows
 # with ``UPDATE users SET is_active = 0`` rather than deleting them).
 # Roles: 'supervisor' (approve/return), 'staff', 'employee'.
+# Batch-adding the real roster (optionally with per-user passwords) is what
+# add_users.py is for -- see its docstring for the name:role[:password] format.
 SEED_USERS = [
     ("Supervisor", "supervisor"),
     ("Staff Member", "staff"),
@@ -131,7 +133,8 @@ SEED_USERS = [
 # ---------------------------------------------------------------------------
 # !!! PLACEHOLDER FILE -- EDIT/REPLACE BEFORE DEPLOYING !!!
 # Production swaps out seismic_blocks.json (block name -> list of AR-number
-# strings) without touching code. SEISMIC_BLOCK_AR_MAP is that file's parsed
+# strings) without touching code; import_seismic_blocks.py validates and
+# merges/replaces the file from a same-shaped JSON source. SEISMIC_BLOCK_AR_MAP is that file's parsed
 # contents, loaded once at import time; AR_TO_SEISMIC_BLOCK is the reverse
 # index (AR -> block name) it's built from, used to label the Portfolio
 # "Seismic Block" column. AR numbers not found in the map fall back to

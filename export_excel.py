@@ -8,16 +8,15 @@ What does NOT belong here:
 - The metric calculations themselves (reporting.py / workflow.py) -- this module
   only lays them out.
 
-The task register uses the shared SQL helpers, while project rows and derived
-metrics come from the workflow/reporting layers (board pointers are derived,
-not stored). Keeping raw SQL behind ``db.fetch_all`` makes the export portable
-across SQLAlchemy 1.4/2.x and SQLite/Postgres deployments.
+Project rows and derived metrics come from the workflow/reporting layers
+(board pointers are derived, not stored). The v18 Task Register sheet (a raw
+dump of every project_tasks row) was removed: it multiplied the workbook's
+cell count ~8x for little analytic value and dominated export time.
 """
 from __future__ import annotations
 
 from datetime import datetime
 
-import db
 import portfolio_export
 import reporting
 import workflow
@@ -51,12 +50,6 @@ def export_to_excel(session, filepath):
     # excluded, matching every other surface of the app.
     projects = workflow.get_projects(session)
     projects_df = pd.DataFrame(projects)
-    # Do not pass a plain SQL string to pandas.read_sql_query. Older pandas
-    # releases call SQLAlchemy Connection.execute(string), which SQLAlchemy 2.x
-    # rejects with ObjectNotExecutableError in production. The application's
-    # shared helper wraps the statement with sqlalchemy.text() and returns the
-    # same list-of-dicts shape on every supported database.
-    tasks_df = pd.DataFrame(db.fetch_all(session, "SELECT * FROM project_tasks"))
 
     if not projects_df.empty:
         for col in ["project_id", "project_name", "overall_status", "current_stage", "current_task",
@@ -87,31 +80,6 @@ def export_to_excel(session, filepath):
             "Well ID", "Well Name", "Overall Status", "Health", "Current Stage",
             "Current Task", "Assignee", "Start Date", "Target Date",
             "Stage Started", "Last Updated"
-        ])
-
-    task_export_df = tasks_df.copy()
-    if not task_export_df.empty:
-        for col in ["project_id", "sequence_no", "task_name", "stage_group", "assigned_to",
-                    "status", "actual_start", "actual_finish",
-                    "comments", "is_active"]:
-            if col not in task_export_df.columns:
-                task_export_df[col] = None
-        task_export_df = task_export_df.reindex(columns=[
-            "project_id", "sequence_no", "task_name", "stage_group", "assigned_to",
-            "status", "actual_start", "actual_finish",
-            "comments", "is_active"
-        ]).copy()
-        task_export_df.columns = [
-            "Well ID", "Seq", "Component", "Stage", "Assignee",
-            "Status", "Actual Start", "Actual Finish",
-            "Comments", "Active"
-        ]
-        task_export_df = task_export_df.sort_values(["Well ID", "Seq"])
-    else:
-        task_export_df = pd.DataFrame(columns=[
-            "Well ID", "Seq", "Component", "Stage", "Assignee",
-            "Status", "Actual Start", "Actual Finish",
-            "Comments", "Active"
         ])
 
     monthly_df = pd.DataFrame(reporting.monthly_progress_metrics(session, limit=12))
@@ -148,7 +116,6 @@ def export_to_excel(session, filepath):
     with pd.ExcelWriter(filepath, engine="openpyxl") as writer:
         pd.DataFrame(summary_rows[1:], columns=summary_rows[0]).to_excel(writer, sheet_name="Executive Summary", index=False, startrow=3)
         overview_df.to_excel(writer, sheet_name="Wells Overview", index=False, startrow=3)
-        task_export_df.to_excel(writer, sheet_name="Task Register", index=False, startrow=3)
         if not monthly_df.empty:
             monthly_df.to_excel(writer, sheet_name="Monthly Progress", index=False, startrow=3)
         else:
@@ -159,7 +126,6 @@ def export_to_excel(session, filepath):
         book = writer.book
         ws_summary = writer.sheets["Executive Summary"]
         ws_overview = writer.sheets["Wells Overview"]
-        ws_tasks = writer.sheets["Task Register"]
         ws_monthly = writer.sheets["Monthly Progress"]
         ws_portfolio_export = writer.sheets["Portfolio Export"]
         ws_staking = writer.sheets["Staking Options"]
@@ -248,7 +214,6 @@ def export_to_excel(session, filepath):
         exported_at = datetime.now().strftime("%Y-%m-%d %H:%M")
         style_sheet(ws_summary, "UR Segment Factory Tracker — Executive Summary", f"Exported on {exported_at}")
         style_sheet(ws_overview, "UR Segment Factory Tracker — Wells Overview", f"Executive export generated on {exported_at}")
-        style_sheet(ws_tasks, "UR Segment Factory Tracker — Task Register", f"Detailed task register exported on {exported_at}")
         style_sheet(ws_monthly, "UR Segment Factory Tracker — Monthly Progress", f"Progress trend exported on {exported_at}")
         style_sheet(ws_portfolio_export, "UR Segment Factory Tracker — Portfolio Export", f"BP wells + mature leads exported on {exported_at}")
         style_sheet(ws_staking, "UR Segment Factory Tracker — Staking Options", f"Mature-lead staking options exported on {exported_at}")

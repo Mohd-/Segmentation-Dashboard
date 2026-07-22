@@ -1,32 +1,37 @@
-"""Schema bootstrap, pre-deployment.
+"""Schema bootstrap and in-place, numbered migrations.
 
 What belongs here:
 - Creating a fresh schema (via ``models.Base.metadata.create_all``), seeding
   base data (users, the commitment row), and stamping ``schema_version``.
+- Append-only ``MIGRATIONS`` steps that upgrade an EXISTING database in place
+  to the current models.py shape.
 
 What does NOT belong here:
 - Runtime domain logic (workflow.py). The workflow definition itself lives in
   code (``workflow.PIPELINE_TEMPLATES``) -- there is no templates table to
   seed.
 
-Pre-deployment policy: nothing is deployed yet, so the database is throwaway.
-There is no data to preserve across a schema change -- ``models.py`` IS the
-schema. When you change it, delete the local ``.db`` file (and its ``-shm``/
-``-wal`` sidecars) and restart the app; ``run()`` below recreates and reseeds
-everything from scratch. LATEST_SCHEMA_VERSION stays at 1 for the whole
-pre-deployment phase.
-
-The numbered-migration skeleton (a ``MIGRATIONS`` list of ``(version, fn)``
-steps, dispatched here in ascending order against ``_get_schema_version``)
-resumes at first production deployment, once there is real data in the field
-that a schema change must carry forward instead of discard. Until then, adding
-a step here is very likely the wrong move -- edit models.py instead.
+Migration policy -- the pre-deployment "throwaway database" era is OVER:
+databases now hold real lead/well data that every schema change must carry
+forward, never discard.
+- A fresh database is still created straight from models.py (``create_all``
+  builds the full current shape) and stamped LATEST_SCHEMA_VERSION; migration
+  steps never run for it.
+- An existing database gets every ``MIGRATIONS`` step newer than its stored
+  ``schema_version``, in ascending order, then is stamped current.
+  (``create_all`` still runs first: it creates newly-added TABLES for free;
+  steps are needed for everything else -- new columns, reshapes, backfills.)
+- Steps are APPEND-ONLY and GUARDED-IDEMPOTENT: never edit or remove a
+  shipped step (append a new one instead), and guard each step so a database
+  already carrying the change (e.g. hand-ALTERed) passes through unchanged.
+  Every step lands with an upgrade-and-replay test -- see CONTRIBUTING.md
+  recipe 5 and tests/test_bootstrap.py.
 
 Concurrency guard: ``run`` acquires the database write lock UPFRONT via
-``db.begin_write`` (SQLite ``BEGIN IMMEDIATE``) before the ensure/seed writes,
-so concurrent processes cannot interleave bootstrap writes. On Postgres
-``begin_write`` is a no-op and an advisory lock (pg_advisory_xact_lock) would
-slot into that same call.
+``db.begin_write`` (SQLite ``BEGIN IMMEDIATE``) before the migrate/ensure/seed
+writes, so concurrent processes cannot interleave bootstrap writes. On
+Postgres ``begin_write`` is a no-op and an advisory lock
+(pg_advisory_xact_lock) would slot into that same call.
 """
 from __future__ import annotations
 
@@ -37,7 +42,7 @@ import db
 from helpers import utc_now_str
 from models import Base
 
-LATEST_SCHEMA_VERSION = 1
+LATEST_SCHEMA_VERSION = 2
 
 
 # ---------------------------------------------------------------------------
@@ -75,10 +80,29 @@ def _ensure_base_data(session) -> None:
         """, {"name": name, "role": role, "now": utc_now_str()})
 
 
-# List of (version, fn). Empty during the pre-deployment phase -- see the
-# module docstring. Add the first step here (with the next integer version)
-# once this codebase has a production database to carry forward.
-MIGRATIONS: list = []
+# ---------------------------------------------------------------------------
+# Migration steps (append-only; see the module docstring's policy)
+# ---------------------------------------------------------------------------
+
+def _migrate_v2_users_password_hash(session, engine) -> None:
+    """v2: add the nullable ``users.password_hash`` column (per-user login
+    passwords, written by add_users.py, checked by POST /api/login).
+
+    Guarded on column existence: a database already ALTERed by hand (the
+    documented one-liner) passes through unchanged instead of hitting a
+    duplicate-column error.
+    """
+    columns = {column["name"] for column in inspect(engine).get_columns("users")}
+    if "password_hash" not in columns:
+        db.execute(session, "ALTER TABLE users ADD COLUMN password_hash TEXT")
+
+
+# List of (version, fn) dispatched by run() in ascending order against the
+# stored schema_version. Append new steps with the next integer version and
+# bump LATEST_SCHEMA_VERSION to match; never edit or remove a shipped step.
+MIGRATIONS = [
+    (2, _migrate_v2_users_password_hash),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -86,30 +110,38 @@ MIGRATIONS: list = []
 # ---------------------------------------------------------------------------
 
 def run(session, engine) -> None:
-    """Create the schema for the given engine, seed base data, stamp version 1.
+    """Create or upgrade the schema, seed base data, stamp the current version.
 
-    A database stamped with a schema_version newer than this code's
-    LATEST_SCHEMA_VERSION means the code is older than the database -- most
-    likely a pre-reset database left over from before the schema was frozen at
-    version 1. Refuse to touch it rather than silently adopting a shape this
-    code doesn't know about.
+    Fresh database (no ``app_settings`` table yet): ``create_all`` builds the
+    full current shape and no migration steps run. Existing database: refuse a
+    ``schema_version`` newer than this code knows (older code must never write
+    into a newer-shaped database), let ``create_all`` add any newly-modeled
+    tables, then apply every MIGRATIONS step newer than the stored version in
+    ascending order. Either way the database ends stamped
+    LATEST_SCHEMA_VERSION with base data ensured.
     """
     inspector = inspect(engine)
-    if "app_settings" in inspector.get_table_names():
+    fresh = "app_settings" not in inspector.get_table_names()
+    stored = 0
+    if not fresh:
         stored = _get_schema_version(session)
         if stored > LATEST_SCHEMA_VERSION:
             raise RuntimeError(
                 f"Database schema_version ({stored}) is newer than this code's "
-                f"LATEST_SCHEMA_VERSION ({LATEST_SCHEMA_VERSION}). This database predates "
-                "the pre-deployment schema reset -- delete the .db file (and its -shm/-wal "
-                "sidecars) and restart the app to regenerate it."
+                f"LATEST_SCHEMA_VERSION ({LATEST_SCHEMA_VERSION}). This application code is "
+                "older than the database it is pointed at -- update the code (or point "
+                "SEGMENT_TRACKER_DB_PATH at the right file) instead of downgrading the database."
             )
 
     Base.metadata.create_all(engine)
 
-    # Upfront write lock for the ensure/seed transaction (SQLite BEGIN IMMEDIATE;
-    # a Postgres advisory lock would slot into begin_write).
+    # Upfront write lock for the migrate/ensure/seed transaction (SQLite BEGIN
+    # IMMEDIATE; a Postgres advisory lock would slot into begin_write).
     db.begin_write(session)
+    if not fresh:
+        for version, step in sorted(MIGRATIONS):
+            if version > stored:
+                step(session, engine)
     _ensure_base_data(session)
     _set_schema_version(session, LATEST_SCHEMA_VERSION)
     session.commit()

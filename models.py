@@ -252,6 +252,10 @@ class User(Base):
     user_id = Column(Integer, primary_key=True)
     name = Column(Text, nullable=False, unique=True)
     role = Column(Text, nullable=False, server_default=text("'employee'"))
+    # Optional per-user password (werkzeug generate_password_hash). NULL/blank
+    # keeps the pre-password behavior: login by name alone (plus the shared
+    # passcode when config.SHARED_PASSCODE is set). Set via add_users.py.
+    password_hash = Column(Text)
     is_active = Column(Integer, nullable=False, server_default=text("1"))
     created_at = Column(Text)
 
