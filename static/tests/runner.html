@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Front-end tests</title>
+  <style>
+    body { font-family: Bahnschrift, "Segoe UI", -apple-system, sans-serif; margin: 1.5rem; background: #fafafa; color: #1a1a1a; }
+    h1 { font-size: 1.2rem; margin: 0 0 .5rem; }
+    .summary { font-size: 1.05rem; font-weight: 700; padding: .5rem .75rem; border-radius: 6px; margin: 0 0 1rem; display: inline-block; }
+    .summary.pass { background: #d9f2e0; color: #145a2e; }
+    .summary.fail { background: #fbdcdc; color: #8f1616; }
+    ul#results { list-style: none; padding: 0; margin: 0; max-width: 68rem; }
+    li.result { padding: .35rem .5rem; border-bottom: 1px solid #e4e4e4; }
+    li.result .badge { display: inline-block; width: 3.4rem; font-size: .72rem; font-weight: 700; letter-spacing: .04em; }
+    li.result.pass .badge { color: #147a3c; }
+    li.result.fail .badge { color: #c22525; }
+    li.result.skip .badge { color: #8a6d1a; }
+    li.result .name { font-size: .9rem; }
+    li.result pre.detail { margin: .3rem 0 .2rem 3.9rem; padding: .4rem .6rem; background: #f1f1f1; border-radius: 4px; font-family: Consolas, monospace; font-size: .78rem; white-space: pre-wrap; overflow-x: auto; }
+    /* Keep the dialog fixtures unobtrusive; .hidden mirrors the app stylesheet. */
+    .hidden { display: none !important; }
+    dialog.app-dialog { border: 1px solid #bbb; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <h1>Segments dashboard — front-end test suite</h1>
+  <p id="summary" class="summary">Running…</p>
+  <ul id="results"></ul>
+
+  <!-- Fixture markup: ids copied verbatim from static/index.html so dialog.js
+       (used by api.js on 401 and by views/transitions.js confirmations) finds
+       its real elements. -->
+  <dialog id="app-dialog" class="app-dialog">
+    <form method="dialog" id="app-dialog-form" class="app-dialog-form">
+      <h3 id="app-dialog-title"></h3>
+      <p id="app-dialog-message"></p>
+      <input id="app-dialog-input" class="hidden" type="text">
+      <label id="app-dialog-select-label" class="app-dialog-select-label hidden"><span id="app-dialog-select-caption"></span>
+        <select id="app-dialog-select"></select>
+      </label>
+      <div class="app-dialog-actions">
+        <button type="button" id="app-dialog-cancel" class="ghost">Cancel</button>
+        <button type="submit" id="app-dialog-confirm">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="login-dialog" class="app-dialog">
+    <form id="login-form" class="app-dialog-form">
+      <h3>Sign in</h3>
+      <p>Select your name to continue.</p>
+      <label>Name<select id="login-name" aria-label="Your name"></select></label>
+      <label>Passcode<input id="login-passcode" type="password" autocomplete="current-password" placeholder="Leave blank unless configured"></label>
+      <p id="login-error" class="login-error hidden"></p>
+      <div class="app-dialog-actions">
+        <button type="submit" id="login-submit">Sign in</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module">
+    import { run, test } from './harness.js';
+
+    const modules = [
+      './test-dom.js',
+      './test-state.js',
+      './test-schema.js',
+      './test-api.js',
+      './test-navigation.js',
+      './test-transitions.js',
+      './test-live.js'
+    ];
+
+    for (const path of modules) {
+      try {
+        await import(path);
+      } catch (err) {
+        // A module that fails to even load is a failure, not a silent omission
+        // — and registering it as a test keeps the beacon firing.
+        const message = String(err && (err.message || err));
+        test('module load: ' + path, () => { throw new Error(message); });
+      }
+    }
+
+    await run();
+  </script>
+</body>
+</html>
