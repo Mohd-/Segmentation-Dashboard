@@ -35,16 +35,16 @@ _SEAL_COS_INPUT_KEYS = (
 )
 
 
-def _apply_stub_cos_calculations(session, task, fields):
+def _apply_trap_cos_calculation(session, task, fields):
     """Trap CoS recompute hook.
 
     Mirrors the Seal CoS recompute pattern (fire only on the owning task's
-    save), but the Trap CoS formula is still a STUB in cos.py: a ``None``
-    return means "not computed" and the stored / manually entered value stays
-    untouched, so manual entry keeps working until the approved formula lands.
-    The cross-task input (the Thickness Estimation SARH thickness) is fetched
-    here because cos.py must stay database-free -- same division of labor as
-    Presence CoS.
+    save). ``cos.calculate_trap_cos`` returns ``None`` when either input is
+    missing/non-numeric (or <= 0), meaning "not computed": the stored /
+    manually entered value stays untouched in that case, same contract as
+    Seal CoS's blank-form handling. The cross-task input (the Thickness
+    Estimation SARH thickness) is fetched here because cos.py must stay
+    database-free -- same division of labor as Presence CoS.
 
     The Lead Resource Assessment PIIP values are no longer auto-computed on
     save: they change only via the pop-up calculator's explicit Apply flow
@@ -204,7 +204,7 @@ def save_task_dynamic_fields(session, task_id, fields, changed_by="Web User"):
     if task.get("task_name") == "Seal CoS" and any(key in fields for key in _SEAL_COS_INPUT_KEYS):
         fields = dict(fields)
         fields["seal_cos_pct"] = cos.calculate_seal_cos(fields)
-    fields = _apply_stub_cos_calculations(session, task, fields)
+    fields = _apply_trap_cos_calculation(session, task, fields)
     now = utc_now_str()
     with db.write_transaction(session):
         _apply_dynamic_fields(session, task, fields, changed_by, now)
@@ -309,10 +309,11 @@ def save_task(session, task_id, payload, changed_by="Web User", allow_priority_c
             fields = dict(fields)
             fields["seal_cos_pct"] = cos.calculate_seal_cos(fields)
 
-        # Trap CoS recompute hook (stub formula in cos.py; a None result leaves
-        # the stored value untouched). Lead Resource Assessment PIIP values are
-        # not auto-computed here -- they only change via the pop-up calculator.
-        fields = _apply_stub_cos_calculations(session, task, fields)
+        # Trap CoS recompute hook (formula-derived, cos.calculate_trap_cos; a
+        # None result leaves the stored value untouched). Lead Resource
+        # Assessment PIIP values are not auto-computed here -- they only
+        # change via the pop-up calculator.
+        fields = _apply_trap_cos_calculation(session, task, fields)
 
         _apply_dynamic_fields(session, task, fields, changed_by, now)
 

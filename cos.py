@@ -225,36 +225,49 @@ def calculate_seal_cos(fields) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Trap CoS (formula-derived -- STUB, formula pending)
+# Trap CoS (formula-derived)
 # ---------------------------------------------------------------------------
+
+# Threshold table: for a = Sarah prognosis thickness and b = Sarah-Quwarah
+# thickness, the score is that of the LARGEST factor for which
+# a + a*factor < b (i.e. a*(1+factor) strictly less than b). Factors and
+# scores are paired positionally (_TRAP_COS_FACTORS[i] <-> _TRAP_COS_SCORES[i]).
+_TRAP_COS_FACTORS = (0.0, 0.036, 0.108, 0.242, 0.405, 0.554, 0.882, 2.13)
+_TRAP_COS_SCORES = (0.7, 0.725, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0)
+
 
 def calculate_trap_cos(sarah_thickness_ft, sarah_quwarah_thickness_ft):
     """Calculate Trap CoS from the SARH and SARH-QWRH thicknesses (ft).
 
-    STUB: the save-path wiring (workflow.lifecycle) and input plumbing are in
-    place; the approved formula is not. Inputs are the Thickness Estimation
-    step's Sarah Formation Thickness (``formation_thickness_ft``, fetched
-    cross-task by the caller) and the Trap CoS step's own Sarah-Quwarah
-    Thickness (``sarah_quwarah_thickness_ft``).
+    ``sarah_thickness_ft`` (a) is the Thickness Estimation step's Sarah
+    prognosis thickness (``formation_thickness_ft``, fetched cross-task by
+    the caller). ``sarah_quwarah_thickness_ft`` (b) is the Trap CoS step's
+    own Sarah-Quwarah Thickness.
+
+    Rule: walk the approved threshold table in ascending order and keep the
+    score of the largest factor for which ``a * (1 + factor) < b`` (strictly
+    less-than); a result of ``0.5`` is the floor used when ``b <= a`` (no
+    threshold is exceeded).
 
     Return contract (already honored by the wiring -- do not change it):
     - ``None``  means "not computed": the save path leaves the stored /
-      manually entered ``trap_cos_pct`` untouched. Returned while either
-      input is missing or non-numeric, and by the placeholder below.
+      manually entered ``trap_cos_pct`` untouched. Returned when either input
+      is missing/non-numeric, or when either coerced value is <= 0 (a <= 0
+      would make every threshold 0 and the score meaningless).
     - a whole-number percentage string (e.g. ``"44"``) is stored as the
       task's ``trap_cos_pct``, exactly like Seal CoS's result.
-
-    To activate: replace the TODO block with the real formula and return
-    ``str(int(round(probability * 100)))``.
     """
     sarah = to_float_or_none(sarah_thickness_ft)
     sarah_quwarah = to_float_or_none(sarah_quwarah_thickness_ft)
     if sarah is None or sarah_quwarah is None:
         return None
-    # TODO(formula): Trap CoS = f(sarah, sarah_quwarah) -- pending approval.
-    # probability = ...
-    # return str(int(round(probability * 100)))
-    return None
+    if sarah <= 0 or sarah_quwarah <= 0:
+        return None
+    result = 0.5
+    for factor, score in zip(_TRAP_COS_FACTORS, _TRAP_COS_SCORES):
+        if sarah + sarah * factor < sarah_quwarah:
+            result = score
+    return str(int(round(result * 100)))
 
 
 # ---------------------------------------------------------------------------

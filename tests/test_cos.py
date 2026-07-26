@@ -269,32 +269,74 @@ def test_final_reservoir_cos_is_first_row_with_nonempty_pct(client):
 
 
 # ---------------------------------------------------------------------------
-# Trap CoS stub (formula pending) + Lead Resource Assessment save contract
+# Trap CoS (formula-derived) + Lead Resource Assessment save contract
 # ---------------------------------------------------------------------------
-# The Trap CoS test pins the STUB contract the save-path wiring relies on:
-# None = "not computed", so stored/manual values survive every save until the
-# approved formula lands in cos.py. The Lead Resource Assessment test pins the
-# new contract: PIIP values change only via the pop-up calculator's Apply flow,
-# so a plain save never auto-overwrites them.
+# calculate_trap_cos(a, b) walks the approved threshold table and keeps the
+# score of the largest factor for which a*(1+factor) < b (strictly
+# less-than); 0.5 is the floor when b <= a. The Lead Resource Assessment test
+# pins a separate contract: PIIP values change only via the pop-up
+# calculator's Apply flow, so a plain save never auto-overwrites them.
 
-def test_trap_cos_stub_returns_none(client):
+def test_trap_cos_none_for_missing_non_numeric_or_non_positive_inputs(client):
     import cos
-    assert cos.calculate_trap_cos("", "") is None          # nothing entered
-    assert cos.calculate_trap_cos("120", "") is None       # partial input
-    assert cos.calculate_trap_cos("120", "250") is None    # formula pending
-    assert cos.calculate_trap_cos("abc", "250") is None    # non-numeric
+    assert cos.calculate_trap_cos("", "") is None            # nothing entered
+    assert cos.calculate_trap_cos("120", "") is None          # partial input
+    assert cos.calculate_trap_cos("", "250") is None          # partial input
+    assert cos.calculate_trap_cos("abc", "250") is None       # non-numeric a
+    assert cos.calculate_trap_cos("120", "abc") is None       # non-numeric b
+    assert cos.calculate_trap_cos("0", "250") is None         # a <= 0
+    assert cos.calculate_trap_cos("-5", "250") is None        # a <= 0
+    assert cos.calculate_trap_cos("120", "0") is None         # b <= 0
+    assert cos.calculate_trap_cos("120", "-5") is None        # b <= 0
 
 
-def test_trap_cos_save_keeps_manual_value_while_stub_pending(client):
-    """Saving the Trap CoS form (with the cross-task SARH thickness present)
-    must keep the manually entered trap_cos_pct while calculate_trap_cos still
-    returns None -- both through the dynamic-fields PATCH and the full save."""
-    pid = create_project(client, "TRAP-STUB-1")
+@pytest.mark.parametrize("a,b,expected", [
+    (100, 100, "50"),   # no threshold strictly below b -> 0.5 floor
+    (100, 101, "70"),   # exceeds only the first threshold (100)
+    (100, 105, "72"),   # 0.725 -> 72.5 -> int(round) floating-point pin
+    (100, 130, "80"),
+    (100, 314, "100"),  # exceeds every threshold, including the last (313)
+])
+def test_trap_cos_threshold_table_examples(client, a, b, expected):
+    import cos
+    assert cos.calculate_trap_cos(a, b) == expected
+
+
+def test_trap_cos_save_persists_computed_value_sourced_from_thickness_task(client):
+    """Saving the Trap CoS form (with the cross-task Sarah prognosis thickness
+    present on Thickness Estimation) must persist the FORMULA-COMPUTED
+    trap_cos_pct -- both through the dynamic-fields PATCH and the full save --
+    overriding whatever was typed into the now-readonly percentage."""
+    import cos
+
+    pid = create_project(client, "TRAP-CALC-1")
     thickness = get_task_by_name(client, pid, "Thickness Estimation")
     resp = client.patch(f"/api/tasks/{thickness['task_id']}/dynamic-fields",
-                        json={"fields": {"formation_thickness_ft": "120"}})
+                        json={"fields": {"formation_thickness_ft": "100"}})
     assert resp.status_code == 200
 
+    trap = get_task_by_name(client, pid, "Trap CoS")
+    resp = client.patch(f"/api/tasks/{trap['task_id']}/dynamic-fields", json={"fields": {
+        "sarah_quwarah_thickness_ft": "130",
+        "trap_cos_pct": "1",  # stale manual value; must be overwritten by the formula
+    }})
+    assert resp.status_code == 200
+    fields = client.get(f"/api/tasks/{trap['task_id']}/dynamic-fields").get_json()
+    assert fields.get("trap_cos_pct") == cos.calculate_trap_cos("100", "130") == "80"
+
+    resp = client.patch(f"/api/tasks/{trap['task_id']}", json={"fields": {
+        "sarah_quwarah_thickness_ft": "314",
+    }})
+    assert resp.status_code == 200
+    fields = client.get(f"/api/tasks/{trap['task_id']}/dynamic-fields").get_json()
+    assert fields.get("trap_cos_pct") == cos.calculate_trap_cos("100", "314") == "100"
+
+
+def test_trap_cos_save_keeps_stored_value_when_thickness_missing(client):
+    """When the Thickness Estimation task has no Sarah prognosis thickness yet,
+    calculate_trap_cos returns None and the Trap CoS save hook must leave the
+    stored trap_cos_pct untouched (same contract as before the formula)."""
+    pid = create_project(client, "TRAP-CALC-2")
     trap = get_task_by_name(client, pid, "Trap CoS")
     resp = client.patch(f"/api/tasks/{trap['task_id']}/dynamic-fields", json={"fields": {
         "sarah_quwarah_thickness_ft": "250",
@@ -303,14 +345,6 @@ def test_trap_cos_save_keeps_manual_value_while_stub_pending(client):
     assert resp.status_code == 200
     fields = client.get(f"/api/tasks/{trap['task_id']}/dynamic-fields").get_json()
     assert fields.get("trap_cos_pct") == "55"
-
-    resp = client.patch(f"/api/tasks/{trap['task_id']}", json={"fields": {
-        "sarah_quwarah_thickness_ft": "260",
-        "trap_cos_pct": "60",
-    }})
-    assert resp.status_code == 200
-    fields = client.get(f"/api/tasks/{trap['task_id']}/dynamic-fields").get_json()
-    assert fields.get("trap_cos_pct") == "60"
 
 
 def test_lead_resource_assessment_save_never_overwrites_piip(client):
