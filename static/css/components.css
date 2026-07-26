@@ -907,6 +907,66 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .login-error { color: var(--danger-700); font-size: var(--text-sm); }
 
 /* =========================================================================
+   Resource Assessment popup (static/js/views/resource-popup.js) -- a wide
+   variant of .app-dialog sized to fit two side-by-side exceedance plots.
+   Scenario/method pickers and the GRV / Area x Thickness inputs reuse the
+   step editor's .radio-group / .radio-options / .field-row idioms verbatim.
+   ========================================================================= */
+.resource-dialog { width: min(920px, 94vw); }
+.resource-dialog-body { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-5); }
+.resource-dialog-body h3 { font-size: var(--text-md); color: var(--ink-900); }
+.ra-actions { display: flex; justify-content: flex-end; }
+.ra-error { color: var(--danger-700); font-size: var(--text-sm); }
+.ra-results { display: flex; flex-direction: column; gap: var(--space-3); }
+/* Side-by-side gas / condensate exceedance plots; collapses to one column on
+   narrow screens (shared breakpoint with the rest of the responsive rules). */
+.ra-plots { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-4); }
+/* Positioning context for the corner expand button below. */
+.ra-plot { position: relative; }
+.ra-plot img { display: block; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); cursor: zoom-in; }
+/* Hover/focus-reveal expand affordance (mirrors the Streamlit st.pyplot
+   "expand" hover control). A real <button> (base look from .icon-btn) so it
+   is keyboard-reachable; :focus-visible reveals it for keyboard users who
+   can't hover. Click handling is delegated on #ra-plots (see wireOnce). */
+.ra-plot-expand {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  opacity: 0;
+  transition: opacity var(--transition), background var(--transition);
+}
+.ra-plot:hover .ra-plot-expand,
+.ra-plot-expand:focus-visible { opacity: 1; }
+
+/* Plot lightbox (#ra-plot-lightbox): a borderless <dialog> sized to the image
+   itself, opened ON TOP of #resource-assessment-dialog (nested native
+   <dialog> modals stack correctly in the top layer). A dedicated dark
+   backdrop -- deliberately not reusing .app-dialog's lighter scrim -- keeps
+   focus on the plot regardless of the app's light/dark theme. */
+.ra-lightbox { max-width: 95vw; max-height: 95vh; padding: 0; border: 0; background: transparent; box-shadow: none; }
+.ra-lightbox::backdrop { background: rgba(6, 14, 22, .82); }
+.ra-lightbox img { display: block; max-width: 95vw; max-height: 95vh; border-radius: var(--radius-md); box-shadow: var(--shadow-lg); cursor: zoom-out; }
+.ra-lightbox-close { position: absolute; top: var(--space-2); right: var(--space-2); width: 34px; height: 34px; font-size: var(--text-lg); }
+
+/* Quiet "Open Resource Assessment" trigger rendered by detail-form.js above
+   the dynamic fields, Lead Resource Assessment component only -- same visual
+   language as .rail-all-fields. */
+.resource-assessment-link {
+  align-self: flex-start;
+  margin: 0 0 var(--space-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--brand-700);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.resource-assessment-link:hover { background: none; color: var(--brand-600); }
+
+/* =========================================================================
    Full-page boot login (fronts the app under AUTH_REQUIRED; the modal above
    handles mid-session 401s). Reuses the panel/dialog token language.
    ========================================================================= */
@@ -961,6 +1021,10 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   .portfolio-stats { grid-template-columns: 1fr; }
   .portfolio-panel { overflow-x: auto; }
   .portfolio-panel table { min-width: 860px; }
+  .resource-dialog { width: min(420px, 92vw); }
+  .ra-plots { grid-template-columns: 1fr; }
+  #resource-assessment-dialog .field-row.cols-2,
+  #resource-assessment-dialog .field-row.cols-3 { grid-template-columns: 1fr; }
 }
 
 /* =========================================================================

@@ -5,6 +5,7 @@ import { SCHEMA, FORMATIONS, FORMATION_METRICS, SEISMIC_BLOCKS } from '../schema
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { renderDetail, renderRightPanel, chooseInitialTask, tasksForPipeline, parseRepeatableRows, refreshAfterRecordChange, revealTaskStage } from './detail.js';
 import { refreshAllBoards } from './pipeline.js';
+import { openResourceAssessmentDialog } from './resource-popup.js';
 
 export function ensureUsers() {
   if (Store.users) return Promise.resolve(Store.users);
@@ -121,6 +122,7 @@ export function loadComponent(task) {
   byId('comments').value = task.comments || '';
   return Promise.all([API.fields(task.task_id), API.componentFolder(Store.projectId, task.task_id)]).then(function (results) {
     renderFields(task.task_name, results[0] || {});
+    renderResourceAssessmentLink(task);
     renderComponentFolder(results[1] || {});
     setComponentReferenceMode(!isCurrentPipelineView());
     renderRightPanel(tasksForPipeline(Store.pipeline));
@@ -610,6 +612,28 @@ export var LATEST_PIIP_SOURCES = [
   ['Lead Resource Assessment', 'lead_piip_gas_mean']
 ];
 
+// Lead Resource Assessment only: a quiet trigger above the dynamic fields
+// that opens the Resource Assessment popup (views/resource-popup.js), which
+// mirrors the standalone PIIP calculator and can Apply its result straight
+// into this component's own piip('lead_piip') fields. Same
+// remove-and-reinsert-on-every-load idiom as renderComponentFolder below, so
+// switching to any other component cleanly drops the button.
+function renderResourceAssessmentLink(task) {
+  var previous = byId('resource-assessment-link');
+  if (previous) previous.remove();
+  if (task.task_name !== 'Lead Resource Assessment') return;
+  var button = document.createElement('button');
+  button.type = 'button';
+  button.id = 'resource-assessment-link';
+  button.className = 'resource-assessment-link';
+  button.textContent = 'Open Resource Assessment Calculator →';
+  var anchor = byId('dynamic-fields');
+  anchor.parentNode.insertBefore(button, anchor);
+  button.addEventListener('click', function () {
+    if (!isCurrentPipelineView()) return msg('Switch back to the current pipeline to open the Resource Assessment calculator.', 'error');
+    openResourceAssessmentDialog(Store.projectId, Store.task, Store.allFields[Store.task.task_name] || {});
+  });
+}
 export function renderComponentFolder(info) {
   var previous = byId('component-folder-card');
   if (previous) previous.remove();

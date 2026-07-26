@@ -82,6 +82,12 @@ def rf_model_path() -> Path:
     return Path(raw).expanduser().resolve()
 
 
+def resource_scenarios_path() -> Path:
+    """Path to the vendored resource_engine scenarios.yaml."""
+    raw = os.environ.get("SEGMENT_TRACKER_SCENARIOS_PATH", str(BASE_DIR / "config" / "scenarios.yaml"))
+    return Path(raw).expanduser().resolve()
+
+
 # ---------------------------------------------------------------------------
 # Security / auth
 # ---------------------------------------------------------------------------

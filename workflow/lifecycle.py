@@ -36,15 +36,21 @@ _SEAL_COS_INPUT_KEYS = (
 
 
 def _apply_stub_cos_calculations(session, task, fields):
-    """Trap CoS / initial (Lead) Resource Assessment recompute hooks.
+    """Trap CoS recompute hook.
 
     Mirrors the Seal CoS recompute pattern (fire only on the owning task's
-    save), but both formulas are still STUBS in cos.py: a ``None`` return
-    means "not computed" and the stored / manually entered values stay
-    untouched, so manual entry keeps working until the approved formulas
-    land. The cross-task inputs (the Reservoir Area Definition areas and the
-    Thickness Estimation SARH thickness) are fetched here because cos.py must
-    stay database-free -- same division of labor as Presence CoS.
+    save), but the Trap CoS formula is still a STUB in cos.py: a ``None``
+    return means "not computed" and the stored / manually entered value stays
+    untouched, so manual entry keeps working until the approved formula lands.
+    The cross-task input (the Thickness Estimation SARH thickness) is fetched
+    here because cos.py must stay database-free -- same division of labor as
+    Presence CoS.
+
+    The Lead Resource Assessment PIIP values are no longer auto-computed on
+    save: they change only via the pop-up calculator's explicit Apply flow
+    (POST /api/tasks/<id>/resource-assessment runs the Monte Carlo engine and
+    the chosen values are written back through the normal field-save path). A
+    plain save therefore never overwrites them.
 
     Shared by save_task and save_task_dynamic_fields. Returns ``fields``
     (copied only when something was computed).
@@ -59,20 +65,6 @@ def _apply_stub_cos_calculations(session, task, fields):
         if computed is not None:
             fields = dict(fields)
             fields["trap_cos_pct"] = computed
-    if task_name == "Lead Resource Assessment":
-        method = fields.get("lead_calculation_method")
-        if method is None:
-            method = _task_field_value(session, project_id, "Lead Resource Assessment",
-                                       "lead_calculation_method")
-        computed = cos.calculate_initial_resource_assessment(
-            _task_field_value(session, project_id, "Reservoir Area Definition", "p90_area_km2"),
-            _task_field_value(session, project_id, "Reservoir Area Definition", "p10_area_km2"),
-            _task_field_value(session, project_id, "Thickness Estimation", "formation_thickness_ft"),
-            method,
-        )
-        if computed:
-            fields = dict(fields)
-            fields.update(computed)
     return fields
 
 
@@ -317,8 +309,9 @@ def save_task(session, task_id, payload, changed_by="Web User", allow_priority_c
             fields = dict(fields)
             fields["seal_cos_pct"] = cos.calculate_seal_cos(fields)
 
-        # Trap CoS / initial Resource Assessment recompute hooks (stub
-        # formulas in cos.py; a None result leaves stored values untouched).
+        # Trap CoS recompute hook (stub formula in cos.py; a None result leaves
+        # the stored value untouched). Lead Resource Assessment PIIP values are
+        # not auto-computed here -- they only change via the pop-up calculator.
         fields = _apply_stub_cos_calculations(session, task, fields)
 
         _apply_dynamic_fields(session, task, fields, changed_by, now)

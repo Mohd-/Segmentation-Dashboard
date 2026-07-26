@@ -103,6 +103,20 @@ test('API.saveFields stamps changed_by with the current user name', function () 
   }).finally(function () { Store.user = savedUser; });
 });
 
+test('API.resourceAssessment POSTs the payload verbatim to /api/tasks/<id>/resource-assessment', function () {
+  var seen = null;
+  mockFetch(function (url, opts) {
+    seen = { url: url, opts: opts };
+    return jsonResponse(200, { gas: { p90: 1, p50: 2, mean: 2, p10: 3 }, units: {}, plots: { gas: 'data:image/png;base64,x' } });
+  });
+  var payload = { scenario: 'dry_gas_high_pressure', method: 'GRV', grv_p90: 12.6, grv_p10: 17.3 };
+  return API.resourceAssessment(42, payload).then(function () {
+    assert.match(seen.url, /^\/api\/tasks\/42\/resource-assessment\?/);
+    assert.equal(seen.opts.method, 'POST');
+    assert.deepEqual(JSON.parse(seen.opts.body), payload);
+  });
+});
+
 // --- 401 → login dialog ----------------------------------------------------
 
 test('api() on 401 opens the login dialog; dismissal surfaces the original 401', function () {

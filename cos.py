@@ -258,51 +258,6 @@ def calculate_trap_cos(sarah_thickness_ft, sarah_quwarah_thickness_ft):
 
 
 # ---------------------------------------------------------------------------
-# Initial (Lead) Resource Assessment (formula-derived -- STUB, formula pending)
-# ---------------------------------------------------------------------------
-
-def calculate_initial_resource_assessment(p90_area_km2, p10_area_km2,
-                                          sarah_thickness_ft, calculation_method=""):
-    """Calculate the Lead Resource Assessment PIIP trio from areas + thickness.
-
-    STUB: the save-path wiring (workflow.lifecycle) and input plumbing are in
-    place; the approved formula is not. Inputs are the Reservoir Area
-    Definition step's P90/P10 areas (km²), the Thickness Estimation step's
-    Sarah Formation Thickness (ft) -- all fetched cross-task by the caller --
-    and the Lead Resource Assessment step's own Calculation Method selection
-    (``"GRV"`` / ``"Box Model"`` / ``""``).
-
-    Return contract (already honored by the wiring -- do not change it):
-    - ``None``  means "not computed": the save path leaves the stored /
-      manually entered PIIP values untouched. Returned while any numeric
-      input is missing or non-numeric, and by the placeholder below.
-    - a dict of the Lead Resource Assessment step's field values to store,
-      e.g. ``{"lead_piip_gas_p90": "3.1", "lead_piip_gas_mean": "5.2",
-      "lead_piip_gas_p10": "8.4"}`` (numbers formatted as strings; every
-      returned key is written verbatim to the task's dynamic fields).
-
-    To activate: replace the TODO block with the real formulas and return the
-    dict of computed values.
-    """
-    p90_area = to_float_or_none(p90_area_km2)
-    p10_area = to_float_or_none(p10_area_km2)
-    thickness = to_float_or_none(sarah_thickness_ft)
-    if p90_area is None or p10_area is None or thickness is None:
-        return None
-    method = str(calculation_method or "").strip()
-    # TODO(formula): PIIP P90/Mean/P10 = f(p90_area, p10_area, thickness,
-    # method) -- pending approval. ``method`` selects between the GRV and
-    # Box Model variants ("" = not chosen yet; return None or a default).
-    # return {
-    #     "lead_piip_gas_p90": ...,
-    #     "lead_piip_gas_mean": ...,
-    #     "lead_piip_gas_p10": ...,
-    # }
-    del method  # placeholder only: silences the unused-variable warning
-    return None
-
-
-# ---------------------------------------------------------------------------
 # Segment classification (portfolio quadrants)
 # ---------------------------------------------------------------------------
 

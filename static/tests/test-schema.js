@@ -4,7 +4,8 @@ import { test, assert } from './harness.js';
 import {
   piip, SCHEMA, PROSPECT_STAGES, BP_STAGES, STATUSES, DONE,
   SEISMIC_BLOCKS, FLUID_TYPES, FORMATIONS, FORMATION_METRICS,
-  RESERVOIR_COS_COLUMNS, FLOWBACK_STAGE_COLUMNS, FLOWBACK_RATE_FIELDS
+  RESERVOIR_COS_COLUMNS, FLOWBACK_STAGE_COLUMNS, FLOWBACK_RATE_FIELDS,
+  RESOURCE_SCENARIOS
 } from '../js/schema.js';
 
 // Types actually used by field definitions in schema.js; detail-form renders
@@ -196,6 +197,23 @@ test('schema.FLOWBACK_RATE_FIELDS keys exist as flowback stage columns', functio
     assert.ok(colKeys[entry.key], 'rate key for "' + fluid + '" (' + entry.key + ') is a stage column');
     assert.ok(FLUID_TYPES.indexOf(fluid) >= 0, '"' + fluid + '" is a known fluid type');
     assert.ok(typeof entry.unit === 'string' && entry.unit.length, 'unit present for ' + fluid);
+  });
+});
+
+// GET /api/meta's resource_scenarios boot fallback: labels are verbatim
+// copies of resource-assessment/config/scenarios.yaml display_name entries
+// (views/resource-popup.js's scenario segmented control) -- pinned here so a
+// drifting label is caught immediately.
+test('schema.RESOURCE_SCENARIOS: all four configured scenarios, exact labels', function () {
+  assert.deepEqual(RESOURCE_SCENARIOS, [
+    { id: 'dry_gas_high_pressure', label: 'Dry Gas - High Pressure Zone', resource_type: 'dry_gas' },
+    { id: 'dry_gas_low_pressure', label: 'Dry Gas - Low Pressure Zone', resource_type: 'dry_gas' },
+    { id: 'condensate_field_a', label: 'Condensate - Field A', resource_type: 'condensate' },
+    { id: 'condensate_field_b', label: 'Condensate - Field B', resource_type: 'condensate' }
+  ]);
+  RESOURCE_SCENARIOS.forEach(function (scenario) {
+    assert.ok(['dry_gas', 'condensate'].indexOf(scenario.resource_type) >= 0,
+      scenario.id + ' resource_type is dry_gas or condensate');
   });
 });
 

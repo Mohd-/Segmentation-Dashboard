@@ -19,6 +19,20 @@ export var SEISMIC_BLOCKS = {
   'Block D': ['560001', '560002', '560003', '560004']
 };
 
+// Boot fallback for GET /api/meta's `resource_scenarios` (Store.meta is
+// authoritative at runtime -- same production-swappable idiom as
+// SEISMIC_BLOCKS above). Shape mirrors the meta contract: {id, label,
+// resource_type}. Labels are verbatim copies of the resource-assessment
+// engine's config/scenarios.yaml `display_name` entries -- keep them in sync
+// if that config changes. Consumed by the Resource Assessment popup's
+// scenario segmented control (views/resource-popup.js).
+export var RESOURCE_SCENARIOS = [
+  { id: 'dry_gas_high_pressure', label: 'Dry Gas - High Pressure Zone', resource_type: 'dry_gas' },
+  { id: 'dry_gas_low_pressure', label: 'Dry Gas - Low Pressure Zone', resource_type: 'dry_gas' },
+  { id: 'condensate_field_a', label: 'Condensate - Field A', resource_type: 'condensate' },
+  { id: 'condensate_field_b', label: 'Condensate - Field B', resource_type: 'condensate' }
+];
+
 export function piip(prefix) {
   // Grouped layout: the gas P90/Mean/P10 trio sits under a 'Gas (BCF)' section
   // in one row; the liquid checkbox stands alone; the liquid trio is its own row

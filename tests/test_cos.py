@@ -269,12 +269,13 @@ def test_final_reservoir_cos_is_first_row_with_nonempty_pct(client):
 
 
 # ---------------------------------------------------------------------------
-# Trap CoS / initial Resource Assessment stubs (formulas pending)
+# Trap CoS stub (formula pending) + Lead Resource Assessment save contract
 # ---------------------------------------------------------------------------
-# These pin the STUB contract the save-path wiring relies on: None = "not
-# computed", so stored/manual values survive every save until the approved
-# formulas land in cos.py. When a formula is implemented, replace the
-# None-assertions here with real expected values.
+# The Trap CoS test pins the STUB contract the save-path wiring relies on:
+# None = "not computed", so stored/manual values survive every save until the
+# approved formula lands in cos.py. The Lead Resource Assessment test pins the
+# new contract: PIIP values change only via the pop-up calculator's Apply flow,
+# so a plain save never auto-overwrites them.
 
 def test_trap_cos_stub_returns_none(client):
     import cos
@@ -282,13 +283,6 @@ def test_trap_cos_stub_returns_none(client):
     assert cos.calculate_trap_cos("120", "") is None       # partial input
     assert cos.calculate_trap_cos("120", "250") is None    # formula pending
     assert cos.calculate_trap_cos("abc", "250") is None    # non-numeric
-
-
-def test_initial_resource_assessment_stub_returns_none(client):
-    import cos
-    assert cos.calculate_initial_resource_assessment("", "", "") is None
-    assert cos.calculate_initial_resource_assessment("5", "12", "") is None
-    assert cos.calculate_initial_resource_assessment("5", "12", "110", "GRV") is None
 
 
 def test_trap_cos_save_keeps_manual_value_while_stub_pending(client):
@@ -319,10 +313,11 @@ def test_trap_cos_save_keeps_manual_value_while_stub_pending(client):
     assert fields.get("trap_cos_pct") == "60"
 
 
-def test_lead_resource_assessment_save_keeps_manual_values_while_stub_pending(client):
-    """Saving the Lead Resource Assessment step (areas + SARH thickness already
-    on their own tasks) must keep the manually entered PIIP trio while
-    calculate_initial_resource_assessment still returns None."""
+def test_lead_resource_assessment_save_never_overwrites_piip(client):
+    """A plain save of the Lead Resource Assessment step must leave its PIIP
+    fields exactly as entered. The PIIP values now change only via the pop-up
+    calculator's explicit Apply flow (POST .../resource-assessment) -- there is
+    no auto-compute on save, so saved values are never silently overwritten."""
     pid = create_project(client, "LEADRA-STUB-1")
     areas = get_task_by_name(client, pid, "Reservoir Area Definition")
     client.patch(f"/api/tasks/{areas['task_id']}/dynamic-fields",

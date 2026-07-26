@@ -1,0 +1,181 @@
+shared_parameters:
+  net_to_gross:
+    distribution: normal
+    mean: 0.805
+    stddev: 0.0726
+    p90: 0.71
+    p10: 0.90
+    maximum: 1.0
+
+  porosity_gas_condensate:
+    distribution: normal
+    mean: 0.160
+    stddev: 0.0382
+    p90: 0.11
+    p10: 0.21
+    minimum: 0.0
+    maximum: 0.40
+
+  gas_saturation:
+    distribution: normal
+    p90: 0.674
+    p10: 0.96
+    minimum: 0.0
+    maximum: 0.96
+
+  trap_fill:
+    distribution: constant
+    value: 1.0
+
+  wet_gas_shrinkage_factor:
+    distribution: constant
+    value: 1.0
+
+  recovery_factor_non_associated_gas:
+    distribution: normal
+    mean: 0.85
+    stddev: 0.0382
+    p90: 0.80
+    p10: 0.90
+    metadata_only: true
+    used_in_piip: false
+
+method_defaults:
+  grv:
+    grv_distribution: lognormal
+
+  area_thickness:
+    area_distribution: lognormal
+    geometric_factor:
+      distribution: lognormal
+      p90: 0.4
+      p10: 0.7
+      minimum: 0.0
+      maximum: 1.0
+    status: configured
+    missing_fields: []
+
+scenarios:
+  dry_gas_high_pressure:
+    display_name: Dry Gas - High Pressure Zone
+    resource_type: dry_gas
+    status: configured
+    shared:
+      net_to_gross: net_to_gross
+      porosity: porosity_gas_condensate
+      saturation: gas_saturation
+      trap_fill: trap_fill
+      shrinkage_factor: wet_gas_shrinkage_factor
+      recovery_factor: recovery_factor_non_associated_gas
+    gas_expansion_factor_1_over_bg:
+      unit: scf/cf
+      distribution: normal
+      mean: 294.0
+      stddev: 13.0
+      p90: 277.0
+      p50: 294.0
+      p10: 311.0
+    condensate_yield:
+      distribution: constant
+      value: 0.0
+      unit: STB/MMscf
+
+  dry_gas_low_pressure:
+    display_name: Dry Gas - Low Pressure Zone
+    resource_type: dry_gas
+    status: configured
+    shared:
+      net_to_gross: net_to_gross
+      porosity: porosity_gas_condensate
+      saturation: gas_saturation
+      trap_fill: trap_fill
+      shrinkage_factor: wet_gas_shrinkage_factor
+      recovery_factor: recovery_factor_non_associated_gas
+    gas_expansion_factor_1_over_bg:
+      unit: scf/cf
+      distribution: normal
+      mean: 194.0
+      stddev: 11.5
+      p90: 179.0
+      p50: 194.0
+      p10: 209.0
+    condensate_yield:
+      distribution: constant
+      value: 0.0
+      unit: STB/MMscf
+
+  condensate_field_a:
+    display_name: Condensate - Field A
+    resource_type: condensate
+    status: configured
+    shared:
+      net_to_gross: net_to_gross
+      porosity: porosity_gas_condensate
+      saturation: gas_saturation
+      trap_fill: trap_fill
+      shrinkage_factor: wet_gas_shrinkage_factor
+      recovery_factor: recovery_factor_non_associated_gas
+    gas_expansion_factor_1_over_bg:
+      unit: scf/cf
+      distribution: normal
+      mean: 265.0
+      stddev: 13.8
+      p90: 247.0
+      p50: 265.0
+      p10: 283.0
+    condensate_yield:
+      unit: STB/MMscf
+      distribution: normal
+      mean: 350.0
+      stddev: 38.2
+      p90: 300.0
+      p50: 350.0
+      p10: 400.1
+    recovery_factor_condensate:
+      distribution: normal
+      mean: 0.375
+      stddev: 0.0191
+      p90: 0.35
+      p50: 0.375
+      p10: 0.40
+      metadata_only: true
+      used_in_piip: false
+    missing_fields: []
+
+  condensate_field_b:
+    display_name: Condensate - Field B
+    resource_type: condensate
+    status: configured
+    shared:
+      net_to_gross: net_to_gross
+      porosity: porosity_gas_condensate
+      saturation: gas_saturation
+      trap_fill: trap_fill
+      shrinkage_factor: wet_gas_shrinkage_factor
+      recovery_factor: recovery_factor_non_associated_gas
+    gas_expansion_factor_1_over_bg:
+      unit: scf/cf
+      distribution: normal
+      mean: 277.0
+      stddev: 13.0
+      p90: 260.0
+      p50: 277.0
+      p10: 294.0
+    condensate_yield:
+      unit: STB/MMscf
+      distribution: normal
+      mean: 120.0
+      stddev: 15.3
+      p90: 100.0
+      p50: 120.0
+      p10: 140.0
+    recovery_factor_condensate:
+      distribution: normal
+      mean: 0.85
+      stddev: 0.0382
+      p90: 0.80
+      p50: 0.85
+      p10: 0.90
+      metadata_only: true
+      used_in_piip: false
+    missing_fields: []

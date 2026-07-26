@@ -48,6 +48,7 @@ import db
 import export_excel
 import folders
 import reporting
+import resource_calc
 import workflow
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -347,6 +348,9 @@ def meta():
         # (seismic_blocks.json). Feeds the Reservoir CoS sheet's dependent
         # Block/AR dropdowns -- this endpoint is their single source of truth.
         "seismic_blocks": config.SEISMIC_BLOCK_AR_MAP,
+        # Configured resource-assessment scenarios for the Lead Resource
+        # Assessment pop-up calculator's scenario dropdown.
+        "resource_scenarios": resource_calc.scenario_options(),
     })
 
 
@@ -576,6 +580,24 @@ def transition_task(task_id):
         actor_role=current_role(), actor_name=flask_session.get("name"),
     )
     return json_response({"ok": True, "task": task_after})
+
+
+@app.post("/api/tasks/<int:task_id>/resource-assessment")
+def resource_assessment(task_id):
+    """Run the Lead Resource Assessment pop-up calculator for a task.
+
+    The task must exist (404 otherwise). The JSON body carries the pop-up's
+    scenario/method/inputs; resource_calc.run drives the Monte Carlo engine and
+    returns the PIIP percentiles plus base64 exceedance plots. Invalid inputs
+    surface as ValueError -> 400 via the centralized handler. Nothing is stored
+    here: persisting the chosen PIIP values is the pop-up's separate Apply/Save
+    flow through the normal dynamic-fields path.
+    """
+    session = db.get_session()
+    if not workflow.get_task(session, task_id):
+        return error_response("Task not found", 404)
+    payload = request.get_json(silent=True) or {}
+    return json_response(resource_calc.run(payload))
 
 
 @app.get("/api/tasks/<int:task_id>/dynamic-fields")

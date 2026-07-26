@@ -54,6 +54,12 @@ def test_meta_shape_matches_workflow_constants(client):
     assert isinstance(body["seismic_blocks"], dict)
     for ars in body["seismic_blocks"].values():
         assert isinstance(ars, list)
+    # The 4 configured resource-assessment scenarios feed the Lead Resource
+    # Assessment pop-up calculator's scenario dropdown.
+    scenarios = body["resource_scenarios"]
+    assert isinstance(scenarios, list) and len(scenarios) == 4
+    for entry in scenarios:
+        assert set(entry) == {"id", "label", "resource_type"}
 
 
 # ---------------------------------------------------------------------------
