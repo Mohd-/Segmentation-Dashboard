@@ -1,11 +1,11 @@
 import { byId, all, esc, isFilled, truthy, msg } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName, currentRole, canManageAssignments, isCurrentPipelineView, Store } from '../state.js';
-import { SCHEMA, FORMATIONS, FORMATION_METRICS, SEISMIC_BLOCKS } from '../schema.js';
+import { SCHEMA, FORMATIONS, FORMATION_METRICS, SEISMIC_BLOCKS, validateStepFields } from '../schema.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { renderDetail, renderRightPanel, chooseInitialTask, tasksForPipeline, parseRepeatableRows, refreshAfterRecordChange, revealTaskStage } from './detail.js';
 import { refreshAllBoards } from './pipeline.js';
-import { openResourceAssessmentDialog } from './resource-popup.js';
+import { renderResourceCalculator, teardownResourceCalculator } from './resource-calculator.js';
 
 export function ensureUsers() {
   if (Store.users) return Promise.resolve(Store.users);
@@ -122,7 +122,7 @@ export function loadComponent(task) {
   byId('comments').value = task.comments || '';
   return Promise.all([API.fields(task.task_id), API.componentFolder(Store.projectId, task.task_id)]).then(function (results) {
     renderFields(task.task_name, results[0] || {});
-    renderResourceAssessmentLink(task);
+    renderResourceCalculatorSection(task, results[0] || {});
     renderComponentFolder(results[1] || {});
     setComponentReferenceMode(!isCurrentPipelineView());
     renderRightPanel(tasksForPipeline(Store.pipeline));
@@ -612,27 +612,28 @@ export var LATEST_PIIP_SOURCES = [
   ['Lead Resource Assessment', 'lead_piip_gas_mean']
 ];
 
-// Lead Resource Assessment only: a quiet trigger above the dynamic fields
-// that opens the Resource Assessment popup (views/resource-popup.js), which
-// mirrors the standalone PIIP calculator and can Apply its result straight
-// into this component's own piip('lead_piip') fields. Same
-// remove-and-reinsert-on-every-load idiom as renderComponentFolder below, so
-// switching to any other component cleanly drops the button.
-function renderResourceAssessmentLink(task) {
-  var previous = byId('resource-assessment-link');
+// Lead Resource Assessment only: the full Resource Assessment calculator
+// (views/resource-calculator.js) rendered inline, above the (now field-less
+// -- see SCHEMA) dynamic-fields grid. Same remove-and-reinsert-on-every-load
+// idiom as renderComponentFolder below, so switching to any other component
+// cleanly drops the panel; switching AWAY also tears down the calculator's
+// own render-generation state (teardownResourceCalculator) so a stray async
+// Calculate/Apply response that resolves after the panel is gone is a no-op.
+// Reference-mode disabling is handled by renderResourceCalculator itself
+// (it disables Calculate directly; every plain input is caught by the
+// generic setComponentReferenceMode sweep detail-form.js runs again right
+// after loadComponent's fields fetch resolves) -- see that function's own
+// comment for why Apply/View-plots need no special-casing there.
+function renderResourceCalculatorSection(task, fields) {
+  var previous = byId('resource-calculator-panel');
   if (previous) previous.remove();
-  if (task.task_name !== 'Lead Resource Assessment') return;
-  var button = document.createElement('button');
-  button.type = 'button';
-  button.id = 'resource-assessment-link';
-  button.className = 'resource-assessment-link';
-  button.textContent = 'Open Resource Assessment Calculator →';
+  if (task.task_name !== 'Lead Resource Assessment') { teardownResourceCalculator(); return; }
+  var panel = document.createElement('div');
+  panel.id = 'resource-calculator-panel';
+  panel.className = 'resource-calculator-panel';
   var anchor = byId('dynamic-fields');
-  anchor.parentNode.insertBefore(button, anchor);
-  button.addEventListener('click', function () {
-    if (!isCurrentPipelineView()) return msg('Switch back to the current pipeline to open the Resource Assessment calculator.', 'error');
-    openResourceAssessmentDialog(Store.projectId, Store.task, Store.allFields[Store.task.task_name] || {});
-  });
+  anchor.parentNode.insertBefore(panel, anchor);
+  renderResourceCalculator(panel, Store.projectId, task, fields);
 }
 export function renderComponentFolder(info) {
   var previous = byId('component-folder-card');
@@ -717,6 +718,12 @@ export function saveComponent(event) {
   if (!Store.task) return;
   if (!isCurrentPipelineView()) return msg('Switch back to the current pipeline to save changes.', 'error');
   var fields = getFields();
+  // Generic input sanity checks (numeric/negative/max/percent, area & thickness
+  // ordering, piip trio ordering -- see schema.js) run before anything hits the
+  // network; same "surface the message, abort the save" shape as the formations
+  // guard right below.
+  var fieldsError = validateStepFields(Store.task.task_name, fields);
+  if (fieldsError) return msg(fieldsError, 'error');
   // A component with a formations mini-sheet also PUTs the touched phase's
   // well-level rows alongside the dynamic-field save.
   var formationsField = (SCHEMA[Store.task.task_name] || []).find(function (item) { return item.type === 'formations'; });

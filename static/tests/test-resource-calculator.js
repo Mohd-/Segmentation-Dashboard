@@ -1,11 +1,16 @@
-// Tests for static/js/views/resource-popup.js's pure functions --
-// validateResourceInputs, formatStored, and the Apply-to-Lead payload
-// builders. These never call openResourceAssessmentDialog (the only DOM-
-// touching entry point), so the module loads fine even though
-// #resource-assessment-dialog is not part of the runner.html fixtures (see
+// Tests for static/js/views/resource-calculator.js's pure functions --
+// validateResourceInputs, formatStored, the Apply-to-Lead payload builders,
+// buildPlotMarkup, and the read-only results-display builders
+// (resultsFromStoredFields/resultsFromCalculation/buildResultsMarkup). These
+// never call renderResourceCalculator (the only DOM-touching entry point),
+// so the module loads fine even though #resource-calculator-panel /
+// #resource-assessment-dialog are not part of the runner.html fixtures (see
 // the module's own docblock).
 import { test, assert, fixture } from './harness.js';
-import { validateResourceInputs, formatStored, buildCalculatePayload, buildLeadApplyFields, buildPlotMarkup } from '../js/views/resource-popup.js';
+import {
+  validateResourceInputs, formatStored, buildCalculatePayload, buildLeadApplyFields, buildPlotMarkup,
+  buildResultsMarkup, resultsFromStoredFields, resultsFromCalculation
+} from '../js/views/resource-calculator.js';
 
 // --- validateResourceInputs -------------------------------------------------
 
@@ -68,6 +73,27 @@ test('validateResourceInputs: Area x Thickness method ignores GRV fields entirel
   assert.equal(validateResourceInputs(areaState({ grvP90: 'garbage', grvP10: '' })), null);
 });
 
+// Same generic 9999 sanity cap as the regular step forms' validateStepFields
+// (schema.js) -- none of GRV/area/thickness are exempt (no bigOk-equivalent
+// here; all are well under 9999 in real use).
+test('validateResourceInputs: a value over the 9999 cap is rejected (GRV)', function () {
+  assert.equal(validateResourceInputs(grvState({ grvP90: '10000' })),
+    'GRV P90 looks too large (max 9999).');
+  assert.equal(validateResourceInputs(grvState({ grvP90: '9999', grvP10: '10000' })),
+    'GRV P10 looks too large (max 9999).');
+});
+
+test('validateResourceInputs: a value over the 9999 cap is rejected (Area x Thickness)', function () {
+  assert.equal(validateResourceInputs(areaState({ areaP90: '10000' })),
+    'Area P90 looks too large (max 9999).');
+  assert.equal(validateResourceInputs(areaState({ thicknessP50: '10000' })),
+    'Reservoir Thickness P50 looks too large (max 9999).');
+});
+
+test('validateResourceInputs: exactly 9999 is still in range', function () {
+  assert.equal(validateResourceInputs(grvState({ grvP90: '9998', grvP10: '9999' })), null);
+});
+
 // --- formatStored ------------------------------------------------------------
 
 test('formatStored: below 10 uses .2f', function () {
@@ -115,7 +141,8 @@ test('buildCalculatePayload: Box Model method sends only scenario/method/area_*/
 
 // --- buildLeadApplyFields: pin the exact EAV keys ----------------------------
 // These key names are a permanent contract (task_dynamic_fields rows) --
-// renaming any of them orphans previously-saved data.
+// renaming any of them orphans previously-saved data. Unchanged by the
+// pop-up -> inline-calculator move: Apply still writes them the same way.
 
 test('buildLeadApplyFields: GRV method, gas-only result -- exact key set', function () {
   var result = { gas: { p90: 8, p50: 12, mean: 12.3, p10: 15 } };
@@ -163,9 +190,10 @@ test('buildLeadApplyFields: Box Model method with condensate -- exact key set, n
 
 // --- buildPlotMarkup (plot lightbox expand affordance) -----------------------
 // Pure string builder -- #ra-plots is rebuilt wholesale on every Calculate,
-// and expand clicks are handled by one delegated listener (wireOnce), so this
-// is the one piece of the lightbox feature worth a DOM-free-to-write test
-// (parsed through a real fixture div rather than regex-matching the string).
+// and expand clicks are handled by one delegated listener
+// (wirePlotsDialogOnce), so this is the one piece of the lightbox feature
+// worth a DOM-free-to-write test (parsed through a real fixture div rather
+// than regex-matching the string).
 
 test('buildPlotMarkup: image carries the src and alt text', function () {
   var container = fixture(buildPlotMarkup('data:image/png;base64,AAA', 'Gas exceedance plot'));
@@ -195,4 +223,82 @@ test('buildPlotMarkup: escapes markup-significant characters in the alt text', f
   // extra/missing elements or a mangled attribute value, not just raw text.
   assert.equal(container.querySelectorAll('.ra-plot').length, 1, 'exactly one plot card, no injected markup');
   assert.equal(container.querySelector('img').getAttribute('alt'), 'Gas <script> & "quotes"');
+});
+
+// --- resultsFromStoredFields / resultsFromCalculation / buildResultsMarkup --
+// The read-only PIIP results display (step body, not the plots dialog): its
+// value-shape builders and markup builder are all pure, so they're covered
+// without touching the DOM.
+
+test('resultsFromStoredFields: gas trio, no liquid when lead_piip_has_liquid is unset', function () {
+  var values = resultsFromStoredFields({
+    lead_piip_gas_p90: '12.0', lead_piip_gas_mean: '19.4', lead_piip_gas_p10: '27.6'
+  });
+  assert.deepEqual(values, { gas: { p90: '12.0', mean: '19.4', p10: '27.6' }, liquid: null });
+});
+
+test('resultsFromStoredFields: liquid trio included when lead_piip_has_liquid is truthy', function () {
+  var values = resultsFromStoredFields({
+    lead_piip_gas_p90: '12.0', lead_piip_gas_mean: '19.4', lead_piip_gas_p10: '27.6',
+    lead_piip_has_liquid: '1',
+    lead_piip_liquid_p90: '1.50', lead_piip_liquid_mean: '2.00', lead_piip_liquid_p10: '2.60'
+  });
+  assert.deepEqual(values, {
+    gas: { p90: '12.0', mean: '19.4', p10: '27.6' },
+    liquid: { p90: '1.50', mean: '2.00', p10: '2.60' }
+  });
+});
+
+test('resultsFromStoredFields: a blank/never-calculated task yields empty strings, not undefined', function () {
+  assert.deepEqual(resultsFromStoredFields({}), { gas: { p90: '', mean: '', p10: '' }, liquid: null });
+  assert.deepEqual(resultsFromStoredFields(undefined), { gas: { p90: '', mean: '', p10: '' }, liquid: null });
+});
+
+test('resultsFromCalculation: gas only, formats every value with formatStored', function () {
+  var values = resultsFromCalculation({ gas: { p90: 12, p50: 18.8, mean: 19.39, p10: 27.56 } });
+  assert.deepEqual(values, { gas: { p90: '12.0', mean: '19.4', p10: '27.6' }, liquid: null });
+});
+
+test('resultsFromCalculation: condensate present adds the liquid trio', function () {
+  var values = resultsFromCalculation({
+    gas: { p90: 4.5, p50: 10, mean: 11.47, p10: 20.16 },
+    condensate: { p90: 1.57, p50: 3.5, mean: 4.02, p10: 7.12 }
+  });
+  assert.deepEqual(values, {
+    gas: { p90: '4.50', mean: '11.5', p10: '20.2' },
+    liquid: { p90: '1.57', mean: '4.02', p10: '7.12' }
+  });
+});
+
+test('buildResultsMarkup: gas-only renders one section, no Liquid heading', function () {
+  var container = fixture(buildResultsMarkup({ gas: { p90: '12.0', mean: '19.4', p10: '27.6' }, liquid: null }));
+  var headings = container.querySelectorAll('.field-section-label');
+  assert.equal(headings.length, 1);
+  assert.equal(headings[0].textContent, 'Gas (BCF)');
+  var outputs = container.querySelectorAll('output');
+  assert.equal(outputs.length, 3);
+  assert.deepEqual(Array.from(outputs).map(function (o) { return o.textContent; }), ['12.0', '19.4', '27.6']);
+});
+
+test('buildResultsMarkup: liquid trio adds a second section', function () {
+  var container = fixture(buildResultsMarkup({
+    gas: { p90: '100.0', mean: '155.4', p10: '210.0' },
+    liquid: { p90: '5.20', mean: '6.05', p10: '7.90' }
+  }));
+  var headings = container.querySelectorAll('.field-section-label');
+  assert.deepEqual(Array.from(headings).map(function (h) { return h.textContent; }), ['Gas (BCF)', 'Liquid (MMSTB)']);
+  var outputs = container.querySelectorAll('output');
+  assert.equal(outputs.length, 6);
+});
+
+test('buildResultsMarkup: an empty/never-calculated value shows a placeholder dash, not a blank output', function () {
+  var container = fixture(buildResultsMarkup({ gas: { p90: '', mean: '', p10: '' }, liquid: null }));
+  var outputs = container.querySelectorAll('output');
+  Array.from(outputs).forEach(function (o) { assert.equal(o.textContent, '—'); });
+});
+
+test('buildResultsMarkup: values are display-only <output>s, not editable inputs', function () {
+  var container = fixture(buildResultsMarkup({ gas: { p90: '1', mean: '2', p10: '3' }, liquid: null }));
+  assert.equal(container.querySelectorAll('input').length, 0);
+  assert.equal(container.querySelectorAll('.calculated-output').length, 3);
 });

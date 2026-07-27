@@ -62,8 +62,8 @@ export var API = {
   assign: function (id, payload) { return api('/api/tasks/' + id + '/assign', jsonOptions('POST', payload)); },
   transition: function (id, payload) { return api('/api/tasks/' + id + '/transition', jsonOptions('POST', payload)); },
   priority: function (id, payload) { return api('/api/tasks/' + id + '/priority', jsonOptions('PATCH', payload)); },
-  // Resource Assessment popup (views/resource-popup.js): taskId is the Lead
-  // Resource Assessment component's own task_id.
+  // Resource Assessment calculator (views/resource-calculator.js): taskId is
+  // the Lead Resource Assessment component's own task_id.
   resourceAssessment: function (taskId, payload) { return api('/api/tasks/' + taskId + '/resource-assessment', jsonOptions('POST', payload)); },
   activity: function (projectId) { return api('/api/activity' + (projectId ? '?project_id=' + encodeURIComponent(projectId) : '')); },
   businessRows: function () { return api('/api/business-plan/rows'); },

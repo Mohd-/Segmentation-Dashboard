@@ -2,7 +2,7 @@ import { byId, all, esc, msg, statusChip } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName, Store, resetSelection } from '../state.js';
 import { activateTab, scrollToTab } from '../navigation.js';
-import { SCHEMA } from '../schema.js';
+import { SCHEMA, validateStepFields } from '../schema.js';
 import { confirmDialog } from '../dialog.js';
 import { canTransitionPhase, promoteProject, recallProject } from './transitions.js';
 import {
@@ -221,9 +221,16 @@ function transitionPhase() {
 function saveComponentCard(task, button) {
   var root = byId('pe-fields-' + task.task_id);
   var comments = byId('pe-comments-' + task.task_id);
+  var fields = getFields(root);
+  // Same generic sanity checks as the pipeline detail view's saveComponent
+  // (schema.js's validateStepFields) -- this card saves the identical
+  // task_name/fields shape through the identical PATCH /api/tasks/<id> path,
+  // so it needs the identical guard before hitting the network.
+  var fieldsError = validateStepFields(task.task_name, fields);
+  if (fieldsError) return msg(fieldsError, 'error');
   button.disabled = true;
   API.updateTask(task.task_id, {
-    fields: getFields(root),
+    fields: fields,
     comments: comments.value,
     priority: task.priority || 'Medium',
     revision: task.revision,

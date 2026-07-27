@@ -16,7 +16,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/css/base.css?v=5">
-  <link rel="stylesheet" href="/static/css/components.css?v=15">
+  <link rel="stylesheet" href="/static/css/components.css?v=17">
 </head>
 <body>
   <section id="login-page" class="login-page hidden">
@@ -198,61 +198,36 @@
     </form>
   </dialog>
 
-  <!-- Resource Assessment popup (views/resource-popup.js) -- mirrors the
-       standalone Streamlit PIIP calculator: scenario + method segmented
-       controls (radio-option pills, same idiom as BP Execution Gate's
-       classification), conditional GRV / Area x Thickness inputs, Calculate,
-       side-by-side exceedance plots, Apply to Lead. Wider than #app-dialog
-       (.resource-dialog) to fit two plot images. No <form>: Calculate/Apply
-       are driven procedurally, not via the native dialog returnValue. -->
+  <!-- Exceedance plots viewer (views/resource-calculator.js) -- the Resource
+       Assessment calculator itself now lives inline in the Lead Resource
+       Assessment step body (detail-form.js), not a dialog; this is only the
+       plots, opened from the calculator's "View exceedance plots" trigger
+       once a Calculate has produced figures for the current session (stored
+       PIIP values alone have no rendered figures). Wider than #app-dialog
+       (.resource-dialog) to fit two plot images side by side. No <form>:
+       Close is driven procedurally, not via the native dialog returnValue. -->
   <dialog id="resource-assessment-dialog" class="app-dialog resource-dialog">
     <div class="resource-dialog-body">
-      <h3>Resource Assessment</h3>
-      <div class="radio-group">
-        <span class="radio-group-label" id="ra-scenario-label">Scenario</span>
-        <div class="radio-options" id="ra-scenario-options" role="radiogroup" aria-labelledby="ra-scenario-label"></div>
-      </div>
-      <div class="radio-group">
-        <span class="radio-group-label" id="ra-method-label">Calculation Method</span>
-        <div class="radio-options" role="radiogroup" aria-labelledby="ra-method-label">
-          <label class="radio-option"><input type="radio" name="ra-method" value="GRV"> GRV</label>
-          <label class="radio-option"><input type="radio" name="ra-method" value="Box Model"> Area x Thickness</label>
-        </div>
-      </div>
-      <div id="ra-grv-fields" class="field-row cols-2">
-        <label>GRV P90 [10&sup3; acre-ft]<input type="number" step="any" id="ra-grv-p90"></label>
-        <label>GRV P10 [10&sup3; acre-ft]<input type="number" step="any" id="ra-grv-p10"></label>
-      </div>
-      <div id="ra-area-fields" class="field-row cols-3 hidden">
-        <label>Area P90 [km&sup2;]<input type="number" step="any" id="ra-area-p90"></label>
-        <label>Area P10 [km&sup2;]<input type="number" step="any" id="ra-area-p10"></label>
-        <label>Reservoir Thickness P50 [ft]<input type="number" step="any" id="ra-thickness-p50"></label>
-      </div>
-      <p id="ra-error" class="ra-error hidden"></p>
-      <div class="ra-actions">
-        <button type="button" id="ra-calculate" class="ghost">Calculate</button>
-      </div>
-      <div id="ra-results" class="ra-results hidden">
-        <div id="ra-plots" class="ra-plots"></div>
-      </div>
+      <h3>Exceedance Plots</h3>
+      <div id="ra-plots" class="ra-plots"></div>
       <div class="app-dialog-actions">
-        <button type="button" id="ra-close" class="ghost">Close</button>
-        <button type="button" id="ra-apply" disabled>Apply to Lead</button>
+        <button type="button" id="ra-plots-close" class="ghost">Close</button>
       </div>
     </div>
   </dialog>
 
-  <!-- Plot lightbox (views/resource-popup.js) -- opened on top of
+  <!-- Plot lightbox (views/resource-calculator.js) -- opened on top of
        #resource-assessment-dialog (nested showModal(); native <dialog> stacks
-       modals in the top layer, so this renders above the already-open popup
-       and gets its own Esc-to-close for free). No <form>; a single click
-       listener on the dialog itself closes it on any click inside (backdrop,
-       image, or the close button all bubble to the same handler). -->
+       modals in the top layer, so this renders above the already-open plots
+       viewer and gets its own Esc-to-close for free). No <form>; a single
+       click listener on the dialog itself closes it on any click inside
+       (backdrop, image, or the close button all bubble to the same
+       handler). -->
   <dialog id="ra-plot-lightbox" class="ra-lightbox">
     <button type="button" id="ra-lightbox-close" class="icon-btn ra-lightbox-close" title="Close" aria-label="Close enlarged plot">&times;</button>
     <img id="ra-lightbox-img" alt="">
   </dialog>
 
-  <script type="module" src="/static/js/main.js?v=13"></script>
+  <script type="module" src="/static/js/main.js?v=14"></script>
 </body>
 </html>

@@ -1,3 +1,8 @@
+// schema.js declares field shapes; it stays otherwise dependency-free.
+// dom.js is a zero-dependency leaf module (no cycle risk) and isFilled's
+// "blank always passes" definition is exactly what validateStepFields needs.
+import { isFilled } from './dom.js';
+
 // PROSPECT_STAGES/BP_STAGES/STATUSES here are boot fallbacks only. GET /api/meta
 // (Store.meta) is authoritative at runtime; its source of truth is workflow.py
 // STAGE_ORDER / PROSPECT_STAGES / BP_EXECUTION_STAGES / STATUSES.
@@ -24,8 +29,8 @@ export var SEISMIC_BLOCKS = {
 // SEISMIC_BLOCKS above). Shape mirrors the meta contract: {id, label,
 // resource_type}. Labels are verbatim copies of the resource-assessment
 // engine's config/scenarios.yaml `display_name` entries -- keep them in sync
-// if that config changes. Consumed by the Resource Assessment popup's
-// scenario segmented control (views/resource-popup.js).
+// if that config changes. Consumed by the Resource Assessment calculator's
+// scenario segmented control (views/resource-calculator.js).
 export var RESOURCE_SCENARIOS = [
   { id: 'dry_gas_high_pressure', label: 'Dry Gas - High Pressure Zone', resource_type: 'dry_gas' },
   { id: 'dry_gas_low_pressure', label: 'Dry Gas - Low Pressure Zone', resource_type: 'dry_gas' },
@@ -78,8 +83,10 @@ export var FLOWBACK_RATE_FIELDS = {
 // stage row exists. The index column is display-only (the stage number).
 export var FLOWBACK_STAGE_COLUMNS = [
   { key: 'stage', label: 'Stage', type: 'index' },
-  { key: 'flowback_top_md', label: 'Top', type: 'number', placeholder: 'Depth (MD)' },
-  { key: 'flowback_base_md', label: 'Base', type: 'number', placeholder: 'Depth (MD)' },
+  // bigOk: true -- see validateStepFields below. Measured depths (MD) routinely
+  // run into the thousands of feet, well past the generic 9999 sanity cap.
+  { key: 'flowback_top_md', label: 'Top', type: 'number', placeholder: 'Depth (MD)', bigOk: true },
+  { key: 'flowback_base_md', label: 'Base', type: 'number', placeholder: 'Depth (MD)', bigOk: true },
   { key: 'flowback_formation', label: 'Formation', type: 'select', optionsFrom: 'formations', value: 'SARH' },
   { key: 'flowback_gas_rate_mmscfd', label: 'Gas Rate (MMSCFD)', type: 'number' },
   { key: 'flowback_water_rate_bwpd', label: 'Water Rate (BWPD)', type: 'number' },
@@ -97,8 +104,14 @@ export var FLOWBACK_STAGE_COLUMNS = [
 // rendered as inputs.
 export var FORMATIONS = ['SARH', 'QASM', 'QWRH'];
 export var FORMATION_METRICS = [
-  { key: 'top_tvdss_ft', label: 'Top TVDSS (ft)', type: 'number' },
-  { key: 'base_tvdss_ft', label: 'Base TVDSS (ft)', type: 'number' },
+  // bigOk: true -- TVDSS depths run well past the generic 9999 cap (see
+  // validateStepFields). Declared for consistency/documentation: formation
+  // metric values are edited/saved through the separate well-level formations
+  // buffer (detail-form.js's formationEdits -> PUT /api/projects/<id>/
+  // formations), not the plain `fields` object validateStepFields checks, so
+  // this flag isn't currently read by any validator -- see the report note.
+  { key: 'top_tvdss_ft', label: 'Top TVDSS (ft)', type: 'number', bigOk: true },
+  { key: 'base_tvdss_ft', label: 'Base TVDSS (ft)', type: 'number', bigOk: true },
   { key: 'thickness_ft', label: 'Formation Thickness (ft)', type: 'number' },
   { key: 'porosity_pct', label: 'Porosity (%)', type: 'number' },
   { key: 'swt_pct', label: 'Swt (%)', type: 'number' },
@@ -117,14 +130,27 @@ export var RESERVOIR_COS_COLUMNS = [
   { key: 'seismic_block', label: 'Seismic Block', type: 'select', optionsFrom: 'seismic_blocks' },
   { key: 'seismic_volume_ar_number', label: 'AR Number', type: 'select', optionsFrom: 'seismic_blocks', dependsOn: 'seismic_block' },
   { key: 'amplitude_ratio', label: 'Amplitude Ratio', type: 'number' },
-  { key: 'base_tight_sarah', label: 'Base Tight Sarah', type: 'number' },
+  // bigOk: true -- a depth (see validateStepFields), routinely past 9999.
+  { key: 'base_tight_sarah', label: 'Base Tight Sarah', type: 'number', bigOk: true },
   { key: 'pull_up', label: 'Pull-up', type: 'select', options: ['', 'No', 'Semi', 'Yes'] },
   { key: 'reservoir_cos_pct', label: 'Reservoir CoS (%)', type: 'number', readonly: true }
 ];
 export var SCHEMA = {
   'Reservoir Area Definition': [{ key: 'p10_area_km2', label: 'P10 Area (km²)', type: 'number' }, { key: 'p90_area_km2', label: 'P90 Area (km²)', type: 'number' }],
   'Thickness Estimation': [{ key: 'formation_thickness_ft', label: 'Sarah Formation Thickness (ft)', type: 'number' }, { key: 'reservoir_thickness_ft', label: 'Reservoir Thickness (ft)', type: 'number' }],
-  'Lead Resource Assessment': piip('lead_piip').concat([{ key: 'lead_calculation_method', label: 'Calculation Method', type: 'select', options: ['', 'GRV', 'Box Model'] }]),
+  // No editable dynamic fields: the Resource Assessment calculator
+  // (views/resource-calculator.js) is now the step's entire body -- inline
+  // scenario/method/inputs, read-only PIIP results, Apply to Lead. The
+  // lead_piip_* / lead_calculation_method / lead_resource_scenario /
+  // lead_grv_*_thousand_acre_ft EAV keys are unchanged and still written
+  // (Apply PATCHes them straight via API.saveFields, bypassing this SCHEMA
+  // entry and getFields() entirely) -- LATEST_PIIP_SOURCES and every other
+  // reader of Store.allFields keep working unchanged, they were never
+  // SCHEMA-driven. The project-editor.js "all fields" card for this step is
+  // therefore now comments-only, same as any other schema-less step (e.g.
+  // 'Seismic Signature Validation' below) -- editing/viewing PIIP data lives
+  // in the pipeline detail view's calculator now.
+  'Lead Resource Assessment': [],
   'Seismic Signature Validation': [],
   'Reservoir CoS': [{ key: 'reservoir_cos_rows', label: 'Reservoir CoS Evaluations', type: 'repeatable', columns: RESERVOIR_COS_COLUMNS }],
   'Trap CoS': [{ key: 'sarah_quwarah_thickness_ft', label: 'Sarah-Quwarah Thickness (ft)', type: 'number' }, { key: 'trap_cos_pct', label: 'Trap CoS (%)', type: 'number', readonly: true }],
@@ -138,8 +164,10 @@ export var SCHEMA = {
   // Four 2-column rows stacked: the well location pair, then one row per staking
   // option (max distance + azimuth). Row ids group each pair; keys/labels stay.
   'Staking Moving Tolerance': [
-    { key: 'staking_well_x', label: 'Well Location X', type: 'number', defaultFrom: 'lead_x', row: 'staking_loc' },
-    { key: 'staking_well_y', label: 'Well Location Y', type: 'number', defaultFrom: 'lead_y', row: 'staking_loc' },
+    // bigOk: true -- UTM coordinates (see validateStepFields), routinely
+    // six/seven digits.
+    { key: 'staking_well_x', label: 'Well Location X', type: 'number', defaultFrom: 'lead_x', row: 'staking_loc', bigOk: true },
+    { key: 'staking_well_y', label: 'Well Location Y', type: 'number', defaultFrom: 'lead_y', row: 'staking_loc', bigOk: true },
     { key: 'staking_opt1_max_distance_m', label: 'Option 1 Max Distance (m)', type: 'number', row: 'staking_opt1' },
     { key: 'staking_opt1_azimuth_deg', label: 'Option 1 Azimuth (°)', type: 'number', row: 'staking_opt1' },
     { key: 'staking_opt2_max_distance_m', label: 'Option 2 Max Distance (m)', type: 'number', row: 'staking_opt2' },
@@ -208,3 +236,164 @@ export var SCHEMA = {
   'PDA': [{ key: 'pda_booked', label: 'Booked', type: 'checkbox' }, { key: 'pda_urinsight_link', label: 'URINSIGHT', type: 'link', value: 'https://urinsight/', linkText: 'Open URINSIGHT' }],
   'Approval To Drill': []
 };
+
+// ---------------------------------------------------------------------------
+// validateStepFields -- generic client-side sanity checks for the regular
+// step forms, mirroring the Resource Assessment calculator's own
+// validateResourceInputs (views/resource-calculator.js). Wired into
+// saveComponent (detail-form.js) before it POSTs; see that call site for the
+// "surface the message and abort" behavior.
+// ---------------------------------------------------------------------------
+
+// Generic sanity cap for a plain numeric input. `bigOk: true` on a field (or
+// repeatable column) declaration exempts it -- reserved for the handful of
+// fields that legitimately run past four digits: UTM coordinates
+// (staking_well_x/_y) and TVDSS/MD depths (top_tvdss_ft, base_tvdss_ft,
+// flowback_top_md, flowback_base_md, base_tight_sarah).
+var MAX_NUMBER = 9999;
+
+// Every rule is skipped for a blank value -- every field here is optional;
+// only a value the user actually typed gets sanity-checked. `pct` runs the
+// <=100 rule for keys ending in `_pct`. Exported (in addition to
+// validateStepFields) because no *writable* `_pct` field exists in SCHEMA
+// today -- every current one is `readonly: true` (Reservoir/Trap/Seal CoS) --
+// so rule (d) has no real end-to-end path through validateStepFields to
+// exercise in a test yet; this lets the rule itself stay covered.
+export function numericFieldError(label, raw, bigOk, pct) {
+  if (!isFilled(raw)) return null;
+  var value = Number(raw);
+  if (isNaN(value)) return label + ' must be numeric.';
+  if (value < 0) return label + ' must not be negative.';
+  if (!bigOk && value > MAX_NUMBER) return label + ' looks too large (max ' + MAX_NUMBER + ').';
+  if (pct && value > 100) return label + ' must not exceed 100%.';
+  return null;
+}
+
+// Minimal local twin of detail.js's parseRepeatableRows (schema.js stays
+// import-free of the view layer -- see the isFilled note at the top of this
+// file). `fields[key]` for a repeatable field is the JSON string getFields()
+// serializes; this is the cheap parse-back validateStepFields uses to reach
+// each row's numeric columns.
+function parseRowsForValidation(value) {
+  if (Array.isArray(value)) return value;
+  try {
+    var parsed = JSON.parse(value || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) { return []; }
+}
+
+// Rules (a)-(d) over every plain type:'number' field of a step (skipping
+// readonly:true -- users can't type into a calculated output), PLUS the same
+// rules over every numeric, non-readonly column of the step's repeatable
+// tables (Reservoir CoS's amplitude_ratio/base_tight_sarah, Flowback
+// Results' flowback_stages_rows columns) -- getFields() already hands those
+// rows back as a JSON string, so parseRowsForValidation reaches them cheaply.
+// NOT covered: the formations mini-sheet's own numeric metrics (top_tvdss_ft,
+// base_tvdss_ft, porosity_pct, ...) -- those live in detail-form.js's private
+// formationEdits buffer and save through PUT /api/projects/<id>/formations,
+// never through the `fields` object this function receives. Reaching them
+// would mean either passing that buffer in here or duplicating range checks
+// next to validateFormationRows; both are a restructuring beyond
+// "generalize the regular step forms", so it's intentionally skipped (their
+// bigOk flags above are declarative-only for now).
+function genericFieldErrors(taskName, fields) {
+  var stepFields = SCHEMA[taskName] || [];
+  for (var i = 0; i < stepFields.length; i += 1) {
+    var field = stepFields[i];
+    if (field.type === 'number' && !field.readonly) {
+      var err = numericFieldError(field.label, fields[field.key], !!field.bigOk, /_pct$/.test(field.key));
+      if (err) return err;
+    } else if (field.type === 'repeatable' && Array.isArray(field.columns)) {
+      var rows = parseRowsForValidation(fields[field.key]);
+      for (var r = 0; r < rows.length; r += 1) {
+        var row = rows[r] || {};
+        for (var c = 0; c < field.columns.length; c += 1) {
+          var col = field.columns[c];
+          if (col.type !== 'number' || col.readonly) continue;
+          var colErr = numericFieldError(col.label, row[col.key], !!col.bigOk, /_pct$/.test(col.key));
+          if (colErr) return colErr;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// Declarative per-step cross-field rules. Each entry gets the task's own
+// `fields` object (already passed the generic scan above, so any filled
+// number field it reads is guaranteed to already be a valid, in-range
+// number) and returns an error string or null.
+var CROSS_FIELD_RULES = {
+  'Reservoir Area Definition': function (fields) {
+    if (isFilled(fields.p90_area_km2) && isFilled(fields.p10_area_km2) &&
+        Number(fields.p90_area_km2) >= Number(fields.p10_area_km2)) {
+      return 'Area P90 must be lower than Area P10.'; // same wording as the popup
+    }
+    return null;
+  },
+  'Thickness Estimation': function (fields) {
+    if (isFilled(fields.reservoir_thickness_ft) && isFilled(fields.formation_thickness_ft) &&
+        Number(fields.reservoir_thickness_ft) > Number(fields.formation_thickness_ft)) {
+      return 'Reservoir Thickness must not exceed Sarah Formation Thickness.';
+    }
+    return null;
+  }
+};
+
+// Every piip()-family trio, addressed by prefix rather than by task name so
+// a future step reusing piip() is covered automatically. `fields` only ever
+// carries keys for the task actually being saved, so a prefix that doesn't
+// belong to the current step simply has nothing filled and no-ops here.
+//
+// 'lead_piip' is now unreachable through any real form: Lead Resource
+// Assessment's SCHEMA entry is `[]` (see above) -- the Resource Assessment
+// calculator (views/resource-calculator.js) writes lead_piip_* directly via
+// API.saveFields on Apply, bypassing getFields()/validateStepFields
+// entirely, so this function is never called with those keys populated in
+// practice. Left in place rather than special-cased out: the rule itself is
+// still correct, costs nothing to keep, and covers a future step that
+// reintroduces an editable lead_piip trio for free.
+var PIIP_PREFIXES = ['lead_piip', 'pre_drill_piip', 'post_drill_piip', 'resource_update'];
+
+// p90 <= mean <= p10, checked pairwise (not chained through a possibly-blank
+// middle value) and only when BOTH members of a pair are filled -- permissive
+// equality on purpose, manual deterministic entries may legitimately repeat
+// one value. `kind` ('gas'/'liquid') only decides the message's qualifier;
+// the liquid trio is naturally skipped whenever its values are blank (the
+// common case when "Liquid" is unchecked), with no need to read the
+// checkbox itself.
+function piipTrioError(fields, prefix, kind) {
+  var p90 = fields[prefix + '_' + kind + '_p90'];
+  var mean = fields[prefix + '_' + kind + '_mean'];
+  var p10 = fields[prefix + '_' + kind + '_p10'];
+  var qualifier = kind === 'gas' ? 'Gas' : 'Liquid';
+  if (isFilled(p90) && isFilled(mean) && Number(p90) > Number(mean)) {
+    return qualifier + ' P90 must not exceed Mean.';
+  }
+  if (isFilled(mean) && isFilled(p10) && Number(mean) > Number(p10)) {
+    return qualifier + ' Mean must not exceed P10.';
+  }
+  return null;
+}
+
+// Entry point: the first error string across generic per-field checks, the
+// step's declarative cross-field rule (if any), then every piip() trio --
+// or null when `fields` (a task's about-to-save dynamic-fields object, same
+// shape getFields() returns) is clean. Every rule applies only to filled
+// values; a wholly blank step always passes, matching the fact that every
+// field here is optional.
+export function validateStepFields(taskName, fields) {
+  fields = fields || {};
+  var genericError = genericFieldErrors(taskName, fields);
+  if (genericError) return genericError;
+  var crossFieldRule = CROSS_FIELD_RULES[taskName];
+  var crossFieldError = crossFieldRule ? crossFieldRule(fields) : null;
+  if (crossFieldError) return crossFieldError;
+  for (var p = 0; p < PIIP_PREFIXES.length; p += 1) {
+    var gasError = piipTrioError(fields, PIIP_PREFIXES[p], 'gas');
+    if (gasError) return gasError;
+    var liquidError = piipTrioError(fields, PIIP_PREFIXES[p], 'liquid');
+    if (liquidError) return liquidError;
+  }
+  return null;
+}
