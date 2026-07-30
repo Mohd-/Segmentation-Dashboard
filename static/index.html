@@ -15,8 +15,8 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="/static/css/base.css?v=5">
-  <link rel="stylesheet" href="/static/css/components.css?v=17">
+  <link rel="stylesheet" href="/static/css/base.css?v=6">
+  <link rel="stylesheet" href="/static/css/components.css?v=19">
 </head>
 <body>
   <section id="login-page" class="login-page hidden">
@@ -53,7 +53,7 @@
 
   <nav class="tabs app-chrome" aria-label="Main navigation" role="tablist">
     <button data-tab="prospect" class="active" role="tab" aria-selected="true" type="button">Prospect Maturation</button>
-    <button data-tab="portfolio" role="tab" aria-selected="false" type="button">Portfolio</button>
+    <button data-tab="portfolio" role="tab" aria-selected="false" type="button">Portfolio Analysis</button>
     <button data-tab="bp" role="tab" aria-selected="false" type="button">Business Plan Execution</button>
     <button data-tab="audit" role="tab" aria-selected="false" type="button">Audit Trail</button>
   </nav>
@@ -93,15 +93,19 @@
 
     <section id="tab-portfolio" class="tab" role="tabpanel">
       <div class="panel portfolio-panel">
-        <div class="toolbar portfolio-toolbar">
-          <select id="portfolio-year-filter" aria-label="Business Plan year filter"></select>
-          <select id="portfolio-activity-filter" aria-label="Well activity filter">
-            <option value="All">All Wells</option>
-            <option value="Active">Active Wells</option>
-            <option value="Non-Active">Non-Active Wells</option>
-          </select>
+        <!-- Overview row: the two stat boxes plus the resource progress bar
+             filling the remaining width. Filtering happens via the table's
+             column menus (no toolbar selects); the bar and stats re-render
+             with the visible rowset on every filter change
+             (views/portfolio-analysis.js). The card chrome and the cross-plot
+             trigger are static; only #portfolio-resource-bar re-renders. -->
+        <div class="portfolio-overview">
+          <div id="portfolio-stats" class="portfolio-stats" aria-live="polite"></div>
+          <div class="portfolio-resource-card">
+            <button type="button" id="open-crossplot" class="prc-crossplot-link">View cross plot…</button>
+            <div id="portfolio-resource-bar" class="portfolio-resource-bar" aria-live="polite"></div>
+          </div>
         </div>
-        <div id="portfolio-stats" class="portfolio-stats" aria-live="polite"></div>
         <table id="portfolio-table" class="portfolio-table"></table>
       </div>
     </section>
@@ -223,11 +227,42 @@
        click listener on the dialog itself closes it on any click inside
        (backdrop, image, or the close button all bubble to the same
        handler). -->
+  <!-- Portfolio cross plot (views/portfolio-analysis.js), opened from the
+       "View cross plot" trigger in the Portfolio Analysis overview row. It
+       carries its own filter checklists (multi-select; populated from the
+       full portfolio rowset on open) because the page-level table filters
+       don't reach into the dialog. An empty checklist = no constraint. The
+       Quadrant group filters on the plot's own cutoff quadrants. No <form>:
+       Close is procedural, like the plots viewer. -->
+  <dialog id="crossplot-dialog" class="app-dialog crossplot-dialog">
+    <div class="crossplot-dialog-body">
+      <h3>Chance of Success vs Resource</h3>
+      <div class="crossplot-filters">
+        <fieldset class="cpf-group"><legend>Field</legend>
+          <div class="cpf-list" id="crossplot-field-filter" aria-label="Filter cross plot by field"></div>
+        </fieldset>
+        <fieldset class="cpf-group"><legend>BP Year</legend>
+          <div class="cpf-list" id="crossplot-year-filter" aria-label="Filter cross plot by Business Plan year"></div>
+        </fieldset>
+        <fieldset class="cpf-group"><legend>Status</legend>
+          <div class="cpf-list" id="crossplot-status-filter" aria-label="Filter cross plot by status"></div>
+        </fieldset>
+        <fieldset class="cpf-group"><legend>Quadrant</legend>
+          <div class="cpf-list" id="crossplot-quadrant-filter" aria-label="Filter cross plot by quadrant"></div>
+        </fieldset>
+      </div>
+      <div id="portfolio-crossplot" class="portfolio-crossplot"></div>
+      <div class="app-dialog-actions">
+        <button type="button" id="crossplot-close" class="ghost">Close</button>
+      </div>
+    </div>
+  </dialog>
+
   <dialog id="ra-plot-lightbox" class="ra-lightbox">
     <button type="button" id="ra-lightbox-close" class="icon-btn ra-lightbox-close" title="Close" aria-label="Close enlarged plot">&times;</button>
     <img id="ra-lightbox-img" alt="">
   </dialog>
 
-  <script type="module" src="/static/js/main.js?v=14"></script>
+  <script type="module" src="/static/js/main.js?v=16"></script>
 </body>
 </html>

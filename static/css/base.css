@@ -39,6 +39,16 @@
   --info-500: #2f78b3;
   --info-100: #e7f1fb;
 
+  /* Data-viz (Portfolio Analysis) — a 3-step ordinal teal ramp for the
+     resource bar (discovered → undiscovered → yet-to-find, most → least
+     certain) plus the cross-plot dot. Steps are validated per mode against
+     the panel surface (dataviz checks: monotone L, ΔL ≥ .06, light end
+     ≥ 2:1, one hue), hence literal hexes instead of brand-token aliases. */
+  --viz-res-1: #0e6478;
+  --viz-res-2: #1aa2b8;
+  --viz-res-3: #6dbfcd;
+  --viz-dot: #12879a;
+
   /* Surfaces */
   --bg: #eef3f6;
   --surface: var(--white);
@@ -149,6 +159,13 @@
   --info-700: #79b6e4;
   --info-500: #3a86c2;
   --info-100: rgba(58, 134, 194, .16);
+
+  /* Data-viz — the same teal ramp re-stepped for the dark panel surface
+     (#172231): brightest = most certain, darkest step still ≥ 2:1. */
+  --viz-res-1: #33b4c9;
+  --viz-res-2: #22869c;
+  --viz-res-3: #175f70;
+  --viz-dot: #33b4c9;
 
   /* Surfaces — overridden directly (not via --white/--gray-*) */
   --bg: #0e1621;

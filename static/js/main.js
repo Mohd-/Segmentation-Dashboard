@@ -4,6 +4,7 @@ import { API } from './api.js';
 import { activateTab, scrollToTab } from './navigation.js';
 import { refreshProspect, refreshBP, createLead } from './views/pipeline.js';
 import { refreshPortfolio } from './views/portfolio.js';
+import { initPortfolioAnalysis } from './views/portfolio-analysis.js';
 import { refreshAudit } from './views/audit.js';
 import { saveComponent, assignComponent, transitionComponent, cyclePriorityChip, ensureUsers } from './views/detail-form.js';
 import { openProjectEditor } from './views/project-editor.js';
@@ -104,8 +105,10 @@ export function wire() {
   });
   ['prospect-status-filter', 'prospect-assignee-filter'].forEach(function (id) { safeOn(id, 'input', refreshProspect); safeOn(id, 'change', refreshProspect); });
   ['bp-year-filter', 'bp-status-filter', 'bp-assignee-filter'].forEach(function (id) { safeOn(id, 'input', refreshBP); safeOn(id, 'change', refreshBP); });
-  ['portfolio-year-filter', 'portfolio-activity-filter'].forEach(function (id) { safeOn(id, 'change', refreshPortfolio); });
   safeOn('audit-project-filter', 'change', refreshAudit);
+  // Portfolio Analysis: cross plot dialog trigger, close, and filter selects.
+  // (The portfolio table itself filters via its column menus -- portfolio.js.)
+  initPortfolioAnalysis();
 }
 
 // Board assignee filters: value '' = All assignees (pipeline.js maps '' to the
@@ -122,11 +125,6 @@ function fillAssigneeFilter(select, users) {
 function boot() {
   fillSelect(byId('prospect-status-filter'), PROSPECT_STATUSES, true);
   fillSelect(byId('bp-status-filter'), PROJECT_STATUSES, true);
-  // The portfolio year range is only a boot placeholder: the first unfiltered
-  // portfolio fetch replaces it with the distinct years actually present
-  // (views/portfolio.js), so imported historical (pre-2026) wells become
-  // selectable. The BP board select stays a fixed 2026+ planning range.
-  fillSelect(byId('portfolio-year-filter'), range(2026, 2040), true);
   fillSelect(byId('bp-year-filter'), range(2026, 2040), true);
   ensureUsers().then(function (users) {
     fillAssigneeFilter(byId('prospect-assignee-filter'), users || []);
