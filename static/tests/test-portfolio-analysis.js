@@ -46,29 +46,40 @@ test('portfolio-analysis.crossPlotPoints keeps only rows with both measures, CoS
   assert.equal(points[0].ogip, 30);
 });
 
-test('portfolio-analysis.renderResourceBar renders total + three proportional stages', function () {
+test('portfolio-analysis.renderResourceBar renders total + strictly proportional segments', function () {
   var root = fixture('<div id="portfolio-resource-bar"></div>');
   renderResourceBar(sampleRows());
   var title = root.querySelector('.prb-title');
   assert.match(title.textContent, /Total Estimated Original Gas Initially in Place is 1,268 BCF/);
-  var stages = root.querySelectorAll('.prb-stage');
-  assert.equal(stages.length, 3);
-  assert.match(stages[0].textContent, /42\.5 BCF/);
-  assert.match(stages[0].textContent, /Discovered Resources/);
-  assert.match(stages[1].textContent, /25 BCF/);
-  assert.match(stages[1].textContent, /Undiscovered Resources/);
-  assert.match(stages[2].textContent, /1,200 BCF/);
-  assert.match(stages[2].textContent, /Yet to Find/);
-  assert.equal(stages[2].style.flexGrow, '1200', 'width proportional to value');
+  var segments = root.querySelectorAll('.prb-seg');
+  assert.equal(segments.length, 3);
+  assert.equal(segments[0].style.flexGrow, '42.5', 'discovered width tracks its value');
+  assert.equal(segments[2].style.flexGrow, '1200', 'ytf width tracks its value');
+  assert.equal(segments[0].style.flexBasis, '0%', 'basis 0 so widths are purely proportional');
+  var keys = root.querySelectorAll('.prb-key');
+  assert.equal(keys.length, 3);
+  assert.match(keys[0].textContent, /42\.5 BCF/);
+  assert.match(keys[0].textContent, /Discovered Resources/);
+  assert.match(keys[1].textContent, /25 BCF/);
+  assert.match(keys[1].textContent, /Undiscovered Resources/);
+  assert.match(keys[2].textContent, /1,200 BCF/);
+  assert.match(keys[2].textContent, /Yet to Find/);
 });
 
-test('portfolio-analysis.renderResourceBar keeps zero-value stages visible', function () {
+test('portfolio-analysis.renderResourceBar drops zero segments but keeps their legend entry', function () {
   var root = fixture('<div id="portfolio-resource-bar"></div>');
   renderResourceBar([{ well_name: 'X-1', gas_field: 'X', status: 'Gas', mean_ogip: 10, total_cos: 50 }]);
-  var stages = root.querySelectorAll('.prb-stage');
-  assert.equal(stages.length, 3);
-  assert.match(stages[1].textContent, /0 BCF/);
-  assert.equal(stages[1].style.flexGrow, '1', 'zero stage falls back to weight 1');
+  assert.equal(root.querySelectorAll('.prb-seg').length, 2, 'no segment for the 0 BCF stage');
+  var keys = root.querySelectorAll('.prb-key');
+  assert.equal(keys.length, 3, 'legend always lists all three stages');
+  assert.match(keys[1].textContent, /0 BCF/);
+});
+
+test('portfolio-analysis.renderResourceBar shows an empty track when everything is zero', function () {
+  var root = fixture('<div id="portfolio-resource-bar"></div>');
+  renderResourceBar([]);
+  assert.equal(root.querySelectorAll('.prb-seg.prb-empty').length, 1);
+  assert.equal(root.querySelectorAll('.prb-key').length, 3);
 });
 
 test('portfolio-analysis.renderCrossPlot draws dots, cutoffs and quadrant labels', function () {

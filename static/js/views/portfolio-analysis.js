@@ -65,20 +65,27 @@ export function renderResourceBar(rows) {
     { slug: 'ytf', label: 'Yet to Find', value: summary.ytf,
       hint: YTF_BCF_PER_FIELD + ' BCF × ' + summary.fieldCount + ' field' + (summary.fieldCount === 1 ? '' : 's') + ' in the current selection' }
   ];
-  // Segment widths are proportional to the stage values via flex-grow; the
-  // CSS min-width floor keeps a small (or zero) stage wide enough for its
-  // label, so the weights only need a non-zero fallback for the all-zero case.
-  var segments = stages.map(function (stage) {
-    return '<div class="prb-stage" style="flex-grow:' + (stage.value > 0 ? stage.value : 1) + '" title="' + esc(stage.hint) + '">' +
-      '<div class="prb-fill prb-' + stage.slug + '"></div>' +
-      '<div class="prb-meta"><b>' + esc(fmtBcf(stage.value)) + ' BCF</b><small>' + esc(stage.label) + '</small></div>' +
-      '</div>';
+  // Segments are strictly proportional to their BCF share: inline flex
+  // weights with basis 0 (and no min-width floor), so width tracks value
+  // exactly however the filters re-scope the sums. A stage with no volume
+  // renders no segment at all. Captions live in a separate legend row
+  // (swatch + value + name, centered per entry) so a thin segment can never
+  // crush or overlap its caption.
+  var segments = stages.filter(function (stage) { return stage.value > 0; }).map(function (stage) {
+    return '<div class="prb-seg prb-' + stage.slug + '" style="flex:' + stage.value + ' 1 0%" title="' + esc(stage.hint) + '"></div>';
+  }).join('');
+  if (!segments) segments = '<div class="prb-seg prb-empty"></div>';
+  var legend = stages.map(function (stage) {
+    return '<div class="prb-key" title="' + esc(stage.hint) + '">' +
+      '<b><span class="prb-swatch prb-' + stage.slug + '"></span>' + esc(fmtBcf(stage.value)) + ' BCF</b>' +
+      '<small>' + esc(stage.label) + '</small></div>';
   }).join('');
   element.innerHTML =
     '<p class="prb-title">Total Estimated Original Gas Initially in Place is <b>' + esc(fmtBcf(summary.total)) + ' BCF</b></p>' +
     '<div class="prb-bar" role="img" aria-label="Discovered ' + esc(fmtBcf(summary.discovered)) +
     ' BCF, undiscovered ' + esc(fmtBcf(summary.undiscovered)) +
-    ' BCF, yet to find ' + esc(fmtBcf(summary.ytf)) + ' BCF">' + segments + '</div>';
+    ' BCF, yet to find ' + esc(fmtBcf(summary.ytf)) + ' BCF">' + segments + '</div>' +
+    '<div class="prb-legend">' + legend + '</div>';
 }
 
 // ---------------------------------------------------------------------------

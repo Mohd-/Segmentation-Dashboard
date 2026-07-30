@@ -705,12 +705,18 @@ button.ghost.success-outline:hover { background: var(--success-100); }
    remaining width. */
 .portfolio-overview { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: stretch; margin: 0 0 var(--space-4); }
 .portfolio-stats { display: contents; }
-.portfolio-overview .portfolio-stat { flex: 0 1 240px; min-width: 180px; }
-.portfolio-resource-card { position: relative; flex: 1 1 420px; min-width: 340px; padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-sunken); }
+/* Stat boxes stay compact; the resource card takes all remaining width.
+   align-items: stretch on the row keeps card and stat boxes one height,
+   with the stat content vertically centered inside its stretched box. */
+.portfolio-overview .portfolio-stat { flex: 0 1 170px; min-width: 140px; display: flex; flex-direction: column; justify-content: center; }
+.portfolio-resource-card { position: relative; flex: 1 1 560px; min-width: 340px; padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-sunken); }
 .prc-crossplot-link {
   position: absolute;
   top: var(--space-3);
   right: var(--space-4);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   padding: 0;
   border: 0;
   background: none;
@@ -723,24 +729,27 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 }
 .prc-crossplot-link:hover { background: none; color: var(--brand-600); }
 
-/* Resource progress bar (views/portfolio-analysis.js): three stacked-bar
-   segments sized flex-grow-proportionally to their BCF values, separated by
-   the 2px surface gap; each stage carries its own value + label below (text
-   tokens, never inside the fill). The min-width floor keeps a small or zero
-   stage wide enough for its label. */
+/* Resource progress bar (views/portfolio-analysis.js): segments sized
+   strictly proportional to their BCF values (inline flex weights, basis 0,
+   no min-width floor), separated by the 2px surface gap and rounded as one
+   track via the container. Captions sit in the legend row below -- swatch +
+   value + stage name, centered per entry (text tokens, never inside the
+   fill) -- so segment widths stay honest at any proportion. */
 .prb-title { margin: 0 0 var(--space-2); padding-right: 120px; font-size: var(--text-base); color: var(--text); }
 .prb-title b { font-family: var(--font-display); color: var(--brand-700); }
-.prb-bar { display: flex; gap: 2px; }
-.prb-stage { flex: 1 1 0; min-width: 176px; }
-.prb-fill { height: 24px; background: var(--surface-sunken); }
-.prb-stage:first-child .prb-fill { border-radius: var(--radius-md) 0 0 var(--radius-md); }
-.prb-stage:last-child .prb-fill { border-radius: 0 var(--radius-md) var(--radius-md) 0; }
+.prb-bar { display: flex; gap: 2px; height: 24px; border-radius: var(--radius-md); overflow: hidden; }
+.prb-seg { min-width: 2px; }
+.prb-seg.prb-empty { flex: 1 1 0%; background: var(--gray-100); }
 .prb-discovered { background: var(--viz-res-1); }
 .prb-undiscovered { background: var(--viz-res-2); }
 .prb-ytf { background: var(--viz-res-3); }
-.prb-meta { margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.prb-meta b { display: block; font-family: var(--font-display); font-variant-numeric: tabular-nums; color: var(--text); font-size: var(--text-base); }
-.prb-meta small { color: var(--text-muted); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .05em; font-family: var(--font-display); font-weight: 700; }
+.prb-legend { display: flex; justify-content: space-between; gap: var(--space-4); margin-top: 6px; }
+.prb-key { min-width: 0; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prb-key:first-child { text-align: left; }
+.prb-key:last-child { text-align: right; }
+.prb-key b { display: block; font-family: var(--font-display); font-variant-numeric: tabular-nums; color: var(--text); font-size: var(--text-base); }
+.prb-key small { color: var(--text-muted); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .05em; font-family: var(--font-display); font-weight: 700; }
+.prb-swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 2px; }
 
 /* Cross plot (views/portfolio-analysis.js), inside #crossplot-dialog:
    responsive SVG, hairline grid, red cutoff lines, one dot series with a
@@ -780,7 +789,8 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   z-index: 5;
 }
 .pxp-tooltip b { display: block; color: var(--text); }
-.portfolio-stats { display: grid; grid-template-columns: repeat(2, minmax(180px, 370px)); gap: var(--space-3); margin: 0 0 var(--space-4); }
+/* (.portfolio-stats is display:contents in the overview row above -- the
+   stat boxes are flex items of .portfolio-overview and stretch with it.) */
 .portfolio-stat { padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-sunken); }
 .portfolio-stat small { display: block; font-family: var(--font-display); color: var(--text-muted); font-size: var(--text-xs); font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
 .portfolio-stat b { display: block; margin-top: 6px; font-family: var(--font-display); font-variant-numeric: tabular-nums; color: var(--ink-900); font-size: var(--text-xl); }
@@ -823,10 +833,12 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .pf-col-trigger:hover { background: none; color: var(--brand-700); }
 .pf-col-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pf-col-affix { display: inline-flex; align-items: center; gap: 4px; flex: none; }
-.pf-sort-mark { font-size: 9px; color: var(--brand-700); }
+.pf-sort-mark { display: inline-flex; align-items: center; color: var(--brand-700); }
+/* Lucide chevrons need a touch more room than the old 9px text glyphs. */
+.pf-sort-mark .lucide, .pf-caret .lucide { width: 12px; height: 12px; }
 .pf-filter-mark { width: 6px; height: 6px; border-radius: 50%; background: transparent; }
 .pf-filter-mark.is-on { background: var(--brand-600); }
-.pf-caret { font-size: 9px; color: var(--text-muted); }
+.pf-caret { display: inline-flex; align-items: center; color: var(--text-muted); }
 
 /* The pop-over itself: a compact card positioned against the viewport by
    portfolio.js. Fixed positioning keeps it outside the table/panel overflow
@@ -951,13 +963,43 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .portfolio-table .well-link { color: var(--brand-700); font-weight: 700; text-decoration: none; }
 .portfolio-table .well-link:hover { text-decoration: underline; }
 
-/* Supervisor-only trailing Actions column: unsortable header + compact
-   per-row buttons -- Recall (ghost + danger-outline) and Promote (ghost +
-   success-outline) share one size so the column reads uniformly. */
-/* Actions has no column menu (no data-key), so it needs no sort/filter undo. */
-.portfolio-actions-th { white-space: nowrap; }
-.portfolio-actions-cell { white-space: nowrap; text-align: right; }
-.portfolio-recall, .portfolio-promote { padding: 3px 10px; font-size: var(--text-xs); font-weight: 700; }
+/* Supervisor-only inline BP Year actions (portfolio.js yearCellMarkup):
+   a Lucide '+' replaces the missing year on undrilled records (promote);
+   a Lucide '−' sits beside an already-passed BP year (recall). */
+.pf-year-cell { white-space: nowrap; }
+.pf-year-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  margin-left: var(--space-2);
+  border: 1px solid;
+  border-radius: var(--radius-sm);
+  background: none;
+  box-shadow: none;
+  font-size: 13px;
+  vertical-align: middle;
+}
+.pf-year-action.pf-year-add { margin-left: 0; color: var(--success-600); border-color: var(--success-500); }
+.pf-year-action.pf-year-add:hover { background: var(--success-100); }
+/* Recall is a bare, small X beside the year (chip-remove pattern): no box
+   chrome, muted until hovered red. */
+.pf-year-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  margin-left: var(--space-1);
+  border: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--text-faint);
+  vertical-align: middle;
+}
+.pf-year-x .lucide { width: 12px; height: 12px; }
+.pf-year-x:hover { background: none; color: var(--danger-600); }
 
 /* =========================================================================
    Audit tab

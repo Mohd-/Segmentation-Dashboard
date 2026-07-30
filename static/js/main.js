@@ -1,4 +1,5 @@
 import { byId, all, esc, fillSelect, range } from './dom.js';
+import { ICONS } from './icons.js';
 import { Store, currentProjectPipeline } from './state.js';
 import { API } from './api.js';
 import { activateTab, scrollToTab } from './navigation.js';
@@ -33,13 +34,14 @@ export function showTab(name) {
 function safeOn(id, event, handler) { var element = byId(id); if (element) element.addEventListener(event, handler); }
 
 // Dark theme. The <head> inline script stamps data-theme pre-paint; these
-// keep the toggle glyph/state in sync and persist the user's choice. The
-// button shows ☾ in light mode (click → go dark) and ☀ in dark (click → light).
+// keep the toggle icon/state in sync and persist the user's choice. The
+// button shows a moon in light mode (click → go dark) and a sun in dark
+// (click → light) — Lucide icons, matching the static markup's default.
 function syncThemeToggle() {
   var isDark = document.documentElement.dataset.theme === 'dark';
   var button = byId('theme-toggle');
   if (!button) return;
-  button.textContent = isDark ? '☀' : '☾';
+  button.innerHTML = isDark ? ICONS.sun : ICONS.moon;
   button.setAttribute('aria-pressed', String(isDark));
 }
 function applyTheme(theme) {

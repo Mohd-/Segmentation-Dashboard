@@ -1,4 +1,5 @@
 import { byId, all, esc, msg, statusChip } from '../dom.js';
+import { ICONS } from '../icons.js';
 import { API } from '../api.js';
 import { currentUserName, Store, resetSelection } from '../state.js';
 import { activateTab, scrollToTab } from '../navigation.js';
@@ -47,7 +48,7 @@ function headMarkup(project) {
   var pipelineLabel = String(project.pipeline_type || '').toLowerCase() === 'bp'
     ? 'Business Plan Execution' : 'Prospect Maturation';
   return '<div class="pe-head">' +
-    '<button id="pe-back" type="button" class="ghost">&larr; Back to Portfolio</button>' +
+    '<button id="pe-back" type="button" class="ghost">' + ICONS['arrow-left'] + ' Back to Portfolio</button>' +
     '<div class="pe-head-titles">' +
     '<h2 id="pe-name">' + esc(project.project_name || 'Lead / Well') + '</h2>' +
     '<p class="pe-subtitle">All project fields</p></div>' +

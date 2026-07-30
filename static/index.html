@@ -15,8 +15,8 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="/static/css/base.css?v=6">
-  <link rel="stylesheet" href="/static/css/components.css?v=19">
+  <link rel="stylesheet" href="/static/css/base.css?v=7">
+  <link rel="stylesheet" href="/static/css/components.css?v=23">
 </head>
 <body>
   <section id="login-page" class="login-page hidden">
@@ -43,7 +43,7 @@
       </div>
     </div>
     <div class="header-actions">
-      <button id="theme-toggle" type="button" class="icon-btn" aria-label="Toggle dark theme" aria-pressed="false" title="Toggle dark theme">&#9790;</button>
+      <button id="theme-toggle" type="button" class="icon-btn" aria-label="Toggle dark theme" aria-pressed="false" title="Toggle dark theme"><svg aria-hidden="true" focusable="false" class="lucide lucide-moon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/> </svg></button>
       <span id="user-chip" class="user-chip hidden"></span>
       <button id="sign-out" type="button" class="ghost hidden">Sign out</button>
       <a class="header-link" href="#">Segments Dashboard</a><!-- TODO: set the real Segments Dashboard URL and restore target="_blank" rel="noreferrer" (a '#' href with target=_blank opens a duplicate app tab) -->
@@ -102,7 +102,7 @@
         <div class="portfolio-overview">
           <div id="portfolio-stats" class="portfolio-stats" aria-live="polite"></div>
           <div class="portfolio-resource-card">
-            <button type="button" id="open-crossplot" class="prc-crossplot-link">View cross plot…</button>
+            <button type="button" id="open-crossplot" class="prc-crossplot-link"><svg aria-hidden="true" focusable="false" class="lucide lucide-chart-scatter" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/> <circle cx="18.5" cy="5.5" r=".5" fill="currentColor"/> <circle cx="11.5" cy="11.5" r=".5" fill="currentColor"/> <circle cx="7.5" cy="16.5" r=".5" fill="currentColor"/> <circle cx="17.5" cy="14.5" r=".5" fill="currentColor"/> <path d="M3 3v16a2 2 0 0 0 2 2h16"/> </svg> View cross plot…</button>
             <div id="portfolio-resource-bar" class="portfolio-resource-bar" aria-live="polite"></div>
           </div>
         </div>
@@ -114,7 +114,7 @@
       <aside class="component-rail">
         <div class="rail-head">
           <div class="rail-nav">
-            <button id="back-to-overview" class="ghost" type="button">&larr; Back to Pipeline</button>
+            <button id="back-to-overview" class="ghost" type="button"><svg aria-hidden="true" focusable="false" class="lucide lucide-arrow-left" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="m12 19-7-7 7-7"/> <path d="M19 12H5"/> </svg> Back to Pipeline</button>
             <button id="switch-pipeline-view" class="ghost rail-switch-pipeline" type="button">View Other Pipeline</button>
           </div>
           <h3 id="detail-name">Select Lead / Well</h3>
@@ -151,7 +151,7 @@
         <div class="summary-card">
           <div class="summary-card-head">
             <h3 id="summary-title">Lead Summary</h3>
-            <button id="summary-settings-toggle" type="button" class="icon-btn" title="Manage lead / well" aria-label="Manage lead / well" aria-haspopup="dialog" aria-expanded="false">&#9881;&#65038;</button>
+            <button id="summary-settings-toggle" type="button" class="icon-btn" title="Manage lead / well" aria-label="Manage lead / well" aria-haspopup="dialog" aria-expanded="false"><svg aria-hidden="true" focusable="false" class="lucide lucide-settings" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/> <circle cx="12" cy="12" r="3"/> </svg></button>
           </div>
           <div id="lead-summary" class="summary-content"></div>
         </div>
@@ -259,10 +259,10 @@
   </dialog>
 
   <dialog id="ra-plot-lightbox" class="ra-lightbox">
-    <button type="button" id="ra-lightbox-close" class="icon-btn ra-lightbox-close" title="Close" aria-label="Close enlarged plot">&times;</button>
+    <button type="button" id="ra-lightbox-close" class="icon-btn ra-lightbox-close" title="Close" aria-label="Close enlarged plot"><svg aria-hidden="true" focusable="false" class="lucide lucide-x" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="M18 6 6 18"/> <path d="m6 6 12 12"/> </svg></button>
     <img id="ra-lightbox-img" alt="">
   </dialog>
 
-  <script type="module" src="/static/js/main.js?v=16"></script>
+  <script type="module" src="/static/js/main.js?v=19"></script>
 </body>
 </html>

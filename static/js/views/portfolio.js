@@ -1,4 +1,5 @@
 import { byId, all, esc, msg, fmtNum } from '../dom.js';
+import { ICONS } from '../icons.js';
 import { API } from '../api.js';
 import { FLUID_TYPES } from '../schema.js';
 import { currentUserName } from '../state.js';
@@ -141,26 +142,43 @@ function visibleRows() {
   return sorted;
 }
 
+// BP Year cell with inline promote/recall icons (replaces the old trailing
+// Actions column; still supervisor-only via canTransitionPhase). A bare
+// Lucide X sits beside the year of every record already in the Business
+// Plan (is_mature_lead 0 -- the same membership signal the old Recall
+// button keyed on) and runs the Recall flow. A Lucide '+' stands in for the
+// missing year on undrilled (Staked/Proposed) records outside the BP and
+// runs the Promote flow (year prompt + snapshot). The .portfolio-promote/
+// .portfolio-recall classes keep the existing renderBody click wiring.
+function yearCellMarkup(row) {
+  var yearText = esc(row.year || '');
+  if (!canTransitionPhase()) return '<td>' + yearText + '</td>';
+  var attrs = ' data-project-id="' + esc(row.project_id) + '" data-project-name="' + esc(row.well_name || '') + '"';
+  if (!row.is_mature_lead) {
+    // Bare, small X (no box chrome): muted until hovered so it doesn't
+    // shout on every BP row; the confirm dialog still guards the recall.
+    return '<td class="pf-year-cell">' + yearText + '<button type="button" class="pf-year-x portfolio-recall"' + attrs +
+      ' title="Remove from Business Plan — recall to lead phase" aria-label="Recall ' + esc(row.well_name || '') + ' to lead phase">' + ICONS.x + '</button></td>';
+  }
+  var hasYear = !(row.year === null || row.year === undefined || row.year === '');
+  var undrilled = row.status === 'Staked' || row.status === 'Proposed';
+  if (!hasYear && undrilled) {
+    return '<td class="pf-year-cell"><button type="button" class="pf-year-action pf-year-add portfolio-promote"' + attrs +
+      ' title="No BP year yet — promote to BP well" aria-label="Promote ' + esc(row.well_name || '') + ' to BP well">' + ICONS.plus + '</button></td>';
+  }
+  return '<td>' + yearText + '</td>';
+}
+
 function rowMarkup(row) {
-  // Supervisor-only trailing Actions cell: mature leads get Promote (year
-  // prompt + snapshot via transitions.js promoteProject), BP wells keep the
-  // existing Recall (transitions.js confirm + PATCH /flags).
-  var actionButton = row.is_mature_lead
-    ? '<button type="button" class="ghost success-outline portfolio-promote" data-project-id="' + esc(row.project_id) + '" data-project-name="' + esc(row.well_name || '') + '">Promote…</button>'
-    : '<button type="button" class="ghost danger-outline portfolio-recall" data-project-id="' + esc(row.project_id) + '" data-project-name="' + esc(row.well_name || '') + '">Recall</button>';
-  var actionsCell = canTransitionPhase()
-    ? '<td class="portfolio-actions-cell">' + actionButton + '</td>'
-    : '';
   return '<tr>' +
     '<td><a href="#" class="well-link" data-project-id="' + esc(row.project_id) + '" data-pipeline="' + esc(row.pipeline_type === 'bp' ? 'bp' : 'prospect') + '" title="Open in ' + (row.pipeline_type === 'bp' ? 'Business Plan Execution' : 'Prospect Maturation') + '">' + esc(row.well_name || '') + '</a></td>' +
     '<td>' + esc(row.gas_field || '') + '</td>' +
     '<td>' + esc(row.seismic_block || '') + '</td>' +
     '<td>' + esc(row.classification || '') + '</td>' +
-    '<td>' + esc(row.year || '') + '</td>' +
+    yearCellMarkup(row) +
     '<td>' + esc(row.status || '') + '</td>' +
     '<td>' + esc(fmtNum(row.mean_ogip) || '') + '</td>' +
     '<td>' + esc(fmtNum(row.total_cos) || '') + '</td>' +
-    actionsCell +
     '</tr>';
 }
 
@@ -168,9 +186,8 @@ function renderBody(table) {
   var tbody = table.querySelector('tbody');
   if (!tbody) return;
   var rows = visibleRows();
-  var columnCount = COLUMNS.length + (canTransitionPhase() ? 1 : 0);
   tbody.innerHTML = rows.length ? rows.map(rowMarkup).join('') :
-    '<tr><td colspan="' + columnCount + '" class="empty-state">No records yet.</td></tr>';
+    '<tr><td colspan="' + COLUMNS.length + '" class="empty-state">No records yet.</td></tr>';
   all('.well-link', tbody).forEach(function (link) {
     link.addEventListener('click', function (event) {
       event.preventDefault();
@@ -274,7 +291,7 @@ function filterGroupMarkup(col) {
 // against the viewport when opened so table/panel overflow cannot clip it.
 function columnHeaderMarkup(col) {
   var labels = sortLabels(col);
-  var sortMark = state.sortKey === col.key ? (state.sortDir === 1 ? '▲' : '▼') : '';
+  var sortMark = state.sortKey === col.key ? (state.sortDir === 1 ? ICONS['chevron-up'] : ICONS['chevron-down']) : '';
   var filtered = columnIsFiltered(col);
   return '<th data-key="' + col.key + '" aria-sort="none">' +
     '<button type="button" class="pf-col-trigger" aria-haspopup="true" aria-expanded="false">' +
@@ -282,7 +299,7 @@ function columnHeaderMarkup(col) {
       '<span class="pf-col-affix">' +
         '<span class="pf-sort-mark" aria-hidden="true">' + sortMark + '</span>' +
         '<span class="pf-filter-mark' + (filtered ? ' is-on' : '') + '" aria-hidden="true"></span>' +
-        '<span class="pf-caret" aria-hidden="true">▾</span>' +
+        '<span class="pf-caret" aria-hidden="true">' + ICONS['chevron-down'] + '</span>' +
       '</span>' +
     '</button>' +
     '<div class="pf-popover" hidden>' +
@@ -354,7 +371,7 @@ function wirePortfolioDismiss() {
 }
 
 // Reflect current sort/filter state onto the (persistent) header without a
-// thead rebuild: aria-sort, the inline ▲/▼ mark, the active sort option, and
+// thead rebuild: aria-sort, the inline chevron sort mark, the active sort option, and
 // the per-column "filtered" dot. Called after every sort/filter change so the
 // open menu keeps its DOM (and any focused input) intact.
 function refreshHeaderState(table) {
@@ -366,7 +383,7 @@ function refreshHeaderState(table) {
     th.classList.toggle('sorted-desc', isSorted && state.sortDir === -1);
     th.setAttribute('aria-sort', isSorted ? (state.sortDir === 1 ? 'ascending' : 'descending') : 'none');
     var sortMark = th.querySelector('.pf-sort-mark');
-    if (sortMark) sortMark.textContent = isSorted ? (state.sortDir === 1 ? '▲' : '▼') : '';
+    if (sortMark) sortMark.innerHTML = isSorted ? (state.sortDir === 1 ? ICONS['chevron-up'] : ICONS['chevron-down']) : '';
     all('.pf-sort-opt', th).forEach(function (opt) {
       opt.classList.toggle('is-active', isSorted && Number(opt.getAttribute('data-dir')) === state.sortDir);
     });
@@ -379,12 +396,11 @@ function refreshHeaderState(table) {
 // Rebuilds thead -- only called when the fetched dataset changes, so typing in
 // a filter input or an open menu never fights the DOM for focus (sort/filter
 // changes only re-render tbody + refreshHeaderState in place).
+// (The former supervisor-only Actions column is gone: promote/recall now
+// live as inline icons in the BP Year cells -- yearCellMarkup.)
 function renderHead(table) {
-  // Supervisor-only trailing Actions column (per-row Recall/Promote): one
-  // unsortable header th with no data-key, so it grows no column menu.
-  var actionsHead = canTransitionPhase() ? '<th class="portfolio-actions-th">Actions</th>' : '';
   table.innerHTML =
-    '<thead><tr>' + COLUMNS.map(columnHeaderMarkup).join('') + actionsHead + '</tr></thead><tbody></tbody>';
+    '<thead><tr>' + COLUMNS.map(columnHeaderMarkup).join('') + '</tr></thead><tbody></tbody>';
 
   all('th[data-key]', table).forEach(function (th) {
     var key = th.getAttribute('data-key');

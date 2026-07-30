@@ -39,14 +39,15 @@
   --info-500: #2f78b3;
   --info-100: #e7f1fb;
 
-  /* Data-viz (Portfolio Analysis) — a 3-step ordinal teal ramp for the
-     resource bar (discovered → undiscovered → yet-to-find, most → least
-     certain) plus the cross-plot dot. Steps are validated per mode against
-     the panel surface (dataviz checks: monotone L, ΔL ≥ .06, light end
-     ≥ 2:1, one hue), hence literal hexes instead of brand-token aliases. */
-  --viz-res-1: #0e6478;
-  --viz-res-2: #1aa2b8;
-  --viz-res-3: #6dbfcd;
+  /* Data-viz (Portfolio Analysis) — resource-bar stages use the corporate
+     red/pink/gray coding (discovered / undiscovered / yet-to-find, per
+     spec: rgb(255,0,0) / rgb(255,204,216) / rgb(217,217,217)); the pale
+     fills rely on the value+label text under each segment, never on the
+     fill alone. Same hexes in both themes. --viz-dot is the cross-plot
+     series color, validated per mode against the panel surface. */
+  --viz-res-1: #ff0000;
+  --viz-res-2: #ffccd8;
+  --viz-res-3: #d9d9d9;
   --viz-dot: #12879a;
 
   /* Surfaces */
@@ -160,11 +161,8 @@
   --info-500: #3a86c2;
   --info-100: rgba(58, 134, 194, .16);
 
-  /* Data-viz — the same teal ramp re-stepped for the dark panel surface
-     (#172231): brightest = most certain, darkest step still ≥ 2:1. */
-  --viz-res-1: #33b4c9;
-  --viz-res-2: #22869c;
-  --viz-res-3: #175f70;
+  /* Data-viz — the corporate resource-bar coding stays fixed across themes
+     (see the light block); only the cross-plot dot re-steps for dark. */
   --viz-dot: #33b4c9;
 
   /* Surfaces — overridden directly (not via --white/--gray-*) */
@@ -382,6 +380,12 @@ button.danger:hover { background: var(--danger-600); }
   font-size: var(--text-base);
 }
 button.icon-btn:hover { background: var(--brand-100); }
+
+/* Vendored Lucide icons (static/icons/, inlined via js/icons.js or the
+   markup): strokes follow currentColor; size follows the local font size,
+   with a fixed 16px inside the square icon buttons. */
+.lucide { width: 1em; height: 1em; vertical-align: -0.15em; }
+.icon-btn .lucide { width: 16px; height: 16px; }
 
 .create-grid, .toolbar {
   display: grid;
