@@ -14,3 +14,4 @@ __pycache__/
 
 # Approved model binary is deployed out-of-band, not versioned.
 RF_model.joblib
+portfolio-analysis.png
