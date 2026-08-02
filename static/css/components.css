@@ -27,10 +27,223 @@
 .priority-medium { background: var(--info-100); color: var(--info-700); border-color: var(--info-500); }
 .priority-high { background: var(--warning-100); color: var(--warning-700); border-color: var(--warning-500); }
 
-/* Slim New Lead disclosure: just the toggle button when collapsed; the form
-   reveals below it on open. */
-.new-lead-panel { padding: var(--space-2) var(--space-3); }
-.new-lead-panel #new-lead-body { margin-top: var(--space-3); }
+/* =========================================================================
+   Add New Lead (Card 1D)
+
+   ONE control with two states, IN PLACE — no modal, no disclosure chrome:
+     collapsed  the navy "+ Add New Lead" button
+     expanded   exactly three inline fields (Lead Name / X / Y) + the hint
+   Behavior lives in views/lead-create.js; this file only dresses the states.
+
+   Height discipline: .new-lead-controls fixes the row height, so swapping the
+   button for the fields — and showing the "Press Enter to create" hint, which
+   sits INSIDE the row and is shorter than the inputs — never moves the board
+   below. An inline error is absolutely positioned (it cannot push the row
+   either); the panel adds bottom padding via .has-error so the message never
+   spills onto the filter panel.
+   ========================================================================= */
+.new-lead-panel { padding: var(--space-3) var(--space-4); }
+.new-lead-panel.has-error { padding-bottom: calc(var(--space-3) + 15px); }
+.new-lead-controls { display: flex; align-items: center; min-height: 40px; }
+
+.new-lead-button {
+  padding: 9px var(--space-6);
+  min-width: 240px;
+  background: var(--asas-navy-fill);
+  border: 1px solid var(--asas-navy-fill);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  color: var(--asas-navy-ink);
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+.new-lead-button:hover { background: var(--asas-navy-fill-hover); border-color: var(--asas-navy-fill-hover); }
+
+.new-lead-fields { display: flex; align-items: center; gap: var(--space-3); flex-wrap: nowrap; }
+/* The anchor for the absolutely positioned error message. */
+.nl-field { position: relative; display: flex; }
+.nl-input {
+  width: 200px;
+  padding: 9px var(--space-3);
+  font-size: var(--text-base);
+}
+.nl-input[aria-invalid="true"] {
+  border-color: var(--danger-500);
+  background: var(--danger-100);
+  color: var(--danger-700);
+}
+.nl-error {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  margin: 0;
+  max-width: 280px;
+  color: var(--danger-700);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.nl-error[hidden] { display: none; }
+/* Deliberately quiet: it explains the interaction, it is not a control. */
+.nl-hint {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+/* In-flight: the POST is running, Enter is locked out. */
+.new-lead-fields.is-busy .nl-input { opacity: .6; }
+.new-lead-fields.is-busy .nl-hint { color: var(--text-muted); font-weight: 700; }
+
+@media (max-width: 720px) {
+  .new-lead-fields { flex-wrap: wrap; }
+  .nl-input { width: 140px; }
+}
+
+/* =========================================================================
+   Header dropdowns (Card 1F) — the notification bell and the gear menu
+
+   Both are position: fixed and placed against the VIEWPORT by
+   views/header-menus.js (placeMenu), right-aligned under their trigger: the
+   header is a sticky bar and an absolutely positioned menu would be clipped by
+   it. z-index sits above the board's filter menus (100) and the sticky header
+   (20), so a header menu is always the topmost surface. Because they are out
+   of flow and hidden with [hidden], opening either shifts nothing.
+   ========================================================================= */
+.header-menu {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-1);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  text-align: left;
+}
+.header-menu[hidden] { display: none; }
+
+/* --- the gear menu: three actions, icon + label ------------------------- */
+.gear-menu { min-width: 200px; }
+.hm-action {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: 8px var(--space-3);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  color: var(--ink-800);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.hm-action:hover { background: var(--surface-sunken); color: var(--ink-800); }
+.hm-action[disabled] { opacity: .55; cursor: default; }
+.hm-action-icon { display: inline-flex; align-items: center; flex: none; color: var(--text-muted); }
+.hm-action-icon .lucide { width: 18px; height: 18px; }
+/* The Excel glyph is the one tinted item: green is the spreadsheet's own
+   signal, and it rides the success token so it inverts with the theme. The
+   LABEL still carries the meaning — the color is redundant. */
+.hm-icon-excel { color: var(--success-600); }
+.hm-action-label { white-space: nowrap; }
+
+/* --- the bell menu: heading + list -------------------------------------- */
+/* A fixed width (not max-width): a long project or component name WRAPS inside
+   it. Nothing in this menu may scroll sideways. */
+.notify-menu { width: 360px; max-width: calc(100vw - 16px); }
+.hm-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3) var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+.hm-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: 700;
+  letter-spacing: .02em;
+  color: var(--ink-900);
+}
+.hm-mark-all {
+  padding: 2px 6px;
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: var(--brand-700);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.hm-mark-all:hover { text-decoration: underline; background: none; }
+.hm-mark-all[disabled] { color: var(--text-faint); cursor: default; text-decoration: none; }
+
+.hm-list { overflow-y: auto; overflow-x: hidden; }
+.hm-note {
+  margin: 0;
+  padding: var(--space-4) var(--space-3);
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+.hm-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  color: var(--ink-800);
+  font-family: var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+.hm-item + .hm-item { border-top-color: var(--border); }
+.hm-item:hover { background: var(--surface-sunken); color: var(--ink-800); }
+.hm-item-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 auto; }
+/* Long names wrap rather than overflow — the menu width is the hard limit. */
+.hm-item-title, .hm-item-target, .hm-item-message, .hm-item-time {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.hm-item-title { font-size: var(--text-sm); font-weight: 600; color: var(--ink-900); }
+.hm-item-target { font-size: var(--text-sm); font-weight: 600; color: var(--text-muted); }
+.hm-item-message { font-size: var(--text-sm); color: var(--text-muted); }
+.hm-item-time { font-size: var(--text-xs); color: var(--text-faint); }
+/* Unread reads as WEIGHT + a dot with its own position and shape, so it never
+   depends on color alone. A read row keeps the dot's space (no reflow when an
+   item is marked) but draws nothing in it. */
+.hm-item-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: var(--radius-pill);
+  background: transparent;
+}
+.hm-item.is-unread .hm-item-dot { background: var(--danger-500); }
+.hm-item.is-unread .hm-item-title { font-weight: 700; }
+.hm-item.is-unread .hm-item-target { color: var(--ink-800); }
+.hm-item.is-unread .hm-item-message { color: var(--text); }
 
 /* =========================================================================
    Pipeline board (kanban-style columns for prospect + BP tabs)
@@ -40,6 +253,203 @@
    left-aligned instead of a fixed 4-column grid. */
 .pipeline-toolbar { display: flex; flex-wrap: wrap; justify-content: flex-start; }
 .pipeline-toolbar select { flex: 0 1 220px; min-width: 150px; }
+
+/* =========================================================================
+   Lead filter row (Card 1C) — Assignee / Field / Status / Priority
+
+   Four dropdown controls plus Clear Filters, above the lead board. The menus
+   are position: fixed and placed against the viewport by views/lead-filters.js
+   (placeMenu): .pipeline-panel and .lead-column both clip their overflow, so
+   an absolutely positioned menu would be cut off by the stage container.
+   ========================================================================= */
+/* The controls band: the filter row takes the free width, the Card 1E KPI
+   tiles sit at the right end. One row, one bottom margin — the filter row
+   itself no longer carries one (it is now a child, not the band). */
+.lead-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.lead-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: var(--space-3);
+}
+.lead-filter { position: relative; }
+.lf-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 168px;
+  padding: 9px var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  color: var(--ink-800);
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+.lf-trigger:hover { background: var(--surface); border-color: var(--brand-500); color: var(--ink-800); }
+/* A constrained filter reads as constrained even when the row is glanced at:
+   brand border + tint, not the label text alone. */
+.lf-trigger.is-active { border-color: var(--brand-600); background: var(--brand-050); color: var(--brand-700); }
+.lf-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lf-caret { display: inline-flex; align-items: center; color: var(--text-muted); flex: none; }
+.lf-caret .lucide { width: 16px; height: 16px; }
+
+.lf-menu {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  min-width: 168px;
+  max-width: 280px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: var(--space-1);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+.lf-menu[hidden] { display: none; }
+.lf-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 6px var(--space-2);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  color: var(--ink-800);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.lf-option:hover { background: var(--surface-sunken); color: var(--ink-800); }
+.lf-option.is-chosen { background: var(--brand-050); border-color: var(--brand-500); color: var(--brand-700); font-weight: 700; }
+/* "Unassigned" is a category of its own, not a person — it reads heavier and
+   carries no person glyph. */
+.lf-option-strong { font-weight: 700; }
+/* The selection mark: a box for the multi-select (Assignee), a dot for the
+   single-selects. Shape + a tick/fill, never color alone. */
+.lf-mark {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+}
+.lf-mark-box { position: relative; border-radius: 2px; }
+.lf-mark-dot { border-radius: 50%; }
+.lf-option.is-chosen .lf-mark { border-color: var(--brand-600); background: var(--brand-600); }
+/* The tick: two borders of an empty box, rotated — no icon file, no font. */
+.lf-option.is-chosen .lf-mark-box::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 3px;
+  height: 7px;
+  border: solid var(--white);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.lf-option.is-chosen .lf-mark-dot { box-shadow: inset 0 0 0 2px var(--surface); }
+.lf-option-icon { display: inline-flex; align-items: center; flex: none; color: var(--text-muted); }
+.lf-option-icon .lucide { width: 15px; height: 15px; }
+/* Status glyphs echo the card dots exactly (components.css .lead-dot-*), so
+   the menu and the cards speak one vocabulary. */
+.lf-icon-completed { color: var(--success-600); }
+.lf-icon-pending { color: var(--warning-500); }
+.lf-icon-in-progress { color: var(--text-faint); }
+.lf-option-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.lf-clear {
+  margin-left: auto;
+  padding: 8px var(--space-3);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+.lf-clear:disabled { opacity: .45; cursor: default; }
+
+/* =========================================================================
+   Lead KPI tiles (Card 1E) — completion donut | Total Active Leads |
+   Total Mean OGIP, at the right end of the controls band.
+
+   SEPARATORS: exactly two, and each is declared on exactly ONE element —
+   .lead-kpi-row's left border divides the filter zone from the donut, and
+   .kpi-tile-ogip's left border divides the two number tiles. Nothing declares
+   a right border, so no boundary can ever render as a doubled 2px rule.
+
+   The donut is a radial METER (one value against a fixed limit): one brand hue
+   on a recessive neutral track, no legend, no hover layer. Its geometry lives
+   in views/lead-kpis.js (r = 15.9155 ⇒ circumference 100, so the dash array is
+   the percentage itself).
+   ========================================================================= */
+.lead-kpi-row {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-4);
+  padding-left: var(--space-4);
+  border-left: 1px solid var(--border);
+}
+.kpi-donut { position: relative; flex: none; width: 56px; height: 56px; }
+.kpi-donut-svg { display: block; width: 100%; height: 100%; }
+.kpi-donut-track { fill: none; stroke: var(--gray-200); stroke-width: 5; }
+.kpi-donut-arc {
+  fill: none;
+  stroke: var(--asas-navy);
+  stroke-width: 5;
+  /* Rounded data-ends. The 0% case renders NO arc element at all (see
+     donutMarkup) — a zero-length dash with this cap would draw a dot. */
+  stroke-linecap: round;
+}
+/* Centred over the ring rather than an SVG <text>, so the numeral inherits the
+   real display-font token and the same optical centring as the other tiles. */
+.kpi-donut-value {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: var(--ink-800);
+}
+.kpi-tile { display: flex; flex: none; align-items: center; gap: var(--space-3); }
+.kpi-tile-ogip { padding-left: var(--space-4); border-left: 1px solid var(--border); }
+.kpi-tile-text { display: flex; flex-direction: column; align-items: center; line-height: 1.15; }
+.kpi-value {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: 700;
+  color: var(--ink-800);
+  white-space: nowrap;
+}
+.kpi-label { font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; }
+/* The one warm note on the board. Decorative: the number and its label carry
+   the meaning, so the hue is never the only thing saying "OGIP". */
+.kpi-icon { display: inline-flex; flex: none; align-items: center; color: var(--warning-500); }
+.kpi-icon .lucide { width: 30px; height: 30px; }
+
 .pipeline-board {
   display: grid;
   grid-auto-flow: column;
@@ -123,6 +533,129 @@
 .pipeline-card-assignee { font-size: var(--text-sm); color: var(--text-muted); border-top: 1px solid var(--gray-100); padding-top: var(--space-2); }
 .pipeline-empty { padding: var(--space-5) var(--space-3); color: var(--text-faint); font-size: var(--text-sm); text-align: center; }
 
+/* -------------------------------------------------------------------------
+   Lead board (Card 1B) — the PROSPECT board only; the BP board keeps every
+   .pipeline-column / .pipeline-card rule above.
+
+   Anatomy: three equal columns on a sunken tray, each with a fixed-height
+   header (glyph + title + live count) over a stack of lead cards. A card is a
+   two-package row — identity (name + assignees) on the left, the column's four
+   tracked items on the right — vertically centered, text left-aligned, and the
+   SAME height whatever the assignee count, because the four item rows always
+   set the floor. The border color is the lead's PRIORITY, never its status.
+   ------------------------------------------------------------------------- */
+.pipeline-board.lead-board {
+  /* Equal widths, equal heights (stretch), and no inner vertical scroll: the
+     columns grow and the page scrolls. */
+  grid-auto-columns: minmax(330px, 1fr);
+  align-items: stretch;
+}
+.lead-column {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  min-height: 320px;
+  overflow: hidden;
+}
+.lead-column > header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  /* Fixed height (not padding-derived) so the three headers line up exactly
+     even when one title wraps differently. */
+  height: 56px;
+  flex: 0 0 auto;
+  padding: 0 var(--space-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.lead-column-icon { display: inline-flex; color: var(--asas-navy); }
+.lead-column-icon .lucide { width: 24px; height: 24px; }
+.lead-column > header h3 {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: 700;
+  color: var(--asas-navy);
+  letter-spacing: .01em;
+}
+.lead-column-count {
+  flex: 0 0 auto;
+  min-width: 28px;
+  height: 26px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--asas-navy);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--text-base);
+}
+.lead-cards { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3); }
+
+.lead-card {
+  display: flex;
+  align-items: center;          /* the content package sits centered ... */
+  justify-content: space-between;
+  gap: var(--space-4);
+  width: 100%;
+  /* Identical geometry on every card: same radius, same padding, same floor.
+     The floor is a guard only — four item rows already set the real height. */
+  min-height: 92px;
+  padding: var(--space-3) var(--space-4);
+  text-align: left;             /* ... but every string reads left-aligned */
+  background: var(--surface);
+  border: 1.5px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--transition), background var(--transition);
+}
+.lead-card:hover { box-shadow: var(--shadow-md); background: var(--surface); }
+/* Priority, NOT workflow status, drives the border. */
+.lead-card-high { border-color: var(--danger-500); }
+.lead-card-medium { border-color: var(--warning-500); }
+.lead-card-low { border-color: var(--border-strong); }
+
+.lead-card-identity { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.lead-card-name {
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: 700;
+  color: var(--asas-navy);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.lead-card-people { display: flex; flex-direction: column; gap: 3px; }
+.lead-person { display: flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--text-muted); }
+.lead-person-icon { display: inline-flex; color: var(--asas-blue); }
+.lead-person-icon .lucide { width: 13px; height: 13px; }
+.lead-person-name { overflow-wrap: anywhere; }
+.lead-person-empty { color: var(--text-faint); font-style: italic; }
+
+/* The four tracked items never wrap or truncate — long labels such as
+   "Segmentation Slides" stay fully visible, so this package keeps its width
+   and the identity package takes the remainder. */
+.lead-card-items { display: flex; flex-direction: column; gap: 3px; flex: 0 0 auto; }
+.lead-item { display: flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--text-muted); white-space: nowrap; }
+.lead-dot { display: inline-flex; flex: 0 0 auto; }
+/* One size for all three states; the glyph SHAPE carries the meaning and the
+   color only reinforces it. */
+.lead-dot .lucide { width: 14px; height: 14px; }
+.lead-dot-completed { color: var(--success-500); }
+/* Filled disc + knocked-out check, the mockup's "done" mark. The CSS beats the
+   inherited fill="none" presentation attribute on the <svg>. */
+.lead-dot-completed circle { fill: var(--success-500); }
+.lead-dot-completed path { stroke: var(--white); }
+.lead-dot-pending { color: var(--warning-500); }
+.lead-dot-in-progress { color: var(--border-strong); }
+
 /* =========================================================================
    Detail shell — component rail, editor, summary panel
    ========================================================================= */
@@ -131,18 +664,18 @@
   grid-template-columns: 280px minmax(420px, 1fr) minmax(360px, 400px);
   gap: var(--space-4);
   align-items: start;
-  /* scrollIntoView target: land below the sticky header (56px) + tab bar
-     (44px) with breathing room instead of overshooting behind them. */
-  scroll-margin-top: 112px;
+  /* scrollIntoView target: land below the sticky header (64px) + tab bar
+     (64px) with breathing room instead of overshooting behind them. */
+  scroll-margin-top: 140px;
 }
 .component-rail, .component-editor, .summary-panel { min-width: 0; }
 
-/* The rail and summary panel pin below the sticky header stack (56 + 44 +
+/* The rail and summary panel pin below the sticky header stack (64 + 64 +
    12px gap) and scroll internally, so long step lists fit any viewport. */
 .component-rail {
   position: sticky;
-  top: 112px;
-  max-height: calc(100vh - 124px);
+  top: 140px;
+  max-height: calc(100vh - 152px);
   display: flex;
   flex-direction: column;
 }
@@ -470,6 +1003,15 @@ button.priority.priority-high:hover { background: var(--warning-100); }
 .formation-panel { display: flex; flex-direction: column; gap: var(--space-1); }
 /* First section heading sits directly under the picker -- drop its extra top gap. */
 .formation-panel > .field-section-label:first-child { margin-top: 0; }
+/* Pay intervals: the selected formation's sub-table (quicklook / final only).
+   Rides the repeatable sheet's grid (.repeatable-rows / .repeatable-head /
+   .repeatable-col-label) so its columns line up exactly like every other
+   mini-spreadsheet; only the row class differs, because the generic repeatable
+   JS must not treat these rows as step fields. */
+.pay-intervals { margin-top: var(--space-3); border-top: 1px solid var(--border); padding-top: var(--space-3); }
+.pay-interval-row { display: contents; }
+.pay-interval-row input, .pay-interval-row select { padding: 4px 8px; font-size: var(--text-sm); }
+.pay-interval-empty { margin: 0; font-size: var(--text-sm); color: var(--text-faint); }
 
 /* =========================================================================
    Summary panel (right-hand rail)
@@ -482,8 +1024,8 @@ button.priority.priority-high:hover { background: var(--warning-100); }
   /* Same sticky treatment as .component-rail: pin below the header stack and
      scroll the panel internally when it outgrows the viewport. */
   position: sticky;
-  top: 112px;
-  max-height: calc(100vh - 124px);
+  top: 140px;
+  max-height: calc(100vh - 152px);
   overflow-y: auto;
 }
 .summary-card { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--space-4); max-width: 100%; }
@@ -613,6 +1155,11 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .summary-pva-delta { text-align: right; font-variant-numeric: tabular-nums; font-size: var(--text-xs); font-weight: 800; min-width: 44px; }
 .summary-pva-delta.pos { color: var(--success-700); }
 .summary-pva-delta.neg { color: var(--danger-700); }
+/* Folders fold (well/lead shared-folder links): one .folder-card row per
+   section, stacked with the same compact glyph/path/copy treatment as the
+   component-folder card (detail-form.js renderComponentFolder). */
+.summary-folders { display: flex; flex-direction: column; gap: var(--space-2); }
+.summary-folders .folder-card { grid-column: auto; }
 
 /* =========================================================================
    Project editor — the full-project "all fields" view (views/project-editor.js)
@@ -625,7 +1172,7 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   gap: var(--space-4);
   /* Same scroll-into-view landing as .detail-shell: clear the sticky header
      (56px) + tab bar (44px) stack instead of hiding behind them. */
-  scroll-margin-top: 112px;
+  scroll-margin-top: 140px;
 }
 .pe-head {
   display: flex;
@@ -1104,6 +1651,13 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .ra-lightbox-close { position: absolute; top: var(--space-2); right: var(--space-2); width: 34px; height: 34px; font-size: var(--text-lg); }
 
 /* =========================================================================
+   Placeholder tabs (Map, Calculator) — Card 1A ships the nav entry + shared
+   page chrome only; a later card fills in the real screen. No mock data.
+   ========================================================================= */
+.placeholder-panel { text-align: center; padding: var(--space-8) var(--space-4); color: var(--text-muted); }
+.placeholder-panel h3 { font-size: var(--text-lg); color: var(--ink-800); margin-bottom: var(--space-2); }
+
+/* =========================================================================
    Full-page boot login (fronts the app under AUTH_REQUIRED; the modal above
    handles mid-session 401s). Reuses the panel/dialog token language.
    ========================================================================= */
@@ -1132,6 +1686,10 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   .pipeline-toolbar { flex-direction: column; }
   .pipeline-toolbar select { flex-basis: auto; width: 100%; }
   .pipeline-board { grid-auto-columns: minmax(245px, 80vw); }
+  /* The lead card carries two packages side by side, so its column needs more
+     floor than a BP column before the board starts scrolling sideways —
+     squeezing it further just wraps every assignee name. */
+  .pipeline-board.lead-board { grid-auto-columns: minmax(380px, 85vw); }
   .detail-shell { grid-template-columns: 1fr; }
   .summary-panel { order: 3; }
   .component-rail { order: 1; }
@@ -1145,9 +1703,31 @@ button.ghost.success-outline:hover { background: var(--success-100); }
      when the narrower editor column can't fit every column. */
 }
 @media (max-width: 640px) {
+  /* The filter row stacks: each control takes the full width instead of
+     wrapping into ragged pairs, and Clear Filters loses its right-hand pin.
+     Above this width the row just wraps, which still reads as a row. */
+  .lead-filter { flex: 1 1 100%; }
+  .lead-filter .lf-trigger { width: 100%; min-width: 0; }
+  .lf-clear { margin-left: 0; width: 100%; }
+  /* Card 1E stacks with them, by the same rule: the KPI row becomes its own
+     full-width band under the controls. The separator rotates with the layout
+     — the left border would divide nothing once the row sits underneath — and
+     it stays a SINGLE border (the row's top edge), never a pair. */
+  .lead-controls { flex-direction: column; align-items: stretch; gap: var(--space-3); }
+  .lead-kpi-row {
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding-left: 0;
+    padding-top: var(--space-3);
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
   .pipeline-board { grid-auto-columns: minmax(230px, 86vw); }
+  .pipeline-board.lead-board { grid-auto-columns: minmax(360px, 92vw); }
   .pipeline-card { padding: var(--space-3); }
-  .detail-shell { scroll-margin-top: 106px; } /* 52px header + 40px tabs + room */
+  .lead-card { padding: var(--space-3); gap: var(--space-3); }
+  .detail-shell { scroll-margin-top: 120px; } /* 56px header + 52px tabs + room */
   .detail-shell.panel { padding: var(--space-3); }
   .summary-card { padding: var(--space-3); }
   .action-row { flex-wrap: wrap; }
@@ -1165,6 +1745,12 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   .resource-calculator-panel .field-row.cols-2,
   .resource-calculator-panel .field-row.cols-3 { grid-template-columns: 1fr; }
 }
+/* Below ~420px the three KPI tiles no longer fit on one line and the OGIP tile
+   wraps to its own; its left border would then divide nothing, so it goes with
+   the layout that gave it a meaning. */
+@media (max-width: 420px) {
+  .kpi-tile-ogip { padding-left: 0; border-left: none; }
+}
 
 /* =========================================================================
    Dark theme — scoped spot-fixes (token block lives in base.css). Only the
@@ -1174,3 +1760,45 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   /* deeper scrim than the light rgba(13,36,56,.45) so the dialog reads */
   background: rgba(0, 0, 0, .6);
 }
+
+/* Lead board (Card 1B). The tokens carry the rest; these three are the places
+   where a border-weight neutral disappears against a dark card. */
+:root[data-theme="dark"] .lead-dot-in-progress {
+  /* --border-strong is a dark slate on dark — the empty ring has to step up to
+     a text-weight neutral to stay visible. */
+  color: var(--text-faint);
+}
+:root[data-theme="dark"] .lead-card-low { border-color: var(--text-faint); }
+:root[data-theme="dark"] .lead-card:hover {
+  /* Shadows barely read on dark; lift the surface instead. */
+  background: var(--gray-100);
+}
+
+/* Lead filter row (Card 1C). The tokens carry the controls themselves; these
+   are the two places where a light-mode assumption breaks on dark. */
+:root[data-theme="dark"] .lf-menu {
+  /* The big shadow does no work on dark — the border is what separates the
+     floating menu from the board behind it. */
+  border-color: var(--text-faint);
+}
+/* The tick itself needs no override: it is drawn in --white, which stays #fff
+   on dark by design (white glyphs on brand/semantic fills), and the radio
+   dot's ring is --surface, which follows the theme already. */
+:root[data-theme="dark"] .lf-icon-in-progress { color: var(--text-muted); }
+
+/* Lead KPI tiles (Card 1E). The arc, the numerals and the flame all follow
+   tokens that already invert (--asas-navy lightens to #a5bdf7, --ink-800 to a
+   pale slate, --warning-500 to a brighter amber), so only the TRACK needs a
+   spot-fix: --gray-200 is a near-surface tone on dark and the empty part of
+   the ring would vanish, taking the "how much is left" reading with it. */
+:root[data-theme="dark"] .kpi-donut-track { stroke: var(--gray-300); }
+
+/* Header dropdowns (Card 1F). Same story as the filter menus: the tokens carry
+   the surfaces, and only the floating menu's SEPARATION from the page behind
+   it needs a spot-fix — the big shadow does no work on a dark background. */
+:root[data-theme="dark"] .header-menu { border-color: var(--text-faint); }
+/* The unread dot and the Excel glyph both sit on --surface here; --danger-500
+   and --success-600 already lighten on dark (base.css), so they keep their
+   contrast without an override. The one token that does not is the item
+   separator, which is near-invisible at --border on dark. */
+:root[data-theme="dark"] .hm-head { border-bottom-color: var(--gray-300); }

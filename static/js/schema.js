@@ -135,6 +135,28 @@ export var RESERVOIR_COS_COLUMNS = [
   { key: 'pull_up', label: 'Pull-up', type: 'select', options: ['', 'No', 'Semi', 'Yes'] },
   { key: 'reservoir_cos_pct', label: 'Reservoir CoS (%)', type: 'number', readonly: true }
 ];
+// One row per formation on the merged SAD Model / SAD Update steps (EAV keys
+// sad_formation_rows / sad_update_formation_rows, JSON arrays exactly like
+// reservoir_cos_rows). OPTIONAL and additive: the well-level formations table
+// (project_formations, phases post_drill/resource_update) stays the
+// petrophysical authority every reader resolves from -- this sheet is the
+// SAD model's own per-formation working note and is read by nothing else.
+//
+// FLAGGED ASSUMPTION: the card only says "additional table (row per
+// formation)". The column set below mirrors the well-level formation metrics
+// minus pay (Top/Base/Thickness/Phit/Swt/NGR/Fluid) -- cheap to change, no
+// reader depends on it.
+export var SAD_FORMATION_COLUMNS = [
+  { key: 'sad_formation', label: 'Formation', type: 'select', optionsFrom: 'formations', value: 'SARH' },
+  // bigOk: true -- TVDSS depths run well past the generic 9999 cap.
+  { key: 'sad_top_tvdss_ft', label: 'Top TVDSS (ft)', type: 'number', bigOk: true },
+  { key: 'sad_base_tvdss_ft', label: 'Base TVDSS (ft)', type: 'number', bigOk: true },
+  { key: 'sad_thickness_ft', label: 'Thickness (ft)', type: 'number' },
+  { key: 'sad_phit_pct', label: 'Phit (%)', type: 'number' },
+  { key: 'sad_swt_pct', label: 'Swt (%)', type: 'number' },
+  { key: 'sad_ngr_pct', label: 'NGR (%)', type: 'number' },
+  { key: 'sad_fluid', label: 'Fluid', type: 'select', options: FLUID_TYPES }
+];
 export var SCHEMA = {
   'Reservoir Area Definition': [{ key: 'p10_area_km2', label: 'P10 Area (km²)', type: 'number' }, { key: 'p90_area_km2', label: 'P90 Area (km²)', type: 'number' }],
   'Thickness Estimation': [{ key: 'formation_thickness_ft', label: 'Sarah Formation Thickness (ft)', type: 'number' }, { key: 'reservoir_thickness_ft', label: 'Reservoir Thickness (ft)', type: 'number' }],
@@ -188,16 +210,35 @@ export var SCHEMA = {
   // formation panel (the well inherits SARH's fluid -- backend resolves that),
   // so the old step-level tops/fluid keys are dropped. Only the log-file
   // checkboxes remain as normal task fields (grouped in one row).
-  'Quicklook Logs Interpretation': [
+  'Quicklook Logs': [
     { key: 'quicklook_formations', label: 'Formation Interpretation (Quicklook)', type: 'formations', phase: 'quicklook' },
     { key: 'quicklook_pdf', label: 'Logs in PDF', type: 'checkbox', row: 'quicklook_logs' },
     { key: 'quicklook_las', label: 'Logs as LAS', type: 'checkbox', row: 'quicklook_logs' }
   ],
-  'Aramco Picks': [],
-  'Post-Drilling Resource Assessment': [{ key: 'post_drill_formations', label: 'Formation Interpretation (Post-Drill)', type: 'formations', phase: 'post_drill' }].concat(piip('post_drill_piip')).concat([{ key: 'post_drill_fluid_type', label: 'Fluid Type', type: 'select', options: FLUID_TYPES }]),
-  'SAD Model': [],
-  'Executive Summary': [],
-  'URED Update': [],
+  'Aramco Picks': [{ key: 'aramco_picks_loaded', label: 'AAP are loaded in Petrel & GK', type: 'checkbox' }],
+  // v4 merge: the retired 'Post-Drilling Resource Assessment' step folded in
+  // here. Its EAV keys are kept verbatim (post_drill_piip_* via piip(),
+  // post_drill_fluid_type) so no stored value is orphaned and every reader
+  // keeps resolving; only the formations PICKER (post_drill_formations) was
+  // dropped, replaced by the optional per-formation table below. Wells written
+  // before the merge hold these same keys under the retired task name, which
+  // Store.allFields still carries (the backend field map is retired-inclusive).
+  'SAD Model': [
+    { key: 'sad_area_km2_p90', label: 'Area (km²) P90', type: 'number', row: 'sad_area' },
+    { key: 'sad_area_km2_p10', label: 'Area (km²) P10', type: 'number', row: 'sad_area' },
+    // bigOk: GRV in 10³ acre.ft runs past the generic 9999 cap on big segments.
+    { key: 'sad_grv_p90', label: 'GRV (10³ acre.ft) P90', type: 'number', row: 'sad_grv', bigOk: true },
+    { key: 'sad_grv_p10', label: 'GRV (10³ acre.ft) P10', type: 'number', row: 'sad_grv', bigOk: true },
+    { key: 'sad_surfaces_polygons_loaded', label: 'Surfaces and polygons are placed in the shared folder', type: 'checkbox' }
+  ].concat(piip('post_drill_piip')).concat([
+    { key: 'post_drill_fluid_type', label: 'Fluid Type', type: 'select', options: FLUID_TYPES },
+    { key: 'sad_formation_rows', label: 'Formations (optional)', type: 'repeatable', columns: SAD_FORMATION_COLUMNS }
+  ]),
+  // v4 merge: 'URED Update' folded in here as the second checkbox.
+  'Executive Summary': [
+    { key: 'exec_summary_loaded', label: 'Executive Summary is loaded in the shared folder', type: 'checkbox', row: 'exec_summary_docs' },
+    { key: 'ured_update_loaded', label: 'URED Update is loaded in the shared folder', type: 'checkbox', row: 'exec_summary_docs' }
+  ],
   // Per-stage measurements moved into the flowback_stages_rows mini-sheet
   // (stage #1 is the primary read everywhere); the retired flat rate keys stay
   // readable in old data via the readers' fallback but are no longer rendered.
@@ -205,13 +246,32 @@ export var SCHEMA = {
   // canonical trio + the well's custom formations) naming the tested formation,
   // SARH by default.
   'Flowback Results': [
+    // Keys predate the reworded labels: existing '1' values in task_dynamic_fields
+    // must keep counting, so the labels changed but the keys did not.
+    { key: 'flowback_sheet', label: 'Flowback Sheet is loaded in the shared folder', type: 'checkbox', row: 'flowback_docs' },
+    { key: 'flowback_slide', label: 'Flowback Slide is loaded in the shared folder', type: 'checkbox', row: 'flowback_docs' },
     { key: 'flowback_stages_rows', label: 'Flowback Stages', type: 'repeatable', columns: FLOWBACK_STAGE_COLUMNS },
     { key: 'flowback_dynamic_area_km2', label: 'Dynamic Reservoir Area (km²)', type: 'number', row: 'flowback_dyn' },
-    { key: 'flowback_dynamic_ogip_bcf', label: 'Dynamic OGIP (BCF)', type: 'number', row: 'flowback_dyn' },
-    { key: 'flowback_sheet', label: 'Flowback Sheet', type: 'checkbox', row: 'flowback_docs' },
-    { key: 'flowback_slide', label: 'Flowback Slide', type: 'checkbox', row: 'flowback_docs' }
+    { key: 'flowback_dynamic_ogip_bcf', label: 'Dynamic OGIP (BCF)', type: 'number', row: 'flowback_dyn' }
   ],
-  'SAD Update': [],
+  // v4 merge: the retired 'Resource Assessment Update' (its resource_update_*
+  // EAV keys are kept verbatim; the formations picker is replaced by the
+  // optional per-formation table) and 'Executive Summary Final' (now the
+  // final_exec_summary_done checkbox) both folded in here. The last two
+  // checkboxes GATE submit -- see REQUIRED_FIELDS_FOR_SUBMIT below and its
+  // authoritative server twin in workflow/constants.py.
+  'SAD Update': [
+    { key: 'sad_update_area_km2_p90', label: 'Area (km²) P90', type: 'number', row: 'sad_update_area' },
+    { key: 'sad_update_area_km2_p10', label: 'Area (km²) P10', type: 'number', row: 'sad_update_area' },
+    { key: 'sad_update_grv_p90', label: 'GRV (10³ acre.ft) P90', type: 'number', row: 'sad_update_grv', bigOk: true },
+    { key: 'sad_update_grv_p10', label: 'GRV (10³ acre.ft) P10', type: 'number', row: 'sad_update_grv', bigOk: true },
+    { key: 'sad_update_surfaces_polygons_loaded', label: 'Surfaces and polygons are placed in the shared folder', type: 'checkbox' }
+  ].concat(piip('resource_update')).concat([
+    { key: 'resource_update_fluid_type', label: 'Fluid Type', type: 'select', options: FLUID_TYPES },
+    { key: 'sad_update_formation_rows', label: 'Formations (optional)', type: 'repeatable', columns: SAD_FORMATION_COLUMNS },
+    { key: 'sad_update_done', label: 'SAD Update', type: 'checkbox', row: 'sad_update_signoff' },
+    { key: 'final_exec_summary_done', label: 'Final Executive Summary', type: 'checkbox', row: 'sad_update_signoff' }
+  ]),
   // Same shape as Quicklook (formations picker replaces the step-level
   // tops/fluid keys, dropped here too); final_petrel is this step's unique
   // extra. The three log-file checkboxes (Petrel/PDF/LAS) stay grouped in one
@@ -222,8 +282,7 @@ export var SCHEMA = {
     { key: 'final_pdf', label: 'Logs in PDF', type: 'checkbox', row: 'final_logs' },
     { key: 'final_las', label: 'Logs as LAS', type: 'checkbox', row: 'final_logs' }
   ],
-  'PVAD Structural MTR': [{ key: 'pvad_mtr_link', label: 'Hyperlink Placeholder', type: 'text' }],
-  'Resource Assessment Update': [{ key: 'resource_update_formations', label: 'Formation Interpretation (Resource Update)', type: 'formations', phase: 'resource_update' }].concat(piip('resource_update')).concat([{ key: 'resource_update_fluid_type', label: 'Fluid Type', type: 'select', options: FLUID_TYPES }]),
+  'PVAD Structural MTR': [{ key: 'pvad_mtr_link', label: 'DRAS', type: 'link', value: 'https://DRAS/', linkText: 'Open PVAD Structural MTR (DRAS)' }],
   'Prospect Evaluation Presentation': [],
   // well_name is never stored as a task field: the backend save hook pops it
   // and renames the project itself (projects.project_name stays the single
@@ -232,10 +291,45 @@ export var SCHEMA = {
   // Classification lives here now (moved off GHEER); reporting reads the new key
   // first, falling back to the legacy gheer_classification for old wells.
   'BP Execution Gate': [{ key: 'bp_gate_classification', label: 'Classification', type: 'radio', options: ['Development', 'Appraisal', 'Exploration'] }],
-  'Site Preparation': [], 'Post-Well Outcome & Decision Gate': [], 'Executive Summary Final': [],
+  'Site Preparation': [],
+  'Post-Well Outcome & Decision Gate': [{ key: 'post_well_slides_loaded', label: 'Slides are loaded in the shared folder', type: 'checkbox' }],
   'PDA': [{ key: 'pda_booked', label: 'Booked', type: 'checkbox' }, { key: 'pda_urinsight_link', label: 'URINSIGHT', type: 'link', value: 'https://urinsight/', linkText: 'Open URINSIGHT' }],
   'Approval To Drill': []
 };
+
+// ---------------------------------------------------------------------------
+// Submit gating -- the CLIENT MIRROR of workflow/constants.py's
+// REQUIRED_FIELDS_FOR_SUBMIT. The server check (lifecycle._check_submit_
+// requirements) is the authority; this exists only so transitionComponent can
+// refuse with a toast instead of a round-trip. Keep the two tables in sync:
+// task name -> ordered [[field_key, label], ...] of checkboxes that must be
+// ticked (and SAVED) before the step may be submitted.
+// ---------------------------------------------------------------------------
+
+export var REQUIRED_FIELDS_FOR_SUBMIT = {
+  'SAD Update': [
+    ['sad_update_done', 'SAD Update'],
+    ['final_exec_summary_done', 'Final Executive Summary']
+  ]
+};
+
+// Checkbox truthiness, matching dom.js truthy() and the server's
+// constants._CHECKBOX_TRUTHY.
+function checkboxOn(value) {
+  return ['1', 'true', 'yes', 'on'].indexOf(String(value == null ? '' : value).trim().toLowerCase()) >= 0;
+}
+
+// The message a blocked submit should show, or null when the step may be
+// submitted. `fields` is the task's SAVED dynamic-fields map (what the server
+// will check) -- an unsaved tick in the form does not unlock it, exactly as
+// the server sees it. Wording mirrors the server's ValueError.
+export function submitBlockedMessage(taskName, fields) {
+  fields = fields || {};
+  var unmet = (REQUIRED_FIELDS_FOR_SUBMIT[taskName] || []).filter(function (entry) {
+    return !checkboxOn(fields[entry[0]]);
+  }).map(function (entry) { return entry[1]; });
+  return unmet.length ? 'Cannot submit until these are checked: ' + unmet.join(', ') + '.' : null;
+}
 
 // ---------------------------------------------------------------------------
 // validateStepFields -- generic client-side sanity checks for the regular

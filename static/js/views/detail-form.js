@@ -1,7 +1,7 @@
 import { byId, all, esc, isFilled, truthy, msg } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName, currentRole, canManageAssignments, isCurrentPipelineView, Store } from '../state.js';
-import { SCHEMA, FORMATIONS, FORMATION_METRICS, SEISMIC_BLOCKS, validateStepFields } from '../schema.js';
+import { SCHEMA, FORMATIONS, FORMATION_METRICS, FLUID_TYPES, SEISMIC_BLOCKS, validateStepFields, submitBlockedMessage } from '../schema.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { renderDetail, renderRightPanel, chooseInitialTask, tasksForPipeline, parseRepeatableRows, refreshAfterRecordChange, revealTaskStage } from './detail.js';
 import { refreshAllBoards } from './pipeline.js';
@@ -57,6 +57,20 @@ export function cyclePriorityChip() {
     .catch(function (error) { msg(error.message, 'error'); });
 }
 
+// KI-002: whether the assignee control is interactive is a ROLE decision
+// (plus "am I looking at this record's own pipeline"), never a side effect of
+// some other sweep over the form. Both renderAssigneeSelect (async, resolves
+// after /api/users) and setComponentReferenceMode (sync, runs twice per
+// component load -- the second time after the fields request) call this ONE
+// function, so whichever lands last still leaves the employee's control
+// disabled instead of a dead, unauthorized dropdown.
+function syncAssigneeGate(referenceOnly) {
+  var select = byId('assigned-to');
+  if (!select) return;
+  var reference = referenceOnly === undefined ? !isCurrentPipelineView() : !!referenceOnly;
+  select.disabled = !canManageAssignments() || reference;
+}
+
 function renderAssigneeSelect(task) {
   var select = byId('assigned-to');
   if (!select) return;
@@ -72,7 +86,7 @@ function renderAssigneeSelect(task) {
     select.value = current;
     // Only supervisors/staff assign (anonymous dev mode acts as supervisor,
     // matching the backend's current_role()).
-    select.disabled = !canManageAssignments() || !isCurrentPipelineView();
+    syncAssigneeGate();
   });
 }
 
@@ -94,15 +108,24 @@ function renderActionButtons(task) {
     !(editable && status === 'Ready' && (role === 'supervisor' || isAssignee)));
 }
 
-function setComponentReferenceMode(referenceOnly) {
+export function setComponentReferenceMode(referenceOnly) {
   var form = byId('component-form');
   if (!form) return;
-  all('input, select, textarea', form).forEach(function (control) { control.disabled = referenceOnly; });
-  all('.add-repeatable-row, .remove-repeatable-row, .formation-remove', form).forEach(function (button) {
+  // The sweep only touches the controls this mode OWNS. The assignee select is
+  // gated by role (KI-002) and is re-applied explicitly below, so leaving
+  // reference mode restores its role-based state instead of blanket-enabling
+  // it. (It also sits OUTSIDE #component-form today -- the guard is here so a
+  // future markup move cannot silently re-open the hole.)
+  all('input, select, textarea', form).forEach(function (control) {
+    if (control.id === 'assigned-to') return;
+    control.disabled = referenceOnly;
+  });
+  all('.add-repeatable-row, .remove-repeatable-row, .formation-remove, .pay-interval-add, .pay-interval-remove', form).forEach(function (button) {
     button.disabled = referenceOnly;
   });
   var saveButton = byId('save-component');
   if (saveButton) saveButton.disabled = referenceOnly;
+  syncAssigneeGate(referenceOnly);
   form.classList.toggle('reference-only', referenceOnly);
 }
 
@@ -171,6 +194,17 @@ var TRANSITION_MESSAGES = {
 export function transitionComponent(action) {
   if (!Store.task) return;
   if (!isCurrentPipelineView()) return msg('Switch back to the current pipeline to change workflow status.', 'error');
+  // Submit gating (SCHEMA's REQUIRED_FIELDS_FOR_SUBMIT): a pre-check against
+  // the SAVED fields, so a blocked submit is a toast instead of a round-trip.
+  // The server runs the same rule and is the authority -- this only skips a
+  // request whose 400 we can already predict, and reads Store.allFields (what
+  // the server has) rather than the live form, so an unsaved tick correctly
+  // does not unlock it.
+  if (action === 'submit') {
+    var blocked = submitBlockedMessage(Store.task.task_name,
+                                       (Store.allFields || {})[Store.task.task_name]);
+    if (blocked) return msg(blocked, 'error');
+  }
   API.transition(Store.task.task_id, {
     action: action,
     revision: Store.task.revision,
@@ -219,20 +253,70 @@ var FORMATION_GROUPS = [
 var FORMATION_METRIC_BY_KEY = {};
 FORMATION_METRICS.forEach(function (metric) { FORMATION_METRIC_BY_KEY[metric.key] = metric; });
 
+// --- Pay intervals ---------------------------------------------------------
+// A formation keeps its envelope (top/base/thickness) above; the pay inside it
+// is described by zero or more PAY INTERVALS -- a mini repeatable table under
+// the panel, one row per interval, stored well-level in
+// project_formation_pay_intervals and PUT inside the formation row's
+// `pay_intervals` array (seq = row order). Only the two log-interpretation
+// steps capture them, so the other two phases' panels render exactly as before.
+var PAY_INTERVAL_PHASES = ['quicklook', 'final'];
+var PAY_INTERVAL_COLUMNS = [
+  { key: 'top_tvdss_ft', label: 'Top (ft)', type: 'number' },
+  { key: 'base_tvdss_ft', label: 'Base (ft)', type: 'number' },
+  { key: 'phit_pct', label: 'Phit (%)', type: 'number' },
+  { key: 'swt_pct', label: 'Swt (%)', type: 'number' },
+  { key: 'ngr_pct', label: 'NGR (%)', type: 'number' },
+  { key: 'kint_md', label: 'Kint (mD)', type: 'number' },
+  { key: 'fluid', label: 'Fluid', type: 'select', options: FLUID_TYPES }
+];
+
+function phaseHasPayIntervals(phase) { return PAY_INTERVAL_PHASES.indexOf(phase) >= 0; }
+
+// One buffer interval from a (possibly missing) saved pay-interval record.
+function makePayIntervalRow(saved) {
+  var values = {};
+  PAY_INTERVAL_COLUMNS.forEach(function (col) {
+    var stored = saved ? saved[col.key] : null;
+    values[col.key] = stored == null ? '' : String(stored);
+  });
+  return values;
+}
+
+// The intervals of one buffered formation row, ready to PUT: entirely blank
+// rows drop (an untouched freshly-added row must not become a stored all-NULL
+// interval), everything else keeps its buffer order -- the backend assigns seq
+// from exactly that order.
+function payIntervalsForSave(row) {
+  return ((row && row.intervals) || []).filter(function (interval) {
+    return PAY_INTERVAL_COLUMNS.some(function (col) { return isFilled(interval[col.key]); });
+  }).map(function (interval) {
+    var out = {};
+    PAY_INTERVAL_COLUMNS.forEach(function (col) { out[col.key] = interval[col.key]; });
+    return out;
+  });
+}
+
+function rowHasPayIntervals(row) { return payIntervalsForSave(row).length > 0; }
+
 // Custom formation names mirror the backend normalization (strip().upper(),
 // <=40 chars) so what the editor shows is what gets stored.
 function normalizeFormationName(name) {
   return String(name == null ? '' : name).trim().toUpperCase().slice(0, 40);
 }
 
-// One buffer row from a (possibly missing) saved formation record.
+// One buffer row from a (possibly missing) saved formation record. `intervals`
+// mirrors the saved row's pay_intervals (already ordered by seq server-side);
+// it is buffered for every phase but only rendered/PUT for the phases that
+// capture pay intervals.
 function makeFormationRow(name, isCustom, saved) {
   var values = {};
   FORMATION_METRICS.forEach(function (metric) {
     var stored = saved ? saved[metric.key] : null;
     values[metric.key] = stored == null ? '' : String(stored);
   });
-  return { formation: name, isCustom: isCustom, values: values };
+  var intervals = ((saved && saved.pay_intervals) || []).map(makePayIntervalRow);
+  return { formation: name, isCustom: isCustom, values: values, intervals: intervals };
 }
 
 // Seed a phase: the canonical trio always renders (in order), each filled from
@@ -252,21 +336,29 @@ function seedFormationEdits(phase) {
   formationDirty[phase] = false;
 }
 
-// Every visible row of the phase, `{ formation, ...metrics }`. A blank formation
-// name always drops. A custom (isCustom) row is kept even when metric-less --
-// the user named a new formation and the backend stores all-NULL metrics fine.
-// A canonical row with entirely blank metrics drops: that full-replacement gap
-// is the designed way to delete a canonical formation's row. Deletions overall
-// are handled by the backend's phase-scoped full replacement.
+// Every visible row of the phase, `{ formation, ...metrics }` (plus
+// `pay_intervals` on the phases that capture them). A blank formation name
+// always drops. A custom (isCustom) row is kept even when metric-less -- the
+// user named a new formation and the backend stores all-NULL metrics fine. A
+// canonical row with entirely blank metrics AND no pay intervals drops: that
+// full-replacement gap is the designed way to delete a canonical formation's
+// row (a row carrying only pay intervals therefore has to survive it).
+// Deletions overall are handled by the backend's phase-scoped full replacement.
 export function formationRowsForSave(phase) {
   var kept = [];
+  var withIntervals = phaseHasPayIntervals(phase);
   (formationEdits[phase] || []).forEach(function (row) {
     var name = normalizeFormationName(row.formation);
     if (!isFilled(name)) return;
     var hasMetrics = FORMATION_METRICS.some(function (metric) { return isFilled(row.values[metric.key]); });
-    if (!row.isCustom && !hasMetrics) return;
+    var hasIntervals = withIntervals && rowHasPayIntervals(row);
+    if (!row.isCustom && !hasMetrics && !hasIntervals) return;
     var out = { formation: name };
     FORMATION_METRICS.forEach(function (metric) { out[metric.key] = row.values[metric.key]; });
+    // Only phases that edit intervals send the key at all: its ABSENCE tells
+    // the backend to leave any stored intervals alone, so the post_drill /
+    // resource_update panels can never clear what the log steps captured.
+    if (withIntervals) out.pay_intervals = payIntervalsForSave(row);
     kept.push(out);
   });
   return kept;
@@ -281,7 +373,8 @@ export function validateFormationRows(phase) {
   var rows = formationEdits[phase] || [];
   for (var i = 0; i < rows.length; i += 1) {
     var row = rows[i];
-    var hasMetrics = FORMATION_METRICS.some(function (metric) { return isFilled(row.values[metric.key]); });
+    var hasMetrics = FORMATION_METRICS.some(function (metric) { return isFilled(row.values[metric.key]); }) ||
+      (phaseHasPayIntervals(phase) && rowHasPayIntervals(row));
     if (row.isCustom && !isFilled(normalizeFormationName(row.formation)) && hasMetrics) {
       return 'Custom formation needs a name.';
     }
@@ -353,6 +446,53 @@ function formationPanelMarkup(row, index) {
   }).join('');
 }
 
+// One pay-interval row. Reuses the repeatable sheet's grid idiom (the row is
+// display:contents and inherits the template declared once on .repeatable-rows)
+// but carries its OWN data attributes and button classes: the generic
+// repeatable machinery (getFields' [data-repeatable] harvest,
+// bindRepeatableFields' .add-repeatable-row/.remove-repeatable-row handlers)
+// must never see these -- intervals travel in the formations buffer, not in the
+// step's dynamic fields. `formationIndex` is the selected formation's buffer
+// position, `index` the interval's position within it.
+function payIntervalRowMarkup(interval, index, formationIndex) {
+  return '<div class="pay-interval-row">' + PAY_INTERVAL_COLUMNS.map(function (col) {
+    var value = interval[col.key] == null ? '' : interval[col.key];
+    var attr = 'data-pay-field="' + esc(col.key) + '" data-pay-row="' + index +
+      '" data-formation-row="' + formationIndex + '" aria-label="' + esc(col.label) + '"';
+    if (col.type === 'select') {
+      var options = (col.options || []).map(function (option) {
+        return '<option value="' + esc(option) + '" ' + (String(value) === String(option) ? 'selected' : '') +
+          '>' + esc(option || 'Select') + '</option>';
+      }).join('');
+      return '<select ' + attr + '>' + options + '</select>';
+    }
+    return '<input type="number" step="any" ' + attr + ' value="' + esc(value) + '">';
+  }).join('') + '<button type="button" class="icon-btn pay-interval-remove" data-pay-row="' + index +
+    '" title="Remove pay interval" aria-label="Remove pay interval">&#10005;</button></div>';
+}
+
+// The selected formation's pay-interval sub-table (log-interpretation phases
+// only; the other phases get ''). Rendered from the buffer, so add/remove is a
+// buffer mutation + container re-render like everything else in this panel.
+function payIntervalsMarkup(row, formationIndex, phase) {
+  if (!phaseHasPayIntervals(phase)) return '';
+  var intervals = (row && row.intervals) || [];
+  var template = PAY_INTERVAL_COLUMNS.map(function () { return 'minmax(80px, 1fr)'; }).join(' ') + ' auto';
+  var header = '<div class="repeatable-head">' + PAY_INTERVAL_COLUMNS.map(function (col) {
+    return '<span class="repeatable-col-label">' + esc(col.label) + '</span>';
+  }).join('') + '<span class="repeatable-col-label" aria-hidden="true"></span></div>';
+  var body = intervals.length
+    ? '<div class="repeatable-sheet"><div class="repeatable-rows" style="grid-template-columns:' + template + '">' +
+      header + intervals.map(function (interval, index) {
+        return payIntervalRowMarkup(interval, index, formationIndex);
+      }).join('') + '</div></div>'
+    : '<p class="pay-interval-empty">No pay intervals recorded for this formation yet.</p>';
+  return '<div class="pay-intervals">' +
+    '<div class="repeatable-heading"><b>Pay intervals</b>' +
+    '<button type="button" class="icon-btn pay-interval-add" title="Add pay interval" aria-label="Add pay interval">+</button></div>' +
+    body + '</div>';
+}
+
 // Container inner markup: heading, the formation picker (canonical trio + stored
 // customs + "Add custom formation…") with a remove button on custom formations,
 // then the selected formation's grouped panel. Rebuilt whenever the picker
@@ -372,7 +512,8 @@ function buildFormationsInner(field) {
     '<label class="formation-picker-label">Formation<select class="formation-picker" aria-label="Formation">' + pickerOptions + '</select></label>' +
     removeButton + '</div>';
   return '<div class="repeatable-heading"><b>' + esc(field.label) + '</b></div>' +
-    pickerRow + '<div class="formation-panel">' + formationPanelMarkup(row, selected) + '</div>';
+    pickerRow + '<div class="formation-panel">' + formationPanelMarkup(row, selected) + '</div>' +
+    payIntervalsMarkup(row, selected, phase);
 }
 
 function renderFormationsField(field) {
@@ -435,6 +576,45 @@ function bindFormationContainer(container) {
     picker.addEventListener('change', function () {
       if (picker.value === '__add__') { addCustomFormation(container, phase, picker); return; }
       formationSelected[phase] = Number(picker.value);
+      rerenderFormationContainer(container, phase);
+    });
+  });
+  // Pay-interval cells write through to the selected formation's own interval
+  // buffer (data-formation-row is stamped at render time, so a stale selection
+  // can never send an edit to the wrong formation).
+  all('[data-pay-field]', container).forEach(function (element) {
+    if (element.dataset.pBound) return;
+    element.dataset.pBound = 'true';
+    function sync() {
+      var formationIndex = Number(element.getAttribute('data-formation-row'));
+      var intervalIndex = Number(element.getAttribute('data-pay-row'));
+      var row = formationEdits[phase][formationIndex];
+      if (!row || !row.intervals[intervalIndex]) return;
+      row.intervals[intervalIndex][element.getAttribute('data-pay-field')] = element.value;
+      formationDirty[phase] = true;
+    }
+    element.addEventListener('input', sync);
+    element.addEventListener('change', sync);
+  });
+  all('.pay-interval-add', container).forEach(function (button) {
+    if (button.dataset.pBtnBound) return;
+    button.dataset.pBtnBound = 'true';
+    button.addEventListener('click', function () {
+      var row = formationEdits[phase][selectedFormationIndex(phase)];
+      if (!row) return;
+      row.intervals.push(makePayIntervalRow(null));
+      formationDirty[phase] = true;
+      rerenderFormationContainer(container, phase);
+    });
+  });
+  all('.pay-interval-remove', container).forEach(function (button) {
+    if (button.dataset.pBtnBound) return;
+    button.dataset.pBtnBound = 'true';
+    button.addEventListener('click', function () {
+      var row = formationEdits[phase][selectedFormationIndex(phase)];
+      if (!row) return;
+      row.intervals.splice(Number(button.getAttribute('data-pay-row')), 1);
+      formationDirty[phase] = true;
       rerenderFormationContainer(container, phase);
     });
   });
@@ -603,14 +783,28 @@ export function val(component, key) {
   var value = ((Store.allFields || {})[component] || {})[key];
   return isFilled(value) ? value : '';
 }
-// Latest mean-PIIP precedence (newest assessment first). Shared with the well
-// summary in detail.js -- keep the two lists in sync.
-export var LATEST_PIIP_SOURCES = [
-  ['Resource Assessment Update', 'resource_update_gas_mean'],
-  ['Post-Drilling Resource Assessment', 'post_drill_piip_gas_mean'],
+// Latest mean-PIIP precedence (newest assessment first), split into its two
+// halves so callers name what they want instead of slicing by index.
+//
+// The v4 step merges moved the two post-drill assessments onto SAD Update
+// (resource_update_*) and SAD Model (post_drill_piip_*); each retired step is
+// listed straight after the step that absorbed it, holding the SAME EAV key,
+// so a well whose numbers were entered before the merge still resolves.
+// Store.allFields carries those legacy buckets because the backend field map
+// (workflow.summary.get_project_dynamic_field_map) is retired-inclusive.
+export var POST_DRILL_PIIP_SOURCES = [
+  ['SAD Update', 'resource_update_gas_mean'],
+  ['Resource Assessment Update', 'resource_update_gas_mean'],   // pre-v4 wells
+  ['SAD Model', 'post_drill_piip_gas_mean'],
+  ['Post-Drilling Resource Assessment', 'post_drill_piip_gas_mean']  // pre-v4
+];
+// The lead phase's own mean sources -- what a LEAD value must be read from,
+// never the post-drill numbers above.
+export var LEAD_PIIP_SOURCES = [
   ['Pre-Drilling Resource Assessment', 'pre_drill_piip_gas_mean'],
   ['Lead Resource Assessment', 'lead_piip_gas_mean']
 ];
+export var LATEST_PIIP_SOURCES = POST_DRILL_PIIP_SOURCES.concat(LEAD_PIIP_SOURCES);
 
 // Lead Resource Assessment only: the full Resource Assessment calculator
 // (views/resource-calculator.js) rendered inline, above the (now field-less

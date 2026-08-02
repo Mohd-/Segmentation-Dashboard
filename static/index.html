@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Segment Maturation and Execution System</title>
+  <title>ASAS — Advanced Segment Assessment System</title>
   <!-- Stamp the theme before first paint to avoid a flash of the wrong theme:
        stored choice wins, else fall back to the OS preference. -->
   <script>
@@ -15,16 +15,17 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="/static/css/base.css?v=7">
-  <link rel="stylesheet" href="/static/css/components.css?v=23">
+  <link rel="stylesheet" href="/static/css/base.css?v=10">
+  <link rel="stylesheet" href="/static/css/components.css?v=29">
 </head>
 <body>
   <section id="login-page" class="login-page hidden">
     <form id="login-page-form" class="login-card">
       <div class="brand-lockup login-brand">
-        <span class="rig-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 5 L12 1.8 L15.5 5"/><path d="M7.5 21 V9.5 L16.5 21 V9.5"/></svg></span>
-        <div>
-          <h1>Segment Maturation and Execution System</h1>
+        <img class="brand-mark" src="/static/icons/asas-logo.svg" width="40" height="34" alt="">
+        <div class="brand-text">
+          <h1 class="brand-wordmark">ASAS</h1>
+          <span class="brand-subtitle">Advanced Segment Assessment System</span>
         </div>
       </div>
       <p class="login-lead">Select your name to sign in.</p>
@@ -37,44 +38,96 @@
 
   <header class="app-header app-chrome">
     <div class="brand-lockup">
-      <span class="rig-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 5 L12 1.8 L15.5 5"/><path d="M7.5 21 V9.5 L16.5 21 V9.5"/></svg></span>
-      <div>
-        <h1>Segment Maturation and Execution System</h1>
+      <img class="brand-mark" src="/static/icons/asas-logo.svg" width="40" height="34" alt="">
+      <div class="brand-text">
+        <span class="brand-wordmark">ASAS</span>
+        <span class="brand-subtitle">Advanced Segment Assessment System</span>
       </div>
     </div>
     <div class="header-actions">
-      <button id="theme-toggle" type="button" class="icon-btn" aria-label="Toggle dark theme" aria-pressed="false" title="Toggle dark theme"><svg aria-hidden="true" focusable="false" class="lucide lucide-moon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/> </svg></button>
       <span id="user-chip" class="user-chip hidden"></span>
-      <button id="sign-out" type="button" class="ghost hidden">Sign out</button>
-      <a class="header-link" href="#">Segments Dashboard</a><!-- TODO: set the real Segments Dashboard URL and restore target="_blank" rel="noreferrer" (a '#' href with target=_blank opens a duplicate app tab) -->
-      <button id="export-excel" type="button" class="ghost">Export to Excel</button>
+      <button id="notify-toggle" type="button" class="icon-btn" aria-label="Notifications" title="Notifications"><svg aria-hidden="true" focusable="false" class="lucide lucide-bell" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/> <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/> </svg><span id="notify-dot" class="notify-dot hidden" aria-hidden="true"></span></button>
+      <button id="app-settings-toggle" type="button" class="icon-btn" aria-label="Settings" title="Settings"><svg aria-hidden="true" focusable="false" class="lucide lucide-settings" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/> <circle cx="12" cy="12" r="3"/> </svg></button>
+      <!-- Card 1F — the two header dropdowns. Both are EMPTY containers:
+           views/header-menus.js renders their contents (the gear's labels and
+           glyphs change with the theme and the session, and the bell's list is
+           fetched), and both are position:fixed so opening either moves
+           nothing on the page. The legacy #header-legacy-controls block that
+           held #theme-toggle / #export-excel / #sign-out is gone: those three
+           handlers now live in main.js and are handed to the gear menu, which
+           is the only place they are triggered from. -->
+      <div id="notify-menu" class="header-menu notify-menu" role="menu" aria-labelledby="notify-toggle" hidden></div>
+      <div id="app-settings-menu" class="header-menu gear-menu" role="menu" aria-labelledby="app-settings-toggle" hidden></div>
     </div>
   </header>
 
   <nav class="tabs app-chrome" aria-label="Main navigation" role="tablist">
-    <button data-tab="prospect" class="active" role="tab" aria-selected="true" type="button">Prospect Maturation</button>
-    <button data-tab="portfolio" role="tab" aria-selected="false" type="button">Portfolio Analysis</button>
-    <button data-tab="bp" role="tab" aria-selected="false" type="button">Business Plan Execution</button>
-    <button data-tab="audit" role="tab" aria-selected="false" type="button">Audit Trail</button>
+    <button data-tab="prospect" class="active" role="tab" aria-selected="true" type="button"><svg aria-hidden="true" focusable="false" class="lucide lucide-rig-trend" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="M2 19 L5.5 13 L8 15.5 L11 8"/> <path d="M7.5 8 L11 8 L11 11.5"/> <path d="M13 21 V9.5 L22 21 V9.5"/> </svg><span>Segment Maturation</span></button>
+    <button data-tab="portfolio" role="tab" aria-selected="false" type="button"><svg aria-hidden="true" focusable="false" class="lucide lucide-briefcase" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/> <rect width="20" height="14" x="2" y="6" rx="2"/> </svg><span>Portfolio Analysis</span></button>
+    <button data-tab="bp" role="tab" aria-selected="false" type="button"><svg aria-hidden="true" focusable="false" class="lucide lucide-target" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <circle cx="12" cy="12" r="10"/> <circle cx="12" cy="12" r="6"/> <circle cx="12" cy="12" r="2"/> </svg><span>Business Plan Execution</span></button>
+    <button data-tab="map" role="tab" aria-selected="false" type="button"><svg aria-hidden="true" focusable="false" class="lucide lucide-map-pin" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/> <circle cx="12" cy="10" r="3"/> </svg><span>Map</span></button>
+    <button data-tab="audit" role="tab" aria-selected="false" type="button"><svg aria-hidden="true" focusable="false" class="lucide lucide-shield" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/> </svg><span>Audit Trail</span></button>
+    <button data-tab="calculator" role="tab" aria-selected="false" type="button"><svg aria-hidden="true" focusable="false" class="lucide lucide-calculator" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <rect width="16" height="20" x="4" y="2" rx="2"/> <line x1="8" x2="16" y1="6" y2="6"/> <line x1="16" x2="16" y1="14" y2="18"/> <path d="M16 10h.01"/> <path d="M12 10h.01"/> <path d="M8 10h.01"/> <path d="M12 14h.01"/> <path d="M8 14h.01"/> <path d="M12 18h.01"/> <path d="M8 18h.01"/> </svg><span>Calculator</span></button>
   </nav>
 
   <main class="app-chrome">
     <section id="tab-prospect" class="tab active" role="tabpanel">
+      <!-- Card 1D — Add New Lead. One control, two states, in place: the navy
+           button, or exactly three inline fields (Lead Name, Lead X, Lead Y).
+           NO <form>, no Create/Cancel buttons and no modal by design: Enter
+           from any field creates, Escape or an outside click cancels
+           (views/lead-create.js owns every one of those rules). The X/Y inputs
+           are type=text + inputmode=decimal, NOT type=number — a number input
+           reports '' for malformed content, which would hide the very thing
+           the "Enter a valid Lead X Coordinate." message exists to report. -->
       <div class="panel new-lead-panel">
-        <button id="new-lead-toggle" type="button" class="ghost">+ New Lead</button>
-        <div id="new-lead-body" class="hidden">
-          <form id="create-lead-form" class="create-grid">
-            <input id="new-lead-name" placeholder="Lead Name" aria-label="Lead Name" required>
-            <input id="new-lead-x" type="number" step="any" placeholder="X" aria-label="X" required>
-            <input id="new-lead-y" type="number" step="any" placeholder="Y" aria-label="Y" required>
-            <button type="submit">Create Lead</button>
-          </form>
+        <div id="new-lead-controls" class="new-lead-controls">
+          <button id="new-lead-open" type="button" class="new-lead-button"
+                  aria-expanded="false" aria-controls="new-lead-fields">+ Add New Lead</button>
+          <div id="new-lead-fields" class="new-lead-fields hidden">
+            <div class="nl-field">
+              <label class="visually-hidden" for="new-lead-name">Lead Name</label>
+              <input id="new-lead-name" class="nl-input" type="text" placeholder="Lead Name"
+                     autocomplete="off" spellcheck="false" maxlength="120" enterkeyhint="done"
+                     aria-describedby="new-lead-name-error">
+              <p id="new-lead-name-error" class="nl-error" hidden></p>
+            </div>
+            <div class="nl-field">
+              <label class="visually-hidden" for="new-lead-x">Lead X Coordinate</label>
+              <input id="new-lead-x" class="nl-input" type="text" inputmode="decimal"
+                     placeholder="Lead X Coordinate" autocomplete="off" spellcheck="false"
+                     enterkeyhint="done" aria-describedby="new-lead-x-error">
+              <p id="new-lead-x-error" class="nl-error" hidden></p>
+            </div>
+            <div class="nl-field">
+              <label class="visually-hidden" for="new-lead-y">Lead Y Coordinate</label>
+              <input id="new-lead-y" class="nl-input" type="text" inputmode="decimal"
+                     placeholder="Lead Y Coordinate" autocomplete="off" spellcheck="false"
+                     enterkeyhint="done" aria-describedby="new-lead-y-error">
+              <p id="new-lead-y-error" class="nl-error" hidden></p>
+            </div>
+            <p id="new-lead-hint" class="nl-hint">Press Enter to create</p>
+          </div>
         </div>
       </div>
       <div class="panel pipeline-panel">
-        <div class="toolbar pipeline-toolbar">
-          <select id="prospect-status-filter" aria-label="Filter by status"></select>
-          <select id="prospect-assignee-filter" aria-label="Filter by assignee"></select>
+        <!-- The controls band: filters on the left, KPIs on the right, one
+             row. Two containers rather than one because views/lead-filters.js
+             rebuilds #lead-filter-row's innerHTML wholesale (its options are
+             data-driven) and would wipe any sibling markup placed inside it.
+             The 1px separators live on .lead-kpi-row and .kpi-tile-ogip —
+             one border per boundary, never a pair of adjacent edges. -->
+        <div class="lead-controls">
+          <!-- Card 1C filter row: Assignee (multi) / Field / Status / Priority,
+               built and owned entirely by views/lead-filters.js (the options are
+               dynamic — active users and the fields the current leads live in).
+               The board renders from that module's single filtered rowset. -->
+          <div id="lead-filter-row" class="lead-filter-row"></div>
+          <!-- Card 1E KPI tiles: completion donut / Total Active Leads /
+               Total Mean OGIP, built by views/lead-kpis.js from the SAME
+               filtered rowset the cards render from (main.js calls both in one
+               handler). Never a separate fetch. -->
+          <div id="lead-kpi-row" class="lead-kpi-row"></div>
         </div>
         <div id="prospect-pipeline" class="pipeline-board" aria-live="polite"></div>
       </div>
@@ -107,6 +160,13 @@
           </div>
         </div>
         <table id="portfolio-table" class="portfolio-table"></table>
+      </div>
+    </section>
+
+    <section id="tab-map" class="tab" role="tabpanel">
+      <div class="panel placeholder-panel">
+        <h3>Map</h3>
+        <p>Map functionality will be implemented in a future update.</p>
       </div>
     </section>
 
@@ -170,6 +230,13 @@
           </select>
         </div>
         <table id="audit-table"></table>
+      </div>
+    </section>
+
+    <section id="tab-calculator" class="tab" role="tabpanel">
+      <div class="panel placeholder-panel">
+        <h3>Calculator</h3>
+        <p>Calculator functionality will be implemented in a future update.</p>
       </div>
     </section>
   </main>
@@ -263,6 +330,6 @@
     <img id="ra-lightbox-img" alt="">
   </dialog>
 
-  <script type="module" src="/static/js/main.js?v=19"></script>
+  <script type="module" src="/static/js/main.js?v=25"></script>
 </body>
 </html>

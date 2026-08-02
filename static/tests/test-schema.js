@@ -5,7 +5,8 @@ import {
   piip, SCHEMA, PROSPECT_STAGES, BP_STAGES, STATUSES, DONE,
   SEISMIC_BLOCKS, FLUID_TYPES, FORMATIONS, FORMATION_METRICS,
   RESERVOIR_COS_COLUMNS, FLOWBACK_STAGE_COLUMNS, FLOWBACK_RATE_FIELDS,
-  RESOURCE_SCENARIOS, validateStepFields, numericFieldError
+  RESOURCE_SCENARIOS, validateStepFields, numericFieldError,
+  SAD_FORMATION_COLUMNS, REQUIRED_FIELDS_FOR_SUBMIT, submitBlockedMessage
 } from '../js/schema.js';
 
 // Types actually used by field definitions in schema.js; detail-form renders
@@ -215,6 +216,93 @@ test('schema.RESOURCE_SCENARIOS: all four configured scenarios, exact labels', f
     assert.ok(['dry_gas', 'condensate'].indexOf(scenario.resource_type) >= 0,
       scenario.id + ' resource_type is dry_gas or condensate');
   });
+});
+
+// --- v4 BP step merges ----------------------------------------------------
+// Four steps were merged away (URED Update, Post-Drilling Resource Assessment,
+// Resource Assessment Update, Executive Summary Final). Their EAV keys had to
+// survive the move onto the steps that absorbed them -- renaming a key orphans
+// every stored value -- and the retired names must no longer render as steps.
+
+test('schema.SCHEMA: the four v4-retired steps are gone from SCHEMA', function () {
+  ['URED Update', 'Post-Drilling Resource Assessment',
+   'Resource Assessment Update', 'Executive Summary Final'].forEach(function (name) {
+    assert.ok(!(name in SCHEMA), name + ' is no longer a rendered step');
+  });
+});
+
+test('schema.SCHEMA: merged steps keep the retired steps\' EAV keys', function () {
+  function keys(step) { return SCHEMA[step].map(function (f) { return f.key; }); }
+  var sadModel = keys('SAD Model');
+  // post_drill_piip_* trio + the kept liquid/fluid select.
+  assert.ok(sadModel.indexOf('post_drill_piip_gas_mean') >= 0, 'SAD Model keeps post_drill_piip_gas_mean');
+  assert.ok(sadModel.indexOf('post_drill_fluid_type') >= 0, 'SAD Model keeps the fluid select');
+  // The formations PICKER was dropped in favour of the optional table.
+  assert.ok(sadModel.indexOf('post_drill_formations') < 0, 'SAD Model dropped the formations picker');
+  assert.ok(sadModel.indexOf('sad_formation_rows') >= 0, 'SAD Model gained the optional formation table');
+
+  var sadUpdate = keys('SAD Update');
+  assert.ok(sadUpdate.indexOf('resource_update_gas_mean') >= 0, 'SAD Update keeps resource_update_gas_mean');
+  assert.ok(sadUpdate.indexOf('resource_update_fluid_type') >= 0, 'SAD Update keeps the fluid select');
+  assert.ok(sadUpdate.indexOf('resource_update_formations') < 0, 'SAD Update dropped the formations picker');
+  assert.ok(sadUpdate.indexOf('sad_update_formation_rows') >= 0, 'SAD Update gained the optional formation table');
+
+  assert.deepEqual(keys('Executive Summary'), ['exec_summary_loaded', 'ured_update_loaded']);
+  SCHEMA['Executive Summary'].forEach(function (field) {
+    assert.equal(field.type, 'checkbox', field.key + ' is a checkbox');
+    assert.equal(field.row, 'exec_summary_docs', field.key + ' shares one row');
+  });
+});
+
+test('schema.SAD_FORMATION_COLUMNS: one row per formation, valid column defs', function () {
+  checkFieldList('SAD_FORMATION_COLUMNS', SAD_FORMATION_COLUMNS, KNOWN_COLUMN_TYPES, 'columns');
+  var keys = SAD_FORMATION_COLUMNS.map(function (col) { return col.key; });
+  assert.deepEqual(keys, ['sad_formation', 'sad_top_tvdss_ft', 'sad_base_tvdss_ft',
+    'sad_thickness_ft', 'sad_phit_pct', 'sad_swt_pct', 'sad_ngr_pct', 'sad_fluid']);
+  // Both merged SAD steps render the SAME column set (one shared definition).
+  ['SAD Model', 'SAD Update'].forEach(function (step) {
+    var table = SCHEMA[step].filter(function (f) { return f.type === 'repeatable'; })[0];
+    assert.equal(table.columns, SAD_FORMATION_COLUMNS, step + ' reuses SAD_FORMATION_COLUMNS');
+  });
+});
+
+// --- submit gating (mirror of workflow/constants.py) -----------------------
+
+test('schema.REQUIRED_FIELDS_FOR_SUBMIT: SAD Update declares both sign-offs', function () {
+  assert.deepEqual(REQUIRED_FIELDS_FOR_SUBMIT['SAD Update'], [
+    ['sad_update_done', 'SAD Update'],
+    ['final_exec_summary_done', 'Final Executive Summary']
+  ]);
+  // Every gated key must actually exist as a checkbox on its step, or the UI
+  // would demand something the form cannot offer.
+  Object.keys(REQUIRED_FIELDS_FOR_SUBMIT).forEach(function (step) {
+    var byKey = {};
+    (SCHEMA[step] || []).forEach(function (field) { byKey[field.key] = field; });
+    REQUIRED_FIELDS_FOR_SUBMIT[step].forEach(function (entry) {
+      assert.ok(byKey[entry[0]], step + ' renders ' + entry[0]);
+      assert.equal(byKey[entry[0]].type, 'checkbox', entry[0] + ' is a checkbox');
+      assert.equal(byKey[entry[0]].label, entry[1], entry[0] + ' label matches the gate message');
+    });
+  });
+});
+
+test('schema.submitBlockedMessage names every unmet checkbox', function () {
+  assert.equal(submitBlockedMessage('SAD Update', {}),
+    'Cannot submit until these are checked: SAD Update, Final Executive Summary.');
+  assert.equal(submitBlockedMessage('SAD Update', { sad_update_done: '1' }),
+    'Cannot submit until these are checked: Final Executive Summary.');
+  // Falsy stored values do not count; the app's truthy vocabulary does.
+  assert.equal(submitBlockedMessage('SAD Update', { sad_update_done: '1', final_exec_summary_done: '0' }),
+    'Cannot submit until these are checked: Final Executive Summary.');
+  assert.equal(submitBlockedMessage('SAD Update', { sad_update_done: '1', final_exec_summary_done: '' }),
+    'Cannot submit until these are checked: Final Executive Summary.');
+  assert.equal(submitBlockedMessage('SAD Update', { sad_update_done: 'true', final_exec_summary_done: 'yes' }), null);
+});
+
+test('schema.submitBlockedMessage lets ungated steps through', function () {
+  assert.equal(submitBlockedMessage('SAD Model', {}), null);
+  assert.equal(submitBlockedMessage('Executive Summary', {}), null);
+  assert.equal(submitBlockedMessage('Nope', null), null);
 });
 
 test('schema formations vocabulary', function () {

@@ -26,6 +26,10 @@ static/
     main.js                   boots the app: wires up the tab buttons and the four static forms
     views/
       pipeline.js              Prospect Maturation + Business Plan Execution tabs (the kanban-style boards)
+      lead-filters.js          the Segment Maturation filter row (Assignee/Field/Status/Priority) AND the one
+                               filtered-leads selector the board — and later the KPIs — render from
+      lead-create.js           the "+ Add New Lead" control: expand-in-place, three inline fields, Enter to
+                               create, Escape/outside-click to cancel, inline validation (no modal, no form)
       detail.js                the right-hand detail panel: compact summary card, rename/delete, BP/Active flags
       detail-form.js           the middle detail panel: the component form itself, dynamic fields, repeatable rows
       project-editor.js         the secondary "all fields" editor opened from pipeline detail

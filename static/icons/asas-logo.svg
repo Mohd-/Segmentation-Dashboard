@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 76 64" role="img" aria-label="ASAS logo">
+  <defs>
+    <linearGradient id="asas-left" x1="8" y1="60" x2="36" y2="4" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1e2f7a"/>
+      <stop offset="0.55" stop-color="#1d4ed8"/>
+      <stop offset="1" stop-color="#2f7fe0"/>
+    </linearGradient>
+    <linearGradient id="asas-right" x1="36" y1="4" x2="68" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2f7fe0"/>
+      <stop offset="0.55" stop-color="#14a8a0"/>
+      <stop offset="1" stop-color="#3fba6f"/>
+    </linearGradient>
+    <linearGradient id="asas-swoosh" x1="10" y1="48" x2="70" y2="46" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1d4ed8"/>
+      <stop offset="0.5" stop-color="#14a8a0"/>
+      <stop offset="1" stop-color="#57c785"/>
+    </linearGradient>
+  </defs>
+  <!-- Left leg: thick tapered stroke, navy at the foot rising to blue at the apex -->
+  <path fill="url(#asas-left)" d="M30.5 4.2
+           C32.6 1.4 36.4 1.4 38.4 4.4
+           L42.5 10.4 L22.5 59 L4.5 59 Z"/>
+  <!-- Right leg: slimmer taper, blue fading through teal to green at the foot -->
+  <path fill="url(#asas-right)" d="M38.4 4.4
+           L42.5 10.4 L62.5 57.5 L71 51 Z"/>
+  <!-- Swoosh crossbar: curved sweep crossing both legs, curling under the right foot -->
+  <path fill="none" stroke="url(#asas-swoosh)" stroke-width="5.8" stroke-linecap="round"
+        d="M9.5 40.5
+           C22 57 50 63.5 63.5 55
+           C70.5 50.4 70.5 43.6 64 40.8"/>
+</svg>

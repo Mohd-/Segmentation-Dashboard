@@ -5,7 +5,7 @@ import { activateTab } from '../navigation.js';
 import { BP_STAGES, PROSPECT_STAGES, DONE, SEISMIC_BLOCKS, FLOWBACK_RATE_FIELDS } from '../schema.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { canTransitionPhase, promoteProject, recallProject } from './transitions.js';
-import { loadComponent, LATEST_PIIP_SOURCES } from './detail-form.js';
+import { loadComponent, LATEST_PIIP_SOURCES, POST_DRILL_PIIP_SOURCES, LEAD_PIIP_SOURCES, copyText } from './detail-form.js';
 import { refreshAllBoards } from './pipeline.js';
 import { refreshAudit } from './audit.js';
 
@@ -353,6 +353,51 @@ function wireFolds() {
   });
 }
 
+// Folders fold: one row per WELL_OVERVIEW_DIRECTORY_MAP section key (see
+// folders.get_section_folder_link). Rendered synchronously as a loading
+// placeholder -- the summary card itself never waits on the network -- then
+// filled in by wireFolderLinks() once each lazy fetch resolves. Mirrors the
+// component-folder card's glyph/path/copy-button markup (renderComponentFolder
+// in detail-form.js) so both folder-link styles read as one pattern.
+function folderRowHtml(sectionKey) {
+  return '<div class="folder-card" data-folder-key="' + esc(sectionKey) + '">' +
+    '<span class="folder-glyph" aria-hidden="true">📁</span>' +
+    '<span class="folder-path" id="summary-folder-path-' + esc(sectionKey) + '">Loading…</span>' +
+    '<button type="button" class="icon-btn" id="summary-folder-copy-' + esc(sectionKey) +
+    '" title="Copy folder link" aria-label="Copy folder link" disabled>⧉</button></div>';
+}
+function foldersHtml(sectionKeys) {
+  return '<div class="summary-folders">' + sectionKeys.map(folderRowHtml).join('') + '</div>';
+}
+// Fetches each section's folder link after the card is already on screen and
+// fills the placeholder row in place. A 404/failure (unmounted share, unknown
+// section) degrades to a quiet inline message -- never a thrown console error
+// -- and a stale response for a project the user has since navigated away
+// from is dropped rather than overwriting the now-current card.
+function wireFolderLinks(sectionKeys) {
+  var forProjectId = Store.projectId;
+  sectionKeys.forEach(function (sectionKey) {
+    API.sectionFolder(forProjectId, sectionKey).then(function (info) {
+      if (Store.projectId !== forProjectId) return;
+      var pathEl = byId('summary-folder-path-' + sectionKey);
+      var copyBtn = byId('summary-folder-copy-' + sectionKey);
+      if (!pathEl) return;
+      var path = (info && info.unc_path) || '';
+      var label = (info && info.section) || sectionKey;
+      pathEl.textContent = label + ': ' + (path || 'Not configured.');
+      pathEl.title = path || '';
+      if (copyBtn && path) {
+        copyBtn.disabled = false;
+        copyBtn.addEventListener('click', function () { copyText(path); });
+      }
+    }).catch(function () {
+      if (Store.projectId !== forProjectId) return;
+      var pathEl = byId('summary-folder-path-' + sectionKey);
+      if (pathEl) pathEl.textContent = 'Folder link unavailable.';
+    });
+  });
+}
+
 function numOrNull(value) {
   if (!isFilled(value)) return null;
   var n = Number(value);
@@ -399,11 +444,11 @@ function statCluster(label, cols, context) {
     contextHtml + '</div>';
 }
 
-// The lead phase's own PIIP mean sources (the tail of LATEST_PIIP_SOURCES,
-// which leads with the two post-drill assessments). Used wherever a LEAD value
-// is wanted from a drilled well: Prediction vs Actual's predicted mean and the
-// well card's Lead Summary fold, neither of which may read post-drill numbers.
-var LEAD_PIIP_SOURCES = LATEST_PIIP_SOURCES.slice(2);
+// LEAD_PIIP_SOURCES (the lead half of LATEST_PIIP_SOURCES) and
+// POST_DRILL_PIIP_SOURCES (the post-drill half, merged steps first and their
+// pre-v4 retired twins right behind) are imported from detail-form.js by name
+// rather than sliced out by index -- the two halves changed length when the v4
+// step merges added the legacy fallback entries.
 
 // The lead-phase field map as seen from the well card: the snapshot frozen at
 // promotion wins field by field, with the live lead tasks (which stay active
@@ -523,7 +568,7 @@ export function renderRightPanel(tasks) {
     var sarh = deduped['SARH'] ? deduped['SARH'].row : null;
     // Post-Drill Gas: source-consistent P90/Mean/P10 from resource_update else
     // post_drill (the drilled results only). Mean feeds Prediction vs Actual.
-    var postDrillTrio = gasTrio(LATEST_PIIP_SOURCES.slice(0, 2));
+    var postDrillTrio = gasTrio(POST_DRILL_PIIP_SOURCES);
     var meanPostDrill = postDrillTrio.mean;
     var prognosis = (Store.allFields['Well Proposal'] || {}).sarh_formation_prognosis_pre_drill;
     // SARH top prefers the formation row; legacy wells stored the top at step
@@ -532,7 +577,7 @@ export function renderRightPanel(tasks) {
     if (!isFilled(topSarh)) {
       topSarh = firstFilledValue([
         (Store.allFields['Final Log Analysis'] || {}).final_top_reservoir_tvdss_ft,
-        (Store.allFields['Quicklook Logs Interpretation'] || {}).quicklook_top_reservoir_tvdss_ft
+        (Store.allFields['Quicklook Logs'] || {}).quicklook_top_reservoir_tvdss_ft
       ]);
     }
     var metricsHtml = '<div class="summary-metrics">' +
@@ -561,14 +606,18 @@ export function renderRightPanel(tasks) {
     // Well fluid ladder (newest authority first), matching the backend: SARH's
     // final-phase formation fluid, then legacy final_fluid_type, the two
     // resource assessments' fluid, SARH's quicklook-phase fluid, then legacy
-    // quicklook_fluid_type.
+    // quicklook_fluid_type. Each resource-assessment rung is read from the
+    // step that owns it since the v4 merges (SAD Update / SAD Model) with the
+    // retired step it absorbed right behind it, for wells written before.
     var fluid = firstFilledValue([
       sarhFluidAtPhase('final'),
       (Store.allFields['Final Log Analysis'] || {}).final_fluid_type,
+      (Store.allFields['SAD Update'] || {}).resource_update_fluid_type,
       (Store.allFields['Resource Assessment Update'] || {}).resource_update_fluid_type,
+      (Store.allFields['SAD Model'] || {}).post_drill_fluid_type,
       (Store.allFields['Post-Drilling Resource Assessment'] || {}).post_drill_fluid_type,
       sarhFluidAtPhase('quicklook'),
-      (Store.allFields['Quicklook Logs Interpretation'] || {}).quicklook_fluid_type
+      (Store.allFields['Quicklook Logs'] || {}).quicklook_fluid_type
     ]);
     var flowEntry = FLOWBACK_RATE_FIELDS[fluid] || FLOWBACK_RATE_FIELDS['Gas'];
     // Primary flowback values are stage #1 -- the first non-empty row of the
@@ -617,12 +666,21 @@ export function renderRightPanel(tasks) {
     var leadHtml = foldSection('lead', 'Lead Summary',
       leadMetricsHtml(leadFieldSource(), LEAD_PIIP_SOURCES) + capturedNote);
 
-    bodyHtml = metricsHtml + reservoirsHtml + flowbackHtml + pvaHtml + leadHtml;
+    // Folder links: the well's own shared folders (Well/MTR/PDA), not the
+    // lead's -- those already live inside the folded Lead Summary above via
+    // the pipeline itself, and get_section_folder_link resolves them from
+    // config.WELL_OVERVIEW_DIRECTORY_MAP by these same keys.
+    var folderSectionKeys = ['well', 'mtr', 'pda'];
+    var foldersFoldHtml = foldSection('folders', 'Folders', foldersHtml(folderSectionKeys));
+
+    bodyHtml = metricsHtml + reservoirsHtml + flowbackHtml + pvaHtml + leadHtml + foldersFoldHtml;
   } else {
     // ---- Lead card ----------------------------------------------------------
     // Res CoS is the primary first-row percent; its "Block · AR n" reference
     // rides along as the cluster's quiet context line (no bulky <small> label).
-    bodyHtml = leadMetricsHtml(Store.allFields, LATEST_PIIP_SOURCES);
+    var folderSectionKeys = ['lead'];
+    var foldersFoldHtml = foldSection('folders', 'Folders', foldersHtml(folderSectionKeys));
+    bodyHtml = leadMetricsHtml(Store.allFields, LATEST_PIIP_SOURCES) + foldersFoldHtml;
   }
   // Popover: what the compact card dropped but still needs a home -- the Active
   // Well flag, the phase move, and rename/delete. The phase button is
@@ -678,6 +736,7 @@ export function renderRightPanel(tasks) {
   // Prediction-vs-Actual / Lead Summary folds (well card only; the lead card
   // renders none, so this is a no-op there).
   wireFolds();
+  wireFolderLinks(folderSectionKeys);
   wireSummarySettings();
 }
 export function refreshAfterRecordChange(message) {

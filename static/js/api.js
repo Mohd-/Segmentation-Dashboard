@@ -56,6 +56,7 @@ export var API = {
   formations: function (id) { return api('/api/projects/' + id + '/formations'); },
   saveFormations: function (id, payload) { return api('/api/projects/' + id + '/formations', jsonOptions('PUT', payload)); },
   componentFolder: function (projectId, taskId) { return api('/api/projects/' + projectId + '/component-folder/' + taskId); },
+  sectionFolder: function (projectId, sectionKey) { return api('/api/projects/' + projectId + '/folders/' + sectionKey); },
   fields: function (id) { return api('/api/tasks/' + id + '/dynamic-fields'); },
   saveFields: function (id, fields) { return api('/api/tasks/' + id + '/dynamic-fields', jsonOptions('PATCH', { fields: fields, changed_by: currentUserName() })); },
   updateTask: function (id, payload) { return api('/api/tasks/' + id, jsonOptions('PATCH', payload)); },
@@ -65,6 +66,14 @@ export var API = {
   // Resource Assessment calculator (views/resource-calculator.js): taskId is
   // the Lead Resource Assessment component's own task_id.
   resourceAssessment: function (taskId, payload) { return api('/api/tasks/' + taskId + '/resource-assessment', jsonOptions('POST', payload)); },
+  // Header bell (views/header-menus.js). All three answer with the CURRENT
+  // unread_count alongside their own payload, so the red dot and the menu are
+  // updated from one round trip and can never disagree. Every route is scoped
+  // server-side to the session identity -- there is no "notifications for user
+  // X" call to make.
+  notifications: function () { return api('/api/notifications'); },
+  markNotificationRead: function (id) { return api('/api/notifications/' + id + '/read', jsonOptions('POST', {})); },
+  markAllNotificationsRead: function () { return api('/api/notifications/read-all', jsonOptions('POST', {})); },
   activity: function (projectId) { return api('/api/activity' + (projectId ? '?project_id=' + encodeURIComponent(projectId) : '')); },
   businessRows: function () { return api('/api/business-plan/rows'); },
   portfolioRows: function (query) {
