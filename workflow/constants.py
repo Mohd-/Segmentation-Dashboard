@@ -390,6 +390,11 @@ REQUIRED_FIELDS_FOR_SUBMIT = {
 _CHECKBOX_TRUTHY = {"1", "true", "yes", "on"}
 
 
+def _checkbox_on(value):
+    """Is a stored dynamic-field value a ticked checkbox? (pure)"""
+    return str(value or "").strip().lower() in _CHECKBOX_TRUTHY
+
+
 def unmet_submit_requirements(task_name, fields):
     """Return the labels of a step's unchecked submit-gate boxes (pure).
 
@@ -399,7 +404,7 @@ def unmet_submit_requirements(task_name, fields):
     """
     fields = fields or {}
     return [label for key, label in REQUIRED_FIELDS_FOR_SUBMIT.get(task_name, ())
-            if str(fields.get(key) or "").strip().lower() not in _CHECKBOX_TRUTHY]
+            if not _checkbox_on(fields.get(key))]
 
 
 # ---------------------------------------------------------------------------
@@ -417,15 +422,25 @@ def unmet_submit_requirements(task_name, fields):
 #
 #   "required_checked": (field_key, ...)  every key must be checkbox-truthy
 #   "required_present": (field_key, ...)  every key must hold a VALID value
+#   "required_greater": ((hi_key, lo_key), ...)  hi must parse numeric and be
+#                                         STRICTLY greater than lo
 #
 # "Valid" defaults to "non-blank", but a key may declare a richer notion of
 # presence in the engine's value-validator table (lifecycle._field_present) --
 # reservoir_cos_rows does, because the whole mini-sheet is stored as ONE JSON
-# array whose empty form ("[]") is a perfectly non-blank string.
+# array whose empty form ("[]") is a perfectly non-blank string, and card 2B's
+# numeric pairs do, because "0" and "-3" are non-blank but are not a lead's
+# area, thickness, GRV or PIIP mean (see POSITIVE_NUMBER_FIELDS below).
 #
-# Both lists are AND-ed and an absent list is vacuously satisfied, so a
+# "required_greater" is the CROSS-FIELD half card 2B needs: a P90/P10 pair or a
+# Reservoir/Formation pair is only a valid capture when the two sides are in the
+# right order, and EQUALITY is not (equal percentiles are a mis-entry, not a
+# degenerate-but-legal distribution). Stated as data rather than a callable for
+# the same reason the other two lists are: the whole rule stays inspectable.
+#
+# All three lists are AND-ed and an absent list is vacuously satisfied, so a
 # checkbox-only card (Seismic Signature Validation) declares one key and a
-# card that also demands real inputs (Reservoir CoS) declares both.
+# card that also demands ordered real inputs (Area Definition) declares more.
 FIELD_COMPLETION = {
     # Card 3A. BOTH halves are required: the supporting-slides confirmation AND
     # a stored, model-scored evaluation. The checkbox alone is not completion --
@@ -439,7 +454,102 @@ FIELD_COMPLETION = {
     "Seismic Signature Validation": {
         "required_checked": ("seismic_slides_loaded",),
     },
+    # Card 3B. The v5 merge put BOTH CoS halves on one step, so "done" means
+    # BOTH results are stored -- the Trap percentage AND the Seal percentage --
+    # plus the Seal supporting-slides confirmation. A Trap half filled in while
+    # the Seal form is still blank leaves the step In Progress, which is the
+    # whole point of merging them: the lead's Total Chance of Success needs both
+    # factors, and half a merged step is not a completed one. Both results are
+    # WRITTEN BY THE SERVER's own recompute hooks on save
+    # (lifecycle._apply_trap_cos_calculation / _apply_seal_cos_calculation) and
+    # stored as whole-number percentage strings, with "" / an absent key meaning
+    # "not computed" -- so the DEFAULT non-blank notion of presence is exactly
+    # right here and neither key needs an entry in lifecycle._field_present.
+    "Trap and Seal CoS": {
+        "required_checked": ("seal_slides_loaded",),
+        "required_present": ("trap_cos_pct", "seal_cos_pct"),
+    },
+    # ---- Card 2B: the four tracked items of the consolidated Lead Assessment
+    # page. The page is ONE workspace with ONE Save, but the four items keep
+    # their own rows, their own dots on the board and their own rules -- so the
+    # engine still decides each of them independently, from the fields that
+    # item owns. That is what lets a user fill Section 2's Area pair and watch
+    # exactly one dot go green.
+    #
+    # Section 2's left half. Both percentiles must be real positive numbers and
+    # P10 must exceed P90 -- an area "distribution" of 5 to 5 is a typo, not a
+    # narrow one. top_formation_tvdss_ft also lives on this task (Section 3) and
+    # is deliberately ABSENT from the predicate: the card asks for it as
+    # reference information, not as a gate, so a lead with no TVDSS still
+    # completes Area Definition.
+    "Area Definition": {
+        "required_present": ("p90_area_km2", "p10_area_km2"),
+        "required_greater": (("p10_area_km2", "p90_area_km2"),),
+    },
+    # Section 1. The canonical thickness reads (reservoir_thickness_ft /
+    # formation_thickness_ft) are the predicate -- NOT the twt_*_ms inputs
+    # beside them, which are one of two interchangeable ways to arrive at those
+    # feet (see config.TWT_THICKNESS_COEFFICIENTS). Whichever side the user
+    # typed, the step is done when both thicknesses are stored and the formation
+    # envelope genuinely contains the reservoir (strictly greater; equal
+    # thicknesses would mean a zero-thickness overburden).
+    "Thickness Estimation": {
+        "required_present": ("reservoir_thickness_ft", "formation_thickness_ft"),
+        "required_greater": (("formation_thickness_ft", "reservoir_thickness_ft"),),
+    },
+    # Section 2's right half. Same P90/P10 shape as Area Definition, in
+    # 10^3 acre.ft.
+    "GRV Inputs": {
+        "required_present": ("grv_p90_thousand_acre_ft", "grv_p10_thousand_acre_ft"),
+        "required_greater": (("grv_p10_thousand_acre_ft", "grv_p90_thousand_acre_ft"),),
+    },
+    # Section 4 + Section 3's checkbox. BOTH halves, for the same reason
+    # Reservoir CoS needs both: a ticked "the polygons are filed" box with no
+    # computed volume carries nothing forward into the portfolio, and a computed
+    # volume whose supporting surfaces were never filed is not a reviewable
+    # deliverable. lead_piip_gas_mean is the ONE stored number every downstream
+    # reader resolves the lead's volume from (_OVERVIEW_READ_SOURCES's
+    # "lead_ogip", LATEST_MEAN_GAS_SOURCES, the Lead Summary's gas trio), so
+    # keying the predicate on it means "this step is complete" and "this step
+    # feeds the portfolio" can never disagree -- exactly the reservoir_cos_rows
+    # argument. It is written by the page's auto-run, never typed.
+    "Resource Assessment": {
+        "required_checked": ("polygons_surfaces_loaded",),
+        "required_present": ("lead_piip_gas_mean",),
+    },
 }
+
+# Keys whose "has a valid value" means a POSITIVE NUMBER, not merely a non-blank
+# string. Read by the engine's value validator (lifecycle._field_present) and
+# by the ordering check below, so both halves of a card 2B predicate agree on
+# what a usable number is.
+#
+# Every one of these is a physical magnitude a lead cannot have zero or less of:
+# an area, a thickness, a gross rock volume, a mean volume in place. "0" is the
+# value a half-filled form and a cleared input both leave behind, so accepting
+# it would let an empty section read as complete.
+POSITIVE_NUMBER_FIELDS = frozenset({
+    "p90_area_km2", "p10_area_km2",
+    "reservoir_thickness_ft", "formation_thickness_ft",
+    "grv_p90_thousand_acre_ft", "grv_p10_thousand_acre_ft",
+    "lead_piip_gas_mean",
+})
+
+
+def positive_number(value):
+    """Does a stored dynamic-field value parse as a number > 0? (pure)"""
+    try:
+        return float(str(value or "").strip()) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _number_or_none(value):
+    """float(value) or None -- never raises. (pure)"""
+    try:
+        return float(str(value or "").strip())
+    except (TypeError, ValueError):
+        return None
 
 # Steps whose completion is a HUMAN APPROVAL and must never become field-driven.
 # "Segmentation Slides" is the one tracked item the board still shows as
@@ -448,6 +558,45 @@ FIELD_COMPLETION = {
 # would silently delete a supervisor's job. Named here rather than left as a
 # comment so a test can assert the two tables never overlap.
 FIELD_COMPLETION_MANUAL_APPROVAL_STEPS = frozenset({"Segmentation Slides"})
+
+# ---------------------------------------------------------------------------
+# Checkbox-driven SUBMISSION (card 3D)
+# ---------------------------------------------------------------------------
+# The other half of a manual-approval step: the employee never sees a separate
+# "Submit for Approval" button, so THE SAVE ITSELF has to ask for the review.
+# task_name -> the confirmation whose ticked state means "this deliverable is
+# ready for a supervisor to look at".
+#
+# Deliberately a SIBLING of FIELD_COMPLETION, not an extension of it: the engine
+# drives a step all the way to Approved, whereas this table stops at Ready and
+# leaves the approval where card 3D wants it -- with a human. The two tables
+# must never name the same step (a test asserts it), and every step named here
+# must be a manual-approval one.
+#
+# The move is Not Assigned / In Progress -> Ready ONLY. A step already Ready is
+# waiting on a supervisor, so re-saving it (a typo fix in the comments, say)
+# must not file a second request for the same review; a step already Approved is
+# finished. Unticking the box does NOT withdraw a pending submission either --
+# there is no "withdraw" in the lifecycle, and inventing one would silently
+# cancel a review the supervisor may already be reading. Reopening a submitted
+# step stays the supervisor's "return" action.
+CHECKBOX_SUBMIT_STEPS = {
+    "Segmentation Slides": "segmentation_slides_loaded",
+}
+
+# The statuses a checkbox-driven submission may move FROM (see above).
+CHECKBOX_SUBMIT_FROM_STATUSES = frozenset({"Not Assigned", "In Progress"})
+
+
+def checkbox_submit_met(task_name, fields):
+    """Is a step's CHECKBOX_SUBMIT_STEPS confirmation ticked? (pure)
+
+    ``fields`` is a {field_key: value} map of the task's stored dynamic fields.
+    A step with no entry returns False -- "not checkbox-submitted", NOT "ready":
+    the hook must never touch a step this table does not claim.
+    """
+    key = CHECKBOX_SUBMIT_STEPS.get(task_name)
+    return bool(key) and _checkbox_on((fields or {}).get(key))
 
 # The distinct task_history action_type + comment the engine leaves behind, in
 # both directions. Unlike AUTO_COMPLETE_EVENT these are NOT once-ever markers:
@@ -475,11 +624,21 @@ def field_completion_met(task_name, fields, is_present=None):
         return False
     fields = fields or {}
     for key in spec.get("required_checked", ()):
-        if str(fields.get(key) or "").strip().lower() not in _CHECKBOX_TRUTHY:
+        if not _checkbox_on(fields.get(key)):
             return False
     present = is_present or (lambda _key, value: str(value or "").strip() != "")
     for key in spec.get("required_present", ()):
         if not present(key, fields.get(key)):
+            return False
+    # Cross-field ordering (card 2B's P90/P10 and Reservoir/Formation pairs).
+    # STRICTLY greater: equality is a mis-entry, not a valid capture. A pair
+    # whose sides do not both parse as numbers fails here rather than raising --
+    # required_present has normally already rejected that, and a spec that
+    # orders a key it did not also require must not blow up the save hook.
+    for hi_key, lo_key in spec.get("required_greater", ()):
+        hi = _number_or_none(fields.get(hi_key))
+        lo = _number_or_none(fields.get(lo_key))
+        if hi is None or lo is None or hi <= lo:
             return False
     return True
 

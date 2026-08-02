@@ -157,9 +157,52 @@ export var SAD_FORMATION_COLUMNS = [
   { key: 'sad_ngr_pct', label: 'NGR (%)', type: 'number' },
   { key: 'sad_fluid', label: 'Fluid', type: 'select', options: FLUID_TYPES }
 ];
+// ---------------------------------------------------------------------------
+// Card 2B -- the four Lead Assessment steps
+// ---------------------------------------------------------------------------
+// These four entries are the FIELD REGISTRY for the consolidated Lead
+// Assessment workspace (views/lead-assessment.js), which custom-renders every
+// one of them into its four numbered sections. They stay declared here anyway,
+// for three reasons:
+//   * the ALL-FIELDS editor (views/project-editor.js) renders straight from
+//     SCHEMA and knows nothing about the consolidated page -- an unregistered
+//     key would be invisible and uneditable there;
+//   * validateStepFields (below) is the shared pre-save sanity net BOTH surfaces
+//     run, and it only sees fields SCHEMA declares;
+//   * a key with no entry anywhere is a key nobody can find later.
+// Every one is a plain typed field project-editor already handles (number /
+// select / checkbox), so that editor renders them harmlessly with no special
+// casing -- the consolidated page simply chooses not to use this renderer.
+// `section` groups them for the all-fields card only; the consolidated page
+// lays the sections out itself.
 export var SCHEMA = {
-  'Area Definition': [{ key: 'p10_area_km2', label: 'P10 Area (km²)', type: 'number' }, { key: 'p90_area_km2', label: 'P90 Area (km²)', type: 'number' }],
-  'Thickness Estimation': [{ key: 'formation_thickness_ft', label: 'Sarah Formation Thickness (ft)', type: 'number' }, { key: 'reservoir_thickness_ft', label: 'Reservoir Thickness (ft)', type: 'number' }],
+  'Area Definition': [
+    { key: 'p10_area_km2', label: 'P10 Area (km²)', type: 'number' },
+    { key: 'p90_area_km2', label: 'P90 Area (km²)', type: 'number' },
+    // Card 2B Section 3. Reference information, NOT a completion gate (it is
+    // deliberately absent from the server's FIELD_COMPLETION entry for this
+    // step) and NOT positive-only -- a TVDSS below datum is a negative number,
+    // and a structure above it a positive one, so the only rule is "parses as a
+    // number". bigOk: true because depths run well past the generic 9999 cap.
+    { key: 'top_formation_tvdss_ft', label: 'Top Formation TVDSS (ft)', type: 'number', bigOk: true, section: 'Structure' }
+  ],
+  'Thickness Estimation': [
+    { key: 'formation_thickness_ft', label: 'Sarah Formation Thickness (ft)', type: 'number' },
+    { key: 'reservoir_thickness_ft', label: 'Reservoir Thickness (ft)', type: 'number' },
+    // Card 2B Section 1's two-way time inputs. The FEET above stay the
+    // canonical thickness reads every downstream surface resolves (Lead
+    // Summary, portfolio, the resource calculator's box model) -- these are the
+    // other end of the same measurement, kept so the capture is reproducible.
+    // bigOk: true -- a deep target's two-way time runs past 9999 ms.
+    { key: 'twt_reservoir_ms', label: 'Reservoir TWT (ms)', type: 'number', bigOk: true, section: 'Two-way time', row: 'twt' },
+    { key: 'twt_formation_ms', label: 'Formation TWT (ms)', type: 'number', bigOk: true, row: 'twt' },
+    // Which side of a row the user typed, when a conversion is configured
+    // (config.TWT_THICKNESS_COEFFICIENTS): '' = both sides entered by hand
+    // (the pending-configuration mode), 'twt' = thickness derived from time,
+    // 'thickness' = time derived from thickness. A select rather than free text
+    // so the all-fields editor offers the three real values and nothing else.
+    { key: 'thickness_source_mode', label: 'Thickness source', type: 'select', options: ['', 'twt', 'thickness'] }
+  ],
   // No editable dynamic fields: the Resource Assessment calculator
   // (views/resource-calculator.js) is now the step's entire body -- inline
   // scenario/method/inputs, read-only PIIP results, Apply to Lead. The
@@ -172,11 +215,28 @@ export var SCHEMA = {
   // therefore now comments-only, same as any other schema-less step (e.g.
   // 'GRV Inputs' below) -- editing/viewing PIIP data lives in the pipeline
   // detail view's calculator now.
-  'Resource Assessment': [],
-  // v5 tracked items with no inputs of their own yet -- declared (rather than
+  // ...and card 2B added ONE typed input to it: the shared-folder confirmation
+  // from Section 3, which is half of this step's FIELD_COMPLETION predicate
+  // (the other half being a stored lead_piip_gas_mean). It lives on THIS task
+  // rather than Area Definition's because it gates THIS item's completion. The
+  // lead_piip_* results themselves are still written by a direct API.saveFields
+  // PATCH (the consolidated page's auto-run, exactly as Apply used to), so they
+  // stay deliberately unregistered here -- they are outputs, never typed.
+  'Resource Assessment': [
+    { key: 'polygons_surfaces_loaded', label: 'Polygons and surfaces are placed in the shared folder', type: 'checkbox' }
+  ],
+  // Card 2B Section 2's right half. NEW keys (nothing stored a lead's own GRV
+  // before -- lead_grv_p90/p10_thousand_acre_ft on the Resource Assessment task
+  // records what the CALCULATOR was last run with, which is a different thing
+  // and stays untouched), named in the same 10^3 acre.ft convention as the SAD
+  // sheets' sad_grv_*. bigOk: true for the same reason those carry it.
+  'GRV Inputs': [
+    { key: 'grv_p90_thousand_acre_ft', label: 'GRV (10³ acre.ft) P90', type: 'number', bigOk: true, row: 'lead_grv' },
+    { key: 'grv_p10_thousand_acre_ft', label: 'GRV (10³ acre.ft) P10', type: 'number', bigOk: true, row: 'lead_grv' }
+  ],
+  // v5 tracked item with no inputs of its own yet -- declared (rather than
   // left absent) so the step reads as a deliberately field-less component
   // everywhere.
-  'GRV Inputs': [],
   'Well Site Location': [],
   // Card 3C. The step's ONLY input, and its whole definition of done: ticking
   // it and saving drives the step to Completed with no approve click, and
@@ -211,7 +271,14 @@ export var SCHEMA = {
     { key: 'seal_fault_level_confidence', label: 'Fault Level of Confidence', type: 'number' },
     { key: 'seal_fracture_permeability', label: 'Fracture Permeability', type: 'number' },
     { key: 'seal_pore_pressure_gradient_psi_ft', label: 'Pore Pressure Gradient (psi/ft)', type: 'number' },
-    { key: 'seal_cos_pct', label: 'Seal CoS (%)', type: 'number', readonly: true }
+    { key: 'seal_cos_pct', label: 'Seal CoS (%)', type: 'number', readonly: true },
+    // Card 3B. Last field of the (section-less continuation of the) Seal half,
+    // so it renders beneath the Seal inputs and above the Comments box -- the
+    // dynamic-fields grid is emitted in array order and precedes Comments in
+    // the form. It is the third of the step's FIELD_COMPLETION requirements
+    // (workflow/constants.py): the box AND both stored CoS percentages, so a
+    // Trap half filled in on its own leaves the step In Progress.
+    { key: 'seal_slides_loaded', label: 'Seal CoS supporting slides are placed in the shared folder', type: 'checkbox' }
   ],
   // v18: 'Presence CoS Evaluation' removed as a step -- the derived value is
   // surfaced as "Total Chance of Success" from /detail's overview.derisking.
@@ -319,7 +386,16 @@ export var SCHEMA = {
     { key: 'final_las', label: 'Logs as LAS', type: 'checkbox', row: 'final_logs' }
   ],
   'PVAD Structural MTR': [{ key: 'pvad_mtr_link', label: 'DRAS', type: 'link', value: 'https://DRAS/', linkText: 'Open PVAD Structural MTR (DRAS)' }],
-  'Segmentation Slides': [],
+  // Card 3D. The one tracked item whose completion stays a HUMAN APPROVAL: the
+  // box is not a completion predicate (this step is deliberately absent from
+  // the server's FIELD_COMPLETION table), it is the REQUEST for one. Saving it
+  // ticked submits the step for review in the same action (server-side twin:
+  // workflow/constants.py CHECKBOX_SUBMIT_STEPS), which is why the employee's
+  // action row shows Save Updates alone -- see SPECIAL_ACTION_ROWS in
+  // views/detail-form.js.
+  'Segmentation Slides': [
+    { key: 'segmentation_slides_loaded', label: 'Segmentation slides are placed in the shared folder', type: 'checkbox' }
+  ],
   // Classification lives here now (moved off GHEER); reporting reads the new key
   // first, falling back to the legacy gheer_classification for old wells.
   'BP Execution Gate': [{ key: 'bp_gate_classification', label: 'Classification', type: 'radio', options: ['Development', 'Appraisal', 'Exploration'] }],
@@ -343,6 +419,23 @@ export var REQUIRED_FIELDS_FOR_SUBMIT = {
     ['sad_update_done', 'SAD Update'],
     ['final_exec_summary_done', 'Final Executive Summary']
   ]
+};
+
+// ---------------------------------------------------------------------------
+// Checkbox-driven SUBMISSION (card 3D) -- the CLIENT MIRROR of
+// workflow/constants.py's CHECKBOX_SUBMIT_STEPS. task name -> the confirmation
+// whose ticked state makes a SAVE double as a submit-for-review.
+//
+// The server owns the behavior end to end (lifecycle.apply_checkbox_submission
+// runs on the same PATCH the Save button already sends, so a save is one round
+// trip either way). This mirror exists so the CLIENT can describe what just
+// happened -- the action row it renders (SPECIAL_ACTION_ROWS in
+// views/detail-form.js) and the toast the save shows -- without hard-coding a
+// step name in the view layer. Keep the two tables in sync.
+// ---------------------------------------------------------------------------
+
+export var CHECKBOX_SUBMIT_STEPS = {
+  'Segmentation Slides': 'segmentation_slides_loaded'
 };
 
 // Checkbox truthiness, matching dom.js truthy() and the server's
@@ -461,6 +554,21 @@ var CROSS_FIELD_RULES = {
     if (isFilled(fields.reservoir_thickness_ft) && isFilled(fields.formation_thickness_ft) &&
         Number(fields.reservoir_thickness_ft) > Number(fields.formation_thickness_ft)) {
       return 'Reservoir Thickness must not exceed Sarah Formation Thickness.';
+    }
+    return null;
+  },
+  // Card 2B. Same shape as Area Definition's rule, over the lead's own GRV
+  // percentiles. Note the ASYMMETRY with the consolidated page's own inline
+  // check (views/lead-assessment.js), which rejects equality too: this generic
+  // rule is the ALL-FIELDS editor's net, where a step is edited key-by-key and
+  // the permissive reading matches every other cross-field rule here; the
+  // consolidated page owns the stricter capture rule for the surface the card
+  // specifies, and the SERVER's FIELD_COMPLETION is stricter still (it simply
+  // will not mark the item complete on an equal pair).
+  'GRV Inputs': function (fields) {
+    if (isFilled(fields.grv_p90_thousand_acre_ft) && isFilled(fields.grv_p10_thousand_acre_ft) &&
+        Number(fields.grv_p90_thousand_acre_ft) > Number(fields.grv_p10_thousand_acre_ft)) {
+      return 'GRV P90 must be lower than GRV P10.';
     }
     return null;
   }

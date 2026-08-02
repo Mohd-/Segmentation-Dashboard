@@ -367,6 +367,13 @@ def meta():
         # Configured resource-assessment scenarios for the Resource
         # Assessment pop-up calculator's scenario dropdown.
         "resource_scenarios": resource_calc.scenario_options(),
+        # Card 2B, Section 1. row ("reservoir"/"formation") -> {m, b} for the
+        # straight-line TWT (ms) <-> thickness (ft) conversion, from
+        # config.TWT_THICKNESS_COEFFICIENTS. SHIPS EMPTY: a row with no entry
+        # renders as two plain manual inputs plus the "conversion pending
+        # configuration" note, so this endpoint is the single production switch
+        # that turns derivation on (see that constant's own comment).
+        "twt_thickness_coefficients": config.TWT_THICKNESS_COEFFICIENTS,
     })
 
 

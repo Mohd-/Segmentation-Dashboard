@@ -436,8 +436,9 @@ def _fill_prospect_step_data(session, tasks, force_ar_one=False, force_pore_pres
         fields = _prospect_step_fields(task["task_name"], force_ar_one=force_ar_one,
                                        force_pore_pressure=force_pore_pressure)
         if fields:
+            # reconcile=False: bulk writer -- ensure_task_approved drives status.
             workflow.save_task_dynamic_fields(session, task["task_id"], fields,
-                                              changed_by="Seed Script")
+                                              changed_by="Seed Script", reconcile=False)
 
 
 # ---------------------------------------------------------------------------
@@ -564,17 +565,19 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
         _seed_pipeline_progress(session, bp_tasks, approve_count, anchor_status, users, role_by_name, supervisors)
         _sprinkle_priorities(session, tasks, random.choice(users))
 
+        # reconcile=False: bulk writer -- ensure_task_approved drives status.
         workflow.save_task_dynamic_fields(session, by_name["GHEER"]["task_id"],
                                           {"gheer_classification": random.choice(GHEER_CLASSIFICATIONS)},
-                                          changed_by="Seed Script")
+                                          changed_by="Seed Script", reconcile=False)
         # WS7: half the wells ALSO get the new BP-gate classification key, so
         # reporting._first_filled(bp_gate, gheer) picks it there; the other
         # half keep ONLY the legacy GHEER key above, exercising the
         # read-fallback (constants.py's _OVERVIEW_READ_SOURCES["classification"]).
         if i % 2 == 0:
+            # reconcile=False: bulk writer -- ensure_task_approved drives status.
             workflow.save_task_dynamic_fields(session, by_name["BP Execution Gate"]["task_id"],
                                               {"bp_gate_classification": random.choice(GHEER_CLASSIFICATIONS)},
-                                              changed_by="Seed Script")
+                                              changed_by="Seed Script", reconcile=False)
 
         # The well's fluid, inherited from its SARH formation rows through
         # reporting.resolve_well_fluid (the step-level Quicklook / Final Log
@@ -609,19 +612,21 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
                 # Analysis only (rungs 2 and 6 of the ladder); see the comment
                 # above for why this well seeds nothing else fluid-wise.
                 top = round(random.uniform(8500, 12000), 1)
+                # reconcile=False: bulk writer -- ensure_task_approved drives status.
                 workflow.save_task_dynamic_fields(
                     session, by_name["Quicklook Logs"]["task_id"],
                     {"quicklook_fluid_type": fluid,
                      "quicklook_top_reservoir_tvdss_ft": top,
                      "quicklook_base_reservoir_tvdss_ft": round(top + random.uniform(30, 150), 1)},
-                    changed_by="Seed Script")
+                    changed_by="Seed Script", reconcile=False)
                 top = round(random.uniform(8500, 12000), 1)
+                # reconcile=False: bulk writer -- ensure_task_approved drives status.
                 workflow.save_task_dynamic_fields(
                     session, by_name["Final Log Analysis"]["task_id"],
                     {"final_fluid_type": fluid,
                      "final_top_reservoir_tvdss_ft": top,
                      "final_base_reservoir_tvdss_ft": round(top + random.uniform(30, 150), 1)},
-                    changed_by="Seed Script")
+                    changed_by="Seed Script", reconcile=False)
             else:
                 # SAD Model / SAD Update kept the merged-away steps' fluid
                 # selects (post_drill_fluid_type / resource_update_fluid_type);
@@ -633,25 +638,30 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
             post_drill_fields["sad_surfaces_polygons_loaded"] = "1"
             resource_update_fields["sad_update_done"] = "1"
             resource_update_fields["final_exec_summary_done"] = "1"
+            # reconcile=False: bulk writer -- ensure_task_approved drives status.
             workflow.save_task_dynamic_fields(session, by_name["SAD Model"]["task_id"],
-                                              post_drill_fields, changed_by="Seed Script")
+                                              post_drill_fields, changed_by="Seed Script", reconcile=False)
+            # reconcile=False: bulk writer -- ensure_task_approved drives status.
             workflow.save_task_dynamic_fields(session, by_name["SAD Update"]["task_id"],
-                                              resource_update_fields, changed_by="Seed Script")
+                                              resource_update_fields, changed_by="Seed Script", reconcile=False)
+            # reconcile=False: bulk writer -- ensure_task_approved drives status.
             workflow.save_task_dynamic_fields(session, by_name["Executive Summary"]["task_id"],
                                               {"exec_summary_loaded": "1", "ured_update_loaded": "1"},
-                                              changed_by="Seed Script")
+                                              changed_by="Seed Script", reconcile=False)
             # The legacy-fallback well also keeps its flowback data in the
             # retired flat keys (no stages sheet), so the flat-key fallback
             # is exercised end-to-end alongside the legacy fluid ladder.
+            # reconcile=False: bulk writer -- ensure_task_approved drives status.
             workflow.save_task_dynamic_fields(session, by_name["Flowback Results"]["task_id"],
                                               _flowback_fields(legacy=legacy_fluid_well),
-                                              changed_by="Seed Script")
+                                              changed_by="Seed Script", reconcile=False)
             # pda_booked on SOME (not all) maturity-2 wells, so the Portfolio
             # Export sheet's Booked column shows both 'Yes' and the blank/'No'
             # case.
             if (i // 3) % 2 == 0:
+                # reconcile=False: bulk writer -- ensure_task_approved drives status.
                 workflow.save_task_dynamic_fields(session, by_name["PDA"]["task_id"],
-                                                  {"pda_booked": "1"}, changed_by="Seed Script")
+                                                  {"pda_booked": "1"}, changed_by="Seed Script", reconcile=False)
 
             # Drilled wells get formation interpretation rows across the
             # remaining FORMATION_PHASES (quicklook was written above), SARH

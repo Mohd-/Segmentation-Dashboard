@@ -6,7 +6,8 @@ import {
   SEISMIC_BLOCKS, FLUID_TYPES, FORMATIONS, FORMATION_METRICS,
   RESERVOIR_COS_COLUMNS, FLOWBACK_STAGE_COLUMNS, FLOWBACK_RATE_FIELDS,
   RESOURCE_SCENARIOS, validateStepFields, numericFieldError,
-  SAD_FORMATION_COLUMNS, REQUIRED_FIELDS_FOR_SUBMIT, submitBlockedMessage
+  SAD_FORMATION_COLUMNS, REQUIRED_FIELDS_FOR_SUBMIT, CHECKBOX_SUBMIT_STEPS,
+  submitBlockedMessage
 } from '../js/schema.js';
 
 // Types actually used by field definitions in schema.js; detail-form renders
@@ -269,7 +270,10 @@ test('schema.SCHEMA: Trap and Seal CoS is the two old forms concatenated, keys v
     'sarah_quwarah_thickness_ft', 'trap_cos_pct',
     'seal_recent_activity_age', 'seal_dip', 'seal_azimuth_vs_shmax',
     'seal_fault_level_confidence', 'seal_fracture_permeability',
-    'seal_pore_pressure_gradient_psi_ft', 'seal_cos_pct'
+    'seal_pore_pressure_gradient_psi_ft', 'seal_cos_pct',
+    // Card 3B's confirmation is the ONLY addition -- every stored key above is
+    // still exactly what the two pre-merge halves wrote.
+    'seal_slides_loaded'
   ], 'the merged step writes exactly the EAV keys the two halves wrote');
   // A section heading opens each half, so the merged form still reads as two.
   assert.equal(fields[0].section, 'Trap');
@@ -326,6 +330,49 @@ test('schema.SCHEMA: Reservoir CoS keeps its mini-sheet and adds the slides chec
   assert.equal(fields.length - 1, keys.indexOf('reservoir_slides_loaded'));
 });
 
+test('schema.SCHEMA: Trap and Seal CoS carries the Seal slides checkbox last (card 3B)', function () {
+  var fields = SCHEMA['Trap and Seal CoS'];
+  var box = fields[fields.length - 1];
+  assert.equal(box.key, 'seal_slides_loaded');
+  assert.equal(box.type, 'checkbox');
+  assert.equal(box.label, 'Seal CoS supporting slides are placed in the shared folder');
+  assert.equal(box.value, undefined, 'defaults to unchecked');
+  assert.equal(box.showIf, undefined);
+  // It belongs to the SEAL half: sections are inherited by the fields that
+  // follow one, and no new section opens after 'Seal'.
+  assert.equal(box.section, undefined, 'no new section — it continues the Seal half');
+  var sections = fields.map(function (f) { return f.section; }).filter(Boolean);
+  assert.deepEqual(sections, ['Trap', 'Seal'], 'still exactly two sections');
+  // Rendered in array order into #dynamic-fields, which precedes Comments.
+  assert.equal(fields.filter(function (f) { return f.type === 'checkbox'; }).length, 1);
+});
+
+test('schema.SCHEMA: Segmentation Slides is the single slides checkbox (card 3D)', function () {
+  var fields = SCHEMA['Segmentation Slides'];
+  assert.equal(fields.length, 1, 'the confirmation is the whole form');
+  assert.equal(fields[0].key, 'segmentation_slides_loaded');
+  assert.equal(fields[0].type, 'checkbox');
+  assert.equal(fields[0].label, 'Segmentation slides are placed in the shared folder');
+  assert.equal(fields[0].value, undefined, 'defaults to unchecked');
+  assert.equal(fields[0].showIf, undefined);
+});
+
+test('schema.CHECKBOX_SUBMIT_STEPS: mirrors the server table and names a real checkbox', function () {
+  // The mirror is what the view layer reads instead of hard-coding a step name;
+  // the SERVER (workflow/constants.py CHECKBOX_SUBMIT_STEPS ->
+  // lifecycle.apply_checkbox_submission) owns the behavior.
+  assert.deepEqual(Object.keys(CHECKBOX_SUBMIT_STEPS), ['Segmentation Slides']);
+  Object.keys(CHECKBOX_SUBMIT_STEPS).forEach(function (step) {
+    var key = CHECKBOX_SUBMIT_STEPS[step];
+    var field = (SCHEMA[step] || []).find(function (f) { return f.key === key; });
+    assert.ok(field, step + ' renders ' + key);
+    assert.equal(field.type, 'checkbox', key + ' is a checkbox');
+    // A submit REQUEST, never a submit GATE: the two mechanisms must not meet.
+    assert.equal(REQUIRED_FIELDS_FOR_SUBMIT[step], undefined,
+      step + ' has no manual submit gate — its save IS the submit');
+  });
+});
+
 test('schema.SCHEMA: the completion confirmations are NOT submit-gate checkboxes', function () {
   // Two different mechanisms: REQUIRED_FIELDS_FOR_SUBMIT gates the MANUAL
   // submit (SAD Update), FIELD_COMPLETION drives status from field state. They
@@ -333,7 +380,8 @@ test('schema.SCHEMA: the completion confirmations are NOT submit-gate checkboxes
   // step and gate a submit that no longer happens.
   Object.keys(REQUIRED_FIELDS_FOR_SUBMIT).forEach(function (step) {
     REQUIRED_FIELDS_FOR_SUBMIT[step].forEach(function (entry) {
-      assert.ok(['seismic_slides_loaded', 'reservoir_slides_loaded'].indexOf(entry[0]) < 0,
+      assert.ok(['seismic_slides_loaded', 'reservoir_slides_loaded',
+                 'seal_slides_loaded'].indexOf(entry[0]) < 0,
         entry[0] + ' is a completion confirmation, not a submit gate');
     });
   });
@@ -495,16 +543,20 @@ test('validateStepFields: piip trio -- the liquid trio is checked too, independe
   }), 'Liquid P90 must not exceed Mean.');
 });
 
-// Resource Assessment's SCHEMA entry is now empty (the Resource
-// Assessment calculator, views/resource-calculator.js, is the step's whole
-// body; Apply writes lead_piip_* via a direct API.saveFields PATCH that
-// never goes through getFields()/validateStepFields) -- so in practice this
-// step's own save path can never populate lead_piip_* keys, and the
-// lead_piip trio rule can never fire through it. The rule itself is left in
-// PIIP_PREFIXES (schema.js) regardless -- proven still correct here by
-// constructing the fields object directly, independent of any form.
-test('validateStepFields: Resource Assessment has no editable fields; the lead_piip rule still holds if ever exercised directly', function () {
-  assert.deepEqual(SCHEMA['Resource Assessment'], []);
+// Resource Assessment's SCHEMA entry carries no editable NUMBERS -- card 2B
+// added exactly one typed input to it, the polygons confirmation, and the PIIP
+// values themselves are still written by a direct API.saveFields PATCH (the
+// consolidated Lead Assessment page's auto-run, formerly "Apply to Lead") that
+// never goes through getFields()/validateStepFields. So in practice this step's
+// own save path can never populate lead_piip_* keys, and the lead_piip trio
+// rule can never fire through it. The rule itself is left in PIIP_PREFIXES
+// (schema.js) regardless -- proven still correct here by constructing the
+// fields object directly, independent of any form.
+test('validateStepFields: Resource Assessment has only the confirmation checkbox; the lead_piip rule still holds if ever exercised directly', function () {
+  assert.deepEqual(SCHEMA['Resource Assessment'].map(function (field) { return field.key; }),
+    ['polygons_surfaces_loaded']);
+  assert.equal(SCHEMA['Resource Assessment'][0].type, 'checkbox',
+    'nothing numeric, so the generic numeric scan has nothing to check here');
   assert.equal(validateStepFields('Resource Assessment', {}), null);
   assert.equal(validateStepFields('Resource Assessment', { lead_piip_gas_p90: '10', lead_piip_gas_mean: '5' }),
     'Gas P90 must not exceed Mean.');

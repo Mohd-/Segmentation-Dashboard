@@ -2037,3 +2037,178 @@ button.ghost.success-outline:hover { background: var(--success-100); }
    contrast without an override. The one token that does not is the item
    separator, which is near-invisible at --border on dark. */
 :root[data-theme="dark"] .hm-head { border-bottom-color: var(--gray-300); }
+
+/* =========================================================================
+   Card 2B — the CONSOLIDATED LEAD ASSESSMENT workspace
+   (views/lead-assessment.js), mounted into the detail shell's own
+   #dynamic-fields body on a lead page's four Lead Assessment steps.
+
+   The body is normally a 3-column field grid; in this mode it becomes a
+   single vertical stack of numbered cards, so the workspace controls its own
+   internal geometry instead of inheriting a form grid it does not use.
+   ========================================================================= */
+.dynamic-fields.lead-assessment-body { display: block; }
+
+.la-workspace { display: flex; flex-direction: column; gap: var(--space-3); }
+
+.la-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+}
+
+/* Numbered card headers: the step number in a soft square, then the title.
+   Section 4 adds its helper sentence on the same line, pushed right. */
+.la-card-head { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); }
+.la-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; flex: none;
+  border-radius: var(--radius-md);
+  background: var(--gray-100); color: var(--text-muted);
+  font-family: var(--font-display); font-size: var(--text-base); font-weight: 700;
+}
+.la-card-title { margin: 0; font-size: var(--text-md); font-weight: 700; color: var(--ink-800); }
+.la-helper { margin: 0 0 0 auto; font-size: var(--text-xs); color: var(--text-faint); max-width: 42ch; }
+
+/* ---- Sections 1 and 2: the SYMMETRIC TWIN cards --------------------------
+   Both cards share .la-card-twin (equal share of one 2-column row) and both
+   lay their values out with the SAME .la-grid: one row-label track plus two
+   equal value tracks, one header row, two data rows, identical gaps. That
+   shared geometry is the whole point — the two cards must read as one pair,
+   so the grid is declared once and used twice rather than copied. */
+.la-twins { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.la-card-twin { display: flex; flex-direction: column; }
+.la-grid {
+  display: grid;
+  grid-template-columns: minmax(96px, auto) minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-2) var(--space-3);
+  align-items: start;
+}
+.la-col-head, .la-row-head {
+  font-size: var(--text-sm); font-weight: 700; color: var(--ink-800);
+  align-self: center;
+}
+.la-col-head { text-align: center; }
+.la-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.la-cell input { width: 100%; text-align: center; }
+
+/* A DERIVED input (the far side of a configured TWT<->thickness conversion)
+   must not look like something you can type into: sunken ground, muted italic
+   figures, and the not-allowed cursor the readonly attribute alone does not
+   give you. */
+.la-derived {
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  font-style: italic;
+  cursor: not-allowed;
+}
+
+.la-field-error {
+  display: none;
+  font-size: var(--text-xs);
+  line-height: 1.3;
+  color: var(--danger-600);
+}
+.la-field-error.is-shown { display: block; }
+.la-invalid { border-color: var(--danger-500); }
+
+.la-note { margin: var(--space-3) 0 0; font-size: var(--text-xs); color: var(--text-faint); }
+
+/* ---- Section 3: full-width TVDSS + confirmation -------------------------- */
+.la-card-wide { display: flex; align-items: center; gap: var(--space-4); }
+.la-tvdss { display: flex; flex-direction: column; gap: 2px; flex: 0 1 340px; }
+.la-polygons { margin: 0; font-size: var(--text-sm); }
+
+/* ---- Section 4: PIIP results -------------------------------------------- */
+.la-scenarios { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-2); }
+.la-scenario {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+}
+.la-scenario:has(input:checked) {
+  border-color: var(--asas-blue);
+  background: var(--brand-050);
+  color: var(--asas-navy);
+  font-weight: 700;
+}
+
+.la-piip-status { display: none; margin: var(--space-3) 0 0; font-size: var(--text-xs); }
+.la-piip-status.is-shown { display: block; }
+.la-status-error { color: var(--danger-600); }
+.la-status-idle, .la-status-running { color: var(--text-faint); }
+
+.la-results {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3); margin-top: var(--space-3);
+}
+/* A dry-gas scenario has no Liquid block, so Gas takes the full width rather
+   than leaving a hole where the second column was. */
+.la-results-gas-only { grid-template-columns: minmax(0, 1fr); }
+
+.la-result-block { border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-3); }
+.la-result-heading { font-weight: 700; font-size: var(--text-base); color: var(--ink-800); margin-bottom: var(--space-2); }
+.la-result-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); }
+/* Labels sit OUTSIDE the tinted boxes (card 2B is explicit): the label is a
+   quiet caption above the value, the box holds only the number. */
+.la-result-col { display: flex; flex-direction: column; align-items: stretch; gap: 2px; text-align: center; }
+.la-result-label { font-size: var(--text-xs); font-weight: 700; color: var(--text-muted); }
+.la-result-box {
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: 700;
+  color: var(--ink-900);
+}
+/* Gas reads light-red, Liquid light-green. Both tints are the semantic -100
+   tokens, which become low-alpha rgba of the same hue on dark, so the blocks
+   stay tinted-but-legible in either theme with no override. */
+.la-result-gas { border-color: var(--danger-100); background: color-mix(in srgb, var(--danger-100) 40%, transparent); }
+.la-result-gas .la-result-box { background: var(--danger-100); }
+.la-result-liquid { border-color: var(--success-100); background: color-mix(in srgb, var(--success-100) 40%, transparent); }
+.la-result-liquid .la-result-box { background: var(--success-100); }
+
+.la-plot-slot:empty { display: none; }
+.la-plot-slot { margin-top: var(--space-3); }
+.la-plot-slot .ra-plot img { width: 100%; }
+
+/* ---- The read-only provenance fold -------------------------------------- */
+.la-earlier {
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3); font-size: var(--text-sm);
+  background: var(--surface-sunken);
+}
+.la-earlier > summary { cursor: pointer; color: var(--text-muted); font-weight: 700; }
+.la-earlier-entry { margin-top: var(--space-2); }
+.la-earlier-entry b { font-size: var(--text-xs); color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em; }
+.la-earlier-entry p { margin: 2px 0 0; white-space: pre-wrap; color: var(--text); }
+
+/* The page's ONE action: a navy Save Updates, right-aligned like the mockup. */
+.action-row .save-primary {
+  background: var(--asas-navy-fill);
+  border-color: var(--asas-navy-fill);
+  color: var(--asas-navy-ink);
+  min-width: 160px;
+}
+.action-row .save-primary:hover:not(:disabled) {
+  background: var(--asas-navy-fill-hover);
+  border-color: var(--asas-navy-fill-hover);
+}
+
+@media (max-width: 1100px) {
+  .la-twins { grid-template-columns: minmax(0, 1fr); }
+  .la-results { grid-template-columns: minmax(0, 1fr); }
+  .la-scenarios { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .la-card-wide { flex-direction: column; align-items: stretch; }
+  .la-helper { margin-left: 0; }
+  .la-card-head { flex-wrap: wrap; }
+}
+
+/* Dark theme: everything above resolves through tokens that already invert.
+   The one exception is the numbered badge — --gray-100 becomes an elevated
+   DARK tone there, which is right for the fill but leaves the numeral at
+   --text-muted too close to it to read at 14px. */
+:root[data-theme="dark"] .la-num { color: var(--ink-800); }

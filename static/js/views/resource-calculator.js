@@ -401,11 +401,35 @@ function renderPlots(result) {
 // already-open #resource-assessment-dialog. Nested native <dialog> modals
 // stack correctly in the top layer, so this renders above the plots viewer
 // and Esc closes the lightbox first, the plots viewer on a second press.
-function openLightbox(src, altText) {
+// Exported (card 2B): the consolidated Lead Assessment page renders its plots
+// INLINE, with no #resource-assessment-dialog around them, so it needs the
+// lightbox on its own. Kept separate from wirePlotsDialogOnce rather than
+// folded into it: that function also reaches for the plots-viewer dialog and
+// #ra-plots, which the inline flow does not use (and the test-harness fixtures
+// do not carry). Every lookup is guarded, so calling this where the lightbox
+// markup is absent is a no-op that returns false instead of throwing.
+var lightboxWired = false;
+export function openPlotLightbox(src, altText) {
+  var lightbox = byId('ra-plot-lightbox');
+  if (!lightbox) return false;
+  if (!lightboxWired) {
+    lightboxWired = true;
+    // Light-dismiss: any click inside the dialog (backdrop, image, close
+    // button) bubbles here -- the same contract wirePlotsDialogOnce sets up.
+    // Both may end up bound; close() on a closed dialog is a no-op.
+    lightbox.addEventListener('click', function () { lightbox.close(); });
+  }
   var img = byId('ra-lightbox-img');
-  img.src = src;
-  img.alt = altText || 'Enlarged exceedance plot';
-  byId('ra-plot-lightbox').showModal();
+  if (img) {
+    img.src = src;
+    img.alt = altText || 'Enlarged exceedance plot';
+  }
+  lightbox.showModal();
+  return true;
+}
+
+function openLightbox(src, altText) {
+  openPlotLightbox(src, altText);
 }
 
 // Bound once (guarded by plotsDialogWired): #resource-assessment-dialog,

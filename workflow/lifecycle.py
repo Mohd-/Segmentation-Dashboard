@@ -14,6 +14,8 @@ import db
 from helpers import today_str, utc_now_str
 
 from .constants import (
+    CHECKBOX_SUBMIT_FROM_STATUSES,
+    CHECKBOX_SUBMIT_STEPS,
     DONE_STATUSES,
     FIELD_COMPLETION,
     FIELD_COMPLETION_COMMENT,
@@ -21,13 +23,16 @@ from .constants import (
     FIELD_REOPEN_COMMENT,
     FIELD_REOPEN_EVENT,
     MERGED_COS_TASK_NAME,
+    POSITIVE_NUMBER_FIELDS,
     REQUIRED_FIELDS_FOR_SUBMIT,
     STATUSES,
     _ALL_TRANSITIONS,
     _TRANSITION_EVENTS,
     StaleRevisionError,
     applicable_stages,
+    checkbox_submit_met,
     field_completion_met,
+    positive_number,
     unmet_submit_requirements,
 )
 from .history import log_task_event
@@ -195,7 +200,7 @@ def _apply_dynamic_fields(session, task, fields, changed_by, now):
                        None, None, changed_by, f"Updated inputs: {listed}.")
 
 
-def save_task_dynamic_fields(session, task_id, fields, changed_by="Web User"):
+def save_task_dynamic_fields(session, task_id, fields, changed_by="Web User", reconcile=True):
     """Save a task's dynamic fields only (no status change, no revision check).
 
     Seal CoS is recomputed when the payload carries the form's inputs (a
@@ -203,6 +208,30 @@ def save_task_dynamic_fields(session, task_id, fields, changed_by="Web User"):
     recompute). The Total Chance of Success needs no recalculation trigger:
     it is computed at read time (calculate_total_cos) from the stored
     Reservoir/Trap/Seal CoS inputs.
+
+    FIELD COMPLETION runs here too (post-commit, like save_task's) WHEN
+    ``reconcile`` is true, which is the default and what the HTTP route uses.
+    This endpoint is a FIELD EDIT -- the only thing that differs from save_task
+    is that it carries no status, comments or revision -- and the engine's whole
+    contract is "reconcile a step's status with its field state after a save of
+    that step". Leaving it out was harmless while every field-driven step was
+    edited through a form, but card 2B's Resource Assessment item is completed
+    by a value the CONSOLIDATED PAGE writes through exactly this endpoint (the
+    auto-run's PIIP results, formerly the calculator's "Apply to Lead"). Without
+    the hook, ticking the confirmation and saving BEFORE the auto-run landed
+    would leave the item stuck open until an unrelated second save happened to
+    re-run the engine -- a status that lags its own inputs.
+
+    ``reconcile=False`` is for BULK WRITERS -- import_excel, seed_dev, and the
+    submit-gate tick inside the approval walk itself. They do not edit one field
+    at a time in a form; they lay down a PARTIAL field set and then drive the
+    status explicitly (``ensure_task_approved``). Reconciling between those two
+    halves is actively wrong: mid-import a step is legitimately Approved while
+    its predicate is not yet satisfied -- the remaining fields are still being
+    written -- and the engine's REOPEN branch would knock it back open, so the
+    importer would fight itself and land a half-open pipeline. The rule is
+    "reconcile a save the USER made", and a bulk writer's partial write is not
+    one. The engine is otherwise a reconciliation and safe to run more often.
     """
     task = get_task(session, task_id)
     if not task:
@@ -215,6 +244,8 @@ def save_task_dynamic_fields(session, task_id, fields, changed_by="Web User"):
         _apply_dynamic_fields(session, task, fields, changed_by, now)
         db.execute(session, "UPDATE project_tasks SET last_updated = :now WHERE task_id = :task_id",
                    {"now": now, "task_id": task_id})
+    if reconcile:
+        apply_field_completion(session, task_id, changed_by)
 
 
 def save_task(session, task_id, payload, changed_by="Web User", allow_priority_change=True):
@@ -353,10 +384,18 @@ def save_task(session, task_id, payload, changed_by="Web User", allow_priority_c
     # never sends the key -- see the docstring above), and the engine would
     # otherwise reconcile the deliberate choice straight back out. Field-driven
     # completion reacts to FIELD edits, not to status writes.
+    #
+    # apply_checkbox_submission is the manual-approval half of the same idea
+    # (card 3D) and stands down on an explicit status for the same reason. The
+    # two tables are disjoint by construction (CHECKBOX_SUBMIT_STEPS names only
+    # manual-approval steps, which FIELD_COMPLETION may never claim), so at most
+    # one of them ever moves a given step -- the ``or`` below is a shape, not a
+    # precedence.
     if not status_supplied:
         completed = apply_field_completion(session, task_id, changed_by)
-        if completed:
-            return completed
+        submitted = apply_checkbox_submission(session, task_id, changed_by)
+        if submitted or completed:
+            return submitted or completed
     return result
 
 
@@ -617,9 +656,12 @@ def satisfy_submit_gate(session, task, changed_by):
     """
     required = REQUIRED_FIELDS_FOR_SUBMIT.get((task or {}).get("task_name"))
     if required:
+        # reconcile=False: this write happens INSIDE the approval walk, between
+        # its submit and its approve. The walk is driving the status explicitly
+        # (ensure_task_approved), so the engine must not fight it.
         save_task_dynamic_fields(session, task["task_id"],
                                  {key: "1" for key, _label in required},
-                                 changed_by=changed_by)
+                                 changed_by=changed_by, reconcile=False)
 
 
 def ensure_task_approved(session, task_id, actor, changed_by=None, automated=False):
@@ -690,9 +732,16 @@ def _field_present(field_key, value):
     never disagree. ``reservoir_cos_pct`` is written by the save hook itself
     (save_task -> cos.calculate_reservoir_cos_rows) on every row it scores, so a
     real save always produces it; blank/malformed/empty JSON all read as absent.
+
+    ``POSITIVE_NUMBER_FIELDS`` is the second entry: card 2B's areas, thicknesses,
+    GRV percentiles and stored PIIP mean are physical magnitudes, so "0", "-3"
+    and "abc" are all non-blank and all absent for completion purposes (see that
+    constant).
     """
     if field_key == "reservoir_cos_rows":
         return bool(first_reservoir_cos_row_value(value, "reservoir_cos_pct"))
+    if field_key in POSITIVE_NUMBER_FIELDS:
+        return positive_number(value)
     return str(value or "").strip() != ""
 
 
@@ -700,7 +749,9 @@ def _field_completion_assignee(session, task, changed_by):
     """Who an UNASSIGNED field-completed step gets assigned to.
 
     Assignment is the only door from "Not Assigned" into the lifecycle, so the
-    engine has to name someone. Preference order:
+    engine has to name someone -- and so does the card-3D checkbox submission
+    hook (:func:`apply_checkbox_submission`), which shares this rule verbatim.
+    Preference order:
 
       1. the step's existing assignee -- the engine NEVER reassigns work that
          already has an owner (it is closing their step, not taking it);
@@ -785,4 +836,58 @@ def apply_field_completion(session, task_id, changed_by):
     with db.write_transaction(session):
         log_task_event(session, task_id, task["project_id"], task["task_name"],
                        event, old_status, new_status, changed_by, comment)
+    return get_task(session, task_id)
+
+
+# ---------------------------------------------------------------------------
+# Checkbox-driven SUBMISSION (card 3D's manual-approval steps)
+# ---------------------------------------------------------------------------
+
+def apply_checkbox_submission(session, task_id, changed_by):
+    """POST-COMMIT hook: a ticked confirmation on a manual-approval step SUBMITS it.
+
+    The sibling of :func:`apply_field_completion` for the steps whose completion
+    is a supervisor's decision (``constants.CHECKBOX_SUBMIT_STEPS`` -- today only
+    "Segmentation Slides"). Those steps show an employee ONE control, Save
+    Updates, so the save has to carry the request for review that the missing
+    "Submit for Approval" button used to:
+
+      - box ticked, step Not Assigned / In Progress -> assign if it has no owner
+        (the same rule as the engine, :func:`_field_completion_assignee`) and
+        SUBMIT as the saving user, leaving the step Ready -- which the board
+        renders as "Pending Approval" for exactly this step
+        (projects._READY_SHOWS_PENDING).
+      - anything else -> no-op. A step already Ready is waiting on a supervisor
+        and must not file a second request for the same review; an Approved step
+        is finished; an unticked box is a DRAFT save that leaves the status
+        exactly where it was (unticking never withdraws a pending submission --
+        see the CHECKBOX_SUBMIT_STEPS note).
+
+    NOT ``automated``. This is a real human asking for a real approval, so the
+    submit's supervisor fan-out (notifications.notify_transition) must fire --
+    the opposite of the field-completion engine's walk, which suppresses it
+    because the same walk grants the approval microseconds later. The step
+    itself is deliberately absent from FIELD_COMPLETION, so nothing here (or
+    anywhere) can drive it to Approved without a supervisor's click.
+
+    POST-COMMIT for the same reason as the engine: assign/submit each open their
+    own write transaction and must not nest inside the save's.
+
+    Returns the fresh task row when it submitted the step (so save_task hands the
+    client the post-submit status and revision), else None.
+    """
+    task = get_task(session, task_id)
+    if not task or task.get("task_name") not in CHECKBOX_SUBMIT_STEPS:
+        return None
+    if not checkbox_submit_met(task["task_name"], get_task_dynamic_fields(session, task_id)):
+        return None
+    status = task.get("status") or "Not Assigned"
+    if status not in CHECKBOX_SUBMIT_FROM_STATUSES:
+        return None
+    if status == "Not Assigned":
+        assignee = _field_completion_assignee(session, task, changed_by)
+        if not assignee:
+            return None
+        assign_task(session, task_id, assignee, cascade=False, changed_by=changed_by)
+    transition_task(session, task_id, "submit", changed_by=changed_by)
     return get_task(session, task_id)

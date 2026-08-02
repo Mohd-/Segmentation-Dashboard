@@ -1,11 +1,17 @@
 import { byId, all, esc, isFilled, truthy, msg } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName, currentRole, canManageAssignments, isCurrentPipelineView, Store } from '../state.js';
-import { SCHEMA, FORMATIONS, FORMATION_METRICS, FLUID_TYPES, SEISMIC_BLOCKS, validateStepFields, submitBlockedMessage } from '../schema.js';
+import { SCHEMA, FORMATIONS, FORMATION_METRICS, FLUID_TYPES, SEISMIC_BLOCKS, CHECKBOX_SUBMIT_STEPS, validateStepFields, submitBlockedMessage } from '../schema.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { renderDetail, renderRightPanel, chooseInitialTask, tasksForPipeline, parseRepeatableRows, refreshAfterRecordChange, revealTaskStage } from './detail.js';
 import { refreshAllBoards } from './pipeline.js';
 import { renderResourceCalculator, teardownResourceCalculator } from './resource-calculator.js';
+// Card 2B: the consolidated Lead Assessment workspace, which REPLACES the
+// generic per-step form for that stage's four steps on a lead page.
+import {
+  isLeadAssessmentStep, leadAssessmentActive, renderLeadAssessment,
+  saveLeadAssessment, teardownLeadAssessment
+} from './lead-assessment.js';
 
 export function ensureUsers() {
   if (Store.users) return Promise.resolve(Store.users);
@@ -98,16 +104,122 @@ function renderAssigneeSelect(task) {
   });
 }
 
-function renderActionButtons(task) {
+// ---------------------------------------------------------------------------
+// The action row
+// ---------------------------------------------------------------------------
+// Three shared buttons (#return-component / #submit-component /
+// #approve-component) plus the form's own Save. They are ONE set of nodes
+// reused by every step, so anything a per-step override changes -- label,
+// classes, disabled -- has to be restored before the next step renders:
+// actionButtonDefaults captures the markup's own values once, and
+// resetActionButtons puts them back on every render. That is what lets an
+// override be a small declarative function instead of a growing if-soup.
+
+var ACTION_BUTTON_IDS = ['return-component', 'submit-component', 'approve-component'];
+var actionButtonDefaults = null;
+
+function actionButtons() {
+  if (!actionButtonDefaults) actionButtonDefaults = {};
+  var buttons = {};
+  ACTION_BUTTON_IDS.forEach(function (id) {
+    var button = byId(id);
+    buttons[id] = button;
+    // Captured from the MARKUP, once, the first time the button is really
+    // there -- never from a render that may already have overridden it.
+    if (button && !actionButtonDefaults[id]) {
+      actionButtonDefaults[id] = {
+        text: button.textContent,
+        title: button.title,
+        className: button.className.replace(/\s*\bhidden\b/g, '')
+      };
+    }
+  });
+  return buttons;
+}
+
+// Back to the markup's own label/classes, hidden and enabled. Every render
+// starts here, so a step with no override is never shown another step's
+// relabelled button.
+function resetActionButtons(buttons) {
+  ACTION_BUTTON_IDS.forEach(function (id) {
+    var button = buttons[id];
+    var defaults = actionButtonDefaults[id];
+    if (!button || !defaults) return;
+    button.textContent = defaults.text;
+    button.title = defaults.title;
+    button.className = defaults.className + ' hidden';
+    button.disabled = false;
+  });
+}
+
+// Show one transition button with an optional relabel / restyle. `enabled`
+// false leaves it visible but disabled (the supervisor's Approved button on a
+// step nobody has submitted yet), with `title` explaining why.
+function showActionButton(button, options) {
+  if (!button) return;
+  options = options || {};
+  if (options.text) button.textContent = options.text;
+  if (options.className) button.className = options.className;
+  button.classList.remove('hidden');
+  button.disabled = options.enabled === false;
+  if (options.title) button.title = options.title;
+}
+
+// PER-STEP ACTION ROWS: task_name -> a function that lays out the row for that
+// step, given the same context the generic renderer computes. A step absent
+// from this map gets the generic lifecycle row below, unchanged.
+//
+// Card 3D, "Segmentation Slides": the deliverable's review gate.
+//   - EMPLOYEE (anyone who is not a supervisor): Save Updates ONLY. There is no
+//     Submit button because SAVING with the confirmation ticked IS the
+//     submission (schema.js CHECKBOX_SUBMIT_STEPS, server-side
+//     lifecycle.apply_checkbox_submission), and Approve/Return are a
+//     supervisor's decisions -- showing either here would be an invitation to a
+//     403.
+//   - SUPERVISOR: Save Updates, Approved and Return side by side. Both
+//     transitions need the step to be Ready (the server refuses otherwise), so
+//     on a step nobody has submitted they render disabled rather than vanishing
+//     -- the review controls are the point of the page for a supervisor, and a
+//     row that changes shape underneath them reads as a bug.
+var SPECIAL_ACTION_ROWS = {
+  'Segmentation Slides': function (context) {
+    var pending = context.status === 'Ready';
+    if (context.role !== 'supervisor') return;
+    showActionButton(context.buttons['approve-component'], {
+      text: 'Approved',
+      className: 'ghost success-outline',
+      enabled: context.editable && pending,
+      title: pending ? 'Approve the segmentation slides' : 'Available once the slides are submitted for review'
+    });
+    showActionButton(context.buttons['return-component'], {
+      text: 'Return',
+      enabled: context.editable && pending,
+      title: pending ? 'Send the slides back for update' : 'Available once the slides are submitted for review'
+    });
+  }
+};
+
+// Exported for the harness: the action row is a role/status decision, and the
+// only honest way to test "an employee never sees Approve/Return" is to render
+// it and look.
+export function renderActionButtons(task) {
   var status = task.status || 'Not Assigned';
   var role = currentRole();
   var manage = canManageAssignments();
   var editable = isCurrentPipelineView();
   var isAssignee = !!(Store.user && Store.user.name &&
     String(Store.user.name).toLowerCase() === String(task.assigned_to || '').toLowerCase());
-  var submitButton = byId('submit-component');
-  var approveButton = byId('approve-component');
-  var returnButton = byId('return-component');
+  var buttons = actionButtons();
+  resetActionButtons(buttons);
+  var special = SPECIAL_ACTION_ROWS[task.task_name];
+  if (special) {
+    special({ task: task, status: status, role: role, editable: editable,
+              isAssignee: isAssignee, buttons: buttons });
+    return;
+  }
+  var submitButton = buttons['submit-component'];
+  var approveButton = buttons['approve-component'];
+  var returnButton = buttons['return-component'];
   if (submitButton) submitButton.classList.toggle('hidden', !(editable && status === 'In Progress' && (manage || isAssignee)));
   if (approveButton) approveButton.classList.toggle('hidden', !(editable && status === 'Ready' && role === 'supervisor'));
   // A supervisor may return any Ready component; everyone else may return
@@ -137,6 +249,35 @@ export function setComponentReferenceMode(referenceOnly) {
   form.classList.toggle('reference-only', referenceOnly);
 }
 
+// Card 2B. A LEAD page's four Lead Assessment steps no longer have four forms:
+// each of them opens the ONE consolidated workspace. This is the only branch
+// that decides it, and it is deliberately narrow -- a BP well, a reference view
+// and every other stage fall straight through to the generic form below.
+//
+// The workspace mounts into #dynamic-fields (the generic grid's own container),
+// so the shell's comments box, folder slot and Save button sit exactly where
+// they always did and need no markup of their own; the editor head's step
+// number/title are hidden, because the page IS the stage, not one step of it.
+function useConsolidatedLeadAssessment(task) {
+  var shell = byId('detail-shell');
+  return !!shell && shell.classList.contains('detail-shell-lead') &&
+    isCurrentPipelineView() && isLeadAssessmentStep(task.task_name);
+}
+
+// Show/hide the per-STEP furniture the consolidated page replaces. Restored on
+// every other component, so switching away from the workspace leaves the
+// generic form exactly as it was.
+function setConsolidatedChrome(consolidated) {
+  var root = byId('dynamic-fields');
+  if (root) root.classList.toggle('lead-assessment-body', consolidated);
+  var number = byId('component-number');
+  if (number) number.classList.toggle('hidden', consolidated);
+  var title = byId('component-title');
+  if (title) title.classList.toggle('hidden', consolidated);
+  var save = byId('save-component');
+  if (save) save.classList.toggle('save-primary', consolidated);
+}
+
 export function loadComponent(task) {
   if (!task) return;
   Store.task = task;
@@ -151,6 +292,25 @@ export function loadComponent(task) {
   renderPriorityChip(task);
   byId('comments').placeholder = commentPlaceholder(task.task_name);
   byId('comments').value = task.comments || '';
+  var consolidated = useConsolidatedLeadAssessment(task);
+  setConsolidatedChrome(consolidated);
+  if (consolidated) {
+    // No per-step field fetch and no per-step folder card: the workspace reads
+    // all four steps' values out of Store.allFields (already on the /detail
+    // payload) and resolves its own lead-scoped Polygons & Surfaces folder.
+    // The lifecycle action row is hidden too -- these four items complete from
+    // their field state (workflow/constants.py FIELD_COMPLETION), so a Submit
+    // or Approve button here would offer a walk nobody has to make.
+    teardownResourceCalculator();
+    var previousFolder = byId('component-folder-card');
+    if (previousFolder) previousFolder.remove();
+    resetActionButtons(actionButtons());
+    renderLeadAssessment(byId('dynamic-fields'), { onCopy: copyText });
+    setComponentReferenceMode(!isCurrentPipelineView());
+    renderRightPanel(tasksForPipeline(Store.pipeline));
+    return Promise.resolve();
+  }
+  teardownLeadAssessment();
   return Promise.all([API.fields(task.task_id), API.componentFolder(Store.projectId, task.task_id)]).then(function (results) {
     renderFields(task.task_name, results[0] || {});
     renderResourceCalculatorSection(task, results[0] || {});
@@ -928,9 +1088,28 @@ export function fallbackCopy(text) {
   area.remove();
   msg('Folder link copied.', 'success');
 }
+// What a completed save should say. Normally "Component saved."; on a
+// checkbox-submit step (card 3D) whose save also filed the review request --
+// the task came back Ready having not been Ready before -- it names the
+// submission, because the user clicked ONE button and two things happened.
+// Exported for the harness.
+export function savedMessage(savedTask, statusBeforeSave) {
+  var name = savedTask && savedTask.task_name;
+  if (name && CHECKBOX_SUBMIT_STEPS[name] &&
+      savedTask.status === 'Ready' && statusBeforeSave !== 'Ready') {
+    return 'Component saved and submitted for approval.';
+  }
+  return 'Component saved.';
+}
+
 export function saveComponent(event) {
   event.preventDefault();
   if (!Store.task) return;
+  // Card 2B: the consolidated workspace owns its own batched save (one button,
+  // four owning tasks, one PATCH each). Checked FIRST because everything below
+  // -- getFields, validateStepFields, the single-task PATCH -- is written for a
+  // one-step form and would harvest nothing from this page's markup.
+  if (leadAssessmentActive()) return saveLeadAssessment();
   if (!isCurrentPipelineView()) return msg('Switch back to the current pipeline to save changes.', 'error');
   var fields = getFields();
   // Generic input sanity checks (numeric/negative/max/percent, area & thickness
@@ -951,6 +1130,13 @@ export function saveComponent(event) {
   }
   var submitButton = event.target.querySelector('button[type="submit"]');
   if (submitButton) submitButton.disabled = true;
+  // Card 3D: on a checkbox-submit step the SAVE may also have asked for a
+  // review (the server does both in the one PATCH -- see
+  // lifecycle.apply_checkbox_submission). The response's task row is the
+  // post-hook one, so comparing its status with the pre-save status is how the
+  // toast knows which of the two things just happened.
+  var statusBeforeSave = Store.task.status;
+  var savedTask = null;
   // No status / assigned_to keys: Save only persists inputs. Status moves via
   // /transition and assignment via /assign; the backend preserves both when
   // the keys are absent. Priority now has its own chip/endpoint, but save_task
@@ -964,7 +1150,8 @@ export function saveComponent(event) {
     changed_by: currentUserName(),
     business_plan_enabled: Number(Store.project.business_plan_enabled || 0) === 1,
     business_plan_year: Store.project.business_plan_year
-  }).then(function () {
+  }).then(function (response) {
+    savedTask = (response && response.task) || null;
     if (formationsField && formationDirty[formationsField.phase]) {
       return API.saveFormations(Store.projectId, {
         phase: formationsField.phase,
@@ -987,7 +1174,7 @@ export function saveComponent(event) {
     renderDetail();
     loadComponent(Store.tasks.find(function (task) { return task.task_id === selectedTaskId; }) || chooseInitialTask(tasksForPipeline(Store.pipeline)));
     refreshAllBoards();
-    msg('Component saved.', 'success');
+    msg(savedMessage(savedTask, statusBeforeSave), 'success');
   }).catch(function (error) { msg(error.message, 'error'); }).finally(function () {
     if (submitButton) submitButton.disabled = false;
   });

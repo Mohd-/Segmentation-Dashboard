@@ -566,7 +566,10 @@ def _ensure_approved(session, task_id) -> None:
 
 def _save(session, task_id, fields, data_bearing: set) -> None:
     """save_task_dynamic_fields wrapper that records the step as data-bearing."""
-    workflow.save_task_dynamic_fields(session, task_id, fields, changed_by=IMPORT_USER)
+    # reconcile=False: bulk writers drive statuses explicitly via
+    # ensure_task_approved, the engine must not fight them.
+    workflow.save_task_dynamic_fields(session, task_id, fields,
+                                      changed_by=IMPORT_USER, reconcile=False)
     data_bearing.add(task_id)
 
 

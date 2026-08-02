@@ -186,6 +186,34 @@ AR_TO_SEISMIC_BLOCK = _invert_seismic_block_ar_map(SEISMIC_BLOCK_AR_MAP)
 
 
 # ---------------------------------------------------------------------------
+# TWT <-> thickness conversion (Card 2B, Section 1)
+# ---------------------------------------------------------------------------
+# The consolidated Lead Assessment page captures each of its two thickness rows
+# (Reservoir / Formation) as a two-way pair: a two-way time in milliseconds and
+# a thickness in feet. Where a calibrated conversion exists, entering ONE side
+# derives the other through the straight line
+#
+#     thickness_ft = m * twt_ms + b          (and its inverse)
+#
+# with the coefficients keyed by ROW:
+#
+#     TWT_THICKNESS_COEFFICIENTS = {
+#         "reservoir": {"m": 0.42, "b": -105.0},
+#         "formation": {"m": 0.51, "b": -160.0},
+#     }
+#
+# SHIPS EMPTY, deliberately. The owner has not supplied calibrated coefficients
+# yet, and a guessed line would silently manufacture thicknesses that feed the
+# lead's PIIP volumes. While a row's entry is ABSENT the UI degrades to two
+# plain manual inputs for that row -- no derivation, no one-source rule -- and
+# shows a quiet "TWT <-> thickness conversion pending configuration" note.
+# Populate a row here and the client picks the derivation up on its next
+# /api/meta read (GET /api/meta serves this map as twt_thickness_coefficients);
+# there is no code change and no migration.
+TWT_THICKNESS_COEFFICIENTS = {}
+
+
+# ---------------------------------------------------------------------------
 # Windows share roots and directory maps (consumed by folders.py)
 # ---------------------------------------------------------------------------
 # Shared/root directories only. Do NOT put a field name or well name here.
@@ -227,12 +255,27 @@ WELL_OVERVIEW_DIRECTORY_MAP = {
     "identification_workflow": "Leads/Identification",
     "risking_workflow": "Leads/Risking",
     "segmentation_workflow": "Leads/Segmentation",
+
+    # Card 2B. The consolidated Lead Assessment page's ONE folder row: where the
+    # lead's interpreted polygons and surfaces are filed. Lead-scoped (see
+    # LEAD_COMPONENT_SECTION_KEYS below), so it resolves under the Leads share
+    # -- \\...\Leads\<field>\<lead>\Polygons__Surfaces -- not the Wells one.
+    "polygons": "Polygons__Surfaces",
 }
 
 LEAD_WORKFLOW_SECTION_KEYS = {
     "identification_workflow",
     "risking_workflow",
     "segmentation_workflow",
+}
+
+# Sections that resolve under the LEADS share (LEAD_COMPONENT_DIRECTORY_ROOT /
+# WINDOWS_LEAD_COMPONENT_SHARE_ROOT) rather than the Wells or Lead_Workflow
+# roots. A third root-selection bucket rather than a special case: a lead's own
+# deliverables sit beside its component files, which folders.py already files
+# under this share for every prospect-stage step.
+LEAD_COMPONENT_SECTION_KEYS = {
+    "polygons",
 }
 
 # Components where users typically need a physical/share location for supporting files.
