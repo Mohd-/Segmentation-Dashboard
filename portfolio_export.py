@@ -129,6 +129,13 @@ def _task_fields(session, project_ids, keys) -> Dict[int, Dict[str, str]]:
     Same shape/idiom as reporting._bp_task_fields (one query for the whole id
     list; higher task_id wins on legacy duplicate rows) but generalized over
     the caller's own key list instead of a module-private one.
+
+    RETIRED-INCLUSIVE like its twin: rows of steps merged away by a migration
+    (``is_active = 0``) are read too, ordered FIRST so an active row folds in
+    last, and folded first-non-blank-wins via reporting.fold_task_field_rows.
+    The map keys on the FIELD key, so a value entered on a retired step and
+    the same value re-entered on the step that absorbed it are the same
+    column here.
     """
     if not project_ids or not keys:
         return {}
@@ -136,14 +143,11 @@ def _task_fields(session, project_ids, keys) -> Dict[int, Dict[str, str]]:
         SELECT pt.project_id, tdf.field_key, tdf.field_value
         FROM project_tasks pt
         JOIN task_dynamic_fields tdf ON tdf.task_id = pt.task_id
-        WHERE pt.project_id IN :project_ids AND pt.is_active = 1
+        WHERE pt.project_id IN :project_ids
           AND tdf.field_key IN :field_keys
-        ORDER BY pt.task_id
+        ORDER BY pt.is_active, pt.task_id
     """, {"project_ids": list(project_ids), "field_keys": list(keys)})
-    fields: Dict[int, Dict[str, str]] = {}
-    for row in rows:
-        fields.setdefault(row["project_id"], {})[row["field_key"]] = row["field_value"] or ""
-    return fields
+    return reporting.fold_task_field_rows(rows)
 
 
 def _sarh_formations(session, project_ids) -> Dict[int, Dict[str, dict]]:

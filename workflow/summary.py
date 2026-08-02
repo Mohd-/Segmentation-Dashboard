@@ -46,12 +46,27 @@ def get_project_overview(session, project_id: int):
 
 
 def get_project_dynamic_field_map(session, project_id: int):
-    """Return {task_name: {field_key: value}} for a project's active tasks."""
+    """Return {task_name: {field_key: value}} for a project's tasks.
+
+    RETIRED-INCLUSIVE on purpose: inactive rows (steps merged away by a
+    migration -- see migrations._migrate_v4_bp_step_merges) are included so
+    their stored inputs stay readable under their own task_name bucket. That
+    is what the surviving-first / legacy-second fallbacks read from, both
+    server-side (_OVERVIEW_READ_SOURCES) and client-side (Store.allFields in
+    static/js/views/detail-form.js + detail.js). Buckets are keyed by
+    task_name and every reader addresses them by an explicit name, so the
+    extra keys are inert for everything else.
+
+    This map is a pure EAV read; it is NOT the step list. The rail, the
+    project editor and every derived-state query take their steps from
+    ``get_project_tasks`` (``is_active = 1``), so a retired step never
+    reappears as a workable component.
+    """
     rows = db.fetch_all(session, """
         SELECT pt.task_name, pt.sequence_no, tdf.field_key, tdf.field_value
         FROM project_tasks pt
         LEFT JOIN task_dynamic_fields tdf ON tdf.task_id = pt.task_id
-        WHERE pt.project_id = :project_id AND pt.is_active = 1
+        WHERE pt.project_id = :project_id
         ORDER BY pt.sequence_no, tdf.field_key
     """, {"project_id": project_id})
     data: Dict[str, Dict[str, str]] = {}

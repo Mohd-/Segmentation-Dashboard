@@ -130,6 +130,15 @@ def _prospect_stage_windows():
 # Lifecycle drivers (assign / submit / return / approve via the domain layer)
 # ---------------------------------------------------------------------------
 
+# Steps like "SAD Update" refuse a submit until their sign-off boxes are checked
+# (workflow.lifecycle._check_submit_requirements). Seeded wells drive those
+# steps to Approved, so the seeder records the sign-off first, through the same
+# shared helper the domain layer's own automated walks use -- the audit trail
+# then matches what a real user's tick would leave behind. Not inlined into
+# _complete_task because _advance_to needs it for the Ready anchor too.
+_satisfy_submit_gate = workflow.satisfy_submit_gate
+
+
 def _complete_task(session, task, assignee, role_by_name, approver, cycle=False):
     """Drive one task to Approved: assign -> submit -> approve.
 
@@ -137,6 +146,7 @@ def _complete_task(session, task, assignee, role_by_name, approver, cycle=False)
     first, so the Audit Trail carries a realistic back-and-forth.
     """
     role = role_by_name.get(assignee)
+    _satisfy_submit_gate(session, task, assignee)
     task = workflow.assign_task(session, task["task_id"], assignee, cascade=False, changed_by=assignee)
     task = workflow.transition_task(session, task["task_id"], "submit", changed_by=assignee,
                                      actor_role=role, actor_name=assignee)
@@ -157,6 +167,7 @@ def _advance_to(session, task, status, assignee, role_by_name):
     task = workflow.assign_task(session, task["task_id"], assignee, cascade=False, changed_by=assignee)
     if status == "In Progress":
         return task
+    _satisfy_submit_gate(session, task, assignee)
     role = role_by_name.get(assignee)
     return workflow.transition_task(session, task["task_id"], "submit", changed_by=assignee,
                                     actor_role=role, actor_name=assignee)
@@ -540,10 +551,12 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
             business_plan_year=years[i % len(years)], changed_by=random.choice(supervisors))
 
         # BP-stage lifecycle progress + inputs, AFTER promotion.
+        # Windows over the 15 BP-execution steps (v4 merged four away):
+        # 0 = early Well Delivery, 1 = mid pipeline, 2 = fully drilled.
         approve_count = {
-            0: random.randint(0, 4),
-            1: random.randint(5, 11),
-            2: random.randint(12, 18),
+            0: random.randint(0, 3),
+            1: random.randint(4, 9),
+            2: random.randint(10, 15),
         }[maturity]
         anchor_status = random.choice(["Not Assigned", "In Progress", "Ready"])
         _seed_pipeline_progress(session, bp_tasks, approve_count, anchor_status, users, role_by_name, supervisors)
@@ -584,7 +597,7 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
             # inherits SARH's fluid.
             workflow.upsert_project_formations(
                 session, pid, "quicklook", _phase_formation_rows(workflow.FORMATIONS, sarh_fluid),
-                changed_by="Seed Script", source_task_id=by_name["Quicklook Logs Interpretation"]["task_id"])
+                changed_by="Seed Script", source_task_id=by_name["Quicklook Logs"]["task_id"])
 
         if maturity == 2:
             post_drill_fields = _piip_fields("post_drill_piip")
@@ -595,7 +608,7 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
                 # above for why this well seeds nothing else fluid-wise.
                 top = round(random.uniform(8500, 12000), 1)
                 workflow.save_task_dynamic_fields(
-                    session, by_name["Quicklook Logs Interpretation"]["task_id"],
+                    session, by_name["Quicklook Logs"]["task_id"],
                     {"quicklook_fluid_type": fluid,
                      "quicklook_top_reservoir_tvdss_ft": top,
                      "quicklook_base_reservoir_tvdss_ft": round(top + random.uniform(30, 150), 1)},
@@ -608,14 +621,23 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
                      "final_base_reservoir_tvdss_ft": round(top + random.uniform(30, 150), 1)},
                     changed_by="Seed Script")
             else:
-                # Steps 20/30 kept their step-level fluid selects; one fluid
-                # value flows through everything for coherence.
+                # SAD Model / SAD Update kept the merged-away steps' fluid
+                # selects (post_drill_fluid_type / resource_update_fluid_type);
+                # one fluid value flows through everything for coherence.
                 post_drill_fields["post_drill_fluid_type"] = fluid
                 resource_update_fields["resource_update_fluid_type"] = fluid
-            workflow.save_task_dynamic_fields(session, by_name["Post-Drilling Resource Assessment"]["task_id"],
+            # v4: the post-drill / resource-update PIIP trios now live on the
+            # steps that absorbed them, under their ORIGINAL EAV keys.
+            post_drill_fields["sad_surfaces_polygons_loaded"] = "1"
+            resource_update_fields["sad_update_done"] = "1"
+            resource_update_fields["final_exec_summary_done"] = "1"
+            workflow.save_task_dynamic_fields(session, by_name["SAD Model"]["task_id"],
                                               post_drill_fields, changed_by="Seed Script")
-            workflow.save_task_dynamic_fields(session, by_name["Resource Assessment Update"]["task_id"],
+            workflow.save_task_dynamic_fields(session, by_name["SAD Update"]["task_id"],
                                               resource_update_fields, changed_by="Seed Script")
+            workflow.save_task_dynamic_fields(session, by_name["Executive Summary"]["task_id"],
+                                              {"exec_summary_loaded": "1", "ured_update_loaded": "1"},
+                                              changed_by="Seed Script")
             # The legacy-fallback well also keeps its flowback data in the
             # retired flat keys (no stages sheet), so the flat-key fallback
             # is exercised end-to-end alongside the legacy fluid ladder.
@@ -641,10 +663,10 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
                 changed_by="Seed Script", source_task_id=by_name["Final Log Analysis"]["task_id"])
             workflow.upsert_project_formations(
                 session, pid, "post_drill", _phase_formation_rows(workflow.FORMATIONS, sarh_fluid),
-                changed_by="Seed Script", source_task_id=by_name["Post-Drilling Resource Assessment"]["task_id"])
+                changed_by="Seed Script", source_task_id=by_name["SAD Model"]["task_id"])
             workflow.upsert_project_formations(
                 session, pid, "resource_update", _phase_formation_rows(workflow.FORMATIONS + custom, sarh_fluid),
-                changed_by="Seed Script", source_task_id=by_name["Resource Assessment Update"]["task_id"])
+                changed_by="Seed Script", source_task_id=by_name["SAD Update"]["task_id"])
     return project_ids
 
 

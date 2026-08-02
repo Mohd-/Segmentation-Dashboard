@@ -215,7 +215,7 @@ def test_status_staked_when_approval_to_stake_approved(client):
 
 def test_fluid_wins_status_and_final_beats_quicklook(client):
     pid = create_project(client, "STATUS-3", **BP_KWARGS)
-    _save_fields(client, pid, "Quicklook Logs Interpretation", {"quicklook_fluid_type": "Gas"})
+    _save_fields(client, pid, "Quicklook Logs", {"quicklook_fluid_type": "Gas"})
     row = _row_for(client, pid)
     assert row["fluid"] == "Gas"
     assert row["status"] == "Gas"  # a recorded fluid outranks Proposed/Staked
@@ -233,15 +233,15 @@ def test_fluid_precedence_legacy_eav_ladder_no_sarh_row(client):
     fluid column does. (Nothing writes final_/quicklook_fluid_type anymore -- the
     step selects are gone -- but wells written before still populate this way.)"""
     pid = create_project(client, "STATUS-4", **BP_KWARGS)
-    _save_fields(client, pid, "Quicklook Logs Interpretation", {"quicklook_fluid_type": "Gas"})
-    _save_fields(client, pid, "Post-Drilling Resource Assessment",
+    _save_fields(client, pid, "Quicklook Logs", {"quicklook_fluid_type": "Gas"})
+    _save_fields(client, pid, "SAD Model",
                  {"post_drill_fluid_type": "Gas Condensate"})
     row = _row_for(client, pid)
     assert row["fluid"] == "Gas Condensate"  # post_drill beats quicklook
     assert row["status"] == "Gas Condensate"
 
-    # A Resource Assessment Update revision beats post_drill and quicklook...
-    _save_fields(client, pid, "Resource Assessment Update", {"resource_update_fluid_type": "Wet"})
+    # A SAD Update (resource_update) revision beats post_drill and quicklook...
+    _save_fields(client, pid, "SAD Update", {"resource_update_fluid_type": "Wet"})
     row = _row_for(client, pid)
     assert row["fluid"] == "Wet"
     assert row["status"] == "Wet"
@@ -257,9 +257,9 @@ def test_sarh_final_phase_fluid_beats_everything(client):
     """Top of the ladder: the SARH 'final'-phase formation fluid outranks every
     lower rung, including the legacy final_fluid_type EAV."""
     pid = create_project(client, "FLUID-SARH-1", **BP_KWARGS)
-    _save_fields(client, pid, "Quicklook Logs Interpretation", {"quicklook_fluid_type": "Gas"})
-    _save_fields(client, pid, "Post-Drilling Resource Assessment", {"post_drill_fluid_type": "Wet"})
-    _save_fields(client, pid, "Resource Assessment Update", {"resource_update_fluid_type": "Gas Condensate"})
+    _save_fields(client, pid, "Quicklook Logs", {"quicklook_fluid_type": "Gas"})
+    _save_fields(client, pid, "SAD Model", {"post_drill_fluid_type": "Wet"})
+    _save_fields(client, pid, "SAD Update", {"resource_update_fluid_type": "Gas Condensate"})
     _save_fields(client, pid, "Final Log Analysis", {"final_fluid_type": "Dry"})
     _put_sarh_fluid(client, pid, "quicklook", "Water")
     _put_sarh_fluid(client, pid, "final", "Oil")
@@ -276,14 +276,14 @@ def test_resource_update_and_post_drill_slot_between_sarh_phases(client):
     (no final-phase row exists)."""
     pid = create_project(client, "FLUID-SARH-2", **BP_KWARGS)
     _put_sarh_fluid(client, pid, "quicklook", "Water")
-    _save_fields(client, pid, "Quicklook Logs Interpretation", {"quicklook_fluid_type": "Gas"})
+    _save_fields(client, pid, "Quicklook Logs", {"quicklook_fluid_type": "Gas"})
     row = _row_for(client, pid)
     assert row["fluid"] == "Water"  # SARH quicklook beats legacy quicklook EAV
 
-    _save_fields(client, pid, "Post-Drilling Resource Assessment", {"post_drill_fluid_type": "Wet"})
+    _save_fields(client, pid, "SAD Model", {"post_drill_fluid_type": "Wet"})
     assert _row_for(client, pid)["fluid"] == "Wet"  # post_drill beats SARH quicklook
 
-    _save_fields(client, pid, "Resource Assessment Update", {"resource_update_fluid_type": "Gas Condensate"})
+    _save_fields(client, pid, "SAD Update", {"resource_update_fluid_type": "Gas Condensate"})
     row = _row_for(client, pid)
     assert row["fluid"] == "Gas Condensate"  # resource_update beats post_drill
     assert row["status"] == "Gas Condensate"
@@ -293,7 +293,7 @@ def test_sarh_quicklook_fluid_beats_legacy_quicklook_eav(client):
     """Bottom two rungs: the SARH 'quicklook'-phase formation fluid outranks the
     legacy quicklook_fluid_type EAV."""
     pid = create_project(client, "FLUID-SARH-3", **BP_KWARGS)
-    _save_fields(client, pid, "Quicklook Logs Interpretation", {"quicklook_fluid_type": "Gas"})
+    _save_fields(client, pid, "Quicklook Logs", {"quicklook_fluid_type": "Gas"})
     assert _row_for(client, pid)["fluid"] == "Gas"  # only the legacy EAV so far
 
     _put_sarh_fluid(client, pid, "quicklook", "Water")
@@ -314,7 +314,7 @@ def test_mean_ogip_precedence_post_beats_pre_beats_lead(client):
     _save_fields(client, pid, "Pre-Drilling Resource Assessment", {"pre_drill_piip_gas_mean": "7.5"})
     assert _row_for(client, pid)["mean_ogip"] == "7.5"
 
-    _save_fields(client, pid, "Post-Drilling Resource Assessment", {"post_drill_piip_gas_mean": "9.25"})
+    _save_fields(client, pid, "SAD Model", {"post_drill_piip_gas_mean": "9.25"})
     assert _row_for(client, pid)["mean_ogip"] == "9.25"
 
 
@@ -322,7 +322,7 @@ def test_summary_cumulative_ogip_sums_mean_ogip(client):
     pid_a = create_project(client, "SUM-A", **BP_KWARGS)
     pid_b = create_project(client, "SUM-B", **BP_KWARGS)
     _save_fields(client, pid_a, "Lead Resource Assessment", {"lead_piip_gas_mean": "4.0"})
-    _save_fields(client, pid_b, "Post-Drilling Resource Assessment", {"post_drill_piip_gas_mean": "6.5"})
+    _save_fields(client, pid_b, "SAD Model", {"post_drill_piip_gas_mean": "6.5"})
 
     payload = _rows(client)
     assert payload["summary"]["business_plan_wells"] == 2

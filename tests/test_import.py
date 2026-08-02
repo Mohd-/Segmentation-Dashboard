@@ -224,7 +224,7 @@ def test_duplicate_skip_and_update_merge(client, app_modules, tmp_path):
 
         # Confirm a data-bearing BP step reached Approved on the first import.
         tasks = _tasks_by_name(session, "UPD-1")
-        assert tasks["Resource Assessment Update"]["status"] == "Approved"
+        assert tasks["SAD Update"]["status"] == "Approved"
 
         # --update: change OGIP Mean, leave Trap CoS blank (must not erase).
         upd = {"Well Name": "UPD-1", "BP Year": 2027, "Status": "Gas", "OGIP Mean (BCF)": 20}
@@ -239,7 +239,7 @@ def test_duplicate_skip_and_update_merge(client, app_modules, tmp_path):
 
         # An Approved step stays Approved after the additive update.
         tasks = _tasks_by_name(session, "UPD-1")
-        assert tasks["Resource Assessment Update"]["status"] == "Approved"
+        assert tasks["SAD Update"]["status"] == "Approved"
     finally:
         session.close()
 

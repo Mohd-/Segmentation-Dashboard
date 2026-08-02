@@ -39,6 +39,9 @@ of what belongs in it.
     workflow), formation vocabulary, `StaleRevisionError`.
   - `history.py` — the append-only `task_history` writer (`log_task_event`).
   - `users.py` — login identity lookups.
+  - `notifications.py` — who a transition tells (the fan-out policy) and the
+    per-recipient bell feed. Its writer runs inside `transition_task`'s own
+    transaction; every read is scoped by the caller's own name.
   - `projects.py` — project CRUD + the derived board state
     (`_annotate_derived_state`).
   - `lifecycle.py` — task reads/saves, assignment, submit/approve/return.

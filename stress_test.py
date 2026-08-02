@@ -52,9 +52,11 @@ REPO_ROOT = Path(__file__).resolve().parent
 REAL_DB = (REPO_ROOT / "pipeline_tracker.db").resolve()
 VENV_PY = REPO_ROOT / ".venv" / "bin" / "python"
 
-# The 31-step pipeline (workflow/constants.py PIPELINE_TEMPLATES); prospect
-# stages cover sequences 1-12, BP execution 13-31.
-TEMPLATE_TASK_COUNT = 31
+# The 27-step pipeline (workflow/constants.py PIPELINE_TEMPLATES); prospect
+# stages cover sequences 1-12, BP execution 13-27. (v4 merged four BP steps
+# away; pre-v4 databases carry those rows as is_active = 0 and the queries
+# below count active rows only.)
+TEMPLATE_TASK_COUNT = 27
 PROSPECT_TASK_COUNT = 12
 
 # ---------------------------------------------------------------------------
@@ -461,7 +463,7 @@ def run_sweep(base_url):
     t2 = task_by_name(c, alpha_id, "Thickness Estimation")
     t_cos = task_by_name(c, alpha_id, "Reservoir CoS")
     t_stake = task_by_name(c, alpha_id, "Staking Moving Tolerance")
-    t_quick = task_by_name(c, alpha_id, "Quicklook Logs Interpretation")
+    t_quick = task_by_name(c, alpha_id, "Quicklook Logs")
     status, out = c.request("POST", f"/api/tasks/{t1['task_id']}/assign",
                             {"assignee": "Staff Member", "cascade": False,
                              "revision": t1.get("revision"), "changed_by": "Stress Harness"},

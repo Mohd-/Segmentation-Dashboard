@@ -200,6 +200,55 @@ class ProjectFormation(Base):
     )
 
 
+class ProjectFormationPayInterval(Base):
+    """Per-formation PAY INTERVALS -- the reservoir sub-intervals of a formation.
+
+    A formation row (``project_formations``) keeps the formation envelope
+    (top / base / thickness); the pay it contains is described by ZERO OR MORE
+    intervals, each with its own top/base and petrophysical averages. Keyed by
+    the same (project, formation, phase) triple as the parent formation row
+    plus ``seq`` (the interval's position in the editor's list, 1-based), so
+    intervals travel with the formation they belong to. There is no FK to
+    ``project_formations`` (its PK is a surrogate id, not that triple);
+    ``workflow.formations.upsert_project_formations`` owns the coupling: it
+    replaces a formation's intervals in the same phase-scoped write and deletes
+    the intervals of any formation the payload dropped.
+
+    ``phit_pct`` is the interval's effective porosity (the pay-interval name for
+    what the formation envelope calls ``porosity_pct``) and ``kint_md`` its
+    intrinsic permeability; both, like every measurement column here, are REAL.
+    ``fluid`` stays TEXT and is validated against ``FORMATION_FLUID_TYPES``.
+
+    ``Base.metadata.create_all`` runs on every bootstrap (migrations.run), so
+    this table appears in existing databases for free -- a purely additive
+    table needs no numbered migration step.
+    """
+    __tablename__ = "project_formation_pay_intervals"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.project_id", ondelete="CASCADE"), nullable=False)
+    formation = Column(Text, nullable=False)
+    phase = Column(Text, nullable=False)
+    seq = Column(Integer, nullable=False)
+    top_tvdss_ft = Column(REAL)
+    base_tvdss_ft = Column(REAL)
+    phit_pct = Column(REAL)
+    swt_pct = Column(REAL)
+    ngr_pct = Column(REAL)
+    kint_md = Column(REAL)
+    fluid = Column(Text)
+    source_task_id = Column(Integer)
+    updated_at = Column(Text)
+    updated_by = Column(Text)
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "formation", "phase", "seq"),
+        CheckConstraint("phase IN ('quicklook','post_drill','final','resource_update')"),
+        Index("idx_formation_pay_intervals_project", "project_id"),
+        {"sqlite_autoincrement": True},
+    )
+
+
 class LeadSummarySnapshot(Base):
     """Frozen JSON of a lead's Prospect-stage inputs captured at BP promotion."""
     __tablename__ = "lead_summary_snapshots"
@@ -233,6 +282,53 @@ class AppSetting(Base):
 
     key = Column(Text, primary_key=True)
     value = Column(Text, nullable=False)
+
+
+class Notification(Base):
+    """One in-app notification addressed to a user BY NAME (Card 1F).
+
+    Identity in this application is the display-name string (``users.name``,
+    the same value stamped into ``task_history.changed_by`` and
+    ``project_tasks.assigned_to``), so ``recipient`` and ``actor`` are names,
+    not user_ids -- a numeric FK here would be the only place that disagreed
+    with every other identity column.
+
+    ``task_name`` / ``project_name`` are SNAPSHOTS of what the event was about
+    at the moment it happened: a notification is a record of the past, so a
+    later rename must not rewrite what the user was told. ``project_id`` stays
+    a live FK because the item is also a NAVIGATION target (click -> open that
+    record); the pipeline to open with is read live from ``projects`` at list
+    time, never stored (the "derive, don't store" rule -- a lead promoted to BP
+    after the event must still open on the right board).
+
+    ``read_at`` NULL = unread; the (recipient, read_at) index serves both the
+    feed query and the unread count, which is polled on every board refresh.
+
+    ``Base.metadata.create_all`` runs on every bootstrap (migrations.run), so
+    this table appears in existing databases for free -- a purely additive
+    table needs no numbered migration step.
+    """
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True)
+    created_at = Column(Text, nullable=False)
+    recipient = Column(Text, nullable=False)
+    actor = Column(Text)
+    event = Column(Text, nullable=False)
+    project_id = Column(Integer, ForeignKey("projects.project_id", ondelete="CASCADE"))
+    task_id = Column(Integer)
+    task_name = Column(Text)
+    project_name = Column(Text)
+    message = Column(Text)
+    read_at = Column(Text)
+
+    __table_args__ = (
+        # The three lifecycle transitions, and nothing else: an unknown event
+        # string would render as an untitled row in the bell menu.
+        CheckConstraint("event IN ('submitted','approved','returned')"),
+        Index("idx_notifications_recipient_read", "recipient", "read_at"),
+        {"sqlite_autoincrement": True},
+    )
 
 
 class User(Base):

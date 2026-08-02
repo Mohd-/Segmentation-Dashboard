@@ -4,10 +4,11 @@ A package split along the old module's section seams; ``import workflow``
 exposes the full public API exactly as the single-file module did:
 
 - constants.py  -- statuses, stages, PIPELINE_TEMPLATES (the single source of
-  truth for the 31-step workflow), formation vocabulary, StaleRevisionError.
+  truth for the 27-step workflow), formation vocabulary, StaleRevisionError.
 - users.py      -- login identity lookups (seeded from config.SEED_USERS).
 - projects.py   -- project CRUD + the derived board state.
 - lifecycle.py  -- task reads/saves, assignment, submit/approve/return.
+- notifications.py -- who a transition tells, and the per-user bell feed.
 - promotion.py  -- lead-summary snapshots, BP promotion / demotion, flags.
 - formations.py -- well-level formation data (project_formations).
 - summary.py    -- the computed overview + Total Chance of Success reads.
@@ -31,32 +32,57 @@ Conventions:
 """
 from .constants import (
     ACTIVE_STATUSES,
+    AUTO_COMPLETE_COMMENT,
+    AUTO_COMPLETE_EVENT,
     BOARD_STAGE_ORDER,
     BP_EXECUTION_STAGES,
     DONE_STATUSES,
+    FORMATION_FLUID_TYPES,
     FORMATION_NUMERIC_FIELDS,
     FORMATION_PHASES,
     FORMATION_VALUE_FIELDS,
     FORMATIONS,
+    NON_PROSPECTIVE_AUTO_COMPLETE_STEPS,
+    NON_PROSPECTIVE_FLUIDS,
+    PAY_INTERVAL_NUMERIC_FIELDS,
+    PAY_INTERVAL_VALUE_FIELDS,
     PIPELINE_TEMPLATES,
     PROSPECT_STAGES,
+    REQUIRED_FIELDS_FOR_SUBMIT,
+    RETIRED_TASK_NAMES,
     STAGE_ORDER,
     STATUSES,
     TASK_TRANSITIONS,
     StaleRevisionError,
     applicable_stages,
+    unmet_submit_requirements,
 )
-from .formations import get_project_formations, upsert_project_formations
+from .formations import (
+    auto_complete_non_prospective_steps,
+    get_project_formations,
+    non_prospective_quicklook_fluid,
+    upsert_project_formations,
+)
 from .history import log_task_event
 from .lifecycle import (
     assign_task,
+    ensure_task_approved,
     get_project_tasks,
     get_task,
     get_task_dynamic_fields,
+    satisfy_submit_gate,
     save_task,
     save_task_dynamic_fields,
     set_task_priority,
     transition_task,
+)
+from .notifications import (
+    list_notifications,
+    mark_all_read,
+    mark_read,
+    notification_feed,
+    notify_transition,
+    unread_count,
 )
 from .projects import (
     add_project,
@@ -80,29 +106,37 @@ from .summary import (
     get_project_overview,
     total_cos_from_fields,
 )
-from .users import find_active_user, get_active_users
+from .users import SYSTEM_USER, ensure_system_user, find_active_user, get_active_users
 
 __all__ = [
     # constants
-    "ACTIVE_STATUSES", "BOARD_STAGE_ORDER", "BP_EXECUTION_STAGES",
-    "DONE_STATUSES", "FORMATION_NUMERIC_FIELDS", "FORMATION_PHASES",
-    "FORMATION_VALUE_FIELDS", "FORMATIONS", "PIPELINE_TEMPLATES",
-    "PROSPECT_STAGES", "STAGE_ORDER", "STATUSES", "TASK_TRANSITIONS",
-    "StaleRevisionError", "applicable_stages",
+    "ACTIVE_STATUSES", "AUTO_COMPLETE_COMMENT", "AUTO_COMPLETE_EVENT",
+    "BOARD_STAGE_ORDER", "BP_EXECUTION_STAGES",
+    "DONE_STATUSES", "FORMATION_FLUID_TYPES", "FORMATION_NUMERIC_FIELDS",
+    "FORMATION_PHASES", "FORMATION_VALUE_FIELDS", "FORMATIONS",
+    "NON_PROSPECTIVE_AUTO_COMPLETE_STEPS", "NON_PROSPECTIVE_FLUIDS",
+    "PAY_INTERVAL_NUMERIC_FIELDS", "PAY_INTERVAL_VALUE_FIELDS", "PIPELINE_TEMPLATES",
+    "PROSPECT_STAGES", "REQUIRED_FIELDS_FOR_SUBMIT", "RETIRED_TASK_NAMES",
+    "STAGE_ORDER", "STATUSES", "TASK_TRANSITIONS",
+    "StaleRevisionError", "applicable_stages", "unmet_submit_requirements",
     # users
-    "find_active_user", "get_active_users",
+    "SYSTEM_USER", "ensure_system_user", "find_active_user", "get_active_users",
     # projects
     "add_project", "archive_project", "delete_project", "get_project",
     "get_projects", "project_completion_percent", "restore_project",
     "update_project_name",
     # lifecycle
-    "assign_task", "get_project_tasks", "get_task", "get_task_dynamic_fields",
-    "save_task", "save_task_dynamic_fields", "set_task_priority",
-    "transition_task",
+    "assign_task", "ensure_task_approved", "get_project_tasks", "get_task",
+    "get_task_dynamic_fields", "satisfy_submit_gate", "save_task",
+    "save_task_dynamic_fields", "set_task_priority", "transition_task",
+    # notifications
+    "list_notifications", "mark_all_read", "mark_read", "notification_feed",
+    "notify_transition", "unread_count",
     # promotion
     "get_lead_summary_snapshot", "set_business_plan", "update_project_flags",
     # formations
-    "get_project_formations", "upsert_project_formations",
+    "auto_complete_non_prospective_steps", "get_project_formations",
+    "non_prospective_quicklook_fluid", "upsert_project_formations",
     # summary
     "calculate_total_cos", "first_reservoir_cos_row_value",
     "get_project_dynamic_field_map", "get_project_overview",

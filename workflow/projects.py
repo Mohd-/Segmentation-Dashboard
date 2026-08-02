@@ -6,6 +6,7 @@ task rows at read time -- never stored (see _annotate_derived_state).
 """
 from __future__ import annotations
 
+import logging
 from datetime import date
 from typing import Any, Dict, List
 
@@ -16,13 +17,51 @@ import db
 import folders
 from helpers import health_from_target, parse_iso_date, today_str, utc_now_str
 
-from .constants import BP_EXECUTION_STAGES, PIPELINE_TEMPLATES, STAGE_ORDER, applicable_stages
+from .constants import (BP_EXECUTION_STAGES, LATEST_MEAN_GAS_SOURCES, PIPELINE_TEMPLATES,
+                        STAGE_ORDER, applicable_stages)
 from .history import log_task_event
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
 # Project creation
 # ---------------------------------------------------------------------------
+
+def _duplicate_name_message(pipeline_type):
+    """The user-facing duplicate-name error.
+
+    Card 1D pins the wording the Add New Lead control shows verbatim; the BP
+    side still creates wells, so it keeps the older combined phrasing.
+    """
+    return ("A lead with this name already exists." if pipeline_type == "prospect"
+            else "A lead / well with this name already exists.")
+
+
+def _validated_coordinate(value, label):
+    """Return ``value`` unchanged when it is a usable coordinate, else raise.
+
+    Coordinates stay OPTIONAL at the API level (the Excel importer and older
+    callers create records without them), so only a supplied, non-blank value is
+    checked. What is rejected is a value that is not a finite number -- letters,
+    malformed decimals, inf/nan -- which would otherwise be stored as text and
+    resurface as a broken well location in Staking. No sign or range rule: real
+    coordinates are signed. The ORIGINAL string is stored, never a reformatted
+    float, so the entered precision survives.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        number = float(text)
+    except (TypeError, ValueError):
+        raise ValueError(f"Enter a valid Lead {label} Coordinate.")
+    if number != number or number in (float("inf"), float("-inf")):
+        raise ValueError(f"Enter a valid Lead {label} Coordinate.")
+    return value
+
 
 def add_project(session, project_name, start_date=None, target_date=None, changed_by="System", lead_x=None, lead_y=None,
                 business_plan_year=None, business_plan_enabled=False, active_well_enabled=False, pipeline_type="prospect"):
@@ -35,6 +74,8 @@ def add_project(session, project_name, start_date=None, target_date=None, change
     pipeline_type = str(pipeline_type or "prospect").strip().lower()
     if pipeline_type not in {"prospect", "bp"}:
         pipeline_type = "prospect"
+    lead_x = _validated_coordinate(lead_x, "X")
+    lead_y = _validated_coordinate(lead_y, "Y")
     now = utc_now_str()
     start_date = start_date or today_str()
     target_date = target_date or ""
@@ -53,11 +94,20 @@ def add_project(session, project_name, start_date=None, target_date=None, change
 
     # Friendly duplicate check up front; the IntegrityError catch below still
     # covers the race where another request inserts the same name in between.
+    #
+    # CASE-INSENSITIVE and whitespace-insensitive (Card 1D): 'WWWW-44',
+    # 'wwww-44' and ' WWWW-44 ' are the same lead to a human, and the derived
+    # field/folder split (folders.parse_field_and_well) would collide anyway.
+    # project_name is already stripped above; trim() on the stored side catches
+    # legacy rows that were written with padding. The DB's UNIQUE(project_name)
+    # index stays case-SENSITIVE, so this check -- not the constraint -- is what
+    # enforces the rule; the IntegrityError catch below remains the race net.
     duplicate = db.fetch_one(session,
-                             "SELECT 1 AS present FROM projects WHERE project_name = :project_name",
+                             "SELECT 1 AS present FROM projects "
+                             "WHERE lower(trim(project_name)) = lower(trim(:project_name))",
                              {"project_name": project_name})
     if duplicate:
-        raise ValueError("A lead / well with this name already exists.")
+        raise ValueError(_duplicate_name_message(pipeline_type))
 
     # The workflow definition lives in code (PIPELINE_TEMPLATES); the creation
     # history event anchors on the pipeline's first step.
@@ -71,7 +121,7 @@ def add_project(session, project_name, start_date=None, target_date=None, change
     except IntegrityError as exc:
         # UNIQUE(project_name) race lost to a concurrent insert.
         if "unique" in str(getattr(exc, "orig", None) or exc).lower():
-            raise ValueError("A lead / well with this name already exists.") from exc
+            raise ValueError(_duplicate_name_message(pipeline_type)) from exc
         raise
 
 
@@ -119,7 +169,13 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
                 "stage_group": stage_group, "assigned_to": None,
                 "status": initial_status,
                 "actual_start": None, "actual_finish": None,
-                "comments": None, "priority": "Medium",
+                # Card 1D: a brand-new record starts at the LOWEST priority, so
+                # its board card renders gray until somebody deliberately
+                # raises a step (PATCH /api/tasks/<id>/priority, supervisor
+                # only). _lead_priority derives the card color from these rows,
+                # so 'Low' here is what makes a fresh lead read as un-escalated
+                # instead of borrowing Medium's blue.
+                "comments": None, "priority": "Low",
                 "business_plan_enabled": bp_enabled, "business_plan_year": year_val,
                 "last_updated": now,
             })
@@ -147,6 +203,223 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
 # Project reads (board pointers are DERIVED from project_tasks, never stored)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Card 1B presentation adapter -- TEMPORARY, delete with the permanent migration
+# ---------------------------------------------------------------------------
+# Everything between this banner and the "end of the Card 1B adapter" marker is
+# a READ-TIME PRESENTATION LAYER over the stored workflow. It stores nothing,
+# changes no status, and adds no query: every value is derived from the task
+# rows _annotate_derived_state has already batch-loaded.
+#
+# The board the users signed off on speaks a shorter vocabulary than the stored
+# pipeline: three columns instead of four stage groups, and twelve short
+# "tracked items" instead of the twelve prospect steps (two of the items have no
+# stored step at all yet). Rather than migrate the schema for a visual card, the
+# mapping lives here, isolated and named, so the permanent migration that
+# introduces the real steps/stages can delete this block whole and leave the
+# rest of the module untouched.
+
+# Stage group (stored) -> board column (displayed). Risking and Segmentation
+# both land in "Risk Analysis"; BP stage groups are absent on purpose and fall
+# through to the stored current_stage (the BP board is unchanged by Card 1B).
+_DISPLAY_STAGE_BY_STAGE = {
+    "Lead Identification": "Lead Assessment",
+    "Risking": "Risk Analysis",
+    "Segmentation": "Risk Analysis",
+    "Pre-Well Delivery": "Pre-Well Delivery",
+}
+
+# The twelve tracked items, in board order:
+#   (display stage, short label, source step names, ready_shows_pending)
+# * An item with NO source steps has no step feeding it in the current 12-step
+#   prospect pipeline -- it renders "In Progress" forever and must NEVER
+#   auto-complete; the permanent migration supplies the real step.
+# * An item with SEVERAL sources is "Completed" only when EVERY source is
+#   Approved (Trap and Seal).
+# * ready_shows_pending is set for the ONE item whose supervisor queue the board
+#   surfaces (Segmentation Slides). Everywhere else a submitted-but-unapproved
+#   step reads "In Progress", because a returned submission drops back to
+#   In Progress and the card must not distinguish the two.
+_TRACKED_ITEMS = (
+    ("Lead Assessment", "Area Definition", ("Reservoir Area Definition",), False),
+    ("Lead Assessment", "Thickness Estimation", ("Thickness Estimation",), False),
+    ("Lead Assessment", "GRV Inputs", (), False),
+    ("Lead Assessment", "Resource Assessment", ("Lead Resource Assessment",), False),
+    ("Risk Analysis", "Reservoir", ("Reservoir CoS",), False),
+    ("Risk Analysis", "Trap and Seal", ("Trap CoS", "Seal CoS"), False),
+    ("Risk Analysis", "Seismic Validation", ("Seismic Signature Validation",), False),
+    ("Risk Analysis", "Segmentation Slides", ("Prospect Evaluation Presentation",), True),
+    ("Pre-Well Delivery", "Moving Tolerance", ("Staking Moving Tolerance",), False),
+    ("Pre-Well Delivery", "Approval to Stake", ("Approval to Stake",), False),
+    ("Pre-Well Delivery", "Well Site Location", (), False),
+    ("Pre-Well Delivery", "GeoX Assessment", ("Pre-Drilling Resource Assessment",), False),
+)
+
+# Card border / column sort vocabulary. "Normal" (the models.py server default
+# for legacy rows) and anything else unrecognized is treated as ABSENT.
+_PRIORITY_RANK = {"High": 0, "Medium": 1, "Low": 2}
+
+
+def _tracked_items(status_by_task):
+    """The 12-item presentation model for one prospect (pure).
+
+    ``status_by_task`` maps a stored step name to its stored lifecycle status.
+    A missing step is simply not Approved, so it reads "In Progress" -- the same
+    thing a brand-new lead's Not Assigned rows read. "Not Assigned" is not a
+    display status: the card shows work as done, waiting, or ongoing, nothing
+    else.
+    """
+    items = []
+    for stage, label, sources, ready_shows_pending in _TRACKED_ITEMS:
+        if not sources:
+            status = "In Progress"
+        elif all(status_by_task.get(name) == "Approved" for name in sources):
+            status = "Completed"
+        elif ready_shows_pending and any(status_by_task.get(name) == "Ready" for name in sources):
+            status = "Pending Approval"
+        else:
+            status = "In Progress"
+        items.append({"stage": stage, "label": label, "status": status})
+    return items
+
+
+def _lead_priority(rows):
+    """The lead's priority: the highest priority still riding on OPEN work.
+
+    There is no stored per-project priority column -- priority is a per-TASK
+    field (project_tasks.priority, supervisor-only via
+    PATCH /api/tasks/<id>/priority). The lead-level value the board needs is
+    therefore derived: the most urgent priority among the tasks the lead still
+    has to do. Approved rows are excluded (finished work cannot make a lead
+    urgent), and unrecognized/legacy values ("Normal") are ignored, leaving the
+    documented "Low" default when nothing applies.
+
+    ``rows`` is already narrowed to the project's applicable active tasks.
+    """
+    ranks = [_PRIORITY_RANK[r["priority"]] for r in rows
+             if r["status"] != "Approved" and r.get("priority") in _PRIORITY_RANK]
+    if not ranks:
+        return "Low"
+    best = min(ranks)
+    return next(name for name, rank in _PRIORITY_RANK.items() if rank == best)
+
+
+def _annotate_card_state(project, rows, stages):
+    """Attach the Card 1B card fields to one project dict, in place.
+
+    ``rows`` are the project's active task rows (already loaded); ``stages`` its
+    applicable stage groups. No query, no write.
+    """
+    applicable = [r for r in rows if r["stage_group"] in stages]
+    assignees = []
+    for row in applicable:
+        name = (row.get("assigned_to") or "").strip()
+        if name and name not in assignees:
+            assignees.append(name)
+    project["assignees"] = assignees
+    project["lead_priority"] = _lead_priority(applicable)
+    project["display_stage"] = _DISPLAY_STAGE_BY_STAGE.get(project.get("current_stage"),
+                                                           project.get("current_stage"))
+    if str(project.get("pipeline_type") or "prospect").lower() == "bp":
+        project["tracked_items"] = []   # the BP board is unchanged by Card 1B
+        return
+    # project_tasks has UNIQUE(project_id, task_name), so one row per step.
+    project["tracked_items"] = _tracked_items({r["task_name"]: r["status"] for r in applicable})
+
+# --- end of the Card 1B adapter --------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Card 1E -- the record's LATEST saved Mean Gas (BCF), derived at read time
+# ---------------------------------------------------------------------------
+# There is no stored mean-gas column: the number lives in task_dynamic_fields
+# under whichever assessment step last recorded it. LATEST_MEAN_GAS_SOURCES
+# (constants.py) is the precedence -- newest assessment first, each surviving
+# v4 step immediately followed by the retired step it absorbed -- and is the
+# server-side twin of the client's LATEST_PIIP_SOURCES.
+
+# The distinct names/keys the ladder can touch, so the batched query narrows on
+# BOTH axes instead of dragging every EAV row of every board project back.
+_MEAN_GAS_TASK_NAMES = tuple(dict.fromkeys(name for name, _key in LATEST_MEAN_GAS_SOURCES))
+_MEAN_GAS_FIELD_KEYS = tuple(dict.fromkeys(key for _name, key in LATEST_MEAN_GAS_SOURCES))
+
+
+def _parse_mean_gas(raw, project_id, task_name, field_key):
+    """Return a stored mean-gas string as a float, or None (logging garbage).
+
+    A blank/absent value is simply "not recorded" and yields None silently. A
+    NON-NUMERIC stored value is a data fault: it is logged and also yields None,
+    so the board renders the lead as 0 BCF rather than crashing or showing text
+    where a number belongs. The unit is BCF exactly as stored -- no conversion.
+    """
+    text_value = str(raw if raw is not None else "").strip()
+    if not text_value:
+        return None
+    try:
+        value = float(text_value)
+    except (TypeError, ValueError):
+        logger.warning("Project %s: non-numeric %s.%s mean gas %r; reporting null",
+                       project_id, task_name, field_key, raw)
+        return None
+    # NaN/inf survive float() ("nan", "inf") and would poison a client-side sum.
+    if value != value or value in (float("inf"), float("-inf")):
+        logger.warning("Project %s: non-finite %s.%s mean gas %r; reporting null",
+                       project_id, task_name, field_key, raw)
+        return None
+    return value
+
+
+def _annotate_mean_gas(session, projects):
+    """Fill ``mean_gas_bcf`` on a list of project dicts, in place.
+
+    ONE batched query for the whole board, keyed by (project_id, task_name) --
+    the ladder addresses buckets by step NAME, and a retired step is its own
+    name. RETIRED-INCLUSIVE for exactly that reason (no ``is_active`` filter):
+    a pre-v4 well whose numbers were entered on "Resource Assessment Update"
+    must still resolve, the same way get_project_dynamic_field_map and
+    reporting._bp_task_fields stay retired-inclusive.
+
+    Within one (project, step) bucket, legacy duplicate task rows fold
+    first-non-blank-wins with the higher task_id winning ties -- the ORDER BY
+    plus reporting.fold_task_field_rows' rule, reproduced here because this
+    fold is keyed by task_name as well as project.
+
+    Precedence stops at the FIRST NON-BLANK source: that source IS the latest
+    saved assessment, so a garbage value there reports null rather than quietly
+    presenting an older assessment as the current one. P90/P10 are never read.
+    """
+    for project in projects:
+        project["mean_gas_bcf"] = None
+    if not projects:
+        return
+    rows = db.fetch_all(session, """
+        SELECT pt.project_id, pt.task_name, tdf.field_key, tdf.field_value
+        FROM project_tasks pt
+        JOIN task_dynamic_fields tdf ON tdf.task_id = pt.task_id
+        WHERE pt.project_id IN :project_ids
+          AND pt.task_name IN :task_names
+          AND tdf.field_key IN :field_keys
+        ORDER BY pt.task_id
+    """, {"project_ids": [p["project_id"] for p in projects],
+          "task_names": _MEAN_GAS_TASK_NAMES,
+          "field_keys": _MEAN_GAS_FIELD_KEYS})
+    folded: Dict[tuple, Dict[str, str]] = {}
+    for row in rows:
+        bucket = folded.setdefault((row["project_id"], row["task_name"]), {})
+        value = row["field_value"] or ""
+        if value or row["field_key"] not in bucket:
+            bucket[row["field_key"]] = value
+
+    for project in projects:
+        project_id = project["project_id"]
+        for task_name, field_key in LATEST_MEAN_GAS_SOURCES:
+            raw = (folded.get((project_id, task_name)) or {}).get(field_key) or ""
+            if not str(raw).strip():
+                continue
+            project["mean_gas_bcf"] = _parse_mean_gas(raw, project_id, task_name, field_key)
+            break
+
+
 def _annotate_derived_state(session, projects):
     """Fill the derived board pointers on a list of project dicts, in place.
 
@@ -167,6 +440,14 @@ def _annotate_derived_state(session, projects):
 
     One batched query for the whole list, so the board never multiplies rows
     (legacy duplicate task rows collapse into the per-project grouping).
+
+    The Card 1B card fields (assignees / tracked_items / display_stage /
+    lead_priority) are derived from the SAME batched rows -- see
+    _annotate_card_state above; still one query for the whole board.
+
+    Card 1E's ``mean_gas_bcf`` needs task_dynamic_fields, which the task query
+    above does not join, so it adds exactly ONE more batched query for the
+    whole list (_annotate_mean_gas) -- two queries per board, never per project.
     """
     projects = [p for p in projects if p]
     if not projects:
@@ -210,15 +491,36 @@ def _annotate_derived_state(session, projects):
         project["overall_status"] = overall_status
         project["current_stage_started_at"] = min(started) if started else project.get("start_date")
         project["current_task_priority"] = anchor.get("priority") or "Medium"
+        # The field a record belongs to. There is NO stored field column: the
+        # field is the first segment of the record name ("GALV-2" -> "GALV"),
+        # exactly as folders.parse_field_and_well derives it for the share
+        # paths. Deriving it here (instead of a second convention) keeps the
+        # board's Field filter and the folder links agreeing by construction.
+        project["field"] = folders.parse_field_and_well(project.get("project_name") or "")[0]
+        # Card 1B presentation fields, off the SAME already-loaded rows.
+        _annotate_card_state(project, rows, stages)
+
+    # Card 1E's mean gas is the one derived field the task rows above cannot
+    # supply (it lives in task_dynamic_fields), so it gets its own single
+    # batched query for the whole list -- never one per project.
+    _annotate_mean_gas(session, projects)
 
 
 def get_projects(session, search_text="", stage_filter="All", status_filter="All",
-                 owner_filter="All", health_filter="All", sort_key="Well Name", pipeline_filter="All"):
+                 owner_filter="All", health_filter="All", sort_key="Well Name", pipeline_filter="All",
+                 include_completed=False):
     """Return the (filtered, sorted) project board rows with derived state.
 
     Search/pipeline/archived filters act on stored columns and stay in SQL; the
     stage/status/owner/health filters act on DERIVED values (see
     _annotate_derived_state) and are applied in Python after annotation.
+
+    ``include_completed`` is an OPT-IN escape from the pipeline board's
+    "a finished record leaves its board" rule below. Card 1C's Segment
+    Maturation board filters client-side over one dataset and offers an
+    explicit "Completed" status, so it asks for the completed leads too;
+    every other caller (the BP board, the tests) keeps the default and the
+    historical behaviour.
 
     The active_drilling subquery aggregates per project (one row each), so a
     project with multiple Quicklook task rows carrying the field appears exactly
@@ -276,7 +578,8 @@ def get_projects(session, search_text="", stage_filter="All", status_filter="All
         # both stay visible in the Portfolio and the Excel export
         # (reporting.py / portfolio_export.py are separate readers, untouched
         # here).
-        if pipeline_filter in ("prospect", "bp") and item.get("overall_status") == "Completed":
+        if (pipeline_filter in ("prospect", "bp") and not include_completed
+                and item.get("overall_status") == "Completed"):
             continue
         if stage_filter != "All" and item.get("current_stage") != stage_filter:
             continue
@@ -391,8 +694,14 @@ def update_project_name(session, project_id, new_name, changed_by="Admin", lead_
         raise ValueError("Lead / well not found.")
     # Friendly duplicate check up front; the IntegrityError catch below still
     # covers the race where another request takes the name in between.
+    # Case-/whitespace-insensitive, matching add_project (Card 1D): a rename
+    # must not be able to create the case-variant pair creation refuses. The
+    # project_id exclusion keeps a pure re-casing of the record's OWN name
+    # ('WWWW-44' -> 'wwww-44') legal.
     duplicate = db.fetch_one(session,
-                             "SELECT 1 AS present FROM projects WHERE project_name = :project_name AND project_id != :project_id",
+                             "SELECT 1 AS present FROM projects "
+                             "WHERE lower(trim(project_name)) = lower(trim(:project_name)) "
+                             "AND project_id != :project_id",
                              {"project_name": new_name, "project_id": project_id})
     if duplicate:
         raise ValueError("A lead / well with this name already exists.")

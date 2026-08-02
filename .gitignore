@@ -1,10 +1,13 @@
 # Live application data — never version the database.
 # To back up: stop the app and copy pipeline_tracker.db (plus -wal/-shm if present).
-# Pre-deployment: the DB is throwaway (see migrations.py); on a schema change,
-# just delete these files and restart the app to regenerate a fresh one.
+# The DB holds real production data: NEVER delete it on a schema change.
+# Schema changes ship as numbered, append-only migration steps (see migrations.py).
 *.db
 *.db-shm
 *.db-wal
+
+# Secrets — never version credentials.
+.env
 
 # Local environments and caches
 .venv/

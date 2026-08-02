@@ -17,14 +17,14 @@ PROSPECT_STAGES = {"Lead Identification", "Risking", "Segmentation", "Pre-Well D
 # Initial seeding
 # ---------------------------------------------------------------------------
 
-def test_new_prospect_project_has_31_tasks_all_not_assigned(client):
+def test_new_prospect_project_has_27_tasks_all_not_assigned(client):
     # v17 lifecycle: every step (including the first) starts Not Assigned;
     # assignment is what moves a step to In Progress. current_task still
-    # anchors on the first step. (31 tasks since v18 removed the Presence CoS
-    # Evaluation step.)
+    # anchors on the first step. (27 tasks: v18 removed the Presence CoS
+    # Evaluation step, v4 merged four BP steps away.)
     pid = create_project(client, "SEED-PROSPECT-1")
     tasks = get_tasks(client, pid)
-    assert len(tasks) == 31
+    assert len(tasks) == 27
 
     first = tasks[0]
     assert first["task_name"] == "Reservoir Area Definition"
@@ -37,9 +37,9 @@ def test_new_prospect_project_has_31_tasks_all_not_assigned(client):
     assert project["current_task"] == "Reservoir Area Definition"
 
 
-def test_new_bp_project_seeds_all_31_tasks_not_assigned(client):
+def test_new_bp_project_seeds_all_27_tasks_not_assigned(client):
     # Applicability is derived from pipeline_type, not stored per row: a BP
-    # project still materializes all 31 tasks Not Assigned (the prospect-stage
+    # project still materializes all 27 tasks Not Assigned (the prospect-stage
     # rows simply fall outside its operating pipeline). current_task anchors on
     # the first BP step.
     pid = create_project(
@@ -47,7 +47,7 @@ def test_new_bp_project_seeds_all_31_tasks_not_assigned(client):
         business_plan_enabled=True, business_plan_year=2027,
     )
     tasks = get_tasks(client, pid)
-    assert len(tasks) == 31
+    assert len(tasks) == 27
     for task in tasks:
         assert task["status"] == "Not Assigned", task["task_name"]
 
@@ -152,7 +152,7 @@ def test_optimistic_locking_stale_revision_rejected(client):
 
 def test_completion_percent_scoped_to_bp_stages_for_bp_well(client):
     # Completion is scoped to the operating pipeline's stages, not stored
-    # applicability: a BP well is measured against its 19 BP-stage tasks
+    # applicability: a BP well is measured against its 15 BP-stage tasks
     # (Well Delivery + Post-Drilling + Post-Testing), never the 12 prospect
     # rows that fall outside its pipeline.
     pid = create_project(
@@ -164,23 +164,23 @@ def test_completion_percent_scoped_to_bp_stages_for_bp_well(client):
 
     tasks = get_tasks(client, pid)
     applicable = [t for t in tasks if t["stage_group"] not in PROSPECT_STAGES]
-    assert len(applicable) == 19
+    assert len(applicable) == 15
 
     for task in applicable[:2]:
         client.patch(f"/api/tasks/{task['task_id']}", json={
             "status": "Approved", "revision": task["revision"],
         })
     resp = client.get(f"/api/projects/{pid}/completion")
-    assert resp.get_json() == {"percent": round(2 / 19 * 100, 1)}
+    assert resp.get_json() == {"percent": round(2 / 15 * 100, 1)}
 
 
 def test_completion_percent_known_arithmetic_for_prospect(client):
     # Completion is scoped to the operating pipeline's stages: a prospect is
-    # measured against its 12 Prospect-stage tasks only, not all 31 (the
+    # measured against its 12 Prospect-stage tasks only, not all 27 (the
     # BP-stage tasks belong to a pipeline it has not entered).
     pid = create_project(client, "COMPLETION-PROSPECT-1")
     tasks = get_tasks(client, pid)
-    assert len(tasks) == 31
+    assert len(tasks) == 27
     prospect_tasks = [t for t in tasks if t["stage_group"] in PROSPECT_STAGES]
     assert len(prospect_tasks) == 12
     for task in prospect_tasks[:5]:
@@ -273,6 +273,85 @@ def test_derived_pointers_track_first_open_task_of_half_approved_prospect(client
     assert row["current_stage"] == "Risking"
     assert row["current_owner"] == "Employee"
     assert row["overall_status"] == "In Progress"
+
+
+# ---------------------------------------------------------------------------
+# Submit gating (workflow.constants.REQUIRED_FIELDS_FOR_SUBMIT)
+# ---------------------------------------------------------------------------
+
+def _assign_and_ready(client, pid, task_name):
+    """Assign a step to Employee so it sits In Progress; return the fresh row."""
+    task = get_task_by_name(client, pid, task_name)
+    return client.post(f"/api/tasks/{task['task_id']}/assign", json={
+        "assignee": "Employee", "cascade": False, "revision": task["revision"],
+    }).get_json()["task"]
+
+
+def _submit(client, task):
+    return client.post(f"/api/tasks/{task['task_id']}/transition",
+                       json={"action": "submit", "revision": task["revision"]})
+
+
+def _bp_project(client, name):
+    return create_project(client, name, pipeline_type="bp",
+                          business_plan_enabled=True, business_plan_year=2029)
+
+
+def test_submit_is_blocked_until_both_sad_update_checkboxes_are_checked(client):
+    """SAD Update absorbed two sign-offs (the merged-away "SAD Update" and
+    "Executive Summary Final" steps) and may not be submitted until BOTH are
+    ticked. The server is the authority: the request 400s with the unmet
+    boxes named, and only unlocks once both fields hold a truthy value."""
+    pid = _bp_project(client, "GATE-SAD-1")
+    task = _assign_and_ready(client, pid, "SAD Update")
+
+    resp = _submit(client, task)
+    assert resp.status_code == 400, resp.get_json()
+    message = resp.get_json()["detail"]
+    assert "SAD Update" in message and "Final Executive Summary" in message
+    # Refused, not half-applied.
+    assert get_task_by_name(client, pid, "SAD Update")["status"] == "In Progress"
+
+    # One box is not enough, and the message narrows to what is still missing.
+    client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
+                 json={"fields": {"sad_update_done": "1"}})
+    task = get_task_by_name(client, pid, "SAD Update")
+    resp = _submit(client, task)
+    assert resp.status_code == 400
+    assert "Final Executive Summary" in resp.get_json()["detail"]
+
+    client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
+                 json={"fields": {"final_exec_summary_done": "1"}})
+    task = get_task_by_name(client, pid, "SAD Update")
+    resp = _submit(client, task)
+    assert resp.status_code == 200, resp.get_json()
+    assert get_task_by_name(client, pid, "SAD Update")["status"] == "Ready"
+
+
+def test_submit_gate_rejects_a_falsy_checkbox_value(client):
+    """An unticked checkbox saves as '' (or '0'), which must not pass the gate
+    -- truthiness matches the app's '1'/'true'/'yes'/'on' vocabulary."""
+    pid = _bp_project(client, "GATE-SAD-2")
+    task = _assign_and_ready(client, pid, "SAD Update")
+    client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
+                 json={"fields": {"sad_update_done": "1", "final_exec_summary_done": "0"}})
+    task = get_task_by_name(client, pid, "SAD Update")
+    assert _submit(client, task).status_code == 400
+
+    client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
+                 json={"fields": {"final_exec_summary_done": "yes"}})
+    task = get_task_by_name(client, pid, "SAD Update")
+    assert _submit(client, task).status_code == 200
+
+
+def test_submit_gate_leaves_ungated_steps_alone(client):
+    """The gate is declarative and empty for every other step: a neighbouring
+    BP step with no REQUIRED_FIELDS_FOR_SUBMIT entry submits with no fields at
+    all."""
+    pid = _bp_project(client, "GATE-SAD-3")
+    task = _assign_and_ready(client, pid, "SAD Model")
+    assert _submit(client, task).status_code == 200
+    assert get_task_by_name(client, pid, "SAD Model")["status"] == "Ready"
 
 
 def test_transition_approve_completes_and_reopen_clears_completed_at(client):

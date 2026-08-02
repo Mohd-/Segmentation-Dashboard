@@ -32,6 +32,16 @@ does not enforce pipeline applicability.
 
 ## KI-002: Reference-mode reset can enable the assignee control for employees
 
+**Status:** RESOLVED (Card 1C) — closed with all three acceptance criteria met.
+`setComponentReferenceMode` no longer sweeps `#assigned-to`; both it and
+`renderAssigneeSelect` now call one `syncAssigneeGate(referenceOnly)` helper, so
+whichever of the sync and async paths lands last still leaves the control in its
+role-based state. Regression coverage: *"detail-form leaving reference mode does
+NOT enable the assignee select for an employee"* in
+`static/tests/test-lead-filters.js`, which drives the employee role through the
+second (post-async) reference-mode call with `#assigned-to` deliberately placed
+INSIDE `#component-form`.
+
 **Priority:** P2
 **Affected file:** `static/js/views/detail-form.js`
 

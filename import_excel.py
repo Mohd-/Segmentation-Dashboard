@@ -35,14 +35,16 @@ Flagged assumptions (documented, cheap to change)
 1. OGIP/Condensate trio destination step, by (record type, fluid presence):
    - proposed / mature lead            -> 'Lead Resource Assessment' (lead_piip_*)
    - bp / historical WITHOUT a fluid   -> 'Pre-Drilling Resource Assessment' (pre_drill_piip_*)
-   - any record WITH a fluid status    -> 'Resource Assessment Update' (resource_update_*)
+   - any record WITH a fluid status    -> 'SAD Update' (resource_update_*)
+     (v4 merged the old 'Resource Assessment Update' step into 'SAD Update',
+     which kept the resource_update_* keys verbatim.)
    (The plan states the lead / bp-without-fluid / with-fluid cases explicitly;
    a *historical* well without a fluid status is not separately specified, so it
    is grouped with the bp-without-fluid case -> pre_drill_piip.)
 2. SARH formation phase for the P50 Pay/Porosity/Swt + fluid row: 'final' for a
    record that carries a fluid status (a drilled well), else 'quicklook'. The
    owning step used as ``source_task_id`` follows: 'Final Log Analysis' for
-   final, 'Quicklook Logs Interpretation' for quicklook.
+   final, 'Quicklook Logs' for quicklook.
 3. Dry-run: the domain layer owns its own commits (``db.write_transaction``), so
    an in-process rollback of already-committed work is not available. ``--dry-run``
    therefore runs the identical flow against a throwaway *copy* of the target
@@ -544,23 +546,17 @@ def _ensure_import_user(session) -> None:
 
 
 def _ensure_approved(session, task_id) -> None:
-    """Drive one task to Approved by WALKING the state machine, never a shortcut:
-    Not Assigned -> (assign) In Progress -> (submit) Ready -> (approve) Approved.
-    Already-Approved is a no-op, so on --update this only ever ADDS approvals."""
-    task = workflow.get_task(session, task_id)
-    status = (task or {}).get("status") or "Not Assigned"
-    if status == "Approved":
-        return
-    if status == "Not Assigned":
-        workflow.assign_task(session, task_id, IMPORT_USER, cascade=False, changed_by=IMPORT_USER)
-        status = "In Progress"
-    if status == "In Progress":
-        workflow.transition_task(session, task_id, "submit", changed_by=IMPORT_USER)
-        status = "Ready"
-    if status == "Ready":
-        # approve has no workflow-layer role gate (the supervisor gate lives in
-        # the route), so no actor_role is passed.
-        workflow.transition_task(session, task_id, "approve", changed_by=IMPORT_USER)
+    """Drive one task to Approved as IMPORT_USER, WALKING the state machine.
+
+    Thin alias for ``workflow.ensure_task_approved`` -- the shared walk the
+    domain layer owns (Not Assigned -> assign -> submit -> approve, resuming
+    from wherever the task is, already-Approved a no-op, so on --update this
+    only ever ADDS approvals). It also satisfies a step's submit gate
+    (workflow.REQUIRED_FIELDS_FOR_SUBMIT -- today "SAD Update") through the
+    normal audited field-save path: an imported historical well IS complete by
+    definition, so the sign-off is RECORDED rather than the gate bypassed.
+    """
+    workflow.ensure_task_approved(session, task_id, IMPORT_USER)
 
 
 def _save(session, task_id, fields, data_bearing: set) -> None:
@@ -601,7 +597,7 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
 
     # Trio destination step by record type + fluid presence (flagged assumption 1).
     if has_fluid:
-        prefix, trio_step = "resource_update", "Resource Assessment Update"
+        prefix, trio_step = "resource_update", "SAD Update"
     elif record_type in ("bp", "historical"):
         prefix, trio_step = "pre_drill_piip", "Pre-Drilling Resource Assessment"
     else:
@@ -715,8 +711,8 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
             existing = [r for r in workflow.get_project_formations(session, pid) if r["phase"] == "quicklook"]
             workflow.upsert_project_formations(
                 session, pid, "quicklook", _merge_sarh_rows(existing, sarh),
-                changed_by=IMPORT_USER, source_task_id=tid("Quicklook Logs Interpretation"))
-            data_bearing.add(tid("Quicklook Logs Interpretation"))
+                changed_by=IMPORT_USER, source_task_id=tid("Quicklook Logs"))
+            data_bearing.add(tid("Quicklook Logs"))
 
     # ---- 2. Approve prospect steps -----------------------------------------
     # proposed lead: only data-bearing steps (so 'Approval to Stake' stays open
@@ -774,7 +770,7 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
         if prefix == "resource_update":
             trio = _piip_trio(row, prefix, warnings)
             if trio:
-                _save(session, tid("Resource Assessment Update"), trio, data_bearing)
+                _save(session, tid("SAD Update"), trio, data_bearing)
 
         # Drilled records place the SARH P50 + fluid row at the 'final' phase.
         if has_fluid:

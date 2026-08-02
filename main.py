@@ -218,6 +218,22 @@ def current_role() -> Optional[str]:
     return None
 
 
+def current_identity() -> Optional[str]:
+    """WHO the current request is, for anything addressed to a person by name.
+
+    Exactly what GET /api/me reports as ``name``: the session identity, or None
+    when there is no session. Deliberately NOT ``actor()``'s 'Web User'
+    fallback and NOT ``current_role()``'s dev-mode 'supervisor': those answer
+    "what should we stamp on this write" and "what may this request do".
+    "Whose mail is this" has a third answer -- with AUTH_REQUIRED off and no
+    session there is no addressee at all, and the notification endpoints report
+    an empty feed rather than inventing an inbox for an anonymous user.
+
+    Consumers: the /api/notifications routes.
+    """
+    return flask_session.get("name") or None
+
+
 def require_role(*roles: str) -> None:
     """Raise PermissionError (-> 403) unless the current role is one of ``roles``.
 
@@ -373,6 +389,22 @@ _PROJECT_LIST_FIELDS = (
     "overall_status", "current_task_priority", "health",
     "business_plan_year", "active_well_enabled", "active_drilling",
     "has_high_priority_tasks",
+    # Card 1B lead-card fields: all derived at read time from the task rows the
+    # board query already loads (workflow.projects._annotate_card_state) -- no
+    # stored column, no extra query. display_stage / tracked_items are the
+    # presentation adapter the permanent migration will retire; assignees and
+    # lead_priority are the board's own per-lead values.
+    "assignees", "tracked_items", "display_stage", "lead_priority",
+    # Card 1C: the record's field, DERIVED from the record name by the same
+    # folders.parse_field_and_well split the share paths use -- there is no
+    # stored field column. Feeds the board's Field filter.
+    "field",
+    # Card 1E: the LATEST saved Mean Gas in BCF, derived at read time from the
+    # assessment steps' task_dynamic_fields on the LATEST_MEAN_GAS_SOURCES
+    # precedence (workflow.projects._annotate_mean_gas -- one batched query for
+    # the whole board). null when nothing is recorded or the stored value is
+    # not a number; the board's Total Mean OGIP tile treats null as 0.
+    "mean_gas_bcf",
 )
 
 
@@ -388,6 +420,10 @@ def list_projects():
         request.args.get("health_filter", "All"),
         request.args.get("sort_key", "Well Name"),
         request.args.get("pipeline_filter", "All"),
+        # Opt-in only (Card 1C's lead board, which offers its own Completed
+        # status filter); absent/0 keeps the "finished records leave the
+        # board" default every other caller relies on.
+        include_completed=request.args.get("include_completed", "") in ("1", "true", "yes"),
     )
     return json_response([{key: row.get(key) for key in _PROJECT_LIST_FIELDS} for row in rows])
 
@@ -402,7 +438,9 @@ def create_project():
         payload.get("start_date", ""),
         payload.get("target_date", ""),
         actor(payload),
-        # Coordinates are no longer collected in the UI; old API callers remain compatible.
+        # Card 1D's Add New Lead control requires both coordinates client-side;
+        # they stay OPTIONAL here (importer / older API callers), but a supplied
+        # value must be numeric -- workflow.add_project validates it.
         payload.get("lead_x"), payload.get("lead_y"),
         payload.get("business_plan_year"), bool(payload.get("business_plan_enabled")),
         bool(payload.get("active_well_enabled")), payload.get("pipeline_type", "prospect"),
@@ -627,6 +665,12 @@ def component_folder(project_id, task_id):
     return json_response(folders.get_component_folder_link(session, project_id, task_id))
 
 
+@app.get("/api/projects/<int:project_id>/folders/<section_key>")
+def project_section_folder(project_id, section_key):
+    session = db.get_session()
+    return json_response(folders.get_section_folder_link(session, project_id, section_key))
+
+
 @app.patch("/api/tasks/<int:task_id>/priority")
 def priority(task_id):
     """Set a component's priority (supervisor only)."""
@@ -635,6 +679,48 @@ def priority(task_id):
     payload = request.get_json(silent=True) or {}
     workflow.set_task_priority(session, task_id, payload.get("priority", payload.get("priority_value", "Medium")), actor(payload))
     return json_response({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Notifications (the header bell) -- every route is scoped to current_identity()
+# ---------------------------------------------------------------------------
+
+@app.get("/api/notifications")
+def notifications():
+    """The signed-in user's feed plus the unread count, in one round trip.
+
+    The count travels with the list (and with both mutations below) so the
+    client updates the red dot and the menu from a single response -- they can
+    never disagree. Anonymous (AUTH_REQUIRED off, no session) gets an empty
+    feed and a zero count; see current_identity() for why that is not
+    'Web User'.
+    """
+    session = db.get_session()
+    return json_response(workflow.notification_feed(session, current_identity()))
+
+
+@app.post("/api/notifications/<int:notification_id>/read")
+def notification_read(notification_id):
+    """Mark ONE of the caller's own notifications read (idempotent).
+
+    An unknown id and another user's id are indistinguishable here: both raise
+    ValueError -> 400 "Notification not found." from the domain layer, so the
+    endpoint cannot be used to enumerate other people's notifications.
+    """
+    session = db.get_session()
+    identity = current_identity()
+    workflow.mark_read(session, identity, notification_id)
+    return json_response({"ok": True, "unread_count": workflow.unread_count(session, identity)})
+
+
+@app.post("/api/notifications/read-all")
+def notifications_read_all():
+    """Mark every unread notification of the caller read (idempotent)."""
+    session = db.get_session()
+    identity = current_identity()
+    marked = workflow.mark_all_read(session, identity)
+    return json_response({"ok": True, "marked": marked,
+                          "unread_count": workflow.unread_count(session, identity)})
 
 
 @app.get("/api/business-plan/rows")

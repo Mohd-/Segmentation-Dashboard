@@ -139,8 +139,10 @@ def resolve_well_fluid(fields, sarh_by_phase) -> str:
 
     1. SARH formation row's fluid at phase 'final' (the petrophysical authority)
     2. legacy EAV ``final_fluid_type`` (old-well fallback; nothing writes it now)
-    3. EAV ``resource_update_fluid_type`` (Resource Assessment Update step)
-    4. EAV ``post_drill_fluid_type`` (Post-Drilling Resource Assessment step)
+    3. EAV ``resource_update_fluid_type`` (the SAD Update step -- or, on a well
+       written before the v4 merge, the retired Resource Assessment Update)
+    4. EAV ``post_drill_fluid_type`` (the SAD Model step -- or, pre-v4, the
+       retired Post-Drilling Resource Assessment)
     5. SARH formation row's fluid at phase 'quicklook'
     6. legacy EAV ``quicklook_fluid_type`` (old-well fallback)
 
@@ -179,9 +181,22 @@ _BP_TASK_FIELD_KEYS = [
 def _bp_task_fields(session, project_ids):
     """Batched {project_id: {field_key: value}} of _BP_TASK_FIELD_KEYS.
 
-    Queried directly from active task rows in ONE query for the whole id list;
-    shared by the business-plan scorecard and the Portfolio. Deterministic on
-    legacy duplicate rows: higher task_id wins.
+    ONE query for the whole id list; shared by the business-plan scorecard and
+    the Portfolio. The map is keyed by FIELD key, not by task name, so it is
+    naturally indifferent to which step a value was entered on -- which is what
+    makes the v4 step merges transparent here: a legacy well's
+    ``post_drill_piip_gas_mean`` sits on the retired "Post-Drilling Resource
+    Assessment" row, a new one's on "SAD Model", and both answer to the same
+    key.
+
+    RETIRED-INCLUSIVE for exactly that reason: inactive rows are read too (a
+    retired step's inputs must not vanish from the Portfolio), with
+    ``ORDER BY pt.is_active`` putting them FIRST so an ACTIVE row is folded in
+    last -- surviving step wins, retired step is the fallback. Folding is
+    first-NON-BLANK-wins (_fold_task_field_rows), the same rule every other
+    read ladder here uses, so a blank on the surviving step cannot erase a
+    legacy well's stored number.
+    Deterministic on legacy duplicate rows within a group: higher task_id wins.
     """
     if not project_ids:
         return {}
@@ -189,13 +204,29 @@ def _bp_task_fields(session, project_ids):
         SELECT pt.project_id, tdf.field_key, tdf.field_value
         FROM project_tasks pt
         JOIN task_dynamic_fields tdf ON tdf.task_id = pt.task_id
-        WHERE pt.project_id IN :project_ids AND pt.is_active = 1
+        WHERE pt.project_id IN :project_ids
           AND tdf.field_key IN :field_keys
-        ORDER BY pt.task_id
+        ORDER BY pt.is_active, pt.task_id
     """, {"project_ids": list(project_ids), "field_keys": _BP_TASK_FIELD_KEYS})
+    return fold_task_field_rows(rows)
+
+
+def fold_task_field_rows(rows):
+    """Fold (project_id, field_key, field_value) rows into {pid: {key: value}}.
+
+    Later rows win, EXCEPT that a blank never displaces an already-recorded
+    non-blank -- the same first-non-blank-wins rule as _first_filled and
+    _OVERVIEW_READ_SOURCES. Callers order their query so the
+    lowest-precedence rows come first (retired/inactive task rows before
+    active ones). Shared with portfolio_export._task_fields so the Portfolio
+    UI and the Excel export fold identically.
+    """
     fields: Dict[int, Dict[str, str]] = {}
     for row in rows:
-        fields.setdefault(row["project_id"], {})[row["field_key"]] = row["field_value"] or ""
+        bucket = fields.setdefault(row["project_id"], {})
+        value = row["field_value"] or ""
+        if value or row["field_key"] not in bucket:
+            bucket[row["field_key"]] = value
     return fields
 
 
@@ -224,8 +255,10 @@ def get_business_plan_rows(session):
 
     OGIP and chance-of-success columns are composed from the task inputs at
     read time (one batched _bp_task_fields query). Post-drill OGIP follows the
-    latest-assessment-first precedence: Resource Assessment Update beats
-    Post-Drilling Resource Assessment.
+    latest-assessment-first precedence: the SAD Update's resource_update trio
+    beats the SAD Model's post_drill trio (pre-v4 wells carry the same two key
+    families on the retired Resource Assessment Update / Post-Drilling Resource
+    Assessment rows, which _bp_task_fields folds in under the same keys).
     """
     rows = db.fetch_all(session, """
         SELECT p.project_id,

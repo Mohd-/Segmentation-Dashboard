@@ -56,7 +56,7 @@ def applicable_stages(pipeline_type):
 
     Applicability is a PURE FUNCTION of pipeline_type -- never stored per row: a
     prospect operates over PROSPECT_STAGES, a BP well over BP_EXECUTION_STAGES.
-    All 31 task rows always exist regardless of pipeline; the rows outside the
+    All 27 task rows always exist regardless of pipeline; the rows outside the
     operating pipeline are simply excluded wherever it matters (completion,
     flow reconciliation, assignment cascade, state refresh) by filtering on
     ``stage_group IN applicable_stages(...)``.
@@ -79,7 +79,24 @@ FORMATION_VALUE_FIELDS = [
 # is a free-text description and stays TEXT.
 FORMATION_NUMERIC_FIELDS = [f for f in FORMATION_VALUE_FIELDS if f != "fluid"]
 
-# The 31-step pipeline definition: (sequence_no, task_name, stage_group).
+# Per-formation PAY INTERVALS (project_formation_pay_intervals): a formation
+# keeps its envelope (top/base/thickness) and carries zero or more pay
+# intervals, each with its own top/base plus petrophysical averages. Rows are
+# keyed by (project, formation, phase, seq); ``seq`` is the interval's 1-based
+# position in the editor's list, assigned from payload order.
+PAY_INTERVAL_VALUE_FIELDS = [
+    "top_tvdss_ft", "base_tvdss_ft", "phit_pct", "swt_pct", "ngr_pct",
+    "kint_md", "fluid",
+]
+PAY_INTERVAL_NUMERIC_FIELDS = [f for f in PAY_INTERVAL_VALUE_FIELDS if f != "fluid"]
+# The fluid vocabulary offered by the formation/pay-interval editors. Mirrors
+# FLUID_TYPES in static/js/schema.js -- keep the two lists in sync. Pay-interval
+# fluids are validated against it (case-insensitively, normalized back to the
+# canonical spelling); the formation envelope's own ``fluid`` stays free text so
+# legacy/imported descriptions keep round-tripping unchanged.
+FORMATION_FLUID_TYPES = ["", "Dry", "Gas", "Water", "Condensate", "Liquid", "Gas over Water"]
+
+# The 27-step pipeline definition: (sequence_no, task_name, stage_group).
 # This list is the SINGLE SOURCE OF TRUTH for the workflow -- there is no
 # task_templates table; project creation materializes project_tasks rows
 # straight from these tuples.
@@ -88,7 +105,19 @@ FORMATION_NUMERIC_FIELDS = [f for f in FORMATION_VALUE_FIELDS if f != "fluid"]
 # databases are throwaway -- delete the .db and restart; see migrations.py).
 # POST-deployment, changing it requires a numbered data migration for existing
 # project_tasks rows: resequencing by task_name, and deactivating retired
-# steps (is_active = 0) so their inputs and audit trail survive.
+# steps (is_active = 0) so their inputs and audit trail survive. That is
+# exactly what migrations._migrate_v4_bp_step_merges does for the v4 merges
+# below.
+#
+# v4 merged four BP steps away (31 -> 27 steps: 12 prospect + 15 BP):
+#   "URED Update"                       -> folded into "Executive Summary"
+#   "Post-Drilling Resource Assessment" -> folded into "SAD Model"
+#   "Resource Assessment Update"        -> folded into "SAD Update"
+#   "Executive Summary Final"           -> folded into "SAD Update"
+# The merged steps keep the RETIRED steps' EAV keys (post_drill_piip_* on SAD
+# Model, resource_update_* on SAD Update) so no stored value is orphaned; the
+# retired rows survive as is_active = 0 and every EAV reader keeps reading
+# them (see RETIRED_TASK_NAMES below).
 PIPELINE_TEMPLATES = [
     (1, "Reservoir Area Definition", "Lead Identification"),
     (2, "Thickness Estimation", "Lead Identification"),
@@ -111,21 +140,78 @@ PIPELINE_TEMPLATES = [
     (15, "Site Preparation", "Well Delivery"),
     (16, "Approval To Drill", "Well Delivery"),
     (17, "GHEER", "Well Delivery"),
-    (18, "Quicklook Logs Interpretation", "Post-Drilling"),
+    # Renamed in v3 (the old name carried a trailing "Interpretation");
+    # existing project_tasks rows are carried over by
+    # migrations._migrate_v3_rename_quicklook_logs.
+    (18, "Quicklook Logs", "Post-Drilling"),
     (19, "Aramco Picks", "Post-Drilling"),
-    (20, "Post-Drilling Resource Assessment", "Post-Drilling"),
-    (21, "SAD Model", "Post-Drilling"),
-    (22, "Executive Summary", "Post-Drilling"),
-    (23, "URED Update", "Post-Drilling"),
-    (24, "Post-Well Outcome & Decision Gate", "Post-Drilling"),
-    (25, "Flowback Results", "Post-Testing"),
-    (26, "SAD Update", "Post-Testing"),
-    (27, "Executive Summary Final", "Post-Testing"),
-    (28, "Final Log Analysis", "Post-Testing"),
-    (29, "PVAD Structural MTR", "Post-Testing"),
-    (30, "Resource Assessment Update", "Post-Testing"),
-    (31, "PDA", "Post-Testing"),
+    # v4: absorbed "Post-Drilling Resource Assessment" (old step 20) -- keeps
+    # its post_drill_piip_* / post_drill_fluid_type keys.
+    (20, "SAD Model", "Post-Drilling"),
+    # v4: absorbed "URED Update" (old step 23) as a checkbox.
+    (21, "Executive Summary", "Post-Drilling"),
+    (22, "Post-Well Outcome & Decision Gate", "Post-Drilling"),
+    (23, "Flowback Results", "Post-Testing"),
+    # v4: absorbed "Resource Assessment Update" (old step 30, keeps its
+    # resource_update_* keys) and "Executive Summary Final" (old step 27, now a
+    # required submit checkbox).
+    (24, "SAD Update", "Post-Testing"),
+    (25, "Final Log Analysis", "Post-Testing"),
+    (26, "PVAD Structural MTR", "Post-Testing"),
+    (27, "PDA", "Post-Testing"),
 ]
+
+# The steps merged away by v4. They are never materialized for a NEW project;
+# EXISTING project_tasks rows carrying these names survive as is_active = 0
+# (rows, EAV data and history all intact), which is why every EAV reader is
+# retired-inclusive -- see workflow.summary.get_project_dynamic_field_map,
+# reporting._bp_task_fields and portfolio_export._task_fields.
+RETIRED_TASK_NAMES = (
+    "URED Update",
+    "Post-Drilling Resource Assessment",
+    "Resource Assessment Update",
+    "Executive Summary Final",
+)
+
+
+# ---------------------------------------------------------------------------
+# Non-prospective auto-completion (the "BP pipeline" rule)
+# ---------------------------------------------------------------------------
+# When the Quicklook Logs interpretation proves a well NON-PROSPECTIVE -- a
+# single formation row recorded at the 'quicklook' phase whose fluid is Water
+# or Dry -- the remaining BP paperwork steps are formalities. They are then
+# driven to Approved automatically by walking the state machine (see
+# workflow.formations.auto_complete_non_prospective_steps).
+#
+# The steps are named, not derived: they are exactly the post-mortem paperwork
+# a dry/wet well still has to file. Names are the POST-v4-merge ones ("SAD
+# Update" absorbed "Resource Assessment Update" + "Executive Summary Final",
+# "Executive Summary" absorbed "URED Update"), so a legacy well's retired rows
+# (is_active = 0) are never in scope -- the auto-walk only touches active rows.
+# All four live in BP_EXECUTION_STAGES, so the applicable-stages filter alone
+# keeps a prospect-pipeline project out of scope; there is no pipeline_type
+# literal anywhere in the rule.
+NON_PROSPECTIVE_AUTO_COMPLETE_STEPS = (
+    "Executive Summary",       # Post-Drilling
+    "Flowback Results",        # Post-Testing
+    "SAD Update",              # Post-Testing
+    "PVAD Structural MTR",     # Post-Testing
+)
+
+# The quicklook fluids that mean "no hydrocarbons here" (compared lowercased
+# after strip, so 'dry', 'DRY' and ' Water ' all count). Blank or anything else
+# -- including 'Gas over Water' -- is NOT a trigger: the rule fires only on an
+# unambiguous non-hydrocarbon result.
+NON_PROSPECTIVE_FLUIDS = {"water", "dry"}
+
+# The distinct task_history action_type + comment the auto-walk leaves behind.
+# The action_type doubles as the ONCE-EVER marker: a task that already carries
+# one is never auto-completed again, so a user who reopens an auto-completed
+# step is not fought by a later formations save (see requirement "NOT
+# reversible" -- the audit trail explains the state).
+AUTO_COMPLETE_EVENT = "Auto-Completed"
+AUTO_COMPLETE_COMMENT = (
+    "Auto-completed: single quicklook formation with non-hydrocarbon fluid ({fluid})")
 
 
 # READ mapping: overview_key -> ordered [(task_name, field_key), ...] sources;
@@ -134,14 +220,22 @@ PIPELINE_TEMPLATES = [
 # entry here shows a BLANK in the overview -- it can never show silently stale
 # data. Multi-source keys follow the frontend's latest-assessment-first
 # precedence (LATEST_PIIP_SOURCES in static/js/views/detail-form.js).
+#
+# The ordered-list shape is ALSO how the v4 merges keep legacy wells readable:
+# a surviving step is listed first and the retired step it absorbed second
+# (same EAV key, different task_name bucket), so a well whose values were
+# entered before the merge still resolves. get_project_dynamic_field_map is
+# retired-inclusive precisely so those legacy buckets are present.
 _OVERVIEW_READ_SOURCES = {
     "lead_ogip": [("Lead Resource Assessment", "lead_piip_gas_mean")],
     "pre_drill_estimation": [("Pre-Drilling Resource Assessment", "pre_drill_piip_gas_mean")],
-    "post_drill_estimation": [("Resource Assessment Update", "resource_update_gas_mean"),
+    "post_drill_estimation": [("SAD Update", "resource_update_gas_mean"),
+                              ("Resource Assessment Update", "resource_update_gas_mean"),
+                              ("SAD Model", "post_drill_piip_gas_mean"),
                               ("Post-Drilling Resource Assessment", "post_drill_piip_gas_mean")],
-    "quick_look_pay": [("Quicklook Logs Interpretation", "quicklook_pay_thickness_ft")],
-    "quick_look_porosity": [("Quicklook Logs Interpretation", "quicklook_average_porosity_pct")],
-    "quick_look_swt": [("Quicklook Logs Interpretation", "quicklook_average_swt_pct")],
+    "quick_look_pay": [("Quicklook Logs", "quicklook_pay_thickness_ft")],
+    "quick_look_porosity": [("Quicklook Logs", "quicklook_average_porosity_pct")],
+    "quick_look_swt": [("Quicklook Logs", "quicklook_average_swt_pct")],
     "flowback_results": [("Flowback Results", "flowback_gas_rate_mmscfd")],
     # WS7: the Classification entered in the BP Execution Gate step feeds the
     # Portfolio; GHEER is a read-fallback for rows entered before the move.
@@ -149,12 +243,67 @@ _OVERVIEW_READ_SOURCES = {
                        ("GHEER", "gheer_classification")],
 }
 
-# Overview keys with no feeding step in the current 31-step pipeline; kept as
+# The LATEST saved Mean Gas (BCF) for one record, as an ordered
+# ((task_name, field_key), ...) precedence -- newest assessment first, each
+# surviving step immediately followed by the retired step it absorbed.
+#
+# Composed from the _OVERVIEW_READ_SOURCES entries above rather than retyped,
+# so the two can never drift; the ORDER of the three keys (post-drill, then
+# pre-drill, then lead) is the server-side twin of LATEST_PIIP_SOURCES in
+# static/js/views/detail-form.js
+# (POST_DRILL_PIIP_SOURCES + LEAD_PIIP_SOURCES, where the lead half is
+# [Pre-Drilling Resource Assessment, Lead Resource Assessment]).
+#
+# Read by workflow.projects._annotate_mean_gas to put ``mean_gas_bcf`` on every
+# board row (Card 1E's Total Mean OGIP tile). P90/P10 are NEVER consulted: the
+# mean is a saved input in its own right, not something to interpolate.
+LATEST_MEAN_GAS_SOURCES = tuple(
+    tuple(source) for source in (
+        _OVERVIEW_READ_SOURCES["post_drill_estimation"]
+        + _OVERVIEW_READ_SOURCES["pre_drill_estimation"]
+        + _OVERVIEW_READ_SOURCES["lead_ogip"]
+    )
+)
+
+# Overview keys with no feeding step in the current 27-step pipeline; kept as
 # blanks so the /detail ``overview`` shape stays stable for the frontend.
 _OVERVIEW_LEGACY_KEYS = [
     "ogip", "preliminary_resource_estimation", "reservoir_pressure",
     "reservoir_gradient", "pay", "porosity", "swt",
 ]
+
+
+# Steps whose SUBMIT is gated on checkbox inputs: task_name -> ordered
+# ((field_key, human label), ...). A submit is refused (ValueError -> HTTP 400)
+# until every listed key holds a checkbox-truthy value; the error message names
+# the unmet ones by label. Deliberately generic -- a future gated step is one
+# entry here plus its mirror in static/js/schema.js REQUIRED_FIELDS_FOR_SUBMIT.
+#
+# The labels ride along (rather than keys alone) because the SERVER composes
+# the message and has no access to the client's SCHEMA labels; the client
+# mirror is a pre-check only -- this table is the authority.
+REQUIRED_FIELDS_FOR_SUBMIT = {
+    "SAD Update": (
+        ("sad_update_done", "SAD Update"),
+        ("final_exec_summary_done", "Final Executive Summary"),
+    ),
+}
+
+# Checkbox truthiness, matching dom.js truthy() and the SQL CASE used by the
+# board's active-drilling flag.
+_CHECKBOX_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def unmet_submit_requirements(task_name, fields):
+    """Return the labels of a step's unchecked submit-gate boxes (pure).
+
+    ``fields`` is a {field_key: value} map of the task's stored dynamic
+    fields. A step with no entry in REQUIRED_FIELDS_FOR_SUBMIT always returns
+    an empty list.
+    """
+    fields = fields or {}
+    return [label for key, label in REQUIRED_FIELDS_FOR_SUBMIT.get(task_name, ())
+            if str(fields.get(key) or "").strip().lower() not in _CHECKBOX_TRUTHY]
 
 
 # action -> (required current status, resulting status)

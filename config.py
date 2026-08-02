@@ -245,9 +245,22 @@ COMPONENT_FILE_SECTIONS = {
     "Seismic Signature Validation", "Reservoir CoS", "Trap CoS", "Seal CoS",
     "Prospect Evaluation Presentation",
     # Additional components with supporting-file requirements.
+    # BOTH quicklook names stay in this set on purpose. The v3 migration
+    # renamed the step to "Quicklook Logs", but a well's share folder was
+    # created on disk under whatever name the step had at the time -- keeping
+    # the old name here is what makes the folder card keep resolving for wells
+    # foldered before the rename (and for any row the migration's
+    # both-names guard skipped).
     "Approval to Stake", "Well Proposal", "GHEER", "Quicklook Logs Interpretation", "Quicklook Logs", "SAD Model",
-    "Executive Summary", "URED Update", "Aramco Picks", "Aramco Approved Picks", "Flowback Results",
-    "SAD Update", "Executive Summary Final", "Final Log Analysis", "PVAD Structural MTR",
-    "Resource Assessment Update", "PDA", "Pre-Drilling Resource Assessment",
-    "Post-Drilling Resource Assessment",
+    "Executive Summary", "Flowback Results",
+    "SAD Update", "Final Log Analysis", "PVAD Structural MTR",
+    "PDA", "Pre-Drilling Resource Assessment",
+    # The four names the v4 merges retired stay in this set for the same reason
+    # the old quicklook name does: a well's share folder was created on disk
+    # under whatever the step was called at the time, so the folder card must
+    # keep resolving for wells foldered before the merge. Retired steps no
+    # longer render as components, so these entries are reachable only through
+    # that historical path.
+    "URED Update", "Executive Summary Final",
+    "Resource Assessment Update", "Post-Drilling Resource Assessment",
 }

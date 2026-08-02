@@ -156,6 +156,53 @@ def get_component_folder_link(session, project_id: int, task_id: int) -> Dict[st
     }
 
 
+# Display names for the well-overview folder-link buttons; falls back to the
+# raw section_key for anything not listed here (defensive only -- every key in
+# WELL_OVERVIEW_DIRECTORY_MAP is listed today).
+_SECTION_DISPLAY_NAMES = {
+    "lead": "Lead Folder",
+    "well": "Well Folder",
+    "segmentation": "Segmentation",
+    "pda": "PDA",
+    "mtr": "MTR",
+    "identification_workflow": "Identification",
+    "risking_workflow": "Risking",
+    "segmentation_workflow": "Segmentation",
+}
+
+
+def get_section_folder_link(session, project_id: int, section_key: str) -> Dict[str, object]:
+    """Return the client-facing folder link for one WELL_OVERVIEW_DIRECTORY_MAP section.
+
+    Mirrors get_component_folder_link's return shape (path/unc_path/file_url/
+    section/server_path) so the UI can render both kinds of folder cards with
+    the same markup. An unknown section_key is a caller/user error (400); a
+    missing project means there is nothing to resolve a folder for (404).
+    """
+    if section_key not in config.WELL_OVERVIEW_DIRECTORY_MAP:
+        raise ValueError(f"Unknown folder section: {section_key}")
+    project = _project_row(session, project_id)
+    if not project:
+        raise FileNotFoundError("Well not found.")
+    field_name, well_name = parse_field_and_well(project.get("project_name") or "")
+    section = config.WELL_OVERVIEW_DIRECTORY_MAP.get(section_key, "")
+    is_lead_workflow = section_key in config.LEAD_WORKFLOW_SECTION_KEYS
+    windows_root = (config.WINDOWS_LEAD_WORKFLOW_SHARE_ROOT if is_lead_workflow
+                    else config.WINDOWS_WELL_SHARE_ROOT)
+    # Section values can nest ("Leads/Identification"); split so each level
+    # joins with the Windows separator instead of leaving a stray "/".
+    section_parts = section.split("/") if section else []
+    unc_path = _windows_join(windows_root, field_name, well_name, *section_parts)
+    server_path = get_open_folder_path(session, project_id, section_key)
+    return {
+        "path": unc_path,
+        "unc_path": unc_path,
+        "file_url": _windows_path_to_file_url(unc_path),
+        "section": _SECTION_DISPLAY_NAMES.get(section_key, section_key),
+        "server_path": str(server_path),
+    }
+
+
 def ensure_well_folders(session, project_id: int) -> str:
     """Best-effort create every well/component folder; return the well path.
 

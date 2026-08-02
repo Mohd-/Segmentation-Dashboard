@@ -19,7 +19,9 @@ def test_duplicate_project_name_returns_friendly_message(client):
     create_project(client, "DUP-FRIENDLY-1")
     resp = client.post("/api/projects", json={"project_name": "DUP-FRIENDLY-1"})
     assert resp.status_code == 400
-    assert resp.get_json()["detail"] == "A lead / well with this name already exists."
+    # Card 1D pins the prospect wording verbatim (the Add New Lead control shows
+    # the server's detail as-is); BP well creation keeps "A lead / well ...".
+    assert resp.get_json()["detail"] == "A lead with this name already exists."
 
 
 def test_non_numeric_business_plan_year_returns_year_message(client):

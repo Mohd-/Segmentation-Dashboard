@@ -15,13 +15,16 @@ from helpers import today_str, utc_now_str
 
 from .constants import (
     DONE_STATUSES,
+    REQUIRED_FIELDS_FOR_SUBMIT,
     STATUSES,
     TASK_TRANSITIONS,
     _TRANSITION_EVENTS,
     StaleRevisionError,
     applicable_stages,
+    unmet_submit_requirements,
 )
 from .history import log_task_event
+from .notifications import notify_transition
 from .projects import _sync_completed_at, get_project, update_project_name
 from .summary import _task_field_value
 from .users import find_active_user
@@ -347,6 +350,25 @@ def save_task(session, task_id, payload, changed_by="Web User", allow_priority_c
     return result
 
 
+def _check_submit_requirements(session, task):
+    """Refuse a submit while the step's required checkboxes are unticked.
+
+    Generic: the gate is declared per step in
+    ``constants.REQUIRED_FIELDS_FOR_SUBMIT`` (today only "SAD Update", whose
+    two checkboxes carry the merged-away "SAD Update" and "Final Executive
+    Summary" sign-offs). A step with no entry there is unaffected.
+
+    THIS is the authoritative check -- static/js/schema.js carries a mirror
+    of the same table so the UI can refuse without a round-trip, but the
+    client can be bypassed and the server cannot.
+    """
+    unmet = unmet_submit_requirements(task.get("task_name"),
+                                      get_task_dynamic_fields(session, task["task_id"]))
+    if unmet:
+        raise ValueError(
+            "Cannot submit until these are checked: " + ", ".join(unmet) + ".")
+
+
 def _check_expected_revision(task, expected_revision):
     """Shared optimistic-lock precheck: mirror save_task's semantics exactly.
 
@@ -466,7 +488,9 @@ def transition_task(session, task_id, action, changed_by="Web User", expected_re
       component; an 'employee' may only submit a component assigned to them
       (case-insensitive name match against ``actor_name`` -> PermissionError
       / 403 otherwise). The supervisor-only gate for approve lives in the
-      route (require_role).
+      route (require_role). A step listed in REQUIRED_FIELDS_FOR_SUBMIT must
+      additionally have its declared checkboxes ticked
+      (_check_submit_requirements -> ValueError / 400).
     - ``approve``: "Ready" -> "Approved" (stamps actual_finish, backfills
       actual_start like save_task does for done statuses).
     - ``return``: "Ready" -> "In Progress" for supervisors or the component's
@@ -505,6 +529,8 @@ def transition_task(session, task_id, action, changed_by="Web User", expected_re
         if old_status != required_status:
             raise ValueError(
                 f'Cannot {action_key} a component in status "{old_status}" -- it must be "{required_status}".')
+        if action_key == "submit":
+            _check_submit_requirements(session, task)
 
         today = today_str()
         now = utc_now_str()
@@ -532,6 +558,13 @@ def transition_task(session, task_id, action, changed_by="Web User", expected_re
                        _TRANSITION_EVENTS[action_key], old_status, new_status, changed_by,
                        f"Status moved from {old_status} to {new_status}.")
 
+        # The header bell's rows ride THIS transaction, right beside the audit
+        # event they mirror: a transition that fails after this point (stale
+        # revision, failed commit) leaves no orphan notification, so the bell
+        # can never announce something the board does not show. The fan-out
+        # policy itself lives in workflow/notifications.py.
+        notify_transition(session, task, action_key, changed_by)
+
         # Approve may have completed the applicable set; return reopens it.
         _sync_completed_at(session, task["project_id"])
         db.execute(session,
@@ -539,3 +572,69 @@ def transition_task(session, task_id, action, changed_by="Web User", expected_re
                    {"now": now, "project_id": task["project_id"]})
         result = get_task(session, task_id) or {}
     return result
+
+
+# ---------------------------------------------------------------------------
+# The shared "drive a task to Approved" walk (automation entry point)
+# ---------------------------------------------------------------------------
+
+def satisfy_submit_gate(session, task, changed_by):
+    """Tick a step's REQUIRED_FIELDS_FOR_SUBMIT checkboxes before a submit.
+
+    Steps like "SAD Update" refuse a submit until their sign-off boxes are
+    checked (:func:`_check_submit_requirements`). Automated drivers that take a
+    step to Approved must therefore RECORD the sign-off first -- through the
+    normal, audited field-save path, so the trail matches what a real user's
+    tick would leave behind -- rather than bypassing the gate. No-op for a step
+    with no entry in the table, so a future gated step needs no change here.
+
+    Shared by :func:`ensure_task_approved`, seed_dev's lifecycle drivers and
+    import_excel; it lives here so the gate and the thing that satisfies it
+    stay in one module. Opens its own write transaction (via
+    save_task_dynamic_fields), so callers must not be inside one.
+    """
+    required = REQUIRED_FIELDS_FOR_SUBMIT.get((task or {}).get("task_name"))
+    if required:
+        save_task_dynamic_fields(session, task["task_id"],
+                                 {key: "1" for key, _label in required},
+                                 changed_by=changed_by)
+
+
+def ensure_task_approved(session, task_id, actor, changed_by=None):
+    """Drive one task to Approved by WALKING the state machine, never a shortcut.
+
+    Not Assigned -> (assign) In Progress -> (submit) Ready -> (approve)
+    Approved, resuming from whatever state the task is actually in. Already
+    Approved is a no-op, so replaying this only ever ADDS approvals -- that is
+    what makes every automated driver idempotent.
+
+    ``actor`` is the ASSIGNEE (must be an active user; only used when the task
+    is still Not Assigned, so a step already owned by a human keeps its owner).
+    ``changed_by`` is the audit-trail actor, defaulting to ``actor``.
+
+    Role safety: no ``actor_role`` is passed, so the employee-only submit check
+    in :func:`transition_task` never applies, and ``approve`` has no
+    workflow-layer role gate at all (the supervisor gate lives in the route).
+    An automated walk therefore cannot be blocked by role or assignee.
+
+    Returns True when it moved the task, False when it was already Approved (or
+    the task does not exist). Each step opens its own write transaction, so
+    callers must not be inside one.
+    """
+    task = get_task(session, task_id)
+    if not task:
+        return False
+    status = task.get("status") or "Not Assigned"
+    if status == "Approved":
+        return False
+    changed_by = changed_by or actor
+    if status == "Not Assigned":
+        assign_task(session, task_id, actor, cascade=False, changed_by=changed_by)
+        status = "In Progress"
+    if status == "In Progress":
+        satisfy_submit_gate(session, task, changed_by)
+        transition_task(session, task_id, "submit", changed_by=changed_by)
+        status = "Ready"
+    if status == "Ready":
+        transition_task(session, task_id, "approve", changed_by=changed_by)
+    return True
