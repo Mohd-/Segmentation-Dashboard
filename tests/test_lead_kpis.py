@@ -8,11 +8,20 @@ server-side twin of the client's LATEST_PIIP_SOURCES
 step immediately followed by the retired step it absorbed.
 
     SAD Update.resource_update_gas_mean
-    Resource Assessment Update.resource_update_gas_mean          (retired)
+    Resource Assessment Update.resource_update_gas_mean          (v4-retired)
     SAD Model.post_drill_piip_gas_mean
-    Post-Drilling Resource Assessment.post_drill_piip_gas_mean   (retired)
+    Post-Drilling Resource Assessment.post_drill_piip_gas_mean   (v4-retired)
     Pre-Drilling GeoX Assessment.pre_drill_piip_gas_mean
+    Pre-Drilling Resource Assessment.pre_drill_piip_gas_mean     (PRE-v5 name)
     Resource Assessment.lead_piip_gas_mean
+    Lead Resource Assessment.lead_piip_gas_mean                  (PRE-v5 name)
+
+The last two pairs are the v5 RENAMES. A rename rewrites project_tasks.task_name
+in place, so a migrated lead answers to the new name and never needs the old one
+-- but ``lead_summary_snapshots`` froze old-name buckets at promotion time, and
+the rename skips a project carrying BOTH names (UNIQUE (project_id, task_name)),
+which leaves a stale old-name row behind. Those two read paths are why the old
+spellings stay on the ladder, and why they are pinned here.
 
 Nothing here asserts a KPI number: the tiles themselves are pinned by the
 front-end harness (static/tests/test-lead-kpis.js). This module pins the ONE
@@ -136,6 +145,61 @@ def test_legacy_post_drill_step_resolves_and_loses_to_a_newer_assessment(client)
     _add_retired_task(client, pid, "Resource Assessment Update", 30, "Post-Testing",
                       {"resource_update_gas_mean": "900"})
     assert _mean_gas(client, pid) == 900.0
+
+
+def test_the_ladder_carries_both_pre_v5_spellings(client):
+    """The ladder's MEMBERSHIP, so a rename can never silently drop off it.
+
+    v4's merges and v5's renames are two different mechanisms with the same
+    read consequence -- a number stored under a name the workflow no longer
+    materializes -- and both are handled by listing the old name straight
+    behind the surviving one. Nothing else asserts the ladder's shape, so a
+    future rename that forgets its fallback entry would only show up as a
+    lead's OGIP quietly reading 0.
+    """
+    from workflow.constants import LATEST_MEAN_GAS_SOURCES, RENAMED_TASK_NAMES
+
+    ladder = list(LATEST_MEAN_GAS_SOURCES)
+    for current, legacy in (("Resource Assessment", "Lead Resource Assessment"),
+                            ("Pre-Drilling GeoX Assessment", "Pre-Drilling Resource Assessment")):
+        assert RENAMED_TASK_NAMES[current] == legacy, "the rename map is the source of the pair"
+        key = next(k for name, k in ladder if name == current)
+        # The legacy twin sits IMMEDIATELY behind its survivor, on the same key:
+        # surviving-first is what makes a re-saved lead outrank its own history.
+        assert ladder[ladder.index((current, key)) + 1] == (legacy, key)
+
+
+def test_a_pre_v5_named_row_still_resolves_the_lead_mean(client):
+    """A lead whose only volume sits under the PRE-v5 step name still reports it.
+
+    "Lead Resource Assessment" was renamed to "Resource Assessment" by v5. This
+    builds the shape the rename could not reach -- the number under the old
+    bucket, with the current step carrying nothing -- and asserts the board
+    still shows the lead's OGIP instead of a silent 0.
+    """
+    pid = create_project(client, "MEANGAS-V5-LEGACY")
+    _add_retired_task(client, pid, "Lead Resource Assessment", 4, "Lead Assessment",
+                      {"lead_piip_gas_mean": "88.5"})
+    assert _mean_gas(client, pid) == 88.5
+    # ...and the CURRENT name still outranks it the moment the lead is re-saved.
+    _save_fields(client, pid, "Resource Assessment", {"lead_piip_gas_mean": "91.25"})
+    assert _mean_gas(client, pid) == 91.25
+
+
+def test_a_pre_v5_named_pre_drill_row_outranks_the_lead_assessment(client):
+    """The other v5 rename, and its rung of the ladder.
+
+    "Pre-Drilling Resource Assessment" (now "Pre-Drilling GeoX Assessment") is
+    a LATER assessment than the lead one, so a value under the old spelling
+    must beat a current-name lead number -- proving the legacy entry sits on
+    the right rung, not merely somewhere on the ladder.
+    """
+    pid = create_project(client, "MEANGAS-V5-PREDRILL")
+    _save_fields(client, pid, "Resource Assessment", {"lead_piip_gas_mean": "10"})
+    assert _mean_gas(client, pid) == 10.0
+    _add_retired_task(client, pid, "Pre-Drilling Resource Assessment", 12, "Pre-Well Delivery",
+                      {"pre_drill_piip_gas_mean": "410"})
+    assert _mean_gas(client, pid) == 410.0
 
 
 def test_surviving_step_beats_the_retired_twin_it_absorbed(client):

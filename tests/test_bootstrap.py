@@ -766,6 +766,60 @@ def test_migration_v5_backfill_is_scoped_to_the_stage_that_is_finished(client, a
         ["Well Site Location"]
 
 
+def test_migration_v5_never_ticks_a_confirmation_checkbox_it_was_not_told_to(client, app_modules):
+    """MIGRATION-CARE CONSTRAINT: historical checkbox init.
+
+    The redesign introduced confirmation checkboxes that mean "this deliverable
+    is filed in the shared folder". For a lead that existed BEFORE them the
+    honest value is ABSENT -- nobody has confirmed anything -- and the migration
+    must never infer one, least of all from a folder existing on disk (the
+    folders are created eagerly by folders.ensure_well_folders, so their
+    presence proves nothing about their contents).
+
+    ``staking_well_created`` is the ONE key v5 is allowed to write, and only
+    from a stored Approved status (its own test above). This pins the other
+    side of that line for every remaining confirmation: after a real v4 -> v5
+    upgrade, not one of them exists -- on a lead whose steps were APPROVED as
+    well as on an untouched one.
+    """
+    _, dbmod = app_modules
+
+    done_pid = create_project(client, "MIGRATE-V5-CHECKBOX-DONE")
+    open_pid = create_project(client, "MIGRATE-V5-CHECKBOX-OPEN")
+    _make_v4_shaped(client.db_path)
+    # The dangerous shape, on ONE of the two: a fully approved v4 lead. If
+    # anything inferred a confirmation from "this step is finished", it fires
+    # here and not on its untouched neighbour.
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        conn.execute("UPDATE project_tasks SET status = 'Approved', actual_finish = '2026-01-05' "
+                     "WHERE project_id = ? AND is_active = 1", (done_pid,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    _rebootstrap(dbmod, client.db_path)
+
+    # Every confirmation the redesign added, by the step that owns it.
+    confirmations = {
+        "Resource Assessment": "polygons_surfaces_loaded",
+        "Reservoir CoS": "reservoir_slides_loaded",
+        "Trap and Seal CoS": "seal_slides_loaded",
+        "Seismic Signature Validation": "seismic_slides_loaded",
+        "Segmentation Slides": "segmentation_slides_loaded",
+        "Approval to Stake": "approval_stake_letter_loaded",
+        "Well Site Location": "wellsite_letter_loaded",
+    }
+    for pid in (done_pid, open_pid):
+        tasks = {t["task_name"]: t for t in get_tasks(client, pid)}
+        for step, key in confirmations.items():
+            fields = client.get(f"/api/tasks/{tasks[step]['task_id']}/dynamic-fields").get_json()
+            assert key not in fields, f"{step}.{key} was invented by the migration on project {pid}"
+            # Absent, not "0": a migration that wrote a falsy value would still
+            # be claiming the user answered the question.
+            assert fields.get(key) is None
+
+
 def test_migration_v5_carries_an_approved_well_creation_onto_approval_to_stake(client, app_modules):
     """Well Creation retires, but an APPROVED one leaves its sign-off behind as
     the staking_well_created checkbox -- an audited insert, guarded on absence."""

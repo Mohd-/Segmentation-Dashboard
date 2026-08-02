@@ -842,6 +842,67 @@ def test_a_blank_or_zero_piip_mean_does_not_complete_resource_assessment(client)
     assert task["status"] == "Approved"
 
 
+def _stage_counter(client, pid, stage):
+    """The detail sidebar's x/4 for one stage, computed the way the client is.
+
+    views/detail.js leadStageGroups groups the SERVER's tracked_items by
+    ``stage`` and counts ``status == 'Completed'``; this reproduces exactly that
+    arithmetic over the same payload, so the assertion is about the number the
+    user reads rather than about a task row.
+    """
+    rows = client.get("/api/projects?pipeline_filter=prospect").get_json()
+    items = [i for i in next(r for r in rows if r["project_id"] == pid)["tracked_items"]
+             if i["stage"] == stage]
+    return sum(1 for i in items if i["status"] == "Completed"), len(items)
+
+
+def test_a_box_model_lead_shows_piip_but_lead_assessment_stays_three_of_four(client):
+    """MIGRATION-CARE CONSTRAINT: GRV is still TRACKED, not absorbed.
+
+    Card 2B derives PIIP from area x thickness when the GRV percentiles are
+    blank (the "Box Model" branch), so a lead can carry a perfectly good
+    volume -- and a Completed Resource Assessment -- while nobody has entered
+    GRV. The temptation the constraint forbids is treating that as a finished
+    Lead Assessment: GRV Inputs is one of the twelve tracked items, so the
+    stage must read 3/4 and the lead must NOT be at 4/12.
+
+    Drives the real endpoints in the order the page does: the auto-run's
+    fields-only PATCH writes the mean, the batched Save writes the rest.
+    """
+    login(client, SUPERVISOR)
+    pid = create_project(client, "FC-2B-BOXMODEL")
+
+    _save_step(client, pid, AREA_STEP, AREA_OK)
+    _save_step(client, pid, THICKNESS_STEP, THICKNESS_OK)
+    # The box-model auto-run: a PIIP mean with NO GRV percentiles anywhere.
+    ra = get_task_by_name(client, pid, RA_STEP)
+    resp = client.patch(f"/api/tasks/{ra['task_id']}/dynamic-fields",
+                        json={"fields": {"lead_piip_gas_mean": "19.4",
+                                         "lead_calculation_method": "Box Model"}})
+    assert resp.status_code == 200, resp.get_json()
+    save(client, get_task_by_name(client, pid, RA_STEP), {"polygons_surfaces_loaded": "1"})
+
+    # The lead really does carry a volume, readable where the portfolio reads it.
+    assert client.get(f"/api/projects/{pid}/detail").get_json()["overview"]["lead_ogip"] == "19.4"
+    # Three of the four items are done...
+    for step in (AREA_STEP, THICKNESS_STEP, RA_STEP):
+        assert tracked_item(client, pid, step) == "Completed", step
+    # ...and GRV Inputs is emphatically NOT one of them.
+    assert tracked_item(client, pid, GRV_STEP) != "Completed"
+    grv = get_task_by_name(client, pid, GRV_STEP)
+    assert grv["status"] != "Approved"
+    assert client.get(f"/api/tasks/{grv['task_id']}/dynamic-fields").get_json() == {}
+
+    # The counter the user actually reads: 3/4, not 4/4.
+    assert _stage_counter(client, pid, "Lead Assessment") == (3, 4)
+    # And the lead's completion is 3/12, never 4/12 -- one shared denominator.
+    assert client.get(f"/api/projects/{pid}/completion").get_json()["percent"] == round(3 / 12 * 100, 1)
+
+    # Entering the GRV pair afterwards is what closes the fourth item.
+    _save_step(client, pid, GRV_STEP, GRV_OK)
+    assert _stage_counter(client, pid, "Lead Assessment") == (4, 4)
+
+
 def test_the_whole_page_saved_step_by_step_turns_all_four_dots_green(client):
     """The end-to-end shape of one Save Updates press.
 

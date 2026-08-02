@@ -11,6 +11,12 @@ import {
   leadSummaryHtml, wireLeadSummary, closeLeadSummaryMenu, progressPercent, EM_DASH
 } from '../js/views/lead-summary.js';
 import { leadStageGroups } from '../js/views/detail.js';
+// The board's own completion arithmetic. Imported HERE so the "one formula"
+// promise is asserted across the module boundary rather than assumed from the
+// import line in detail.js.
+import {
+  completedItemCount, dashboardCompletionPercent, TRACKED_ITEM_COUNT
+} from '../js/views/lead-kpis.js';
 
 // A fully populated lead, so a test can knock out ONE value and see only that
 // cell change.
@@ -229,6 +235,30 @@ test('lead sidebar counts only COMPLETED tracked items toward x/4', function () 
   var groups = leadStageGroups(ITEMS, TASKS);
   assert.deepEqual(groups.map(function (g) { return g.done; }), [2, 0, 0],
     'Pending Approval is work still open, exactly as the board KPI treats it');
+});
+
+/* ONE FORMULA, THREE SURFACES. The sidebar's x/4 counters, the Lead Summary's
+   progress bar and the board's KPI donut are three renderings of the same
+   arithmetic over the same twelve tracked items. Each of the three is pinned
+   on its own above; these tests pin that they AGREE, which is the property a
+   second copy of the formula would break. */
+
+test('lead sidebar counters sum to the board KPI completed count', function () {
+  var groups = leadStageGroups(ITEMS, TASKS);
+  var sidebarTotal = groups.reduce(function (sum, g) { return sum + g.done; }, 0);
+  assert.equal(sidebarTotal, completedItemCount({ tracked_items: ITEMS }),
+    'the sidebar and the donut must count the same items as done');
+  assert.equal(groups.reduce(function (sum, g) { return sum + g.total; }, 0), TRACKED_ITEM_COUNT,
+    'and measure them against the same denominator of twelve');
+});
+
+test('lead summary progress equals the board donut for the same lead', function () {
+  var lead = { pipeline_type: 'prospect', overall_status: 'In Progress', tracked_items: ITEMS };
+  var progress = { completed: completedItemCount(lead), total: TRACKED_ITEM_COUNT };
+  assert.equal(progressPercent(progress), dashboardCompletionPercent([lead]),
+    'one lead on the board must read the same percentage as its own summary bar');
+  // ...and the figure is genuinely the shared one, not a coincidence at 0.
+  assert.equal(progressPercent(progress), 17, '2 of 12');
 });
 
 test('lead sidebar renders Trap and Seal as the ONE merged step, clickable', function () {

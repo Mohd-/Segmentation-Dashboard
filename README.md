@@ -1,11 +1,11 @@
 # Segment Maturation and Execution System
 
-A dashboard for tracking unconventional gas wells from lead identification
-through risking, segmentation and business-plan execution. Each lead/well moves
-through a fixed 31-component workflow with per-component technical inputs
-(Chance-of-Success calculations, resource estimates), an audit trail, and
-portfolio-level reporting. The backend is Flask + SQLite (SQLAlchemy underneath);
-the front-end is vanilla JS served from `static/`.
+A dashboard for tracking unconventional gas wells from lead assessment through
+risk analysis and pre-well delivery into business-plan execution. Each
+lead/well moves through a fixed 27-component workflow with per-component
+technical inputs (Chance-of-Success calculations, resource estimates), an
+audit trail, and portfolio-level reporting. The backend is Flask + SQLite
+(SQLAlchemy underneath); the front-end is vanilla JS served from `static/`.
 
 New to the codebase? Read `ARCHITECTURE.md` for the module map and
 `CONTRIBUTING.md` for step-by-step recipes for common changes. Confirmed defects
@@ -104,9 +104,6 @@ in the header while a session is active.
 All data lives in one SQLite file (default `./pipeline_tracker.db`). It is
 deliberately **not** in git (see `.gitignore`). To back up: stop the app, then
 copy `pipeline_tracker.db` plus the `-wal` / `-shm` files if present.
-Pre-deployment, there is no upgrade-in-place migration path: a schema change
-means deleting the `.db` file and letting the app regenerate it from
-`models.py` (see the Quickstart dev note above).
 
 ## Switching to Postgres
 
@@ -155,6 +152,9 @@ promotion/demotion, the CoS math, schema bootstrap, error handling and identity.
 
 ### v13 — Seal CoS calculation
 
+(merged into "Trap and Seal CoS" in v5 — the inputs, the formula and the stored
+`seal_cos_pct` key are unchanged.)
+
 The **Seal CoS** component now uses five technical inputs:
 
 - Most recent age of activity
@@ -172,7 +172,7 @@ The result is displayed as a whole-number percentage, such as `44%`. Inputs shou
 
 ### v14 — Lead mean gas in Well Summary
 
-- **Mean PIIP Gas (BCF) — Lead Phase** is now shown in the right-hand Well Summary as soon as it is saved in **Lead Resource Assessment**.
+- **Mean PIIP Gas (BCF) — Lead Phase** is now shown in the right-hand Well Summary as soon as it is saved in **Resource Assessment**.
 - For a lead promoted to Business Plan, the same value is retained in the frozen **Lead Summary** view.
 
 ### v15 changes
@@ -181,7 +181,7 @@ The result is displayed as a whole-number percentage, such as `44%`. Inputs shou
 - Toggling Business Plan on moves a Lead to BP Execution; toggling it off moves it back to Prospect Maturation without deleting BP work, inputs, lead summary, or history.
 
 ### v16: Automatic Presence CoS
-Presence CoS is now calculated automatically and is read-only. The dashboard uses the final (last completed) Reservoir CoS row, Trap CoS, and Seal CoS:
+Presence CoS is now calculated automatically and is read-only. The dashboard uses the final (last completed) Reservoir CoS row, Trap CoS, and Seal CoS (the latter two merged into "Trap and Seal CoS" in v5; both halves keep their own inputs and stored percentages):
 
 `Presence CoS = Final Reservoir CoS × Trap CoS × Seal CoS`
 
@@ -212,14 +212,51 @@ v16 also ships a full backend refactor:
 - Formation interpretation values (SARH/QASM/QWRH, quicklook and final phases) move off scattered step fields into a well-level `project_formations` table, edited through a mini-sheet on the logs steps. Legacy SARH values are backfilled once. New endpoints: `GET`/`PUT /api/projects/<id>/formations`.
 - The Portfolio tab becomes an 8-column mature-prospect analysis table: Well Name, Gas Field, Seismic Block (mapped via `SEISMIC_BLOCK_NAMES` in `config.py`), Classification, BP Year, Fluid, Mean OGIP, Total CoS.
 
-### The pre-deployment architecture reset (current)
+### Schema v4: BP step merges (31 → 27 steps)
+
+- Four Business Plan steps are merged away: **URED Update** folds into
+  **Executive Summary**, **Post-Drilling Resource Assessment** into **SAD
+  Model**, and **Resource Assessment Update** + **Executive Summary Final**
+  into **SAD Update**. The workflow is now 27 steps (12 prospect + 15 BP).
+- Nothing is deleted: a retired step's row becomes `is_active = 0` and keeps
+  its inputs and history, the surviving step reuses the retired step's input
+  keys (`post_drill_piip_*`, `resource_update_*`), and every reader stays
+  retired-inclusive so a well drilled before the merge still shows its numbers.
+  Applied by `migrations._migrate_v4_bp_step_merges`.
+
+### Schema v5: the permanent 12-item prospect template
+
+The prospect half becomes the 12 tracked items the board and detail sidebar had
+been faking through a read-time adapter (still 12 prospect steps, so still 27 in
+total; BP numbers 13–27 do not move). Applied by
+`migrations._migrate_v5_prospect_template_restructure`:
+
+- **Renames** (a `task_name` rewrite in place, so the row keeps its ID, inputs,
+  history and folder card): Reservoir Area Definition → **Area Definition**,
+  Lead Resource Assessment → **Resource Assessment**, Prospect Evaluation
+  Presentation → **Segmentation Slides**, Staking Moving Tolerance → **Moving
+  Tolerance**, Pre-Drilling Resource Assessment → **Pre-Drilling GeoX
+  Assessment**.
+- **Trap CoS** and **Seal CoS** merge into one step, **Trap and Seal CoS**,
+  which keeps both halves' input keys verbatim.
+- **Well Creation** is retired; its sign-off is now a checkbox on **Approval to
+  Stake**.
+- **GRV Inputs** and **Well Site Location** are added as tracked steps.
+- The prospect stage groups are remapped onto the three board columns —
+  **Lead Assessment**, **Risk Analysis**, **Pre-Well Delivery** (the old Lead
+  Identification / Risking / Segmentation groups survive only as
+  `LEGACY_PROSPECT_STAGE_GROUPS` in `workflow/constants.py`).
+
+### The pre-deployment architecture reset (historical, superseded)
 
 Because nothing was ever deployed, the legacy-data machinery the notes above
 describe was deleted wholesale rather than carried forward:
 
-- Schema migrations are gone; `models.py` is the single source of truth and a
-  schema change means regenerating the dev database (see Quickstart). The
-  numbered-migration framework resumes at first production deployment.
+- Schema migrations were dropped at the time; `models.py` remains the single
+  source of truth for a fresh database. **This part is superseded:** the
+  numbered-migration era is active again — the schema is at
+  `LATEST_SCHEMA_VERSION = 5` (`migrations.py`) with four shipped steps, and
+  existing databases upgrade in place (see the Quickstart schema note).
 - The `task_templates` and `project_overview` tables are gone: the workflow is
   defined in code (`PIPELINE_TEMPLATES`), and the overview shown in the detail
   panel — including Total CoS — is composed from step inputs at read time.

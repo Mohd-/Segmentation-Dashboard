@@ -7,7 +7,7 @@
 // injected (they live in main.js, which the harness must not import — its
 // DOMContentLoaded boot would try to run the whole app), so what is asserted
 // here is that the menu invokes them, not what they do.
-import { test, assert, fixture, mockFetch, waitFor } from './harness.js';
+import { test, skip, assert, fixture, mockFetch, waitFor } from './harness.js';
 import {
   initHeaderMenus, closeHeaderMenus, refreshUnreadCount, headerMenuState,
   resetHeaderMenus, formatWhen, eventTitle
@@ -673,11 +673,14 @@ test('header-menus both menus stay out of flow, so opening one shifts nothing', 
 // ---------------------------------------------------------------------------
 
 if (!live) {
-  test('header-menus (skipped without ?live=1) the shipped header has no legacy controls', function () {
-    // Registered as a pass-through note rather than skip() so the count is
-    // stable either way; the real assertion needs the served index.html.
-    assert.ok(true);
-  });
+  // The real assertion needs the SERVED index.html, so without ?live=1 there is
+  // nothing to check. Registered through skip() -- which keeps the entry (and
+  // the total) exactly as stable as a pass-through would -- so a non-live run
+  // reports it as SKIP rather than banking a green tick for an assert.ok(true)
+  // that proves nothing. run_frontend_tests.py always passes ?live=1, so the
+  // substantive branch below is what the shipped suite actually runs.
+  skip('header-menus (skipped without ?live=1) the shipped header has no legacy controls',
+       'the legacy-header check needs the served index.html (?live=1)');
 } else {
   test('header-menus (skipped without ?live=1) the shipped header has no legacy controls', function () {
     return fetch('/static/index.html', { cache: 'no-store' }).then(function (response) {
