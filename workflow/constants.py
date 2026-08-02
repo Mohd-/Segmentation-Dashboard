@@ -402,15 +402,119 @@ def unmet_submit_requirements(task_name, fields):
             if str(fields.get(key) or "").strip().lower() not in _CHECKBOX_TRUTHY]
 
 
-# action -> (required current status, resulting status)
+# ---------------------------------------------------------------------------
+# Field-driven completion (the redesign's detail cards)
+# ---------------------------------------------------------------------------
+# The redesign defines a step's completion by its FIELD STATE -- the user ticks
+# the confirmations, fills the inputs and saves; there is no separate
+# submit -> approve walk to remember. This table declares, per step, WHAT
+# "done" means; :func:`workflow.lifecycle.apply_field_completion` is the engine
+# that reads it on every save of that step and reconciles the status.
+#
+# The value is a DECLARATIVE predicate spec the engine interprets -- never a
+# callable -- so a new detail card is one entry here plus its checkbox in
+# static/js/schema.js, and the whole rule stays inspectable/testable as data:
+#
+#   "required_checked": (field_key, ...)  every key must be checkbox-truthy
+#   "required_present": (field_key, ...)  every key must hold a VALID value
+#
+# "Valid" defaults to "non-blank", but a key may declare a richer notion of
+# presence in the engine's value-validator table (lifecycle._field_present) --
+# reservoir_cos_rows does, because the whole mini-sheet is stored as ONE JSON
+# array whose empty form ("[]") is a perfectly non-blank string.
+#
+# Both lists are AND-ed and an absent list is vacuously satisfied, so a
+# checkbox-only card (Seismic Signature Validation) declares one key and a
+# card that also demands real inputs (Reservoir CoS) declares both.
+FIELD_COMPLETION = {
+    # Card 3A. BOTH halves are required: the supporting-slides confirmation AND
+    # a stored, model-scored evaluation. The checkbox alone is not completion --
+    # a Reservoir CoS step with an empty mini-sheet has no CoS to carry forward
+    # into the Total Chance of Success.
+    "Reservoir CoS": {
+        "required_checked": ("reservoir_slides_loaded",),
+        "required_present": ("reservoir_cos_rows",),
+    },
+    # Card 3C. The step has no inputs of its own; the confirmation IS the work.
+    "Seismic Signature Validation": {
+        "required_checked": ("seismic_slides_loaded",),
+    },
+}
+
+# Steps whose completion is a HUMAN APPROVAL and must never become field-driven.
+# "Segmentation Slides" is the one tracked item the board still shows as
+# "Pending Approval" (projects._READY_SHOWS_PENDING): its submit -> approve walk
+# IS the deliverable's review gate (card 3D), so putting it in FIELD_COMPLETION
+# would silently delete a supervisor's job. Named here rather than left as a
+# comment so a test can assert the two tables never overlap.
+FIELD_COMPLETION_MANUAL_APPROVAL_STEPS = frozenset({"Segmentation Slides"})
+
+# The distinct task_history action_type + comment the engine leaves behind, in
+# both directions. Unlike AUTO_COMPLETE_EVENT these are NOT once-ever markers:
+# the engine is a reconciliation, so a step may legitimately close and reopen as
+# many times as the user ticks and unticks the box, each move audited.
+FIELD_COMPLETION_EVENT = "Field Completion"
+FIELD_COMPLETION_COMMENT = "Completed: required confirmations satisfied"
+FIELD_REOPEN_EVENT = "Field Reopen"
+FIELD_REOPEN_COMMENT = "Reopened: required confirmation removed"
+
+
+def field_completion_met(task_name, fields, is_present=None):
+    """Is a step's FIELD_COMPLETION predicate satisfied? (pure)
+
+    ``fields`` is a {field_key: value} map of the task's stored dynamic fields.
+    ``is_present`` is an optional ``(field_key, value) -> bool`` override for
+    keys whose "has a valid value" is richer than "non-blank" (see
+    lifecycle._field_present); the default is a plain non-blank test.
+
+    A step with no entry returns False -- "not field-driven", NOT "done": the
+    engine must never touch a step this table does not claim.
+    """
+    spec = FIELD_COMPLETION.get(task_name)
+    if not spec:
+        return False
+    fields = fields or {}
+    for key in spec.get("required_checked", ()):
+        if str(fields.get(key) or "").strip().lower() not in _CHECKBOX_TRUTHY:
+            return False
+    present = is_present or (lambda _key, value: str(value or "").strip() != "")
+    for key in spec.get("required_present", ()):
+        if not present(key, fields.get(key)):
+            return False
+    return True
+
+
+# action -> (required current status, resulting status). This is the PUBLIC
+# vocabulary of POST /api/tasks/<id>/transition; main.py validates the incoming
+# action against it before calling transition_task.
 TASK_TRANSITIONS = {
     "submit": ("In Progress", "Ready"),
     "approve": ("Ready", "Approved"),
     "return": ("Ready", "In Progress"),
 }
 
+# ENGINE-ONLY reverse move, deliberately kept OUT of TASK_TRANSITIONS.
+#
+# The manual lifecycle has no way back out of Approved -- "return" only undoes a
+# submit (Ready -> In Progress) -- because un-approving is a supervisor decision
+# the UI does not offer. The field-completion engine needs exactly that move:
+# when a user unticks a confirmation on a step the engine itself closed, the
+# step must reopen. Listing it in TASK_TRANSITIONS would publish an ungated
+# Approved -> In Progress action on the transition endpoint (the assignee/
+# supervisor checks in transition_task are keyed on the "return" action alone),
+# so it lives here and only :func:`workflow.lifecycle.apply_field_completion`
+# ever names it.
+ENGINE_TRANSITIONS = {
+    "reopen": ("Approved", "In Progress"),
+}
+
+# Everything transition_task itself will honor: the public actions plus the
+# engine-only one.
+_ALL_TRANSITIONS = dict(TASK_TRANSITIONS, **ENGINE_TRANSITIONS)
+
 _TRANSITION_EVENTS = {
     "submit": "Component Submitted",
     "approve": "Component Approved",
     "return": "Component Returned",
+    "reopen": "Component Reopened",
 }

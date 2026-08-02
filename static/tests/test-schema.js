@@ -289,6 +289,56 @@ test('schema.SCHEMA: every v5 prospect step has an entry', function () {
   });
 });
 
+// --- field-driven completion (cards 3A / 3C) -------------------------------
+// The RULE is server-side (workflow/constants.py FIELD_COMPLETION keys it on
+// these exact field keys). SCHEMA's job is only to RENDER the confirmations, so
+// what these pin is the contract between the two: the key, the type, the exact
+// label the card specifies, and where the box sits on the form.
+
+test('schema.SCHEMA: Seismic Signature Validation is the single slides checkbox (card 3C)', function () {
+  var fields = SCHEMA['Seismic Signature Validation'];
+  assert.equal(fields.length, 1, 'the confirmation is the whole form');
+  assert.equal(fields[0].key, 'seismic_slides_loaded');
+  assert.equal(fields[0].type, 'checkbox');
+  assert.equal(fields[0].label,
+    'Seismic validation supporting slides are placed in the shared folder');
+  // Nothing infers it: no default, no value, no showIf, no folder-path wiring.
+  assert.equal(fields[0].value, undefined, 'defaults to unchecked');
+  assert.equal(fields[0].showIf, undefined);
+});
+
+test('schema.SCHEMA: Reservoir CoS keeps its mini-sheet and adds the slides checkbox beneath it (card 3A)', function () {
+  var fields = SCHEMA['Reservoir CoS'];
+  var keys = fields.map(function (f) { return f.key; });
+  assert.deepEqual(keys, ['reservoir_cos_rows', 'reservoir_slides_loaded'],
+    'the existing evaluations sheet is untouched; the confirmation follows it');
+  // Existing field verbatim -- renaming an EAV key orphans stored data.
+  assert.equal(fields[0].type, 'repeatable');
+  assert.equal(fields[0].label, 'Reservoir CoS Evaluations');
+  assert.equal(fields[0].columns, RESERVOIR_COS_COLUMNS);
+  assert.equal(fields[1].type, 'checkbox');
+  assert.equal(fields[1].label,
+    'Reservoir CoS supporting slides are placed in the shared folder');
+  assert.equal(fields[1].value, undefined, 'defaults to unchecked');
+  // Fields render in array order into #dynamic-fields, which precedes the
+  // Comments box in the detail form -- so "last in the array" IS "beneath the
+  // inputs, above Comments".
+  assert.equal(fields.length - 1, keys.indexOf('reservoir_slides_loaded'));
+});
+
+test('schema.SCHEMA: the completion confirmations are NOT submit-gate checkboxes', function () {
+  // Two different mechanisms: REQUIRED_FIELDS_FOR_SUBMIT gates the MANUAL
+  // submit (SAD Update), FIELD_COMPLETION drives status from field state. They
+  // must not be wired together, or ticking a box would both auto-complete the
+  // step and gate a submit that no longer happens.
+  Object.keys(REQUIRED_FIELDS_FOR_SUBMIT).forEach(function (step) {
+    REQUIRED_FIELDS_FOR_SUBMIT[step].forEach(function (entry) {
+      assert.ok(['seismic_slides_loaded', 'reservoir_slides_loaded'].indexOf(entry[0]) < 0,
+        entry[0] + ' is a completion confirmation, not a submit gate');
+    });
+  });
+});
+
 test('schema.SAD_FORMATION_COLUMNS: one row per formation, valid column defs', function () {
   checkFieldList('SAD_FORMATION_COLUMNS', SAD_FORMATION_COLUMNS, KNOWN_COLUMN_TYPES, 'columns');
   var keys = SAD_FORMATION_COLUMNS.map(function (col) { return col.key; });

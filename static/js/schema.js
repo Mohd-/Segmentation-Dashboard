@@ -170,16 +170,31 @@ export var SCHEMA = {
   // reader of Store.allFields keep working unchanged, they were never
   // SCHEMA-driven. The project-editor.js "all fields" card for this step is
   // therefore now comments-only, same as any other schema-less step (e.g.
-  // 'Seismic Signature Validation' below) -- editing/viewing PIIP data lives
-  // in the pipeline detail view's calculator now.
+  // 'GRV Inputs' below) -- editing/viewing PIIP data lives in the pipeline
+  // detail view's calculator now.
   'Resource Assessment': [],
   // v5 tracked items with no inputs of their own yet -- declared (rather than
   // left absent) so the step reads as a deliberately field-less component
-  // everywhere, exactly like 'Seismic Signature Validation' below.
+  // everywhere.
   'GRV Inputs': [],
   'Well Site Location': [],
-  'Seismic Signature Validation': [],
-  'Reservoir CoS': [{ key: 'reservoir_cos_rows', label: 'Reservoir CoS Evaluations', type: 'repeatable', columns: RESERVOIR_COS_COLUMNS }],
+  // Card 3C. The step's ONLY input, and its whole definition of done: ticking
+  // it and saving drives the step to Completed with no approve click, and
+  // unticking it reopens the step. The rule itself is server-side --
+  // workflow/constants.py FIELD_COMPLETION keys it on this exact field key --
+  // so this entry only has to RENDER the box; nothing here decides status.
+  'Seismic Signature Validation': [
+    { key: 'seismic_slides_loaded', label: 'Seismic validation supporting slides are placed in the shared folder', type: 'checkbox' }
+  ],
+  // Card 3A. The confirmation sits BENEATH the evaluations mini-sheet (fields
+  // render in array order into #dynamic-fields, which precedes the Comments
+  // box and the folder card in the detail form), and is the second half of the
+  // step's FIELD_COMPLETION predicate: the box AND a stored, model-scored
+  // Reservoir CoS are both required before the step reads Completed.
+  'Reservoir CoS': [
+    { key: 'reservoir_cos_rows', label: 'Reservoir CoS Evaluations', type: 'repeatable', columns: RESERVOIR_COS_COLUMNS },
+    { key: 'reservoir_slides_loaded', label: 'Reservoir CoS supporting slides are placed in the shared folder', type: 'checkbox' }
+  ],
   // v5: the separate 'Trap CoS' and 'Seal CoS' steps merged into ONE component.
   // The two halves keep their EXACT field keys (renaming an EAV key orphans
   // stored data, and both server-side recompute hooks are keyed on them), so

@@ -15,20 +15,26 @@ from helpers import today_str, utc_now_str
 
 from .constants import (
     DONE_STATUSES,
+    FIELD_COMPLETION,
+    FIELD_COMPLETION_COMMENT,
+    FIELD_COMPLETION_EVENT,
+    FIELD_REOPEN_COMMENT,
+    FIELD_REOPEN_EVENT,
     MERGED_COS_TASK_NAME,
     REQUIRED_FIELDS_FOR_SUBMIT,
     STATUSES,
-    TASK_TRANSITIONS,
+    _ALL_TRANSITIONS,
     _TRANSITION_EVENTS,
     StaleRevisionError,
     applicable_stages,
+    field_completion_met,
     unmet_submit_requirements,
 )
 from .history import log_task_event
 from .notifications import notify_transition
 from .projects import _sync_completed_at, get_project
-from .summary import _task_field_value
-from .users import find_active_user
+from .summary import _task_field_value, first_reservoir_cos_row_value
+from .users import ensure_system_user, find_active_user
 
 # The Seal CoS form's manual inputs (cos.calculate_seal_cos reads exactly
 # these). Their presence in a save payload is what marks it as a form save
@@ -333,6 +339,24 @@ def save_task(session, task_id, payload, changed_by="Web User", allow_priority_c
                    "UPDATE projects SET last_updated = :now, revision = revision + 1 WHERE project_id = :project_id",
                    {"now": now, "project_id": task["project_id"]})
         result = get_task(session, task_id) or {}
+
+    # POST-COMMIT field-driven completion (see apply_field_completion). Outside
+    # the transaction above because every leg of its walk opens its own
+    # BEGIN IMMEDIATE -- the same reason the W1e non-prospective auto-complete
+    # hook fires post-commit. It looks at THIS task only, so a save can never
+    # disturb a sibling step. When it moves the step we return the POST-WALK
+    # row, so the client adopts the new status and revision instead of the
+    # stale pre-walk pair it would otherwise send with its next save.
+    #
+    # A save that EXPLICITLY names a status stands the engine down: that caller
+    # is driving status directly (the legacy PATCH-with-status path; the v17 UI
+    # never sends the key -- see the docstring above), and the engine would
+    # otherwise reconcile the deliberate choice straight back out. Field-driven
+    # completion reacts to FIELD edits, not to status writes.
+    if not status_supplied:
+        completed = apply_field_completion(session, task_id, changed_by)
+        if completed:
+            return completed
     return result
 
 
@@ -467,7 +491,7 @@ def assign_task(session, task_id, assignee, cascade=True, changed_by="Web User",
 
 
 def transition_task(session, task_id, action, changed_by="Web User", expected_revision=None,
-                    actor_role=None, actor_name=None):
+                    actor_role=None, actor_name=None, automated=False):
     """Advance a component through the v17 lifecycle: submit / approve / return.
 
     - ``submit``: "In Progress" -> "Ready". Supervisors/staff may submit any
@@ -482,19 +506,31 @@ def transition_task(session, task_id, action, changed_by="Web User", expected_re
     - ``return``: "Ready" -> "In Progress" for supervisors or the component's
       assignee (clears actual_finish if set). Other users receive 403.
 
+    - ``reopen``: "Approved" -> "In Progress". ENGINE-ONLY (see
+      constants.ENGINE_TRANSITIONS): it is not part of TASK_TRANSITIONS, and
+      main.py validates the request body's action against THAT table, so no
+      HTTP caller can reach it. Only the field-completion engine names it, when
+      a user unticks a confirmation on a step the engine itself closed. The
+      assignee is preserved (this function never writes assigned_to).
+
     Wrong from-state or an unknown action -> ValueError (400). The supervisor-
     only gate for ``approve`` lives in the route; the assignee check for
     ``return`` lives here because it needs the task row. Optimistic locking
     mirrors save_task (StaleRevisionError -> 409).
     One history event is
     logged with the old/new status; completed_at is re-synced (approve can
-    complete the applicable set, return reopens it). Returns the fresh task
-    row.
+    complete the applicable set, return/reopen reopens it). Returns the fresh
+    task row.
+
+    ``automated`` marks this transition as one leg of a driver's multi-step
+    walk rather than a human's click; it is forwarded to notify_transition,
+    which suppresses the pointless "asked for approval" fan-out of a submit
+    that the same walk approves microseconds later.
     """
     action_key = str(action or "").strip().lower()
-    if action_key not in TASK_TRANSITIONS:
+    if action_key not in _ALL_TRANSITIONS:
         raise ValueError("Unknown action. Use one of: submit, approve, return.")
-    required_status, new_status = TASK_TRANSITIONS[action_key]
+    required_status, new_status = _ALL_TRANSITIONS[action_key]
 
     result: Dict[str, Any] = {}
     with db.write_transaction(session):
@@ -549,7 +585,7 @@ def transition_task(session, task_id, action, changed_by="Web User", expected_re
         # revision, failed commit) leaves no orphan notification, so the bell
         # can never announce something the board does not show. The fan-out
         # policy itself lives in workflow/notifications.py.
-        notify_transition(session, task, action_key, changed_by)
+        notify_transition(session, task, action_key, changed_by, automated=automated)
 
         # Approve may have completed the applicable set; return reopens it.
         _sync_completed_at(session, task["project_id"])
@@ -586,7 +622,7 @@ def satisfy_submit_gate(session, task, changed_by):
                                  changed_by=changed_by)
 
 
-def ensure_task_approved(session, task_id, actor, changed_by=None):
+def ensure_task_approved(session, task_id, actor, changed_by=None, automated=False):
     """Drive one task to Approved by WALKING the state machine, never a shortcut.
 
     Not Assigned -> (assign) In Progress -> (submit) Ready -> (approve)
@@ -602,6 +638,12 @@ def ensure_task_approved(session, task_id, actor, changed_by=None):
     in :func:`transition_task` never applies, and ``approve`` has no
     workflow-layer role gate at all (the supervisor gate lives in the route).
     An automated walk therefore cannot be blocked by role or assignee.
+
+    ``automated`` is forwarded to every transition (see transition_task): it
+    suppresses the submit's supervisor fan-out for a walk that approves the same
+    step immediately afterwards. The SYSTEM_USER drivers do not need it (their
+    identity already suppresses it); the field-completion engine, which walks
+    under the SAVING USER's name, does.
 
     Returns True when it moved the task, False when it was already Approved (or
     the task does not exist). Each step opens its own write transaction, so
@@ -619,8 +661,128 @@ def ensure_task_approved(session, task_id, actor, changed_by=None):
         status = "In Progress"
     if status == "In Progress":
         satisfy_submit_gate(session, task, changed_by)
-        transition_task(session, task_id, "submit", changed_by=changed_by)
+        transition_task(session, task_id, "submit", changed_by=changed_by, automated=automated)
         status = "Ready"
     if status == "Ready":
-        transition_task(session, task_id, "approve", changed_by=changed_by)
+        transition_task(session, task_id, "approve", changed_by=changed_by, automated=automated)
     return True
+
+
+# ---------------------------------------------------------------------------
+# The field-driven completion engine (the redesign's detail cards)
+# ---------------------------------------------------------------------------
+
+def _field_present(field_key, value):
+    """Does a stored field hold a VALID value, for FIELD_COMPLETION purposes?
+
+    The default notion of "present" is "non-blank", which is right for a scalar
+    input. ``reservoir_cos_rows`` is the exception this table exists for: the
+    Reservoir CoS mini-sheet is stored as ONE JSON ARRAY under that single key,
+    so an empty sheet is the string "[]" -- perfectly non-blank, and carrying no
+    result at all.
+
+    THE CHOICE, stated: the Reservoir CoS step's "valid inputs are present"
+    means the STORED, MODEL-SCORED RESULT exists -- at least one row of
+    ``reservoir_cos_rows`` carries a non-blank ``reservoir_cos_pct``. That is
+    ``first_reservoir_cos_row_value``, the exact same read the Total Chance of
+    Success uses for the lead's final Reservoir CoS (summary.total_cos_from_
+    fields), so "this step is complete" and "this step feeds a Total CoS" can
+    never disagree. ``reservoir_cos_pct`` is written by the save hook itself
+    (save_task -> cos.calculate_reservoir_cos_rows) on every row it scores, so a
+    real save always produces it; blank/malformed/empty JSON all read as absent.
+    """
+    if field_key == "reservoir_cos_rows":
+        return bool(first_reservoir_cos_row_value(value, "reservoir_cos_pct"))
+    return str(value or "").strip() != ""
+
+
+def _field_completion_assignee(session, task, changed_by):
+    """Who an UNASSIGNED field-completed step gets assigned to.
+
+    Assignment is the only door from "Not Assigned" into the lifecycle, so the
+    engine has to name someone. Preference order:
+
+      1. the step's existing assignee -- the engine NEVER reassigns work that
+         already has an owner (it is closing their step, not taking it);
+      2. the saving user, when the name resolves to an active user (the normal
+         case: a logged-in person ticking their own checkbox);
+      3. the SYSTEM_USER, for a save made under a name the users table does not
+         know (an anonymous dev/API call, a legacy importer identity). The
+         AUDIT actor stays the saving user either way -- only the assignee falls
+         back -- and this keeps the engine from 400-ing a save that has already
+         committed.
+
+    None means "no identity at all" (System deliberately deactivated); the
+    caller stands down rather than raising.
+    """
+    existing = (task.get("assigned_to") or "").strip()
+    if existing:
+        return existing
+    user = find_active_user(session, changed_by)
+    if user:
+        return user["name"]
+    system = ensure_system_user(session)
+    return system["name"] if system else None
+
+
+def apply_field_completion(session, task_id, changed_by):
+    """POST-COMMIT hook: reconcile ONE saved step's status with its field state.
+
+    The redesign's detail cards define completion by FIELD STATE -- the ticked
+    confirmations and the valid inputs declared in
+    ``constants.FIELD_COMPLETION`` -- not by a human walking submit -> approve.
+    This function is the whole engine: it evaluates that declarative predicate
+    for the SAVED TASK ONLY and moves the step to match.
+
+      - predicate MET, step not yet Approved -> drive it to Approved by WALKING
+        the state machine (:func:`ensure_task_approved`) as the SAVING USER, and
+        log one FIELD_COMPLETION_EVENT explaining why it closed without a click.
+      - predicate NOT met, step IS Approved -> reopen to In Progress via the
+        engine-only "reopen" transition (assignee preserved), and log one
+        FIELD_REOPEN_EVENT.
+      - anything else -> no-op.
+
+    THE GRANDFATHER RULE. The reopen branch can only ever fire as a response to
+    THE USER'S OWN SAVE OF THIS TASK: this hook runs post-save, on the saved
+    task, and looks at nothing else. Legacy steps that were Approved before
+    these checkboxes existed are therefore NEVER touched -- not when the project
+    is read, not when a sibling step is saved, not by any sweep (there is no
+    sweep). They stay Approved until somebody deliberately opens that step and
+    saves it, at which point the field state on screen is what they just chose.
+
+    POST-COMMIT, exactly like the W1e non-prospective auto-complete hook
+    (formations.auto_complete_non_prospective_steps): every leg of the walk
+    (assign / submit / approve / reopen / the history write) opens its OWN write
+    transaction, which must not nest inside the save's ``BEGIN IMMEDIATE``.
+
+    save_task additionally stands this hook down for a save that EXPLICITLY
+    names a status (see its call site): the engine reconciles FIELD edits, not
+    a caller driving status directly.
+
+    Returns the fresh task row when it moved the step (so save_task can hand the
+    client the post-walk status and revision), else None.
+    """
+    task = get_task(session, task_id)
+    if not task or task.get("task_name") not in FIELD_COMPLETION:
+        return None
+    met = field_completion_met(task["task_name"],
+                               get_task_dynamic_fields(session, task_id),
+                               _field_present)
+    status = task.get("status") or "Not Assigned"
+    if met and status != "Approved":
+        assignee = _field_completion_assignee(session, task, changed_by)
+        if not assignee:
+            return None
+        ensure_task_approved(session, task_id, assignee, changed_by=changed_by, automated=True)
+        event, comment, old_status, new_status = (
+            FIELD_COMPLETION_EVENT, FIELD_COMPLETION_COMMENT, status, "Approved")
+    elif not met and status == "Approved":
+        transition_task(session, task_id, "reopen", changed_by=changed_by, automated=True)
+        event, comment, old_status, new_status = (
+            FIELD_REOPEN_EVENT, FIELD_REOPEN_COMMENT, "Approved", "In Progress")
+    else:
+        return None
+    with db.write_transaction(session):
+        log_task_event(session, task_id, task["project_id"], task["task_name"],
+                       event, old_status, new_status, changed_by, comment)
+    return get_task(session, task_id)

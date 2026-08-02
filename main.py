@@ -609,6 +609,13 @@ def transition_task(task_id):
     """
     payload = request.get_json(silent=True) or {}
     action = str(payload.get("action") or "").strip().lower()
+    # The PUBLIC vocabulary is exactly workflow.TASK_TRANSITIONS. workflow.
+    # transition_task additionally honors the engine-only "reopen"
+    # (Approved -> In Progress, used by the field-completion engine); this
+    # check is what keeps that move off the HTTP surface, where it would be an
+    # ungated un-approve.
+    if action not in workflow.TASK_TRANSITIONS:
+        raise ValueError("Unknown action. Use one of: submit, approve, return.")
     if action == "approve":
         require_role("supervisor")
     session = db.get_session()

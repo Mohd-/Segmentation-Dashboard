@@ -95,7 +95,7 @@ def _insert(session, recipient, actor, event, task, project_name, message) -> No
           "project_name": project_name, "message": message})
 
 
-def notify_transition(session, task, action, actor) -> List[str]:
+def notify_transition(session, task, action, actor, automated=False) -> List[str]:
     """Record the notifications one submit/approve/return transition produces.
 
     Fan-out rules (the whole policy, in one place):
@@ -104,11 +104,18 @@ def notify_transition(session, task, action, actor) -> List[str]:
       for approval, and any supervisor can grant it, so the request goes to all
       of them. The actor is excluded even when a supervisor submits their own
       work -- nobody needs to be told what they just did. A submit BY the
-      automation user notifies no one (see the inline note).
+      automation user, or any submit flagged ``automated``, notifies no one
+      (see the inline note).
     - ``approve`` / ``return`` -> the component's ASSIGNEE, when there is one,
       it is not the actor, and the name still matches an active user (an
       assignee who has since been deactivated gets nothing rather than a row
       no one will ever read).
+
+    ``automated`` marks a transition that a DRIVER performed as part of a
+    multi-step walk rather than a human clicking the button -- today the
+    field-completion engine's save -> submit -> approve. It generalizes the
+    SYSTEM_USER rule below to walks that (deliberately) run under a real
+    person's name.
 
     A recipient that resolves to blank produces NO row: ``recipient`` is NOT
     NULL by design, so "nobody to tell" is the absence of a notification, never
@@ -130,12 +137,16 @@ def notify_transition(session, task, action, actor) -> List[str]:
     project_name = _clean(project.get("project_name"))
 
     if event == "submitted":
-        # An AUTOMATED submit is not a request for approval: the auto-complete
-        # walk approves the same step microseconds later, so telling every
-        # supervisor "System submitted X" would fill their bell with approvals
-        # that were never theirs to grant. System APPROVALS still notify the
-        # human who owns the step (the branch below) -- that is news.
-        recipients = [] if _same_person(actor_name, SYSTEM_USER) \
+        # An AUTOMATED submit is not a request for approval: the driving walk
+        # approves the same step microseconds later, so telling every
+        # supervisor "X submitted Y" would fill their bell with approvals that
+        # were never theirs to grant. Two ways to be automated, one rule:
+        # the SYSTEM_USER identity (the non-prospective auto-complete walk), or
+        # an explicit ``automated`` flag from a driver running under a real
+        # person's name (the field-completion engine, whose whole point is that
+        # the audit trail carries the SAVING USER). APPROVALS still notify the
+        # human who owns the step (the branch below) -- that is news either way.
+        recipients = [] if automated or _same_person(actor_name, SYSTEM_USER) \
             else _active_supervisors(session, actor_name)
     else:
         assignee = _clean(task.get("assigned_to"))

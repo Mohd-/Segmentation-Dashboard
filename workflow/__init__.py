@@ -37,6 +37,13 @@ from .constants import (
     BOARD_STAGE_ORDER,
     BP_EXECUTION_STAGES,
     DONE_STATUSES,
+    ENGINE_TRANSITIONS,
+    FIELD_COMPLETION,
+    FIELD_COMPLETION_COMMENT,
+    FIELD_COMPLETION_EVENT,
+    FIELD_COMPLETION_MANUAL_APPROVAL_STEPS,
+    FIELD_REOPEN_COMMENT,
+    FIELD_REOPEN_EVENT,
     FORMATION_FLUID_TYPES,
     FORMATION_NUMERIC_FIELDS,
     FORMATION_PHASES,
@@ -59,6 +66,7 @@ from .constants import (
     TASK_TRANSITIONS,
     StaleRevisionError,
     applicable_stages,
+    field_completion_met,
     unmet_submit_requirements,
 )
 from .formations import (
@@ -69,6 +77,7 @@ from .formations import (
 )
 from .history import log_task_event
 from .lifecycle import (
+    apply_field_completion,
     assign_task,
     ensure_task_approved,
     get_project_tasks,
@@ -116,7 +125,11 @@ __all__ = [
     # constants
     "ACTIVE_STATUSES", "AUTO_COMPLETE_COMMENT", "AUTO_COMPLETE_EVENT",
     "BOARD_STAGE_ORDER", "BP_EXECUTION_STAGES",
-    "DONE_STATUSES", "FORMATION_FLUID_TYPES", "FORMATION_NUMERIC_FIELDS",
+    "DONE_STATUSES", "ENGINE_TRANSITIONS",
+    "FIELD_COMPLETION", "FIELD_COMPLETION_COMMENT", "FIELD_COMPLETION_EVENT",
+    "FIELD_COMPLETION_MANUAL_APPROVAL_STEPS",
+    "FIELD_REOPEN_COMMENT", "FIELD_REOPEN_EVENT",
+    "FORMATION_FLUID_TYPES", "FORMATION_NUMERIC_FIELDS",
     "FORMATION_PHASES", "FORMATION_VALUE_FIELDS", "FORMATIONS",
     "MERGED_COS_LEGACY_NAMES", "MERGED_COS_TASK_NAME",
     "NON_PROSPECTIVE_AUTO_COMPLETE_STEPS", "NON_PROSPECTIVE_FLUIDS",
@@ -124,7 +137,8 @@ __all__ = [
     "PROSPECT_STAGES", "RENAMED_TASK_NAMES", "REQUIRED_FIELDS_FOR_SUBMIT",
     "RETIRED_TASK_NAMES", "STAKING_WELL_CREATED_KEY",
     "STAGE_ORDER", "STATUSES", "TASK_TRANSITIONS",
-    "StaleRevisionError", "applicable_stages", "unmet_submit_requirements",
+    "StaleRevisionError", "applicable_stages", "field_completion_met",
+    "unmet_submit_requirements",
     # users
     "SYSTEM_USER", "ensure_system_user", "find_active_user", "get_active_users",
     # projects
@@ -132,7 +146,8 @@ __all__ = [
     "get_projects", "project_completion_percent", "restore_project",
     "update_project_name",
     # lifecycle
-    "assign_task", "ensure_task_approved", "get_project_tasks", "get_task",
+    "apply_field_completion", "assign_task", "ensure_task_approved",
+    "get_project_tasks", "get_task",
     "get_task_dynamic_fields", "satisfy_submit_gate", "save_task",
     "save_task_dynamic_fields", "set_task_priority", "transition_task",
     # notifications
