@@ -1,10 +1,12 @@
 """Card 1B: the derived lead-card fields on the project read payloads.
 
 `assignees`, `tracked_items`, `display_stage` and `lead_priority` are a READ-TIME
-presentation layer over the stored workflow (workflow/projects.py's Card 1B
-adapter). Nothing here may change what is stored, so every test drives the
-normal API (assign / submit / approve / priority) and only asserts on what the
-read payloads report back.
+projection over the stored workflow (workflow/projects.py). Since v5 the twelve
+tracked items ARE the twelve stored prospect steps, 1:1, and the three board
+columns ARE their stored stage groups -- the presentation adapter that used to
+fake both is gone, and the PAYLOAD SHAPE is deliberately unchanged. Nothing here
+may change what is stored, so every test drives the normal API (assign / submit
+/ approve / priority) and only asserts on what the read payloads report back.
 """
 from __future__ import annotations
 
@@ -16,10 +18,10 @@ PRE_WELL_LABELS = ["Moving Tolerance", "Approval to Stake", "Well Site Location"
 
 # The stored prospect steps, in sequence order (workflow.PIPELINE_TEMPLATES 1-12).
 PROSPECT_STEPS = [
-    "Reservoir Area Definition", "Thickness Estimation", "Lead Resource Assessment",
-    "Seismic Signature Validation", "Reservoir CoS", "Trap CoS", "Seal CoS",
-    "Prospect Evaluation Presentation", "Well Creation", "Pre-Drilling Resource Assessment",
-    "Staking Moving Tolerance", "Approval to Stake",
+    "Area Definition", "Thickness Estimation", "GRV Inputs", "Resource Assessment",
+    "Reservoir CoS", "Trap and Seal CoS", "Seismic Signature Validation",
+    "Segmentation Slides", "Moving Tolerance", "Approval to Stake",
+    "Well Site Location", "Pre-Drilling GeoX Assessment",
 ]
 
 
@@ -86,18 +88,22 @@ def test_tracked_items_shape_order_and_stages(client):
     assert [item["stage"] for item in items] == (
         ["Lead Assessment"] * 4 + ["Risk Analysis"] * 4 + ["Pre-Well Delivery"] * 4)
     # Exactly four keys per item: the three the CARD renders, plus Card 2A's
-    # `steps` (the item's source step names) that the lead detail page's
-    # three-stage sidebar opens the real components from.
+    # `steps` (the item's source step name) that the lead detail page's
+    # three-stage sidebar opens the real component from. The key keeps its LIST
+    # shape (it predates v5, when an item could stand for two steps or none) so
+    # the client contract is untouched by the restructure.
     for item in items:
         assert set(item) == {"stage", "label", "status", "steps"}
     by_label = {item["label"]: item["steps"] for item in items}
-    # The two items with NO stored step yet stay empty -- the sidebar renders
-    # them as dimmed, non-clickable placeholder rows.
-    assert by_label["GRV Inputs"] == []
-    assert by_label["Well Site Location"] == []
-    # The one multi-source item keeps BOTH of its steps, in order.
-    assert by_label["Trap and Seal"] == ["Trap CoS", "Seal CoS"]
+    # Every item is now backed by exactly ONE real step -- nothing sourceless,
+    # nothing multi-sourced.
+    assert [steps for steps in by_label.values() if len(steps) != 1] == []
+    assert by_label["GRV Inputs"] == ["GRV Inputs"]
+    assert by_label["Well Site Location"] == ["Well Site Location"]
+    assert by_label["Trap and Seal"] == ["Trap and Seal CoS"]
     assert by_label["Thickness Estimation"] == ["Thickness Estimation"]
+    # ... and the item order IS the stored sequence order.
+    assert [steps[0] for steps in by_label.values()] == PROSPECT_STEPS
 
 
 def test_a_fresh_lead_reads_entirely_in_progress(client):
@@ -112,28 +118,27 @@ def test_a_fresh_lead_reads_entirely_in_progress(client):
 
 def test_an_approved_step_completes_its_item_only(client):
     pid = create_project(client, "TRACKED-ONE-1")
-    _approve(client, pid, "Reservoir Area Definition")
+    _approve(client, pid, "Area Definition")
     items = _items(_board_row(client, pid))
     assert items["Area Definition"] == "Completed"
     assert items["Thickness Estimation"] == "In Progress"
     assert list(items.values()).count("Completed") == 1
 
 
-def test_trap_and_seal_completes_only_when_both_are_approved(client):
+def test_trap_and_seal_is_one_step_and_completes_with_it(client):
+    """v5 merged the two CoS halves into ONE step, so the item that always read
+    "both approved" is now simply that step's own status."""
     pid = create_project(client, "TRACKED-TRAPSEAL-1")
-    _approve(client, pid, "Trap CoS")
     assert _items(_board_row(client, pid))["Trap and Seal"] == "In Progress"
-
-    _approve(client, pid, "Seal CoS")
+    _approve(client, pid, "Trap and Seal CoS")
     assert _items(_board_row(client, pid))["Trap and Seal"] == "Completed"
 
 
-def test_a_ready_trap_cos_does_not_make_trap_and_seal_pending(client):
-    """Pending Approval is reserved for Segmentation Slides; a combined item
+def test_a_ready_trap_and_seal_cos_does_not_read_pending(client):
+    """Pending Approval is reserved for Segmentation Slides; any other step
     submitted-but-unapproved is still just In Progress."""
     pid = create_project(client, "TRACKED-TRAPSEAL-2")
-    _set_ready(client, pid, "Trap CoS")
-    _set_ready(client, pid, "Seal CoS")
+    _set_ready(client, pid, "Trap and Seal CoS")
     assert _items(_board_row(client, pid))["Trap and Seal"] == "In Progress"
 
 
@@ -142,8 +147,8 @@ def test_pending_approval_is_only_for_segmentation_slides(client):
     a returned/reopened submission drops back to In Progress, and the card must
     not distinguish "never submitted" from "submitted then returned"."""
     pid = create_project(client, "TRACKED-READY-1")
-    for step in ("Thickness Estimation", "Reservoir CoS", "Staking Moving Tolerance",
-                 "Pre-Drilling Resource Assessment", "Prospect Evaluation Presentation"):
+    for step in ("Thickness Estimation", "Reservoir CoS", "Moving Tolerance",
+                 "Pre-Drilling GeoX Assessment", "Segmentation Slides"):
         _set_ready(client, pid, step)
     items = _items(_board_row(client, pid))
 
@@ -157,28 +162,25 @@ def test_pending_approval_is_only_for_segmentation_slides(client):
 
 def test_returning_a_segmentation_slides_submission_drops_it_back_to_in_progress(client):
     pid = create_project(client, "TRACKED-RETURN-1")
-    ready = _set_ready(client, pid, "Prospect Evaluation Presentation")
+    ready = _set_ready(client, pid, "Segmentation Slides")
     assert _items(_board_row(client, pid))["Segmentation Slides"] == "Pending Approval"
 
     _transition(client, ready, "return")
     assert _items(_board_row(client, pid))["Segmentation Slides"] == "In Progress"
 
 
-def test_the_two_sourceless_items_never_complete(client):
-    """GRV Inputs and Well Site Location have no feeding step in the current
-    12-step pipeline. They must stay In Progress even on a lead where every
-    stored step is Approved -- the permanent migration supplies the real steps."""
-    pid = create_project(client, "TRACKED-SOURCELESS-1")
+def test_every_item_completes_once_its_step_is_approved(client):
+    """v5 gave GRV Inputs and Well Site Location real steps: approving all
+    twelve now leaves ZERO items open, where the pre-v5 adapter pinned those two
+    at In Progress for ever."""
+    pid = create_project(client, "TRACKED-ALL-1")
     for step in PROSPECT_STEPS:
         _approve(client, pid, step)
 
     # A fully approved lead leaves the board for the Portfolio, so read the
-    # detail payload -- same derivation, same adapter.
+    # detail payload -- same derivation.
     items = _items(_detail_row(client, pid))
-    assert items["GRV Inputs"] == "In Progress"
-    assert items["Well Site Location"] == "In Progress"
-    assert [label for label, status in items.items() if status != "Completed"] == [
-        "GRV Inputs", "Well Site Location"]
+    assert [label for label, status in items.items() if status != "Completed"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -189,21 +191,16 @@ def test_display_stage_follows_the_derived_stage_through_the_pipeline(client):
     pid = create_project(client, "DISPLAY-STAGE-1")
     assert _board_row(client, pid)["display_stage"] == "Lead Assessment"
 
-    for step in PROSPECT_STEPS[:3]:                       # Lead Identification done
+    for step in PROSPECT_STEPS[:4]:                       # Lead Assessment done
         _approve(client, pid, step)
     row = _board_row(client, pid)
-    assert row["current_stage"] == "Risking"
+    assert row["current_stage"] == "Risk Analysis"
     assert row["display_stage"] == "Risk Analysis"
 
-    for step in PROSPECT_STEPS[3:7]:                      # Risking done
+    for step in PROSPECT_STEPS[4:8]:                      # Risk Analysis done
         _approve(client, pid, step)
     row = _board_row(client, pid)
-    # The one collapse Card 1B introduces: Segmentation joins Risk Analysis.
-    assert row["current_stage"] == "Segmentation"
-    assert row["display_stage"] == "Risk Analysis"
-
-    _approve(client, pid, "Prospect Evaluation Presentation")
-    row = _board_row(client, pid)
+    # Since v5 display_stage IS the stored stage group -- no mapping left.
     assert row["current_stage"] == "Pre-Well Delivery"
     assert row["display_stage"] == "Pre-Well Delivery"
 
@@ -244,7 +241,7 @@ def test_lead_priority_takes_the_most_urgent_open_task(client):
     # until somebody escalates a step.
     assert _board_row(client, pid)["lead_priority"] == "Low"
 
-    task = get_task_by_name(client, pid, "Staking Moving Tolerance")
+    task = get_task_by_name(client, pid, "Moving Tolerance")
     assert client.patch(f"/api/tasks/{task['task_id']}/priority", json={"priority": "High"}).status_code == 200
     assert _board_row(client, pid)["lead_priority"] == "High"
 
@@ -252,11 +249,11 @@ def test_lead_priority_takes_the_most_urgent_open_task(client):
 def test_lead_priority_ignores_approved_work(client):
     """Finished work cannot keep a lead urgent."""
     pid = create_project(client, "PRIORITY-2")
-    task = get_task_by_name(client, pid, "Reservoir Area Definition")
+    task = get_task_by_name(client, pid, "Area Definition")
     assert client.patch(f"/api/tasks/{task['task_id']}/priority", json={"priority": "High"}).status_code == 200
     assert _board_row(client, pid)["lead_priority"] == "High"
 
-    _approve(client, pid, "Reservoir Area Definition")
+    _approve(client, pid, "Area Definition")
     # Back to the creation default once the escalated step is approved.
     assert _board_row(client, pid)["lead_priority"] == "Low"
 
@@ -284,7 +281,7 @@ def test_new_lead_board_defaults(client):
     pid = create_project(client, "NEWDEF-3", lead_x="123.5", lead_y="-456.25")
     row = _board_row(client, pid)
 
-    assert row["display_stage"] == "Lead Assessment"     # stored: Lead Identification
+    assert row["display_stage"] == "Lead Assessment"     # the stored stage group
     assert row["assignees"] == []
     assert row["lead_priority"] == "Low"
     assert len(row["tracked_items"]) == 12
@@ -317,7 +314,7 @@ def test_bp_wells_carry_no_tracked_items_and_keep_their_stored_stage(client):
 
     row = _board_row(client, pid, pipeline="bp")
     assert row["tracked_items"] == []
-    # No display mapping for BP stage groups: the stored stage passes through.
+    # display_stage is the stored stage group, on either pipeline.
     assert row["display_stage"] == row["current_stage"] == "Well Delivery"
     # assignees / lead_priority are pipeline-agnostic and still derived.
     assert row["assignees"] == ["Employee"]

@@ -86,7 +86,7 @@ def test_seal_cos_survives_saves_without_form_inputs(client):
     seal_cos_pct with a blank-form recompute. Recompute fires only when the
     payload contains at least one of the form's input keys."""
     pid = create_project(client, "SEAL-KEEP-1")
-    seal = get_task_by_name(client, pid, "Seal CoS")
+    seal = get_task_by_name(client, pid, "Trap and Seal CoS")
     resp = client.patch(f"/api/tasks/{seal['task_id']}/dynamic-fields", json={"fields": {
         "seal_recent_activity_age": "0.95",
         "seal_fracture_permeability": "0.5",
@@ -195,8 +195,8 @@ def test_total_cos_computed_at_read_via_task_save_endpoint(client):
 
     pid = create_project(client, "PRESENCE-1")
     reservoir = get_task_by_name(client, pid, "Reservoir CoS")
-    trap = get_task_by_name(client, pid, "Trap CoS")
-    seal = get_task_by_name(client, pid, "Seal CoS")
+    trap = get_task_by_name(client, pid, "Trap and Seal CoS")
+    seal = get_task_by_name(client, pid, "Trap and Seal CoS")
     assert get_task_by_name(client, pid, "Presence CoS Evaluation") is None  # step removed in v18
 
     resp = client.patch(f"/api/tasks/{reservoir['task_id']}", json={
@@ -233,7 +233,7 @@ def test_total_cos_computed_at_read_via_task_save_endpoint(client):
 
 def test_total_cos_blank_if_any_component_missing(client):
     pid = create_project(client, "PRESENCE-2")
-    trap = get_task_by_name(client, pid, "Trap CoS")
+    trap = get_task_by_name(client, pid, "Trap and Seal CoS")
     client.patch(f"/api/tasks/{trap['task_id']}/dynamic-fields", json={"fields": {"trap_cos_pct": "80"}})
     assert (_derisking(client, pid) or "") == ""
 
@@ -246,8 +246,8 @@ def test_final_reservoir_cos_is_first_row_with_nonempty_pct(client):
     workflow.first_reservoir_cos_row_value via the derisking result."""
     pid = create_project(client, "PRESENCE-FINAL-1")
     reservoir = get_task_by_name(client, pid, "Reservoir CoS")
-    trap = get_task_by_name(client, pid, "Trap CoS")
-    seal = get_task_by_name(client, pid, "Seal CoS")
+    trap = get_task_by_name(client, pid, "Trap and Seal CoS")
+    seal = get_task_by_name(client, pid, "Trap and Seal CoS")
 
     raw_rows = json.dumps([
         {"reservoir_cos_pct": "40"},
@@ -269,11 +269,11 @@ def test_final_reservoir_cos_is_first_row_with_nonempty_pct(client):
 
 
 # ---------------------------------------------------------------------------
-# Trap CoS (formula-derived) + Lead Resource Assessment save contract
+# Trap CoS (formula-derived) + Resource Assessment save contract
 # ---------------------------------------------------------------------------
 # calculate_trap_cos(a, b) walks the approved threshold table and keeps the
 # score of the largest factor for which a*(1+factor) < b (strictly
-# less-than); 0.5 is the floor when b <= a. The Lead Resource Assessment test
+# less-than); 0.5 is the floor when b <= a. The Resource Assessment test
 # pins a separate contract: PIIP values change only via the pop-up
 # calculator's Apply flow, so a plain save never auto-overwrites them.
 
@@ -315,7 +315,7 @@ def test_trap_cos_save_persists_computed_value_sourced_from_thickness_task(clien
                         json={"fields": {"formation_thickness_ft": "100"}})
     assert resp.status_code == 200
 
-    trap = get_task_by_name(client, pid, "Trap CoS")
+    trap = get_task_by_name(client, pid, "Trap and Seal CoS")
     resp = client.patch(f"/api/tasks/{trap['task_id']}/dynamic-fields", json={"fields": {
         "sarah_quwarah_thickness_ft": "130",
         "trap_cos_pct": "1",  # stale manual value; must be overwritten by the formula
@@ -337,7 +337,7 @@ def test_trap_cos_save_keeps_stored_value_when_thickness_missing(client):
     calculate_trap_cos returns None and the Trap CoS save hook must leave the
     stored trap_cos_pct untouched (same contract as before the formula)."""
     pid = create_project(client, "TRAP-CALC-2")
-    trap = get_task_by_name(client, pid, "Trap CoS")
+    trap = get_task_by_name(client, pid, "Trap and Seal CoS")
     resp = client.patch(f"/api/tasks/{trap['task_id']}/dynamic-fields", json={"fields": {
         "sarah_quwarah_thickness_ft": "250",
         "trap_cos_pct": "55",
@@ -348,19 +348,19 @@ def test_trap_cos_save_keeps_stored_value_when_thickness_missing(client):
 
 
 def test_lead_resource_assessment_save_never_overwrites_piip(client):
-    """A plain save of the Lead Resource Assessment step must leave its PIIP
+    """A plain save of the Resource Assessment step must leave its PIIP
     fields exactly as entered. The PIIP values now change only via the pop-up
     calculator's explicit Apply flow (POST .../resource-assessment) -- there is
     no auto-compute on save, so saved values are never silently overwritten."""
     pid = create_project(client, "LEADRA-STUB-1")
-    areas = get_task_by_name(client, pid, "Reservoir Area Definition")
+    areas = get_task_by_name(client, pid, "Area Definition")
     client.patch(f"/api/tasks/{areas['task_id']}/dynamic-fields",
                  json={"fields": {"p90_area_km2": "5", "p10_area_km2": "12"}})
     thickness = get_task_by_name(client, pid, "Thickness Estimation")
     client.patch(f"/api/tasks/{thickness['task_id']}/dynamic-fields",
                  json={"fields": {"formation_thickness_ft": "110"}})
 
-    lead_ra = get_task_by_name(client, pid, "Lead Resource Assessment")
+    lead_ra = get_task_by_name(client, pid, "Resource Assessment")
     resp = client.patch(f"/api/tasks/{lead_ra['task_id']}/dynamic-fields", json={"fields": {
         "lead_calculation_method": "GRV",
         "lead_piip_gas_p90": "2.5",

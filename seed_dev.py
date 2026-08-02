@@ -27,8 +27,8 @@ PATCH /api/tasks/<id>/dynamic-fields uses, which does not re-invoke the model
 That keeps seeding independent of the model file while still going through
 the domain layer. Seal CoS has no such external dependency, so its inputs are
 seeded and left to the real formula (cos.calculate_seal_cos, invoked by
-save_task_dynamic_fields for the "Seal CoS" task) to compute the stored
-percentage.
+save_task_dynamic_fields for the merged "Trap and Seal CoS" task) to compute
+the stored percentage.
 """
 from __future__ import annotations
 
@@ -203,7 +203,7 @@ def _add_comment(session, task, changed_by):
     priority variety seeded above.
 
     The stored dynamic fields are resent too, mirroring the real UI (which
-    always submits the whole form): save_task on a "Seal CoS" task recomputes
+    always submits the whole form): save_task on a "Trap and Seal CoS" task recomputes
     seal_cos_pct from the PAYLOAD's fields, so a fields-less save would trip
     calculate_seal_cos's blank-form guard and wipe the stored percentage.
     ``reservoir_cos_rows`` is the one exception: resending it would make
@@ -310,7 +310,7 @@ def _seal_fields():
 
 
 def _staking_fields():
-    """Coherent 'Staking Moving Tolerance' inputs: a well location plus the
+    """Coherent 'Moving Tolerance' inputs: a well location plus the
     3 distance/azimuth option pairs (schema.js's staking_opt1/2/3 rows) --
     used to seed fully-mature leads for the Staking Options export sheet."""
     fields = {
@@ -387,41 +387,43 @@ def _phase_formation_rows(names, sarh_fluid):
 
 def _prospect_step_fields(task_name, force_ar_one=False, force_pore_pressure=False):
     """Coherent dynamic-field payload for one data-entry prospect step, or
-    None for the steps that carry no inputs (Seismic Signature Validation,
-    Prospect Evaluation Presentation, Well Creation, Approval to Stake).
+    None for the steps that carry no inputs (GRV Inputs, Seismic Signature
+    Validation, Segmentation Slides, Approval to Stake, Well Site Location).
 
     The SINGLE source of prospect-step seed data, shared by the proposed-lead,
     mature-lead and BP-well seeders, so a step that has been progressed
     through always carries the fields a real user would have filled:
-    - Lead Identification: P90/P10 areas, formation/reservoir thickness,
-      lead PIIP gas trio (occasionally + the liquid trio).
-    - Risking: pre-scored reservoir_cos_rows (coherent Block/AR pairs), the
-      Trap inputs, the 5 Seal CoS inputs (occasionally + pore pressure;
-      forced via ``force_pore_pressure`` for fully-drilled BP wells).
+    - Lead Assessment: P90/P10 areas, formation/reservoir thickness, lead PIIP
+      gas trio (occasionally + the liquid trio).
+    - Risk Analysis: pre-scored reservoir_cos_rows (coherent Block/AR pairs) and
+      the merged Trap and Seal CoS form -- the Trap inputs PLUS the 5 Seal CoS
+      inputs in one payload (occasionally + pore pressure; forced via
+      ``force_pore_pressure`` for fully-drilled BP wells).
     - Pre-Well Delivery: pre-drill PIIP gas trio, staking location + the 3
       distance/azimuth option pairs.
     """
-    if task_name == "Reservoir Area Definition":
+    if task_name == "Area Definition":
         p90 = round(random.uniform(2, 25), 2)
         return {"p90_area_km2": p90, "p10_area_km2": round(p90 * random.uniform(1.5, 3.5), 2)}
     if task_name == "Thickness Estimation":
         return {"formation_thickness_ft": round(random.uniform(40, 180), 1),
                 "reservoir_thickness_ft": round(random.uniform(30, 150), 1)}
-    if task_name == "Lead Resource Assessment":
+    if task_name == "Resource Assessment":
         return _piip_fields("lead_piip", include_liquid=random.random() < 0.35)
     if task_name == "Reservoir CoS":
         return {"reservoir_cos_rows": _reservoir_cos_rows(force_ar_one=force_ar_one)}
-    if task_name == "Trap CoS":
-        return {"sarah_quwarah_thickness_ft": round(random.uniform(60, 400), 1),
-                "trap_cos_pct": str(random.randint(20, 90))}
-    if task_name == "Seal CoS":
-        fields = _seal_fields()
+    if task_name == workflow.MERGED_COS_TASK_NAME:
+        # One save carrying both halves: the server recomputes trap_cos_pct
+        # (from Thickness Estimation) and seal_cos_pct (from the 5 inputs).
+        fields = {"sarah_quwarah_thickness_ft": round(random.uniform(60, 400), 1),
+                  "trap_cos_pct": str(random.randint(20, 90))}
+        fields.update(_seal_fields())
         if force_pore_pressure or random.random() < 0.5:
             fields["seal_pore_pressure_gradient_psi_ft"] = round(random.uniform(0.35, 0.75), 3)
         return fields
-    if task_name == "Pre-Drilling Resource Assessment":
+    if task_name == "Pre-Drilling GeoX Assessment":
         return _piip_fields("pre_drill_piip", include_liquid=random.random() < 0.35)
-    if task_name == "Staking Moving Tolerance":
+    if task_name == "Moving Tolerance":
         return _staking_fields()
     return None
 

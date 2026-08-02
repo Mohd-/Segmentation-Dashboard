@@ -35,7 +35,7 @@ of what belongs in it.
   public API via `__init__.py` re-exports). Every function takes a `session`
   first; no Flask imports. Modules, bottom of the dependency graph first:
   - `constants.py` — statuses, stages, `applicable_stages()`,
-    `PIPELINE_TEMPLATES` (the single source of truth for the 31-step
+    `PIPELINE_TEMPLATES` (the single source of truth for the 27-step
     workflow), formation vocabulary, `StaleRevisionError`.
   - `history.py` — the append-only `task_history` writer (`log_task_event`).
   - `users.py` — login identity lookups.
@@ -104,7 +104,7 @@ else → generic 500 + server-side log.
   stored completion fact is `completed_at`, a historical timestamp kept in
   sync by `_sync_completed_at` (`workflow/projects.py`) from every write that
   can change completeness (save, transition, promotion/demotion).
-- **project_tasks** — the per-project instances of the 31-step workflow
+- **project_tasks** — the per-project instances of the 27-step workflow
   ("components" in the UI), materialized straight from
   `workflow.PIPELINE_TEMPLATES` at creation (there is no templates table).
   `UNIQUE(project_id, task_name)`; retired components would stay as

@@ -6,7 +6,7 @@ import { isFilled } from './dom.js';
 // PROSPECT_STAGES/BP_STAGES/STATUSES here are boot fallbacks only. GET /api/meta
 // (Store.meta) is authoritative at runtime; its source of truth is workflow.py
 // STAGE_ORDER / PROSPECT_STAGES / BP_EXECUTION_STAGES / STATUSES.
-export var PROSPECT_STAGES = ['Lead Identification', 'Risking', 'Segmentation', 'Pre-Well Delivery'];
+export var PROSPECT_STAGES = ['Lead Assessment', 'Risk Analysis', 'Pre-Well Delivery'];
 export var BP_STAGES = ['Well Delivery', 'Post-Drilling', 'Post-Testing'];
 // The 4 user-facing lifecycle states (display only; the UI never submits a
 // status -- /assign and /transition drive it).
@@ -158,7 +158,7 @@ export var SAD_FORMATION_COLUMNS = [
   { key: 'sad_fluid', label: 'Fluid', type: 'select', options: FLUID_TYPES }
 ];
 export var SCHEMA = {
-  'Reservoir Area Definition': [{ key: 'p10_area_km2', label: 'P10 Area (km²)', type: 'number' }, { key: 'p90_area_km2', label: 'P90 Area (km²)', type: 'number' }],
+  'Area Definition': [{ key: 'p10_area_km2', label: 'P10 Area (km²)', type: 'number' }, { key: 'p90_area_km2', label: 'P90 Area (km²)', type: 'number' }],
   'Thickness Estimation': [{ key: 'formation_thickness_ft', label: 'Sarah Formation Thickness (ft)', type: 'number' }, { key: 'reservoir_thickness_ft', label: 'Reservoir Thickness (ft)', type: 'number' }],
   // No editable dynamic fields: the Resource Assessment calculator
   // (views/resource-calculator.js) is now the step's entire body -- inline
@@ -172,20 +172,41 @@ export var SCHEMA = {
   // therefore now comments-only, same as any other schema-less step (e.g.
   // 'Seismic Signature Validation' below) -- editing/viewing PIIP data lives
   // in the pipeline detail view's calculator now.
-  'Lead Resource Assessment': [],
+  'Resource Assessment': [],
+  // v5 tracked items with no inputs of their own yet -- declared (rather than
+  // left absent) so the step reads as a deliberately field-less component
+  // everywhere, exactly like 'Seismic Signature Validation' below.
+  'GRV Inputs': [],
+  'Well Site Location': [],
   'Seismic Signature Validation': [],
   'Reservoir CoS': [{ key: 'reservoir_cos_rows', label: 'Reservoir CoS Evaluations', type: 'repeatable', columns: RESERVOIR_COS_COLUMNS }],
-  'Trap CoS': [{ key: 'sarah_quwarah_thickness_ft', label: 'Sarah-Quwarah Thickness (ft)', type: 'number' }, { key: 'trap_cos_pct', label: 'Trap CoS (%)', type: 'number', readonly: true }],
-  'Seal CoS': [{ key: 'seal_recent_activity_age', label: 'Most recent age of activity', type: 'number' }, { key: 'seal_dip', label: 'Dip', type: 'number' }, { key: 'seal_azimuth_vs_shmax', label: 'Azimuth vs. SHmax', type: 'number' }, { key: 'seal_fault_level_confidence', label: 'Fault Level of Confidence', type: 'number' }, { key: 'seal_fracture_permeability', label: 'Fracture Permeability', type: 'number' }, { key: 'seal_pore_pressure_gradient_psi_ft', label: 'Pore Pressure Gradient (psi/ft)', type: 'number' }, { key: 'seal_cos_pct', label: 'Seal CoS (%)', type: 'number', readonly: true }],
+  // v5: the separate 'Trap CoS' and 'Seal CoS' steps merged into ONE component.
+  // The two halves keep their EXACT field keys (renaming an EAV key orphans
+  // stored data, and both server-side recompute hooks are keyed on them), so
+  // this entry is literally the old Trap array followed by the old Seal array
+  // with a section heading over each. Both readonly outputs are still written
+  // by the server on save (workflow/lifecycle.py's re-keyed hooks fire on this
+  // step's name now).
+  'Trap and Seal CoS': [
+    { key: 'sarah_quwarah_thickness_ft', label: 'Sarah-Quwarah Thickness (ft)', type: 'number', section: 'Trap' },
+    { key: 'trap_cos_pct', label: 'Trap CoS (%)', type: 'number', readonly: true },
+    { key: 'seal_recent_activity_age', label: 'Most recent age of activity', type: 'number', section: 'Seal' },
+    { key: 'seal_dip', label: 'Dip', type: 'number' },
+    { key: 'seal_azimuth_vs_shmax', label: 'Azimuth vs. SHmax', type: 'number' },
+    { key: 'seal_fault_level_confidence', label: 'Fault Level of Confidence', type: 'number' },
+    { key: 'seal_fracture_permeability', label: 'Fracture Permeability', type: 'number' },
+    { key: 'seal_pore_pressure_gradient_psi_ft', label: 'Pore Pressure Gradient (psi/ft)', type: 'number' },
+    { key: 'seal_cos_pct', label: 'Seal CoS (%)', type: 'number', readonly: true }
+  ],
   // v18: 'Presence CoS Evaluation' removed as a step -- the derived value is
   // surfaced as "Total Chance of Success" from /detail's overview.derisking.
-  'Pre-Drilling Resource Assessment': piip('pre_drill_piip'),
+  'Pre-Drilling GeoX Assessment': piip('pre_drill_piip'),
   // Old moving_* values remain in the DB untouched; the step now captures the
   // well location (prefilled from the project's lead X/Y) plus three
   // distance/azimuth option pairs.
   // Four 2-column rows stacked: the well location pair, then one row per staking
   // option (max distance + azimuth). Row ids group each pair; keys/labels stay.
-  'Staking Moving Tolerance': [
+  'Moving Tolerance': [
     // bigOk: true -- UTM coordinates (see validateStepFields), routinely
     // six/seven digits.
     { key: 'staking_well_x', label: 'Well Location X', type: 'number', defaultFrom: 'lead_x', row: 'staking_loc', bigOk: true },
@@ -283,11 +304,7 @@ export var SCHEMA = {
     { key: 'final_las', label: 'Logs as LAS', type: 'checkbox', row: 'final_logs' }
   ],
   'PVAD Structural MTR': [{ key: 'pvad_mtr_link', label: 'DRAS', type: 'link', value: 'https://DRAS/', linkText: 'Open PVAD Structural MTR (DRAS)' }],
-  'Prospect Evaluation Presentation': [],
-  // well_name is never stored as a task field: the backend save hook pops it
-  // and renames the project itself (projects.project_name stays the single
-  // source of truth), so the input always prefills from the live name.
-  'Well Creation': [{ key: 'well_name', label: 'Well Name', type: 'text', defaultFrom: 'project_name' }],
+  'Segmentation Slides': [],
   // Classification lives here now (moved off GHEER); reporting reads the new key
   // first, falling back to the legacy gheer_classification for old wells.
   'BP Execution Gate': [{ key: 'bp_gate_classification', label: 'Classification', type: 'radio', options: ['Development', 'Appraisal', 'Exploration'] }],
@@ -418,7 +435,7 @@ function genericFieldErrors(taskName, fields) {
 // number field it reads is guaranteed to already be a valid, in-range
 // number) and returns an error string or null.
 var CROSS_FIELD_RULES = {
-  'Reservoir Area Definition': function (fields) {
+  'Area Definition': function (fields) {
     if (isFilled(fields.p90_area_km2) && isFilled(fields.p10_area_km2) &&
         Number(fields.p90_area_km2) >= Number(fields.p10_area_km2)) {
       return 'Area P90 must be lower than Area P10.'; // same wording as the popup
@@ -439,7 +456,7 @@ var CROSS_FIELD_RULES = {
 // carries keys for the task actually being saved, so a prefix that doesn't
 // belong to the current step simply has nothing filled and no-ops here.
 //
-// 'lead_piip' is now unreachable through any real form: Lead Resource
+// 'lead_piip' is now unreachable through any real form: Resource
 // Assessment's SCHEMA entry is `[]` (see above) -- the Resource Assessment
 // calculator (views/resource-calculator.js) writes lead_piip_* directly via
 // API.saveFields on Apply, bypassing getFields()/validateStepFields

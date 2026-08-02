@@ -26,8 +26,15 @@ import db
 # Kept local to this path-only module to avoid importing the workflow package
 # (workflow.projects imports folders.py). These are the persisted stage_group
 # values whose component files belong under the Leads share.
+#
+# The three v5 groups plus the four they replaced: v5 rewrote every prospect
+# row's stage_group, but a row a migration could not reach (or an old export /
+# hand-repaired record) must still file under the Leads share rather than
+# silently switching to the Wells one. Mirrors workflow.constants
+# .PROSPECT_STAGES + LEGACY_PROSPECT_STAGE_GROUPS.
 _PROSPECT_STAGE_GROUPS = {
-    "Lead Identification", "Risking", "Segmentation", "Pre-Well Delivery",
+    "Lead Assessment", "Risk Analysis", "Pre-Well Delivery",
+    "Lead Identification", "Risking", "Segmentation",
 }
 
 

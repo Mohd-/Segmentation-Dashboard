@@ -15,6 +15,7 @@ from helpers import today_str, utc_now_str
 
 from .constants import (
     DONE_STATUSES,
+    MERGED_COS_TASK_NAME,
     REQUIRED_FIELDS_FOR_SUBMIT,
     STATUSES,
     TASK_TRANSITIONS,
@@ -25,7 +26,7 @@ from .constants import (
 )
 from .history import log_task_event
 from .notifications import notify_transition
-from .projects import _sync_completed_at, get_project, update_project_name
+from .projects import _sync_completed_at, get_project
 from .summary import _task_field_value
 from .users import find_active_user
 
@@ -36,6 +37,16 @@ _SEAL_COS_INPUT_KEYS = (
     "seal_recent_activity_age", "seal_dip", "seal_azimuth_vs_shmax",
     "seal_fault_level_confidence", "seal_fracture_permeability",
 )
+
+# The step(s) whose save fires the Trap / Seal recompute hooks. Since v5 both
+# forms live on ONE merged step, "Trap and Seal CoS", writing the SAME EAV keys
+# the two separate steps wrote -- so the hooks are simply re-keyed onto the
+# merged name. The pre-v5 names ride along as a fallback: they are retired
+# (is_active = 0) and unreachable from the UI, but the Excel importer and any
+# maintenance script addressing a legacy row by task_id must still get the same
+# recompute rather than a silently un-recomputed percentage.
+_TRAP_COS_STEPS = frozenset({MERGED_COS_TASK_NAME, "Trap CoS"})
+_SEAL_COS_STEPS = frozenset({MERGED_COS_TASK_NAME, "Seal CoS"})
 
 
 def _apply_trap_cos_calculation(session, task, fields):
@@ -49,8 +60,8 @@ def _apply_trap_cos_calculation(session, task, fields):
     Estimation SARH thickness) is fetched here because cos.py must stay
     database-free -- same division of labor as Presence CoS.
 
-    The Lead Resource Assessment PIIP values are no longer auto-computed on
-    save: they change only via the pop-up calculator's explicit Apply flow
+    The Resource Assessment PIIP values are no longer auto-computed on save:
+    they change only via the pop-up calculator's explicit Apply flow
     (POST /api/tasks/<id>/resource-assessment runs the Monte Carlo engine and
     the chosen values are written back through the normal field-save path). A
     plain save therefore never overwrites them.
@@ -58,9 +69,8 @@ def _apply_trap_cos_calculation(session, task, fields):
     Shared by save_task and save_task_dynamic_fields. Returns ``fields``
     (copied only when something was computed).
     """
-    task_name = task.get("task_name")
     project_id = task["project_id"]
-    if task_name == "Trap CoS" and "sarah_quwarah_thickness_ft" in fields:
+    if task.get("task_name") in _TRAP_COS_STEPS and "sarah_quwarah_thickness_ft" in fields:
         computed = cos.calculate_trap_cos(
             _task_field_value(session, project_id, "Thickness Estimation", "formation_thickness_ft"),
             fields.get("sarah_quwarah_thickness_ft"),
@@ -71,29 +81,18 @@ def _apply_trap_cos_calculation(session, task, fields):
     return fields
 
 
-def _pop_well_name_override(task, fields):
-    """Split the Well Creation step's well_name out of a save payload.
+def _apply_seal_cos_calculation(task, fields):
+    """Seal CoS recompute hook (formula-derived, never manually keyed).
 
-    The typed name is never stored as a dynamic field -- projects.project_name
-    is the single source of truth (the form prefills from it via defaultFrom).
-    Returns (fields without the key, stripped name or None). Callers apply the
-    rename AFTER their field transaction commits: update_project_name opens its
-    own write transaction, which must not nest inside another BEGIN IMMEDIATE.
+    Recomputes ONLY when the payload carries the form's own inputs: a
+    comment-only save, or one carrying just the merged step's Trap half, must
+    not wipe the stored result with a blank-form recompute. Returns ``fields``
+    (copied only when something was computed).
     """
-    if task.get("task_name") != "Well Creation" or "well_name" not in fields:
-        return fields, None
-    fields = dict(fields)
-    name = str(fields.pop("well_name") or "").strip()
-    return fields, name or None
-
-
-def _apply_well_name_override(session, project_id, new_name, changed_by):
-    """Rename the project from a Well Creation save; unchanged name is a no-op
-    (no spurious 'Renamed' audit event on every save)."""
-    project = get_project(session, project_id)
-    if not project or (project.get("project_name") or "").strip() == new_name:
-        return
-    update_project_name(session, project_id, new_name, changed_by=changed_by)
+    if task.get("task_name") in _SEAL_COS_STEPS and any(key in fields for key in _SEAL_COS_INPUT_KEYS):
+        fields = dict(fields)
+        fields["seal_cos_pct"] = cos.calculate_seal_cos(fields)
+    return fields
 
 
 def get_project_tasks(session, project_id):
@@ -203,18 +202,13 @@ def save_task_dynamic_fields(session, task_id, fields, changed_by="Web User"):
     if not task:
         raise ValueError("Component not found.")
     fields = fields or {}
-    fields, new_well_name = _pop_well_name_override(task, fields)
-    if task.get("task_name") == "Seal CoS" and any(key in fields for key in _SEAL_COS_INPUT_KEYS):
-        fields = dict(fields)
-        fields["seal_cos_pct"] = cos.calculate_seal_cos(fields)
+    fields = _apply_seal_cos_calculation(task, fields)
     fields = _apply_trap_cos_calculation(session, task, fields)
     now = utc_now_str()
     with db.write_transaction(session):
         _apply_dynamic_fields(session, task, fields, changed_by, now)
         db.execute(session, "UPDATE project_tasks SET last_updated = :now WHERE task_id = :task_id",
                    {"now": now, "task_id": task_id})
-    if new_well_name:
-        _apply_well_name_override(session, task["project_id"], new_well_name, changed_by)
 
 
 def save_task(session, task_id, payload, changed_by="Web User", allow_priority_change=True):
@@ -297,25 +291,19 @@ def save_task(session, task_id, payload, changed_by="Web User", allow_priority_c
         # ignored. Promotion is owned exclusively by update_project_flags
         # (workflow/promotion.py) via PATCH /api/projects/<id>/flags.
 
-        fields, new_well_name = _pop_well_name_override(task, fields)
-
         # Reservoir CoS is model-derived, not manually keyed. The saved result is a whole-number percent.
         if task.get("task_name") == "Reservoir CoS" and "reservoir_cos_rows" in fields:
             fields = dict(fields)
             fields["reservoir_cos_rows"] = cos.calculate_reservoir_cos_rows(fields.get("reservoir_cos_rows"))
 
         # Seal CoS is formula-derived, not manually entered. The result is stored
-        # as a whole-number percentage string, e.g., 44 for 44%. Recompute only
-        # when the payload carries the form's inputs -- a comment-only save must
-        # not wipe the stored result with a blank-form recompute.
-        if task.get("task_name") == "Seal CoS" and any(key in fields for key in _SEAL_COS_INPUT_KEYS):
-            fields = dict(fields)
-            fields["seal_cos_pct"] = cos.calculate_seal_cos(fields)
+        # as a whole-number percentage string, e.g., 44 for 44%.
+        fields = _apply_seal_cos_calculation(task, fields)
 
         # Trap CoS recompute hook (formula-derived, cos.calculate_trap_cos; a
-        # None result leaves the stored value untouched). Lead Resource
-        # Assessment PIIP values are not auto-computed here -- they only
-        # change via the pop-up calculator.
+        # None result leaves the stored value untouched). Resource Assessment
+        # PIIP values are not auto-computed here -- they only change via the
+        # pop-up calculator.
         fields = _apply_trap_cos_calculation(session, task, fields)
 
         _apply_dynamic_fields(session, task, fields, changed_by, now)
@@ -345,8 +333,6 @@ def save_task(session, task_id, payload, changed_by="Web User", allow_priority_c
                    "UPDATE projects SET last_updated = :now, revision = revision + 1 WHERE project_id = :project_id",
                    {"now": now, "project_id": task["project_id"]})
         result = get_task(session, task_id) or {}
-    if new_well_name:
-        _apply_well_name_override(session, task["project_id"], new_well_name, changed_by)
     return result
 
 

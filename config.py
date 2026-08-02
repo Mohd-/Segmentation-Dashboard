@@ -239,10 +239,25 @@ LEAD_WORKFLOW_SECTION_KEYS = {
 # The app automatically generates: Leads-or-Wells ROOT / Field / Well /
 # Component Files / Component Name
 COMPONENT_FILE_SECTIONS = {
-    # First eight Prospect Maturation components require generated file
-    # locations. (v18 removed the Presence CoS Evaluation step.)
-    "Reservoir Area Definition", "Thickness Estimation", "Lead Resource Assessment",
-    "Seismic Signature Validation", "Reservoir CoS", "Trap CoS", "Seal CoS",
+    # The Prospect Maturation components that require generated file locations.
+    # (v18 removed the Presence CoS Evaluation step.)
+    #
+    # BOTH the v5 names and the names they replaced stay in this set, for the
+    # same reason both quicklook spellings do below: a lead's share folder was
+    # created on disk under whatever the step was called at the time, so the
+    # folder card must keep resolving for leads foldered before v5. The v5
+    # renames ("Reservoir Area Definition" -> "Area Definition",
+    # "Lead Resource Assessment" -> "Resource Assessment",
+    # "Prospect Evaluation Presentation" -> "Segmentation Slides",
+    # "Pre-Drilling Resource Assessment" -> "Pre-Drilling GeoX Assessment") are
+    # in-place task_name rewrites, so the old entries are reachable only through
+    # that historical path -- and the retired "Trap CoS" / "Seal CoS" halves
+    # only through it too, now that "Trap and Seal CoS" is the live step.
+    "Area Definition", "Thickness Estimation", "Resource Assessment",
+    "Seismic Signature Validation", "Reservoir CoS", "Trap and Seal CoS",
+    "Segmentation Slides", "Pre-Drilling GeoX Assessment",
+    # Their pre-v5 spellings (legacy on-disk folders).
+    "Reservoir Area Definition", "Lead Resource Assessment", "Trap CoS", "Seal CoS",
     "Prospect Evaluation Presentation",
     # Additional components with supporting-file requirements.
     # BOTH quicklook names stay in this set on purpose. The v3 migration

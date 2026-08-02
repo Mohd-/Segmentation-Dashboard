@@ -18,7 +18,7 @@ import json
 from conftest import create_project, get_task_by_name, get_tasks
 
 BP_KWARGS = {"business_plan_enabled": True, "business_plan_year": 2027}
-PROSPECT_STAGES = {"Lead Identification", "Risking", "Segmentation", "Pre-Well Delivery"}
+PROSPECT_STAGES = {"Lead Assessment", "Risk Analysis", "Pre-Well Delivery"}
 BP_STAGES = {"Well Delivery", "Post-Drilling", "Post-Testing"}
 
 
@@ -308,10 +308,10 @@ def test_sarh_quicklook_fluid_beats_legacy_quicklook_eav(client):
 
 def test_mean_ogip_precedence_post_beats_pre_beats_lead(client):
     pid = create_project(client, "OGIP-1", **BP_KWARGS)
-    _save_fields(client, pid, "Lead Resource Assessment", {"lead_piip_gas_mean": "5.0"})
+    _save_fields(client, pid, "Resource Assessment", {"lead_piip_gas_mean": "5.0"})
     assert _row_for(client, pid)["mean_ogip"] == "5.0"
 
-    _save_fields(client, pid, "Pre-Drilling Resource Assessment", {"pre_drill_piip_gas_mean": "7.5"})
+    _save_fields(client, pid, "Pre-Drilling GeoX Assessment", {"pre_drill_piip_gas_mean": "7.5"})
     assert _row_for(client, pid)["mean_ogip"] == "7.5"
 
     _save_fields(client, pid, "SAD Model", {"post_drill_piip_gas_mean": "9.25"})
@@ -321,7 +321,7 @@ def test_mean_ogip_precedence_post_beats_pre_beats_lead(client):
 def test_summary_cumulative_ogip_sums_mean_ogip(client):
     pid_a = create_project(client, "SUM-A", **BP_KWARGS)
     pid_b = create_project(client, "SUM-B", **BP_KWARGS)
-    _save_fields(client, pid_a, "Lead Resource Assessment", {"lead_piip_gas_mean": "4.0"})
+    _save_fields(client, pid_a, "Resource Assessment", {"lead_piip_gas_mean": "4.0"})
     _save_fields(client, pid_b, "SAD Model", {"post_drill_piip_gas_mean": "6.5"})
 
     payload = _rows(client)

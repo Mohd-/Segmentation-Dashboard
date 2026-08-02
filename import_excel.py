@@ -33,8 +33,8 @@ matched headers mapped back to the canonical column names.
 Flagged assumptions (documented, cheap to change)
 -------------------------------------------------
 1. OGIP/Condensate trio destination step, by (record type, fluid presence):
-   - proposed / mature lead            -> 'Lead Resource Assessment' (lead_piip_*)
-   - bp / historical WITHOUT a fluid   -> 'Pre-Drilling Resource Assessment' (pre_drill_piip_*)
+   - proposed / mature lead            -> 'Resource Assessment' (lead_piip_*)
+   - bp / historical WITHOUT a fluid   -> 'Pre-Drilling GeoX Assessment' (pre_drill_piip_*)
    - any record WITH a fluid status    -> 'SAD Update' (resource_update_*)
      (v4 merged the old 'Resource Assessment Update' step into 'SAD Update',
      which kept the resource_update_* keys verbatim.)
@@ -117,6 +117,11 @@ _SEAL_INPUT_KEYS = (
     "seal_recent_activity_age", "seal_dip", "seal_azimuth_vs_shmax",
     "seal_fault_level_confidence", "seal_fracture_permeability",
 )
+
+# The step that owns BOTH CoS halves since v5 (they used to be two steps,
+# "Trap CoS" and "Seal CoS", now retired). Named once so the Trap/Seal writes
+# below read as what they are: several saves against one component.
+_COS_STEP = workflow.MERGED_COS_TASK_NAME
 
 # The per-stage measurement keys of the flowback_stages_rows mini-sheet
 # (schema.js FLOWBACK_STAGE_COLUMNS); must track portfolio_export's own
@@ -599,9 +604,9 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
     if has_fluid:
         prefix, trio_step = "resource_update", "SAD Update"
     elif record_type in ("bp", "historical"):
-        prefix, trio_step = "pre_drill_piip", "Pre-Drilling Resource Assessment"
+        prefix, trio_step = "pre_drill_piip", "Pre-Drilling GeoX Assessment"
     else:
-        prefix, trio_step = "lead_piip", "Lead Resource Assessment"
+        prefix, trio_step = "lead_piip", "Resource Assessment"
 
     # Lead rows have no BP phase, so BP-only cells would vanish silently: name
     # the ignored columns instead. Booked counts only when truthy -- the export
@@ -623,7 +628,7 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
         if value is not None:
             area[key] = value
     if area:
-        _save(session, tid("Reservoir Area Definition"), area, data_bearing)
+        _save(session, tid("Area Definition"), area, data_bearing)
 
     thickness = _num(row, "SARH Formation Thickness (ft)", warnings)
     if thickness is not None:
@@ -654,10 +659,13 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
     if value is not None:
         trap["trap_cos_pct"] = value
     if trap:
-        _save(session, tid("Trap CoS"), trap, data_bearing)
+        _save(session, tid(_COS_STEP), trap, data_bearing)
 
     # Seal CoS: inputs first (their save fires the server-side recompute), then
-    # a pct-only override when the sheet disagrees.
+    # a pct-only override when the sheet disagrees. Since v5 the Trap and Seal
+    # halves share ONE step (_COS_STEP) and therefore one task_id; the two
+    # saves stay separate because the Seal half has its own recompute /
+    # incomplete-inputs retry contract.
     seal = {}
     for col, key in (("Most Recent Age of Fault", "seal_recent_activity_age"),
                      ("Dip", "seal_dip"),
@@ -674,7 +682,7 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
     has_seal_inputs = any(key in seal for key in _SEAL_INPUT_KEYS)
     if seal:
         try:
-            _save(session, tid("Seal CoS"), seal, data_bearing)
+            _save(session, tid(_COS_STEP), seal, data_bearing)
         except ValueError as exc:
             # cos.calculate_seal_cos rejects an INCOMPLETE input set (some but
             # not all of the required keys). The recompute raises before any
@@ -687,17 +695,17 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
                             f"({', '.join(skipped)}): {exc}")
             retry = {key: val for key, val in seal.items() if key not in _SEAL_INPUT_KEYS}
             if retry:
-                _save(session, tid("Seal CoS"), retry, data_bearing)
+                _save(session, tid(_COS_STEP), retry, data_bearing)
             has_seal_inputs = False
     if sheet_seal_pct is not None:
         if has_seal_inputs:
-            stored = workflow.get_task_dynamic_fields(session, tid("Seal CoS")).get("seal_cos_pct", "")
+            stored = workflow.get_task_dynamic_fields(session, tid(_COS_STEP)).get("seal_cos_pct", "")
             if _norm_num(stored) != _norm_num(sheet_seal_pct):
                 # Inputs-free save -> no recompute -> the sheet value wins.
-                _save(session, tid("Seal CoS"), {"seal_cos_pct": sheet_seal_pct}, data_bearing)
+                _save(session, tid(_COS_STEP), {"seal_cos_pct": sheet_seal_pct}, data_bearing)
                 notes.append(f"Seal CoS (%): sheet value {sheet_seal_pct} pinned over recomputed {stored!r}")
         else:
-            _save(session, tid("Seal CoS"), {"seal_cos_pct": sheet_seal_pct}, data_bearing)
+            _save(session, tid(_COS_STEP), {"seal_cos_pct": sheet_seal_pct}, data_bearing)
 
     if prefix in ("lead_piip", "pre_drill_piip"):
         trio = _piip_trio(row, prefix, warnings)

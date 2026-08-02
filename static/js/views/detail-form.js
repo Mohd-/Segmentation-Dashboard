@@ -808,15 +808,27 @@ export var POST_DRILL_PIIP_SOURCES = [
 ];
 // The lead phase's own mean sources -- what a LEAD value must be read from,
 // never the post-drill numbers above.
+//
+// The v5 renames ('Pre-Drilling Resource Assessment' -> 'Pre-Drilling GeoX
+// Assessment', 'Lead Resource Assessment' -> 'Resource Assessment') rewrote the
+// task rows in place, so LIVE data answers to the new names only. The old
+// spellings ride along right behind for the one map that still carries them:
+// lead_summary_snapshots froze its buckets at promotion time and is never
+// rewritten, and leadFieldSource() merges that frozen map with the live one.
 export var LEAD_PIIP_SOURCES = [
-  ['Pre-Drilling Resource Assessment', 'pre_drill_piip_gas_mean'],
-  ['Lead Resource Assessment', 'lead_piip_gas_mean']
+  ['Pre-Drilling GeoX Assessment', 'pre_drill_piip_gas_mean'],
+  ['Pre-Drilling Resource Assessment', 'pre_drill_piip_gas_mean'],   // pre-v5 snapshots
+  ['Resource Assessment', 'lead_piip_gas_mean'],
+  ['Lead Resource Assessment', 'lead_piip_gas_mean']                 // pre-v5 snapshots
 ];
 export var LATEST_PIIP_SOURCES = POST_DRILL_PIIP_SOURCES.concat(LEAD_PIIP_SOURCES);
 
-// Lead Resource Assessment only: the full Resource Assessment calculator
-// (views/resource-calculator.js) rendered inline, above the (now field-less
-// -- see SCHEMA) dynamic-fields grid. Same remove-and-reinsert-on-every-load
+// The full Resource Assessment calculator (views/resource-calculator.js)
+// rendered inline, above the (now field-less -- see SCHEMA) dynamic-fields
+// grid, on the two steps that carry a PIIP assessment: the lead's own
+// 'Resource Assessment' and the pre-drill re-assessment
+// 'Pre-Drilling GeoX Assessment'. The calculator itself is unchanged -- it
+// reads/writes whichever step's task it is handed. Same remove-and-reinsert-on-every-load
 // idiom as renderComponentFolder below, so switching to any other component
 // cleanly drops the panel; switching AWAY also tears down the calculator's
 // own render-generation state (teardownResourceCalculator) so a stray async
@@ -826,10 +838,11 @@ export var LATEST_PIIP_SOURCES = POST_DRILL_PIIP_SOURCES.concat(LEAD_PIIP_SOURCE
 // generic setComponentReferenceMode sweep detail-form.js runs again right
 // after loadComponent's fields fetch resolves) -- see that function's own
 // comment for why Apply/View-plots need no special-casing there.
+var RESOURCE_CALCULATOR_STEPS = ['Resource Assessment', 'Pre-Drilling GeoX Assessment'];
 function renderResourceCalculatorSection(task, fields) {
   var previous = byId('resource-calculator-panel');
   if (previous) previous.remove();
-  if (task.task_name !== 'Lead Resource Assessment') { teardownResourceCalculator(); return; }
+  if (RESOURCE_CALCULATOR_STEPS.indexOf(task.task_name) < 0) { teardownResourceCalculator(); return; }
   var panel = document.createElement('div');
   panel.id = 'resource-calculator-panel';
   panel.className = 'resource-calculator-panel';

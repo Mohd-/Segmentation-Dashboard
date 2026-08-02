@@ -10,7 +10,7 @@ from datetime import date
 
 from conftest import create_project, get_task_by_name, get_tasks
 
-PROSPECT_STAGES = {"Lead Identification", "Risking", "Segmentation", "Pre-Well Delivery"}
+PROSPECT_STAGES = {"Lead Assessment", "Risk Analysis", "Pre-Well Delivery"}
 
 
 # ---------------------------------------------------------------------------
@@ -27,14 +27,14 @@ def test_new_prospect_project_has_27_tasks_all_not_assigned(client):
     assert len(tasks) == 27
 
     first = tasks[0]
-    assert first["task_name"] == "Reservoir Area Definition"
+    assert first["task_name"] == "Area Definition"
     assert first["status"] == "Not Assigned"
 
     for task in tasks[1:]:
         assert task["status"] == "Not Assigned"
 
     project = client.get(f"/api/projects/{pid}").get_json()
-    assert project["current_task"] == "Reservoir Area Definition"
+    assert project["current_task"] == "Area Definition"
 
 
 def test_new_bp_project_seeds_all_27_tasks_not_assigned(client):
@@ -120,7 +120,7 @@ def test_not_assigned_also_clears_actual_start(client):
 def test_approving_first_task_advances_current_task(client):
     pid = create_project(client, "ADVANCE-1")
     task = get_tasks(client, pid)[0]
-    assert task["task_name"] == "Reservoir Area Definition"
+    assert task["task_name"] == "Area Definition"
     client.patch(f"/api/tasks/{task['task_id']}", json={
         "status": "Approved", "revision": task["revision"],
     })
@@ -208,10 +208,11 @@ def test_approving_all_prospect_tasks_completes_project(client):
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["overall_status"] == "Completed"
     # A completed project anchors on the final (highest-sequence) task of its
-    # OWN pipeline: "Approval to Stake" / Pre-Well Delivery for a prospect
-    # (a completed BP well anchors on PDA / Post-Testing), and completion
-    # percent reads 100% because it is scoped to the pipeline's own stages.
-    assert project["current_task"] == "Approval to Stake"
+    # OWN pipeline: "Pre-Drilling GeoX Assessment" / Pre-Well Delivery for a
+    # prospect (a completed BP well anchors on PDA / Post-Testing), and
+    # completion percent reads 100% because it is scoped to the pipeline's own
+    # stages.
+    assert project["current_task"] == "Pre-Drilling GeoX Assessment"
     assert project["current_stage"] == "Pre-Well Delivery"
 
     completion = client.get(f"/api/projects/{pid}/completion").get_json()
@@ -245,32 +246,31 @@ def test_approving_all_bp_tasks_completes_bp_well_anchored_on_pda(client):
 # ---------------------------------------------------------------------------
 
 def test_derived_pointers_track_first_open_task_of_half_approved_prospect(client):
-    # Approve steps 1-3 (all of Lead Identification) and assign step 4: the
-    # derived pointers must land on step 4 (Seismic Signature Validation /
-    # Risking) and carry its assignee, on both the single-project read and the
-    # board row.
+    # Approve steps 1-4 (all of Lead Assessment) and assign step 5: the derived
+    # pointers must land on step 5 (Reservoir CoS / Risk Analysis) and carry its
+    # assignee, on both the single-project read and the board row.
     pid = create_project(client, "DERIVED-POINTERS-1")
     tasks = get_tasks(client, pid)
-    for task in tasks[:3]:
+    for task in tasks[:4]:
         resp = client.patch(f"/api/tasks/{task['task_id']}", json={
             "status": "Approved", "revision": task["revision"],
         })
         assert resp.status_code == 200, resp.get_json()
-    step4 = get_tasks(client, pid)[3]
-    resp = client.post(f"/api/tasks/{step4['task_id']}/assign", json={
-        "assignee": "Employee", "cascade": False, "revision": step4["revision"],
+    step5 = get_tasks(client, pid)[4]
+    resp = client.post(f"/api/tasks/{step5['task_id']}/assign", json={
+        "assignee": "Employee", "cascade": False, "revision": step5["revision"],
     })
     assert resp.status_code == 200, resp.get_json()
 
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["overall_status"] == "In Progress"
-    assert project["current_task"] == "Seismic Signature Validation"
-    assert project["current_stage"] == "Risking"
+    assert project["current_task"] == "Reservoir CoS"
+    assert project["current_stage"] == "Risk Analysis"
     assert project["current_owner"] == "Employee"
 
     row = next(r for r in client.get("/api/projects").get_json() if r["project_id"] == pid)
-    assert row["current_task"] == "Seismic Signature Validation"
-    assert row["current_stage"] == "Risking"
+    assert row["current_task"] == "Reservoir CoS"
+    assert row["current_stage"] == "Risk Analysis"
     assert row["current_owner"] == "Employee"
     assert row["overall_status"] == "In Progress"
 
@@ -367,7 +367,7 @@ def test_transition_approve_completes_and_reopen_clears_completed_at(client):
         })
         assert resp.status_code == 200, resp.get_json()
     last = get_tasks(client, pid)[prospect[-1]["sequence_no"] - 1]
-    assert last["task_name"] == "Approval to Stake"
+    assert last["task_name"] == "Pre-Drilling GeoX Assessment"
     assigned = client.post(f"/api/tasks/{last['task_id']}/assign", json={
         "assignee": "Employee", "cascade": False, "revision": last["revision"],
     }).get_json()["task"]
@@ -382,7 +382,7 @@ def test_transition_approve_completes_and_reopen_clears_completed_at(client):
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["overall_status"] == "Completed"
     assert project["completed_at"]  # stamped by the completing transition
-    assert project["current_task"] == "Approval to Stake"
+    assert project["current_task"] == "Pre-Drilling GeoX Assessment"
     assert project["current_stage"] == "Pre-Well Delivery"
     assert project["current_owner"] is None
 
@@ -406,7 +406,7 @@ def test_transition_approve_completes_and_reopen_clears_completed_at(client):
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["overall_status"] == "In Progress"
     assert project["completed_at"] is None
-    assert project["current_task"] == "Approval to Stake"
+    assert project["current_task"] == "Pre-Drilling GeoX Assessment"
 
 
 def test_owner_filter_matches_derived_owner(client):
@@ -453,12 +453,12 @@ def test_prospect_completion_fallback_anchors_on_prospect_not_pda(client):
     pid = create_project(client, "FALLBACK-PROSPECT-1")
     _deactivate_stage_tasks(
         client.db_path, pid,
-        ["Lead Identification", "Risking", "Segmentation", "Pre-Well Delivery"],
+        ["Lead Assessment", "Risk Analysis", "Pre-Well Delivery"],
     )
 
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["overall_status"] == "Completed"
-    assert project["current_task"] == "Approval to Stake"
+    assert project["current_task"] == "Pre-Drilling GeoX Assessment"
     assert project["current_stage"] == "Pre-Well Delivery"
     assert project["current_task"] != "PDA"
     assert project["current_stage"] != "Post-Testing"

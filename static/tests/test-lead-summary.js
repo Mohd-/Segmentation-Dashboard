@@ -192,30 +192,30 @@ test('lead-summary carries no collapse affordance at all', function () {
 
 // The server's twelve tracked items, abbreviated to what the sidebar reads.
 var ITEMS = [
-  { stage: 'Lead Assessment', label: 'Area Definition', status: 'Completed', steps: ['Reservoir Area Definition'] },
+  { stage: 'Lead Assessment', label: 'Area Definition', status: 'Completed', steps: ['Area Definition'] },
   { stage: 'Lead Assessment', label: 'Thickness Estimation', status: 'Completed', steps: ['Thickness Estimation'] },
-  { stage: 'Lead Assessment', label: 'GRV Inputs', status: 'In Progress', steps: [] },
-  { stage: 'Lead Assessment', label: 'Resource Assessment', status: 'In Progress', steps: ['Lead Resource Assessment'] },
+  { stage: 'Lead Assessment', label: 'GRV Inputs', status: 'In Progress', steps: ['GRV Inputs'] },
+  { stage: 'Lead Assessment', label: 'Resource Assessment', status: 'In Progress', steps: ['Resource Assessment'] },
   { stage: 'Risk Analysis', label: 'Reservoir', status: 'In Progress', steps: ['Reservoir CoS'] },
-  { stage: 'Risk Analysis', label: 'Trap and Seal', status: 'In Progress', steps: ['Trap CoS', 'Seal CoS'] },
+  { stage: 'Risk Analysis', label: 'Trap and Seal', status: 'In Progress', steps: ['Trap and Seal CoS'] },
   { stage: 'Risk Analysis', label: 'Seismic Validation', status: 'In Progress', steps: ['Seismic Signature Validation'] },
-  { stage: 'Risk Analysis', label: 'Segmentation Slides', status: 'Pending Approval', steps: ['Prospect Evaluation Presentation'] },
-  { stage: 'Pre-Well Delivery', label: 'Moving Tolerance', status: 'In Progress', steps: ['Staking Moving Tolerance'] },
+  { stage: 'Risk Analysis', label: 'Segmentation Slides', status: 'Pending Approval', steps: ['Segmentation Slides'] },
+  { stage: 'Pre-Well Delivery', label: 'Moving Tolerance', status: 'In Progress', steps: ['Moving Tolerance'] },
   { stage: 'Pre-Well Delivery', label: 'Approval to Stake', status: 'In Progress', steps: ['Approval to Stake'] },
-  { stage: 'Pre-Well Delivery', label: 'Well Site Location', status: 'In Progress', steps: [] },
-  { stage: 'Pre-Well Delivery', label: 'GeoX Assessment', status: 'In Progress', steps: ['Pre-Drilling Resource Assessment'] }
+  { stage: 'Pre-Well Delivery', label: 'Well Site Location', status: 'In Progress', steps: ['Well Site Location'] },
+  { stage: 'Pre-Well Delivery', label: 'GeoX Assessment', status: 'In Progress', steps: ['Pre-Drilling GeoX Assessment'] }
 ];
-// The stored 12-step prospect pipeline, in sequence order.
+// The stored 12-step prospect pipeline (v5), in sequence order. The stage
+// group IS the sidebar heading now -- no display mapping.
 var TASKS = [
-  'Reservoir Area Definition', 'Thickness Estimation', 'Lead Resource Assessment',
-  'Seismic Signature Validation', 'Reservoir CoS', 'Trap CoS', 'Seal CoS',
-  'Prospect Evaluation Presentation', 'Well Creation', 'Pre-Drilling Resource Assessment',
-  'Staking Moving Tolerance', 'Approval to Stake'
+  'Area Definition', 'Thickness Estimation', 'GRV Inputs', 'Resource Assessment',
+  'Reservoir CoS', 'Trap and Seal CoS', 'Seismic Signature Validation',
+  'Segmentation Slides', 'Moving Tolerance', 'Approval to Stake',
+  'Well Site Location', 'Pre-Drilling GeoX Assessment'
 ].map(function (name, index) {
   return { task_id: index + 1, task_name: name, sequence_no: index + 1, status: 'Not Assigned',
-           stage_group: index < 3 ? 'Lead Identification'
-             : index < 7 ? 'Risking'
-               : index === 7 ? 'Segmentation' : 'Pre-Well Delivery' };
+           stage_group: index < 4 ? 'Lead Assessment'
+             : index < 8 ? 'Risk Analysis' : 'Pre-Well Delivery' };
 });
 
 test('lead sidebar groups into exactly the three display stages, four items each', function () {
@@ -231,24 +231,39 @@ test('lead sidebar counts only COMPLETED tracked items toward x/4', function () 
     'Pending Approval is work still open, exactly as the board KPI treats it');
 });
 
-test('lead sidebar renders Trap and Seal as its TWO real steps, both clickable', function () {
+test('lead sidebar renders Trap and Seal as the ONE merged step, clickable', function () {
   var risk = leadStageGroups(ITEMS, TASKS)[1];
   var labels = risk.rows.map(function (row) { return row.label; });
-  assert.ok(labels.indexOf('Trap CoS') >= 0 && labels.indexOf('Seal CoS') >= 0,
-    'both stored steps stay reachable: ' + labels.join(','));
+  assert.ok(labels.indexOf('Trap and Seal CoS') >= 0,
+    'the merged step is what the row opens: ' + labels.join(','));
+  assert.equal(labels.indexOf('Trap CoS'), -1, 'the retired halves are gone');
+  assert.equal(labels.indexOf('Seal CoS'), -1, 'the retired halves are gone');
   risk.rows.forEach(function (row) {
     assert.ok(row.task, row.label + ' resolves to a real task');
   });
 });
 
-test('lead sidebar dims the two tracked items that have no stored step yet', function () {
+test('lead sidebar has ZERO dimmed rows: every tracked item is a real step', function () {
   var groups = leadStageGroups(ITEMS, TASKS);
+  var future = [];
+  var rows = 0;
+  groups.forEach(function (group) {
+    group.rows.forEach(function (row) { rows += 1; if (!row.task) future.push(row.label); });
+  });
+  assert.deepEqual(future, [], 'v5 gave GRV Inputs and Well Site Location real steps');
+  assert.equal(rows, 12, 'twelve items, twelve openable rows');
+});
+
+test('lead sidebar dims a step the record does not actually carry', function () {
+  // Defensive path only: a legacy row a migration could not reach. The item
+  // still shows its name instead of vanishing from the workflow.
+  var thinTasks = TASKS.filter(function (task) { return task.task_name !== 'GRV Inputs'; });
+  var groups = leadStageGroups(ITEMS, thinTasks);
   var future = [];
   groups.forEach(function (group) {
     group.rows.forEach(function (row) { if (!row.task) future.push(row.label); });
   });
-  assert.deepEqual(future, ['GRV Inputs', 'Well Site Location'],
-    'exactly the two items the permanent step migration will supply');
+  assert.deepEqual(future, ['GRV Inputs']);
 });
 
 test('lead sidebar never loses a real step no tracked item references', function () {
@@ -260,15 +275,17 @@ test('lead sidebar never loses a real step no tracked item references', function
   TASKS.forEach(function (task) {
     assert.ok(rendered.indexOf(task.task_name) >= 0, task.task_name + ' is reachable from the sidebar');
   });
-  // "Well Creation" is the one such step today; it lands in its stored stage
-  // group's display stage rather than being dropped.
-  var preWell = groups[2].rows.map(function (row) { return row.label; });
-  assert.ok(preWell.indexOf('Well Creation') >= 0, preWell.join(','));
+  // A stray extra row (none in the v5 template) still lands in its own stage
+  // group rather than being dropped.
+  var extra = TASKS.concat([{ task_id: 99, task_name: 'Legacy Step', sequence_no: 99,
+                              status: 'Not Assigned', stage_group: 'Pre-Well Delivery' }]);
+  var preWell = leadStageGroups(ITEMS, extra)[2].rows.map(function (row) { return row.label; });
+  assert.ok(preWell.indexOf('Legacy Step') >= 0, preWell.join(','));
 });
 
 test('lead sidebar tolerates a lead with no tracked items at all', function () {
   assert.deepEqual(leadStageGroups(null, []), []);
   var groups = leadStageGroups([], TASKS);
-  assert.equal(groups.length, 3, 'the stored steps still group under their display stages');
+  assert.equal(groups.length, 3, 'the stored steps still group under their stage groups');
   assert.deepEqual(groups.map(function (g) { return g.total; }), [0, 0, 0]);
 });

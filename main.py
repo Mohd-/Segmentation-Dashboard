@@ -364,7 +364,7 @@ def meta():
         # (seismic_blocks.json). Feeds the Reservoir CoS sheet's dependent
         # Block/AR dropdowns -- this endpoint is their single source of truth.
         "seismic_blocks": config.SEISMIC_BLOCK_AR_MAP,
-        # Configured resource-assessment scenarios for the Lead Resource
+        # Configured resource-assessment scenarios for the Resource
         # Assessment pop-up calculator's scenario dropdown.
         "resource_scenarios": resource_calc.scenario_options(),
     })
@@ -622,7 +622,7 @@ def transition_task(task_id):
 
 @app.post("/api/tasks/<int:task_id>/resource-assessment")
 def resource_assessment(task_id):
-    """Run the Lead Resource Assessment pop-up calculator for a task.
+    """Run the Resource Assessment pop-up calculator for a task.
 
     The task must exist (404 otherwise). The JSON body carries the pop-up's
     scenario/method/inputs; resource_calc.run drives the Monte Carlo engine and

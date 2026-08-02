@@ -102,10 +102,10 @@ def test_four_record_types_placed_correctly(client, app_modules, tmp_path):
         prospect_names = {p["project_name"] for p in workflow.get_projects(session, pipeline_filter="prospect")}
         assert "PROP-4" in prospect_names
         prop_tasks = _tasks_by_name(session, "PROP-4")
-        assert prop_tasks["Reservoir Area Definition"]["status"] == "Approved"
+        assert prop_tasks["Area Definition"]["status"] == "Approved"
         assert prop_tasks["Reservoir CoS"]["status"] == "Approved"
         # A step with no imported data stays open (not fully matured).
-        assert prop_tasks["Trap CoS"]["status"] != "Approved"
+        assert prop_tasks["Trap and Seal CoS"]["status"] != "Approved"
 
         # mature lead -> off the Prospect board, in the Portfolio as 'Staked'.
         assert "MATR-3" not in prospect_names
@@ -340,7 +340,7 @@ def test_partial_seal_inputs_warn_and_pct_pins(client, app_modules, tmp_path):
         assert any("incomplete Seal CoS inputs" in w and "seal_dip" in w for w in result.warnings)
 
         fields = workflow.get_task_dynamic_fields(
-            session, _tasks_by_name(session, "SEAL-1")["Seal CoS"]["task_id"])
+            session, _tasks_by_name(session, "SEAL-1")["Trap and Seal CoS"]["task_id"])
         assert "seal_dip" not in fields                    # incomplete inputs skipped
         assert fields.get("seal_cos_pct") == "55"          # sheet pct pinned
         assert fields.get("seal_pore_pressure_gradient_psi_ft") == "0.45"  # rider kept
@@ -458,7 +458,7 @@ def test_fluidless_bp_well_trio_lands_in_pre_drill(client, app_modules, tmp_path
         assert report.results[0].outcome == "created", report.results[0].reason
 
         fields = workflow.get_task_dynamic_fields(
-            session, _tasks_by_name(session, "NOF-1")["Pre-Drilling Resource Assessment"]["task_id"])
+            session, _tasks_by_name(session, "NOF-1")["Pre-Drilling GeoX Assessment"]["task_id"])
         assert fields.get("pre_drill_piip_gas_mean") == "10"
 
         exported = _export_by_name(session)["NOF-1"]

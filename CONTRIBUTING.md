@@ -61,11 +61,12 @@ for the workflow — there is no templates table.
 5. **Renaming** a component pre-deployment is the same edit — change the name
    in the tuple (and in `schema.js`, `_OVERVIEW_READ_SOURCES` and
    `COMPONENT_FILE_SECTIONS` if it appears there), then regenerate the dev DB.
-6. Tests: the task-count pins must move with you — the `31` counts in
+6. Tests: the task-count pins must move with you — the `27` counts in
    `tests/test_workflow_lifecycle.py`
-   (`test_new_prospect_project_has_31_tasks_all_not_assigned`,
-   `test_new_bp_project_seeds_all_31_tasks_not_assigned`) and
-   `tests/test_bootstrap.py` (`test_new_project_gets_31_active_tasks`), plus
+   (`test_new_prospect_project_has_27_tasks_all_not_assigned`,
+   `test_new_bp_project_seeds_all_27_tasks_not_assigned`) and
+   `tests/test_bootstrap.py` (`test_new_project_gets_27_active_tasks`,
+   `test_new_project_materializes_the_v5_template`), plus
    the completion-percent arithmetic tests if the new step lands in a
    Prospect stage.
 

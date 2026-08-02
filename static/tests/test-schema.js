@@ -170,7 +170,7 @@ test('schema.SCHEMA: row grouping ids are non-empty strings shared by at least t
 // --- supporting vocab ------------------------------------------------------
 
 test('schema boot fallbacks: stages, statuses, DONE', function () {
-  assert.deepEqual(PROSPECT_STAGES, ['Lead Identification', 'Risking', 'Segmentation', 'Pre-Well Delivery']);
+  assert.deepEqual(PROSPECT_STAGES, ['Lead Assessment', 'Risk Analysis', 'Pre-Well Delivery']);
   assert.deepEqual(BP_STAGES, ['Well Delivery', 'Post-Drilling', 'Post-Testing']);
   assert.equal(STATUSES.length, 4);
   assert.deepEqual(DONE, { 'Approved': 1 });
@@ -254,6 +254,41 @@ test('schema.SCHEMA: merged steps keep the retired steps\' EAV keys', function (
   });
 });
 
+test('schema.SCHEMA: the v5-retired prospect steps are gone from SCHEMA', function () {
+  ['Trap CoS', 'Seal CoS', 'Well Creation', 'Reservoir Area Definition',
+   'Lead Resource Assessment', 'Prospect Evaluation Presentation',
+   'Staking Moving Tolerance', 'Pre-Drilling Resource Assessment'].forEach(function (name) {
+    assert.ok(!(name in SCHEMA), name + ' is no longer a rendered step');
+  });
+});
+
+test('schema.SCHEMA: Trap and Seal CoS is the two old forms concatenated, keys verbatim', function () {
+  var fields = SCHEMA['Trap and Seal CoS'];
+  var keys = fields.map(function (f) { return f.key; });
+  assert.deepEqual(keys, [
+    'sarah_quwarah_thickness_ft', 'trap_cos_pct',
+    'seal_recent_activity_age', 'seal_dip', 'seal_azimuth_vs_shmax',
+    'seal_fault_level_confidence', 'seal_fracture_permeability',
+    'seal_pore_pressure_gradient_psi_ft', 'seal_cos_pct'
+  ], 'the merged step writes exactly the EAV keys the two halves wrote');
+  // A section heading opens each half, so the merged form still reads as two.
+  assert.equal(fields[0].section, 'Trap');
+  assert.equal(fields[2].section, 'Seal');
+  // Both computed percentages stay server-written, never typed.
+  assert.ok(SCHEMA['Trap and Seal CoS'].filter(function (f) {
+    return f.key === 'trap_cos_pct' || f.key === 'seal_cos_pct';
+  }).every(function (f) { return f.readonly === true; }), 'both outputs stay readonly');
+});
+
+test('schema.SCHEMA: every v5 prospect step has an entry', function () {
+  ['Area Definition', 'Thickness Estimation', 'GRV Inputs', 'Resource Assessment',
+   'Reservoir CoS', 'Trap and Seal CoS', 'Seismic Signature Validation',
+   'Segmentation Slides', 'Moving Tolerance', 'Approval to Stake',
+   'Well Site Location', 'Pre-Drilling GeoX Assessment'].forEach(function (name) {
+    assert.ok(name in SCHEMA, name + ' has a SCHEMA entry (even if field-less)');
+  });
+});
+
 test('schema.SAD_FORMATION_COLUMNS: one row per formation, valid column defs', function () {
   checkFieldList('SAD_FORMATION_COLUMNS', SAD_FORMATION_COLUMNS, KNOWN_COLUMN_TYPES, 'columns');
   var keys = SAD_FORMATION_COLUMNS.map(function (col) { return col.key; });
@@ -317,33 +352,33 @@ test('schema formations vocabulary', function () {
 // saveComponentCard (project-editor.js) ahead of the save API call.
 
 test('validateStepFields: a wholly blank step always passes (every field is optional)', function () {
-  assert.equal(validateStepFields('Reservoir Area Definition', {}), null);
+  assert.equal(validateStepFields('Area Definition', {}), null);
   assert.equal(validateStepFields('Seal CoS', {}), null);
-  assert.equal(validateStepFields('Reservoir Area Definition', undefined), null, 'missing fields object defaults to {}');
+  assert.equal(validateStepFields('Area Definition', undefined), null, 'missing fields object defaults to {}');
 });
 
 test('validateStepFields: (a) non-numeric value is rejected by field label', function () {
-  assert.equal(validateStepFields('Reservoir Area Definition', { p90_area_km2: 'abc' }),
+  assert.equal(validateStepFields('Area Definition', { p90_area_km2: 'abc' }),
     'P90 Area (km²) must be numeric.');
 });
 
 test('validateStepFields: (b) a negative value is rejected', function () {
-  assert.equal(validateStepFields('Reservoir Area Definition', { p90_area_km2: '-5' }),
+  assert.equal(validateStepFields('Area Definition', { p90_area_km2: '-5' }),
     'P90 Area (km²) must not be negative.');
 });
 
 test('validateStepFields: (c) a value over the 9999 cap is rejected on a plain (non-bigOk) field', function () {
-  assert.equal(validateStepFields('Reservoir Area Definition', { p90_area_km2: '10000' }),
+  assert.equal(validateStepFields('Area Definition', { p90_area_km2: '10000' }),
     'P90 Area (km²) looks too large (max 9999).');
   // 9999 itself is still in range (p10 left blank so the ordering rule
   // below doesn't also fire).
-  assert.equal(validateStepFields('Reservoir Area Definition', { p90_area_km2: '9999' }), null);
+  assert.equal(validateStepFields('Area Definition', { p90_area_km2: '9999' }), null);
 });
 
 test('validateStepFields: bigOk-flagged fields are exempt from the 9999 cap', function () {
   // staking_well_x is a UTM coordinate (bigOk: true in schema.js); every
   // other field on the step is left blank so only this field is exercised.
-  assert.equal(validateStepFields('Staking Moving Tolerance', { staking_well_x: '650000' }), null);
+  assert.equal(validateStepFields('Moving Tolerance', { staking_well_x: '650000' }), null);
 });
 
 // No *writable* field ending in `_pct` exists in SCHEMA today (every current
@@ -374,13 +409,13 @@ test('validateStepFields: repeatable numeric columns are checked (cheap parse-ba
   assert.equal(validateStepFields('Reservoir CoS', { reservoir_cos_rows: readonlyRow }), null);
 });
 
-test('validateStepFields: cross-field -- Reservoir Area Definition P90 must be lower than P10', function () {
-  assert.equal(validateStepFields('Reservoir Area Definition', { p90_area_km2: '2', p10_area_km2: '1' }),
+test('validateStepFields: cross-field -- Area Definition P90 must be lower than P10', function () {
+  assert.equal(validateStepFields('Area Definition', { p90_area_km2: '2', p10_area_km2: '1' }),
     'Area P90 must be lower than Area P10.');
-  assert.equal(validateStepFields('Reservoir Area Definition', { p90_area_km2: '2', p10_area_km2: '2' }),
+  assert.equal(validateStepFields('Area Definition', { p90_area_km2: '2', p10_area_km2: '2' }),
     'Area P90 must be lower than Area P10.', 'equal values still fail -- strictly lower, matching the popup');
-  assert.equal(validateStepFields('Reservoir Area Definition', { p90_area_km2: '1', p10_area_km2: '2' }), null);
-  assert.equal(validateStepFields('Reservoir Area Definition', { p90_area_km2: '2' }), null, 'only one side filled: no comparison');
+  assert.equal(validateStepFields('Area Definition', { p90_area_km2: '1', p10_area_km2: '2' }), null);
+  assert.equal(validateStepFields('Area Definition', { p90_area_km2: '2' }), null, 'only one side filled: no comparison');
 });
 
 test('validateStepFields: cross-field -- Thickness Estimation reservoir must not exceed Sarah formation thickness', function () {
@@ -392,25 +427,25 @@ test('validateStepFields: cross-field -- Thickness Estimation reservoir must not
 });
 
 test('validateStepFields: piip trio ordering -- P90 must not exceed Mean, Mean must not exceed P10', function () {
-  assert.equal(validateStepFields('Pre-Drilling Resource Assessment', { pre_drill_piip_gas_p90: '10', pre_drill_piip_gas_mean: '5' }),
+  assert.equal(validateStepFields('Pre-Drilling GeoX Assessment', { pre_drill_piip_gas_p90: '10', pre_drill_piip_gas_mean: '5' }),
     'Gas P90 must not exceed Mean.');
-  assert.equal(validateStepFields('Pre-Drilling Resource Assessment', { pre_drill_piip_gas_mean: '20', pre_drill_piip_gas_p10: '10' }),
+  assert.equal(validateStepFields('Pre-Drilling GeoX Assessment', { pre_drill_piip_gas_mean: '20', pre_drill_piip_gas_p10: '10' }),
     'Gas Mean must not exceed P10.');
 });
 
 test('validateStepFields: piip trio -- equal values are permitted (manual deterministic entry)', function () {
-  assert.equal(validateStepFields('Pre-Drilling Resource Assessment', {
+  assert.equal(validateStepFields('Pre-Drilling GeoX Assessment', {
     pre_drill_piip_gas_p90: '10', pre_drill_piip_gas_mean: '10', pre_drill_piip_gas_p10: '10'
   }), null);
 });
 
 test('validateStepFields: piip trio -- the liquid trio is checked too, independent of the gas trio', function () {
-  assert.equal(validateStepFields('Pre-Drilling Resource Assessment', {
+  assert.equal(validateStepFields('Pre-Drilling GeoX Assessment', {
     pre_drill_piip_liquid_p90: '9', pre_drill_piip_liquid_mean: '3'
   }), 'Liquid P90 must not exceed Mean.');
 });
 
-// Lead Resource Assessment's SCHEMA entry is now empty (the Resource
+// Resource Assessment's SCHEMA entry is now empty (the Resource
 // Assessment calculator, views/resource-calculator.js, is the step's whole
 // body; Apply writes lead_piip_* via a direct API.saveFields PATCH that
 // never goes through getFields()/validateStepFields) -- so in practice this
@@ -418,9 +453,9 @@ test('validateStepFields: piip trio -- the liquid trio is checked too, independe
 // lead_piip trio rule can never fire through it. The rule itself is left in
 // PIIP_PREFIXES (schema.js) regardless -- proven still correct here by
 // constructing the fields object directly, independent of any form.
-test('validateStepFields: Lead Resource Assessment has no editable fields; the lead_piip rule still holds if ever exercised directly', function () {
-  assert.deepEqual(SCHEMA['Lead Resource Assessment'], []);
-  assert.equal(validateStepFields('Lead Resource Assessment', {}), null);
-  assert.equal(validateStepFields('Lead Resource Assessment', { lead_piip_gas_p90: '10', lead_piip_gas_mean: '5' }),
+test('validateStepFields: Resource Assessment has no editable fields; the lead_piip rule still holds if ever exercised directly', function () {
+  assert.deepEqual(SCHEMA['Resource Assessment'], []);
+  assert.equal(validateStepFields('Resource Assessment', {}), null);
+  assert.equal(validateStepFields('Resource Assessment', { lead_piip_gas_p90: '10', lead_piip_gas_mean: '5' }),
     'Gas P90 must not exceed Mean.');
 });

@@ -1,4 +1,4 @@
-"""Tests for the Lead Resource Assessment calculator (resource_calc) + its API.
+"""Tests for the Resource Assessment calculator (resource_calc) + its API.
 
 resource_calc adapts the vendored resource_engine to the pop-up calculator: it
 maps the dashboard's method labels/field names onto engine requests, runs the
@@ -171,7 +171,7 @@ def test_scenario_options_returns_four_configured():
 
 def test_api_resource_assessment_valid_grv(client):
     pid = create_project(client, "RESCALC-API-1")
-    task = get_task_by_name(client, pid, "Lead Resource Assessment")
+    task = get_task_by_name(client, pid, "Resource Assessment")
     resp = client.post(f"/api/tasks/{task['task_id']}/resource-assessment", json={
         "scenario": "dry_gas_high_pressure", "method": "GRV",
         "grv_p90": "12.6", "grv_p10": "17.3",
@@ -184,7 +184,7 @@ def test_api_resource_assessment_valid_grv(client):
 
 def test_api_resource_assessment_invalid_ordering_400(client):
     pid = create_project(client, "RESCALC-API-2")
-    task = get_task_by_name(client, pid, "Lead Resource Assessment")
+    task = get_task_by_name(client, pid, "Resource Assessment")
     resp = client.post(f"/api/tasks/{task['task_id']}/resource-assessment", json={
         "scenario": "dry_gas_high_pressure", "method": "GRV",
         "grv_p90": "17.3", "grv_p10": "12.6",

@@ -29,19 +29,9 @@ function isLeadView() {
   return currentProjectPipeline() === 'prospect' && isCurrentPipelineView();
 }
 
-/* The stored stage group -> the board's three DISPLAY stages. TRANSITIONAL: an
-   exact mirror of workflow/projects.py's _DISPLAY_STAGE_BY_STAGE (the Card 1B
-   presentation adapter), needed here only to place a step under the right
-   sidebar heading; it disappears with the same permanent step migration that
-   deletes the server-side adapter. BP stage groups are absent on purpose. */
-var LEAD_DISPLAY_STAGE_BY_STAGE = {
-  'Lead Identification': 'Lead Assessment',
-  'Risking': 'Risk Analysis',
-  'Segmentation': 'Risk Analysis',
-  'Pre-Well Delivery': 'Pre-Well Delivery'
-};
 // Same glyphs the board columns use, so a stage reads identically on both
-// surfaces.
+// surfaces. Keyed by the STORED stage group, which since v5 is the board
+// column itself -- there is no display mapping left to mirror.
 var LEAD_STAGE_ICONS = {
   'Lead Assessment': 'clipboard-check',
   'Risk Analysis': 'gauge',
@@ -108,9 +98,8 @@ export function openDetail(projectId, pipeline) {
 // sneak in. Keys match the stage_group values from workflow.py / /api/meta;
 // unknown stages fall back to a plain bullet.
 var STAGE_ICONS = {
-  'Lead Identification': '\u25CE',      // ◎ bullseye
-  'Risking': '\u2696\uFE0E',             // ⚖ scales
-  'Segmentation': '\u25A6',             // ▦ grid
+  'Lead Assessment': '\u25CE',          // ◎ bullseye
+  'Risk Analysis': '\u2696\uFE0E',       // ⚖ scales
   'Pre-Well Delivery': '\u26F3\uFE0E',   // ⛳ flag
   'Well Delivery': '\u2692\uFE0E',       // ⚒ hammer and pick
   'Post-Drilling': '\u26CF\uFE0E',       // ⛏ pick
@@ -143,12 +132,9 @@ function syncStageOpenState() {
 // picked, so the default-open stage is set here rather than at render time).
 export function revealTaskStage(task) {
   if (!task) return;
-  // The lead sidebar's headings are the three DISPLAY stages, not the stored
-  // stage groups, so the key has to be translated there (see
-  // LEAD_DISPLAY_STAGE_BY_STAGE). The BP rail is keyed by the stored group.
-  openStage = isLeadView()
-    ? (LEAD_DISPLAY_STAGE_BY_STAGE[task.stage_group] || task.stage_group)
-    : task.stage_group;
+  // Both rails are keyed by the stored stage group (v5 made the prospect
+  // groups the three sidebar headings).
+  openStage = task.stage_group;
   openStageProjectId = Store.projectId;
   syncStageOpenState();
   syncActiveStage();
@@ -171,18 +157,17 @@ function syncActiveStage() {
    the same twelve the board cards and the KPI donut read) and a chevron
    (down = expanded, right = collapsed).
 
-   Under an expanded stage sit that stage's REAL steps, regrouped under the
-   three headings -- this is presentation only, the stored 12-step prospect
-   pipeline is untouched. Three transitional details, all of which disappear
-   with the permanent step migration:
-     * a tracked item maps to its source steps via the `steps` list the server
-       now sends with each item, so the mapping is never duplicated here;
-     * "Trap and Seal" therefore renders as its TWO real steps (Trap CoS,
-       Seal CoS) -- both must stay reachable;
-     * "GRV Inputs" and "Well Site Location" have no backing step at all yet
-       and render as dimmed, non-clickable rows.
-   Any prospect step no tracked item references (today: "Well Creation") is
-   appended to its own display stage, so regrouping can never hide a step.
+   Under an expanded stage sit that stage's REAL steps. Since v5 that is a
+   straight 1:1 listing: each tracked item names exactly ONE stored step in its
+   `steps` list, and the item's own stage IS that step's stored stage group, so
+   nothing is regrouped, faked or dimmed here any more. Two details survive:
+     * the step name still comes off the item (`steps[0]`) rather than being
+       re-derived, so the server stays the single source of the mapping;
+     * a step a record does not actually carry -- a legacy row a migration
+       could not reach -- still shows its name, dimmed and unclickable, instead
+       of vanishing from the workflow.
+   Any prospect task row no tracked item names (there is none today) is
+   appended to its own stage, so the sidebar can never hide a real step.
    ------------------------------------------------------------------------- */
 
 // [{ stage, done, total, rows: [{ task | label }] }] in board order, built from
@@ -199,27 +184,17 @@ export function leadStageGroups(trackedItems, tasks) {
     var group = byStage[stage];
     group.total += 1;
     if (item.status === 'Completed') group.done += 1;
-    var sources = item.steps || [];
-    if (!sources.length) {
-      // No stored step behind this item yet -- a dimmed placeholder, never a
-      // click target and never counted as work that can be opened.
-      group.rows.push({ label: item.label, task: null });
-      return;
-    }
-    sources.forEach(function (name) {
+    (item.steps || []).forEach(function (name) {
       var task = taskByName[name];
-      // A source the project does not carry (a legacy/retired row) still shows
-      // its name rather than vanishing, dimmed like the not-yet-built items.
       group.rows.push({ label: name, task: task || null });
       if (task) task._leadRailPlaced = true;
     });
   });
-  // Steps no tracked item references (e.g. "Well Creation") keep their place in
-  // the workflow: appended to whichever display stage their stored group maps
-  // to, so the regrouped sidebar never loses a real step.
+  // Task rows no tracked item names keep their place in the workflow: appended
+  // to their own stage, so the sidebar never loses a real step.
   (tasks || []).forEach(function (task) {
     if (task._leadRailPlaced) { delete task._leadRailPlaced; return; }
-    var stage = LEAD_DISPLAY_STAGE_BY_STAGE[task.stage_group] || task.stage_group;
+    var stage = task.stage_group;
     if (!byStage[stage]) { byStage[stage] = { stage: stage, done: 0, total: 0, rows: [] }; order.push(stage); }
     byStage[stage].rows.push({ label: task.task_name, task: task });
   });
@@ -228,8 +203,11 @@ export function leadStageGroups(trackedItems, tasks) {
 
 function leadRailRowHtml(row) {
   if (!row.task) {
+    // Defensive only: every tracked item has a real step since v5, so this
+    // renders solely for a record missing a row the workflow says it should
+    // have (a legacy row a migration could not reach).
     return '<div class="component-item component-item-future"' +
-      ' title="(coming with a later step migration)" aria-disabled="true">' +
+      ' title="This step is not on this record." aria-disabled="true">' +
       '<span class="component-num" aria-hidden="true">·</span><b>' + esc(row.label) + '</b></div>';
   }
   var slug = String(row.task.status || 'Not Assigned').toLowerCase().replace(/\s+/g, '-');
@@ -382,6 +360,32 @@ function blockForAr(map, ar) {
   }
   return '';
 }
+/* Ordered task-name ladders for the lead-phase field map, and the tiny reader
+   over them. A plain `fields['<step>']` lookup is no longer enough, for two
+   independent reasons -- both about buckets that still answer to a PRE-v5 name:
+     * the v5 MERGE created a new "Trap and Seal CoS" row; a lead scored before
+       it still holds trap_cos_pct / seal_cos_pct under the now-retired
+       "Trap CoS" / "Seal CoS" buckets (the backend field map is
+       retired-inclusive, so they are on the payload);
+     * lead_summary_snapshots froze their {task_name: {key: value}} JSON at
+       PROMOTION time and are never rewritten -- they are a historical record --
+       so a well promoted before v5 carries the pre-RENAME bucket names for
+       ever, and leadFieldSource() merges exactly that map with the live one.
+   Surviving name first, legacy second: first non-blank wins, so re-entering a
+   value on the current step always supersedes the frozen/retired one. */
+var AREA_STEPS = ['Area Definition', 'Reservoir Area Definition'];
+var TRAP_STEPS = ['Trap and Seal CoS', 'Trap CoS'];
+var SEAL_STEPS = ['Trap and Seal CoS', 'Seal CoS'];
+
+export function fieldFrom(map, taskNames, key) {
+  var source = map || {};
+  for (var i = 0; i < taskNames.length; i += 1) {
+    var value = (source[taskNames[i]] || {})[key];
+    if (isFilled(value)) return value;
+  }
+  return '';
+}
+
 // Primary Reservoir CoS row, split into its percent and a "Block · AR n"
 // reference. The primary is the FIRST non-empty row (the global first-row
 // semantic — backend Total CoS and the portfolio read the same row). Prefer the
@@ -686,8 +690,8 @@ function leadMetricsHtml(fieldMap, gasSources) {
     metricRow('Reservoir Thickness (ft)', (fieldMap['Thickness Estimation'] || {}).reservoir_thickness_ft) +
     statCluster('Chance of Success (%)', [
       { label: 'Res', value: resCos.pct },
-      { label: 'Trap', value: (fieldMap['Trap CoS'] || {}).trap_cos_pct },
-      { label: 'Seal', value: (fieldMap['Seal CoS'] || {}).seal_cos_pct },
+      { label: 'Trap', value: fieldFrom(fieldMap, TRAP_STEPS, 'trap_cos_pct') },
+      { label: 'Seal', value: fieldFrom(fieldMap, SEAL_STEPS, 'seal_cos_pct') },
       { label: 'Total', value: (Store.overview || {}).derisking }
     ], resCos.ref) +
     '</div>';
@@ -740,7 +744,6 @@ export function leadSummaryData() {
   var fields = Store.allFields || {};
   var resCos = reservoirCosPrimary(fields);
   var thickness = fields['Thickness Estimation'] || {};
-  var area = fields['Reservoir Area Definition'] || {};
   return {
     // The lead's twelve TRACKED ITEMS, derived server-side and already on the
     // /detail payload's project row (get_project runs the same annotation the
@@ -760,11 +763,14 @@ export function leadSummaryData() {
       formation: thickness.formation_thickness_ft,
       reservoir: thickness.reservoir_thickness_ft
     },
-    area: { p90: area.p90_area_km2, p10: area.p10_area_km2 },
+    area: {
+      p90: fieldFrom(fields, AREA_STEPS, 'p90_area_km2'),
+      p10: fieldFrom(fields, AREA_STEPS, 'p10_area_km2')
+    },
     cos: {
       reservoir: resCos.pct,
-      trap: (fields['Trap CoS'] || {}).trap_cos_pct,
-      seal: (fields['Seal CoS'] || {}).seal_cos_pct,
+      trap: fieldFrom(fields, TRAP_STEPS, 'trap_cos_pct'),
+      seal: fieldFrom(fields, SEAL_STEPS, 'seal_cos_pct'),
       // Derived at read time (Reservoir x Trap x Seal) and delivered by
       // /detail's overview -- never recomputed on the client.
       total: (Store.overview || {}).derisking

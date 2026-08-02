@@ -459,10 +459,10 @@ def run_sweep(base_url):
               what="get missing task")
 
     # --- assignment -------------------------------------------------------
-    t1 = task_by_name(c, alpha_id, "Reservoir Area Definition")
+    t1 = task_by_name(c, alpha_id, "Area Definition")
     t2 = task_by_name(c, alpha_id, "Thickness Estimation")
     t_cos = task_by_name(c, alpha_id, "Reservoir CoS")
-    t_stake = task_by_name(c, alpha_id, "Staking Moving Tolerance")
+    t_stake = task_by_name(c, alpha_id, "Moving Tolerance")
     t_quick = task_by_name(c, alpha_id, "Quicklook Logs")
     status, out = c.request("POST", f"/api/tasks/{t1['task_id']}/assign",
                             {"assignee": "Staff Member", "cascade": False,
@@ -730,7 +730,7 @@ def run_sweep(base_url):
     # --- full approval path (for the Phase 3 completion invariant) ---------
     _, created_full = create_project(c, "Full Approval Path")
     full_id = created_full.get("project_id") if isinstance(created_full, dict) else None
-    first = task_by_name(c, full_id, "Reservoir Area Definition")
+    first = task_by_name(c, full_id, "Area Definition")
     status, _b = c.request("POST", f"/api/tasks/{first['task_id']}/assign",
                            {"assignee": "Supervisor", "cascade": True,
                             "revision": first.get("revision"), "changed_by": "Stress Harness"},
@@ -777,7 +777,7 @@ def run_storm(base_url, writers, readers, duration):
     setup = Client(base_url)
     _, created = create_project(setup, "Storm Target")
     storm_id = created.get("project_id") if isinstance(created, dict) else None
-    target = task_by_name(setup, storm_id, "Reservoir Area Definition")
+    target = task_by_name(setup, storm_id, "Area Definition")
     setup.request("POST", f"/api/tasks/{target['task_id']}/assign",
                   {"assignee": "Staff Member", "cascade": False,
                    "revision": target.get("revision"), "changed_by": "Stress Harness"},

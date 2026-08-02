@@ -79,7 +79,7 @@ def test_component_folder_uses_leads_for_prospect_steps_and_wells_for_bp_steps(c
     pipeline, so historical prospect steps remain under Leads after promotion."""
     pid = create_project(client, "PATH-1", pipeline_type="bp",
                          business_plan_enabled=True, business_plan_year=2030)
-    prospect_task = get_task_by_name(client, pid, "Reservoir Area Definition")
+    prospect_task = get_task_by_name(client, pid, "Area Definition")
     bp_task = get_task_by_name(client, pid, "Well Proposal")
 
     prospect = client.get(
@@ -92,7 +92,7 @@ def test_component_folder_uses_leads_for_prospect_steps_and_wells_for_bp_steps(c
     assert prospect["unc_path"].startswith("\\\\aramco.com\\ecc\\data\\NAUGAD\\Leads\\")
     assert prospect["server_path"].startswith("/mnt/leads/")
     assert prospect["unc_path"].endswith(
-        r"PATH\PATH-1\Component Files\Reservoir Area Definition"
+        r"PATH\PATH-1\Component Files\Area Definition"
     )
     assert bp["unc_path"].startswith("\\\\aramco.com\\ecc\\data\\NAUGAD\\Wells\\")
     assert bp["server_path"].startswith("/mnt/wells/")
@@ -284,7 +284,7 @@ def test_list_projects_row_shape(client):
     # workflow.projects._annotate_card_state). Pinned by name and by shape so a
     # later card can't quietly drop one the board renders from.
     row = rows[0]
-    assert row["display_stage"] == "Lead Assessment"      # Lead Identification, mapped
+    assert row["display_stage"] == "Lead Assessment"      # the stored stage group itself
     assert row["assignees"] == []                          # nothing assigned yet
     assert row["lead_priority"] in ("High", "Medium", "Low")
     assert len(row["tracked_items"]) == 12
@@ -368,7 +368,9 @@ def test_list_projects_include_completed_is_opt_in(client):
     # It lands in the board's last column, with every tracked item done -- the
     # board can render it without a special case.
     assert by_id[done_pid]["display_stage"] == "Pre-Well Delivery"
-    assert {item["status"] for item in by_id[done_pid]["tracked_items"]} == {"Completed", "In Progress"}
+    # Since v5 every tracked item has a real step, so a fully approved lead
+    # reads ALL twelve done (pre-v5 two items were pinned at In Progress).
+    assert {item["status"] for item in by_id[done_pid]["tracked_items"]} == {"Completed"}
 
 
 # ---------------------------------------------------------------------------
@@ -448,76 +450,6 @@ def test_rename_project_duplicate_name_rejected(client):
     assert resp.status_code == 400
     assert "already exists" in resp.get_json()["detail"]
     assert client.get(f"/api/projects/{pid}").get_json()["project_name"] == "RENAME-DUP-1"
-
-
-# ---------------------------------------------------------------------------
-# Well Creation step: well_name override (renames the project itself)
-# ---------------------------------------------------------------------------
-
-def _rename_event_count(client, project_id):
-    from conftest import raw_sqlite_connect
-    conn = raw_sqlite_connect(client.db_path)
-    try:
-        row = conn.execute(
-            "SELECT COUNT(*) AS n FROM task_history WHERE project_id = ? "
-            "AND action_type IN ('Lead Renamed', 'Well Renamed')", (project_id,)).fetchone()
-        return row["n"]
-    finally:
-        conn.close()
-
-
-def test_well_creation_well_name_renames_project(client):
-    """Saving well_name on the Well Creation step renames the project itself:
-    projects.project_name is the single source of truth (the form prefills
-    from it), so the value is never stored as a dynamic field."""
-    pid = create_project(client, "WCN-1")
-    task = get_task_by_name(client, pid, "Well Creation")
-    resp = client.patch(f"/api/tasks/{task['task_id']}",
-                        json={"fields": {"well_name": "WCN-1-REAL"}})
-    assert resp.status_code == 200
-    assert client.get(f"/api/projects/{pid}").get_json()["project_name"] == "WCN-1-REAL"
-    fields = client.get(f"/api/tasks/{task['task_id']}/dynamic-fields").get_json()
-    assert "well_name" not in fields
-    assert _rename_event_count(client, pid) == 1
-
-
-def test_well_creation_well_name_via_dynamic_fields_patch(client):
-    """The fields-only save path (PATCH /dynamic-fields) applies the same
-    rename override as the full component save."""
-    pid = create_project(client, "WCN-2")
-    task = get_task_by_name(client, pid, "Well Creation")
-    resp = client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
-                        json={"fields": {"well_name": "WCN-2-REAL"}})
-    assert resp.status_code == 200
-    assert client.get(f"/api/projects/{pid}").get_json()["project_name"] == "WCN-2-REAL"
-    fields = client.get(f"/api/tasks/{task['task_id']}/dynamic-fields").get_json()
-    assert "well_name" not in fields
-
-
-def test_well_creation_blank_or_same_well_name_is_noop(client):
-    """A blank well_name keeps the current name; re-saving the current name
-    logs no spurious 'Renamed' audit event."""
-    pid = create_project(client, "WCN-3")
-    task = get_task_by_name(client, pid, "Well Creation")
-    resp = client.patch(f"/api/tasks/{task['task_id']}",
-                        json={"fields": {"well_name": "   "}})
-    assert resp.status_code == 200
-    assert client.get(f"/api/projects/{pid}").get_json()["project_name"] == "WCN-3"
-    resp = client.patch(f"/api/tasks/{task['task_id']}",
-                        json={"fields": {"well_name": "WCN-3"}})
-    assert resp.status_code == 200
-    assert _rename_event_count(client, pid) == 0
-
-
-def test_well_creation_duplicate_well_name_rejected(client):
-    pid = create_project(client, "WCN-4")
-    create_project(client, "WCN-5")
-    task = get_task_by_name(client, pid, "Well Creation")
-    resp = client.patch(f"/api/tasks/{task['task_id']}",
-                        json={"fields": {"well_name": "WCN-5"}})
-    assert resp.status_code == 400
-    assert "already exists" in resp.get_json()["detail"]
-    assert client.get(f"/api/projects/{pid}").get_json()["project_name"] == "WCN-4"
 
 
 # ---------------------------------------------------------------------------
@@ -1015,13 +947,13 @@ def test_export_includes_proposed_leads_with_latest_estimates(client):
     membership, so neither lead may show there."""
     bare_pid = create_project(client, "EXPORT-LEAD-BARE")
     lead_pid = create_project(client, "EXPORT-LEAD-1")
-    lead_ra_task = get_task_by_name(client, lead_pid, "Lead Resource Assessment")
+    lead_ra_task = get_task_by_name(client, lead_pid, "Resource Assessment")
     resp = client.patch(f"/api/tasks/{lead_ra_task['task_id']}/dynamic-fields",
                          json={"fields": {"lead_piip_gas_p90": "3.1",
                                           "lead_piip_gas_mean": "7.5",
                                           "lead_piip_gas_p10": "15.2"}})
     assert resp.status_code == 200
-    area_task = get_task_by_name(client, lead_pid, "Reservoir Area Definition")
+    area_task = get_task_by_name(client, lead_pid, "Area Definition")
     resp = client.patch(f"/api/tasks/{area_task['task_id']}/dynamic-fields",
                          json={"fields": {"p90_area_km2": "2.4", "p10_area_km2": "9.8"}})
     assert resp.status_code == 200

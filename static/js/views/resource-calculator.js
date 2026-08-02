@@ -3,7 +3,7 @@
 // controls, conditional GRV / Area x Thickness inputs, Calculate -> POST
 // /api/tasks/<leadTaskId>/resource-assessment, Apply to Lead.
 //
-// Renders INLINE in the Lead Resource Assessment step body (detail-form.js's
+// Renders INLINE in the Resource Assessment step body (detail-form.js's
 // renderResourceCalculatorSection), not a dialog -- only the exceedance
 // plots still live behind a dialog (#resource-assessment-dialog, now a
 // plots-only viewer) because stored PIIP values alone have no rendered
@@ -127,27 +127,43 @@ export function buildCalculatePayload(state) {
   return payload;
 }
 
-// The Lead RA task's dynamic-fields save payload for "Apply to Lead". Key
-// names are the permanent EAV contract -- do not rename (renaming orphans
-// stored data, same rule as every other piip()-family field). GRV inputs are
-// only persisted for the GRV method (Area x Thickness has no GRV of its own).
-export function buildLeadApplyFields(result, state) {
+// Which EAV key family the calculator reads and writes, per hosting step.
+// The calculator LOGIC is identical on both -- only the key prefix moves, so
+// each assessment lands in the bucket its own step (and every reader of it:
+// SCHEMA's piip() grid, _OVERVIEW_READ_SOURCES, LATEST_PIIP_SOURCES) already
+// addresses. 'lead' is the default, so every existing caller and test is
+// unaffected.
+export var DEFAULT_FIELD_PREFIX = 'lead';
+export var FIELD_PREFIX_BY_STEP = {
+  'Resource Assessment': 'lead',
+  'Pre-Drilling GeoX Assessment': 'pre_drill'
+};
+export function fieldPrefixForStep(taskName) {
+  return FIELD_PREFIX_BY_STEP[taskName] || DEFAULT_FIELD_PREFIX;
+}
+
+// The assessment task's dynamic-fields save payload for "Apply". Key names are
+// the permanent EAV contract -- do not rename (renaming orphans stored data,
+// same rule as every other piip()-family field); only the FAMILY is chosen, by
+// `prefix`. GRV inputs are only persisted for the GRV method (Area x Thickness
+// has no GRV of its own).
+export function buildLeadApplyFields(result, state, prefix) {
   var s = state || {};
+  var p = prefix || s.fieldPrefix || DEFAULT_FIELD_PREFIX;
   var hasCondensate = !!(result && result.condensate);
-  var fields = {
-    lead_piip_gas_p90: formatStored(result.gas.p90),
-    lead_piip_gas_mean: formatStored(result.gas.mean),
-    lead_piip_gas_p10: formatStored(result.gas.p10),
-    lead_piip_has_liquid: hasCondensate ? '1' : '',
-    lead_piip_liquid_p90: hasCondensate ? formatStored(result.condensate.p90) : '',
-    lead_piip_liquid_mean: hasCondensate ? formatStored(result.condensate.mean) : '',
-    lead_piip_liquid_p10: hasCondensate ? formatStored(result.condensate.p10) : '',
-    lead_resource_scenario: s.scenario,
-    lead_calculation_method: s.method
-  };
+  var fields = {};
+  fields[p + '_piip_gas_p90'] = formatStored(result.gas.p90);
+  fields[p + '_piip_gas_mean'] = formatStored(result.gas.mean);
+  fields[p + '_piip_gas_p10'] = formatStored(result.gas.p10);
+  fields[p + '_piip_has_liquid'] = hasCondensate ? '1' : '';
+  fields[p + '_piip_liquid_p90'] = hasCondensate ? formatStored(result.condensate.p90) : '';
+  fields[p + '_piip_liquid_mean'] = hasCondensate ? formatStored(result.condensate.mean) : '';
+  fields[p + '_piip_liquid_p10'] = hasCondensate ? formatStored(result.condensate.p10) : '';
+  fields[p + '_resource_scenario'] = s.scenario;
+  fields[p + '_calculation_method'] = s.method;
   if (s.method === 'GRV') {
-    fields.lead_grv_p90_thousand_acre_ft = s.grvP90;
-    fields.lead_grv_p10_thousand_acre_ft = s.grvP10;
+    fields[p + '_grv_p90_thousand_acre_ft'] = s.grvP90;
+    fields[p + '_grv_p10_thousand_acre_ft'] = s.grvP10;
   }
   return fields;
 }
@@ -197,16 +213,18 @@ export function buildResultsMarkup(values) {
   return html;
 }
 
-// Pure: the Lead RA task's persisted fields -> the results-display value
+// Pure: the assessment task's persisted fields -> the results-display value
 // shape buildResultsMarkup renders. Stored values are already
 // formatStored()-formatted strings (Apply is their only writer) -- shown
-// verbatim, no re-formatting. Exported for a DOM-free unit test.
-export function resultsFromStoredFields(fields) {
+// verbatim, no re-formatting. `prefix` picks the key family (see
+// buildLeadApplyFields); it defaults to 'lead'. Exported for a DOM-free unit test.
+export function resultsFromStoredFields(fields, prefix) {
   fields = fields || {};
+  var p = prefix || DEFAULT_FIELD_PREFIX;
   return {
-    gas: { p90: fields.lead_piip_gas_p90 || '', mean: fields.lead_piip_gas_mean || '', p10: fields.lead_piip_gas_p10 || '' },
-    liquid: truthy(fields.lead_piip_has_liquid)
-      ? { p90: fields.lead_piip_liquid_p90 || '', mean: fields.lead_piip_liquid_mean || '', p10: fields.lead_piip_liquid_p10 || '' }
+    gas: { p90: fields[p + '_piip_gas_p90'] || '', mean: fields[p + '_piip_gas_mean'] || '', p10: fields[p + '_piip_gas_p10'] || '' },
+    liquid: truthy(fields[p + '_piip_has_liquid'])
+      ? { p90: fields[p + '_piip_liquid_p90'] || '', mean: fields[p + '_piip_liquid_mean'] || '', p10: fields[p + '_piip_liquid_p10'] || '' }
       : null
   };
 }
@@ -453,7 +471,7 @@ function onCalculate() {
 }
 
 // Changed-only write-back of the area/thickness inputs to their owning tasks
-// (Reservoir Area Definition / Thickness Estimation), sequential (one save
+// (Area Definition / Thickness Estimation), sequential (one save
 // resolves before the next starts) so both never race the same project's
 // write lock. Untouched inputs (unchanged from the prefill, or never shown
 // because the method never revealed them) produce an empty diff and are
@@ -464,10 +482,10 @@ function writeBackChangedFields(activeState) {
   if (String(activeState.areaP90) !== String(activeState.initialAreaP90)) areaChanged.p90_area_km2 = activeState.areaP90;
   if (String(activeState.areaP10) !== String(activeState.initialAreaP10)) areaChanged.p10_area_km2 = activeState.areaP10;
   if (Object.keys(areaChanged).length) {
-    if (!activeState.areaTask) return Promise.reject(new Error('Reservoir Area Definition component not found.'));
+    if (!activeState.areaTask) return Promise.reject(new Error('Area Definition component not found.'));
     chain = chain.then(function () {
       return API.saveFields(activeState.areaTask.task_id, areaChanged).catch(function (error) {
-        throw new Error('Failed to save Reservoir Area Definition: ' + error.message);
+        throw new Error('Failed to save Area Definition: ' + error.message);
       });
     });
   }
@@ -491,9 +509,9 @@ function onApply() {
   var applyButton = byId('ra-apply');
   applyButton.disabled = true;
   clearError();
-  var leadFields = buildLeadApplyFields(activeState.result, activeState);
+  var leadFields = buildLeadApplyFields(activeState.result, activeState, activeState.fieldPrefix);
   API.saveFields(activeState.task.task_id, leadFields).catch(function (error) {
-    throw new Error('Failed to save Lead Resource Assessment: ' + error.message);
+    throw new Error('Failed to save ' + activeState.task.task_name + ': ' + error.message);
   }).then(function () {
     return writeBackChangedFields(activeState);
   }).then(function () {
@@ -508,8 +526,8 @@ function onApply() {
 }
 
 // Called by detail-form.js whenever it removes the calculator panel from the
-// DOM without immediately rendering a fresh one (leaving the Lead Resource
-// Assessment step for a different component). Nulls the render generation so
+// DOM without immediately rendering a fresh one (leaving an assessment step
+// for a different component). Nulls the render generation so
 // a stray async Calculate/Apply response that resolves afterward is a no-op
 // (see the `state`/`activeState` doc comment above) instead of touching gone
 // elements. Not needed when staying on the SAME step (a post-Apply refresh,
@@ -520,34 +538,36 @@ export function teardownResourceCalculator() {
 }
 
 // Entry point: called by detail-form.js's renderResourceCalculatorSection
-// (Lead Resource Assessment component only) with a freshly created container
-// to render into. `fields` is that task's current dynamic fields (the same
+// (on either assessment component -- see FIELD_PREFIX_BY_STEP) with a freshly
+// created container to render into. `fields` is that task's current dynamic fields (the same
 // object passed to renderFields); area/thickness prefill from the sibling
 // tasks via Store.allFields/Store.tasks -- the same mechanism detail-form.js/
 // detail.js already use for cross-task reads.
 export function renderResourceCalculator(container, projectId, task, fields) {
   wirePlotsDialogOnce();
   fields = fields || {};
-  var areaFields = (Store.allFields || {})['Reservoir Area Definition'] || {};
+  var fieldPrefix = fieldPrefixForStep(task && task.task_name);
+  var areaFields = (Store.allFields || {})['Area Definition'] || {};
   var thicknessFields = (Store.allFields || {})['Thickness Estimation'] || {};
   var initialAreaP90 = isFilled(areaFields.p90_area_km2) ? areaFields.p90_area_km2 : '';
   var initialAreaP10 = isFilled(areaFields.p10_area_km2) ? areaFields.p10_area_km2 : '';
   var initialThickness = isFilled(thicknessFields.reservoir_thickness_ft) ? thicknessFields.reservoir_thickness_ft : '';
-  var storedValues = resultsFromStoredFields(fields);
+  var storedValues = resultsFromStoredFields(fields, fieldPrefix);
   state = {
     projectId: projectId,
     task: task,
-    scenario: isFilled(fields.lead_resource_scenario) ? fields.lead_resource_scenario : DEFAULT_SCENARIO,
-    method: isFilled(fields.lead_calculation_method) ? fields.lead_calculation_method : DEFAULT_METHOD,
-    grvP90: isFilled(fields.lead_grv_p90_thousand_acre_ft) ? fields.lead_grv_p90_thousand_acre_ft : DEFAULT_GRV_P90,
-    grvP10: isFilled(fields.lead_grv_p10_thousand_acre_ft) ? fields.lead_grv_p10_thousand_acre_ft : DEFAULT_GRV_P10,
+    fieldPrefix: fieldPrefix,
+    scenario: isFilled(fields[fieldPrefix + '_resource_scenario']) ? fields[fieldPrefix + '_resource_scenario'] : DEFAULT_SCENARIO,
+    method: isFilled(fields[fieldPrefix + '_calculation_method']) ? fields[fieldPrefix + '_calculation_method'] : DEFAULT_METHOD,
+    grvP90: isFilled(fields[fieldPrefix + '_grv_p90_thousand_acre_ft']) ? fields[fieldPrefix + '_grv_p90_thousand_acre_ft'] : DEFAULT_GRV_P90,
+    grvP10: isFilled(fields[fieldPrefix + '_grv_p10_thousand_acre_ft']) ? fields[fieldPrefix + '_grv_p10_thousand_acre_ft'] : DEFAULT_GRV_P10,
     areaP90: initialAreaP90,
     areaP10: initialAreaP10,
     thicknessP50: initialThickness,
     initialAreaP90: initialAreaP90,
     initialAreaP10: initialAreaP10,
     initialThickness: initialThickness,
-    areaTask: findTaskByName('Reservoir Area Definition'),
+    areaTask: findTaskByName('Area Definition'),
     thicknessTask: findTaskByName('Thickness Estimation'),
     storedValues: storedValues,
     displayValues: storedValues,

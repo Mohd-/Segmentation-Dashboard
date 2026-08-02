@@ -65,7 +65,7 @@ def _validated_coordinate(value, label):
 
 def add_project(session, project_name, start_date=None, target_date=None, changed_by="System", lead_x=None, lead_y=None,
                 business_plan_year=None, business_plan_enabled=False, active_well_enabled=False, pipeline_type="prospect"):
-    """Create a project and materialize its 31 workflow tasks; return project_id."""
+    """Create a project and materialize its 27 workflow tasks; return project_id."""
     project_name = (project_name or '').strip()
     if not project_name:
         raise ValueError("Lead / well name is required.")
@@ -153,7 +153,7 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
             # Every step starts Not Assigned regardless of pipeline_type;
             # assignment moves it to In Progress. Applicability is derived per
             # pipeline at query time (applicable_stages), never stored per row,
-            # so all 31 rows are materialized identically.
+            # so all 27 rows are materialized identically.
             initial_status = "Not Assigned"
             task_result = db.execute(session, """
                 INSERT INTO project_tasks (
@@ -204,55 +204,40 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Card 1B presentation adapter -- TEMPORARY, delete with the permanent migration
+# The board card's derived fields (Card 1B)
 # ---------------------------------------------------------------------------
-# Everything between this banner and the "end of the Card 1B adapter" marker is
-# a READ-TIME PRESENTATION LAYER over the stored workflow. It stores nothing,
-# changes no status, and adds no query: every value is derived from the task
-# rows _annotate_derived_state has already batch-loaded.
+# A READ-TIME projection over the stored workflow. It stores nothing, changes no
+# status and adds no query: every value is derived from the task rows
+# _annotate_derived_state has already batch-loaded.
 #
-# The board the users signed off on speaks a shorter vocabulary than the stored
-# pipeline: three columns instead of four stage groups, and twelve short
-# "tracked items" instead of the twelve prospect steps (two of the items have no
-# stored step at all yet). Rather than migrate the schema for a visual card, the
-# mapping lives here, isolated and named, so the permanent migration that
-# introduces the real steps/stages can delete this block whole and leave the
-# rest of the module untouched.
+# Since v5 the stored prospect pipeline IS what the board shows -- twelve steps
+# across the three stage groups the columns are named after -- so there is no
+# mapping table any more, only the two cosmetic rules below. (Before v5 this
+# block was a presentation ADAPTER that folded four stage groups into three and
+# invented two items with no stored step; migrations._migrate_v5_prospect_
+# template_restructure made all twelve real and the adapter was deleted whole.)
 
-# Stage group (stored) -> board column (displayed). Risking and Segmentation
-# both land in "Risk Analysis"; BP stage groups are absent on purpose and fall
-# through to the stored current_stage (the BP board is unchanged by Card 1B).
-_DISPLAY_STAGE_BY_STAGE = {
-    "Lead Identification": "Lead Assessment",
-    "Risking": "Risk Analysis",
-    "Segmentation": "Risk Analysis",
-    "Pre-Well Delivery": "Pre-Well Delivery",
+# Board labels that are SHORTER than the step they stand for, because a card dot
+# gets a few characters. Display-only: the stored step name is untouched and is
+# what ``steps`` carries, so a client always opens the real component.
+_TRACKED_ITEM_LABELS = {
+    "Reservoir CoS": "Reservoir",
+    "Trap and Seal CoS": "Trap and Seal",
+    "Seismic Signature Validation": "Seismic Validation",
+    "Pre-Drilling GeoX Assessment": "GeoX Assessment",
 }
 
-# The twelve tracked items, in board order:
-#   (display stage, short label, source step names, ready_shows_pending)
-# * An item with NO source steps has no step feeding it in the current 12-step
-#   prospect pipeline -- it renders "In Progress" forever and must NEVER
-#   auto-complete; the permanent migration supplies the real step.
-# * An item with SEVERAL sources is "Completed" only when EVERY source is
-#   Approved (Trap and Seal).
-# * ready_shows_pending is set for the ONE item whose supervisor queue the board
-#   surfaces (Segmentation Slides). Everywhere else a submitted-but-unapproved
-#   step reads "In Progress", because a returned submission drops back to
-#   In Progress and the card must not distinguish the two.
-_TRACKED_ITEMS = (
-    ("Lead Assessment", "Area Definition", ("Reservoir Area Definition",), False),
-    ("Lead Assessment", "Thickness Estimation", ("Thickness Estimation",), False),
-    ("Lead Assessment", "GRV Inputs", (), False),
-    ("Lead Assessment", "Resource Assessment", ("Lead Resource Assessment",), False),
-    ("Risk Analysis", "Reservoir", ("Reservoir CoS",), False),
-    ("Risk Analysis", "Trap and Seal", ("Trap CoS", "Seal CoS"), False),
-    ("Risk Analysis", "Seismic Validation", ("Seismic Signature Validation",), False),
-    ("Risk Analysis", "Segmentation Slides", ("Prospect Evaluation Presentation",), True),
-    ("Pre-Well Delivery", "Moving Tolerance", ("Staking Moving Tolerance",), False),
-    ("Pre-Well Delivery", "Approval to Stake", ("Approval to Stake",), False),
-    ("Pre-Well Delivery", "Well Site Location", (), False),
-    ("Pre-Well Delivery", "GeoX Assessment", ("Pre-Drilling Resource Assessment",), False),
+# The ONE item whose supervisor queue the board surfaces: a submitted-but-
+# unapproved Segmentation Slides reads "Pending Approval". Everywhere else a
+# Ready step reads "In Progress", because a returned submission drops back to
+# In Progress and the card must not distinguish the two.
+_READY_SHOWS_PENDING = frozenset({"Segmentation Slides"})
+
+# The twelve tracked items ARE the prospect steps, in sequence order.
+_TRACKED_ITEM_STEPS = tuple(
+    (stage_group, task_name, _TRACKED_ITEM_LABELS.get(task_name, task_name))
+    for _sequence_no, task_name, stage_group in PIPELINE_TEMPLATES
+    if stage_group not in BP_EXECUTION_STAGES
 )
 
 # Card border / column sort vocabulary. "Normal" (the models.py server default
@@ -261,34 +246,31 @@ _PRIORITY_RANK = {"High": 0, "Medium": 1, "Low": 2}
 
 
 def _tracked_items(status_by_task):
-    """The 12-item presentation model for one prospect (pure).
+    """The 12-item board model for one prospect (pure), 1:1 with its steps.
 
     ``status_by_task`` maps a stored step name to its stored lifecycle status.
-    A missing step is simply not Approved, so it reads "In Progress" -- the same
-    thing a brand-new lead's Not Assigned rows read. "Not Assigned" is not a
-    display status: the card shows work as done, waiting, or ongoing, nothing
-    else.
+    A step the project does not carry is simply not Approved, so it reads
+    "In Progress" -- the same thing a brand-new lead's Not Assigned rows read.
+    "Not Assigned" is not a display status: the card shows work as done, waiting,
+    or ongoing, nothing else.
 
-    ``steps`` carries the item's SOURCE STEP NAMES (a list, possibly empty) so a
-    client can open the real step behind a tracked item without re-implementing
-    the _TRACKED_ITEMS mapping. Card 2A's three-stage detail sidebar needs
-    exactly that: it lists the real steps under the three display stages, and
-    renders a dimmed placeholder for the two items that have no step yet. The
-    mapping stays derived in ONE place (here), and the whole key disappears with
-    this adapter when the permanent step migration lands.
+    ``steps`` carries the item's stored step name as a one-element list. The key
+    predates v5 (an item could then stand for two steps, or none) and is KEPT at
+    exactly that shape: Card 2A's three-stage detail sidebar opens the real
+    component from it, and freezing the payload shape is what let v5 land
+    without touching a line of client board code.
     """
     items = []
-    for stage, label, sources, ready_shows_pending in _TRACKED_ITEMS:
-        if not sources:
-            status = "In Progress"
-        elif all(status_by_task.get(name) == "Approved" for name in sources):
-            status = "Completed"
-        elif ready_shows_pending and any(status_by_task.get(name) == "Ready" for name in sources):
-            status = "Pending Approval"
+    for stage_group, task_name, label in _TRACKED_ITEM_STEPS:
+        status = status_by_task.get(task_name)
+        if status == "Approved":
+            display = "Completed"
+        elif status == "Ready" and task_name in _READY_SHOWS_PENDING:
+            display = "Pending Approval"
         else:
-            status = "In Progress"
-        items.append({"stage": stage, "label": label, "status": status,
-                      "steps": list(sources)})
+            display = "In Progress"
+        items.append({"stage": stage_group, "label": label, "status": display,
+                      "steps": [task_name]})
     return items
 
 
@@ -327,15 +309,16 @@ def _annotate_card_state(project, rows, stages):
             assignees.append(name)
     project["assignees"] = assignees
     project["lead_priority"] = _lead_priority(applicable)
-    project["display_stage"] = _DISPLAY_STAGE_BY_STAGE.get(project.get("current_stage"),
-                                                           project.get("current_stage"))
+    # Since v5 the stored stage group IS the board column, so display_stage is
+    # the derived current_stage verbatim. The key stays on the payload (the
+    # board and its tests read it) rather than making every client fall back to
+    # current_stage.
+    project["display_stage"] = project.get("current_stage")
     if str(project.get("pipeline_type") or "prospect").lower() == "bp":
-        project["tracked_items"] = []   # the BP board is unchanged by Card 1B
+        project["tracked_items"] = []   # the BP board carries no tracked items
         return
     # project_tasks has UNIQUE(project_id, task_name), so one row per step.
     project["tracked_items"] = _tracked_items({r["task_name"]: r["status"] for r in applicable})
-
-# --- end of the Card 1B adapter --------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -450,7 +433,7 @@ def _annotate_derived_state(session, projects):
     One batched query for the whole list, so the board never multiplies rows
     (legacy duplicate task rows collapse into the per-project grouping).
 
-    The Card 1B card fields (assignees / tracked_items / display_stage /
+    The board card fields (assignees / tracked_items / display_stage /
     lead_priority) are derived from the SAME batched rows -- see
     _annotate_card_state above; still one query for the whole board.
 
@@ -506,7 +489,7 @@ def _annotate_derived_state(session, projects):
         # paths. Deriving it here (instead of a second convention) keeps the
         # board's Field filter and the folder links agreeing by construction.
         project["field"] = folders.parse_field_and_well(project.get("project_name") or "")[0]
-        # Card 1B presentation fields, off the SAME already-loaded rows.
+        # The board card fields, off the SAME already-loaded rows.
         _annotate_card_state(project, rows, stages)
 
     # Card 1E's mean gas is the one derived field the task rows above cannot

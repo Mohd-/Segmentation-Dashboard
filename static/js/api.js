@@ -64,7 +64,7 @@ export var API = {
   transition: function (id, payload) { return api('/api/tasks/' + id + '/transition', jsonOptions('POST', payload)); },
   priority: function (id, payload) { return api('/api/tasks/' + id + '/priority', jsonOptions('PATCH', payload)); },
   // Resource Assessment calculator (views/resource-calculator.js): taskId is
-  // the Lead Resource Assessment component's own task_id.
+  // the Resource Assessment component's own task_id.
   resourceAssessment: function (taskId, payload) { return api('/api/tasks/' + taskId + '/resource-assessment', jsonOptions('POST', payload)); },
   // Header bell (views/header-menus.js). All three answer with the CURRENT
   // unread_count alongside their own payload, so the red dot and the menu are

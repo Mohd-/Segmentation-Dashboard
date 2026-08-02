@@ -36,19 +36,35 @@ STATUSES = [
 DONE_STATUSES = {"Approved"}
 ACTIVE_STATUSES = {"In Progress", "Ready"}
 
+# v5 made the three board columns the STORED stage groups: the prospect side
+# used to store four groups (Lead Identification / Risking / Segmentation /
+# Pre-Well Delivery) that a read-time adapter folded into the three the users
+# signed off on. The adapter is gone -- these ARE the three, and
+# migrations._migrate_v5_prospect_template_restructure remapped every existing
+# prospect row onto them. BP groups are untouched.
 STAGE_ORDER = [
-    "Lead Identification",
-    "Risking",
-    "Segmentation",
+    "Lead Assessment",
+    "Risk Analysis",
     "Pre-Well Delivery",
     "Well Delivery",
     "Post-Drilling",
     "Post-Testing",
 ]
 
-PROSPECT_STAGES = ["Lead Identification", "Risking", "Segmentation", "Pre-Well Delivery"]
+PROSPECT_STAGES = ["Lead Assessment", "Risk Analysis", "Pre-Well Delivery"]
 BP_EXECUTION_STAGES = ["Well Delivery", "Post-Drilling", "Post-Testing"]
 BOARD_STAGE_ORDER = STAGE_ORDER[:]
+
+# The pre-v5 prospect stage groups -> their v5 replacements. Nothing in the
+# runtime reads a legacy group any more (v5 rewrote every row), but the mapping
+# stays named here as the documented history and is what folders.py widens its
+# prospect-share test with, so a row the migration could not reach still files
+# its component folder under the Leads share instead of the Wells one.
+LEGACY_PROSPECT_STAGE_GROUPS = {
+    "Lead Identification": "Lead Assessment",
+    "Risking": "Risk Analysis",
+    "Segmentation": "Risk Analysis",
+}
 
 
 def applicable_stages(pipeline_type):
@@ -56,10 +72,10 @@ def applicable_stages(pipeline_type):
 
     Applicability is a PURE FUNCTION of pipeline_type -- never stored per row: a
     prospect operates over PROSPECT_STAGES, a BP well over BP_EXECUTION_STAGES.
-    All 27 task rows always exist regardless of pipeline; the rows outside the
-    operating pipeline are simply excluded wherever it matters (completion,
-    flow reconciliation, assignment cascade, state refresh) by filtering on
-    ``stage_group IN applicable_stages(...)``.
+    All 27 active task rows always exist regardless of pipeline; the rows
+    outside the operating pipeline are simply excluded wherever it matters
+    (completion, flow reconciliation, assignment cascade, state refresh) by
+    filtering on ``stage_group IN applicable_stages(...)``.
     """
     return BP_EXECUTION_STAGES if str(pipeline_type or "prospect").lower() == "bp" else PROSPECT_STAGES
 
@@ -107,7 +123,8 @@ FORMATION_FLUID_TYPES = ["", "Dry", "Gas", "Water", "Condensate", "Liquid", "Gas
 # project_tasks rows: resequencing by task_name, and deactivating retired
 # steps (is_active = 0) so their inputs and audit trail survive. That is
 # exactly what migrations._migrate_v4_bp_step_merges does for the v4 merges
-# below.
+# and migrations._migrate_v5_prospect_template_restructure for the v5
+# prospect restructure below.
 #
 # v4 merged four BP steps away (31 -> 27 steps: 12 prospect + 15 BP):
 #   "URED Update"                       -> folded into "Executive Summary"
@@ -118,23 +135,44 @@ FORMATION_FLUID_TYPES = ["", "Dry", "Gas", "Water", "Condensate", "Liquid", "Gas
 # Model, resource_update_* on SAD Update) so no stored value is orphaned; the
 # retired rows survive as is_active = 0 and every EAV reader keeps reading
 # them (see RETIRED_TASK_NAMES below).
+#
+# v5 restructured the PROSPECT half into the permanent 12 tracked items the
+# board and the detail sidebar had been faking through a read-time adapter.
+# Still 12 prospect steps (so still 27 in total, and the BP numbers 13-27 did
+# not move), but they are now the tracked items themselves:
+#   renamed  "Reservoir Area Definition"        -> "Area Definition"
+#            "Lead Resource Assessment"         -> "Resource Assessment"
+#            "Prospect Evaluation Presentation" -> "Segmentation Slides"
+#            "Staking Moving Tolerance"         -> "Moving Tolerance"
+#            "Pre-Drilling Resource Assessment" -> "Pre-Drilling GeoX Assessment"
+#   merged   "Trap CoS" + "Seal CoS"            -> "Trap and Seal CoS"
+#   retired  "Well Creation"  (its sign-off became the staking_well_created
+#            checkbox on "Approval to Stake")
+#   added    "GRV Inputs", "Well Site Location"
+# The rename is a task_name rewrite IN PLACE, so a renamed row keeps its
+# task_id, EAV, history and folder card; the merge and the retirement follow
+# the v4 pattern (is_active = 0, nothing deleted, same EAV keys).
 PIPELINE_TEMPLATES = [
-    (1, "Reservoir Area Definition", "Lead Identification"),
-    (2, "Thickness Estimation", "Lead Identification"),
-    (3, "Lead Resource Assessment", "Lead Identification"),
-    (4, "Seismic Signature Validation", "Risking"),
-    (5, "Reservoir CoS", "Risking"),
-    (6, "Trap CoS", "Risking"),
-    (7, "Seal CoS", "Risking"),
-    # v18: "Presence CoS Evaluation" (formerly step 8) was removed as a visible
-    # step -- its value is derived (Reservoir x Trap x Seal), computed at read
-    # time (calculate_total_cos) and surfaced as ``derisking`` in the /detail
-    # payload's computed overview. The remaining steps renumber to a clean 1-31.
-    (8, "Prospect Evaluation Presentation", "Segmentation"),
-    (9, "Well Creation", "Pre-Well Delivery"),
-    (10, "Pre-Drilling Resource Assessment", "Pre-Well Delivery"),
-    (11, "Staking Moving Tolerance", "Pre-Well Delivery"),
-    (12, "Approval to Stake", "Pre-Well Delivery"),
+    (1, "Area Definition", "Lead Assessment"),
+    (2, "Thickness Estimation", "Lead Assessment"),
+    (3, "GRV Inputs", "Lead Assessment"),
+    (4, "Resource Assessment", "Lead Assessment"),
+    (5, "Reservoir CoS", "Risk Analysis"),
+    # v5: "Trap CoS" + "Seal CoS" merged here. It keeps BOTH steps' EAV keys
+    # verbatim (sarah_quwarah_thickness_ft / trap_cos_pct and the five seal_*
+    # inputs / seal_cos_pct), which is what lets the recompute hooks and the
+    # Total CoS read carry straight over.
+    (6, "Trap and Seal CoS", "Risk Analysis"),
+    (7, "Seismic Signature Validation", "Risk Analysis"),
+    # v18: "Presence CoS Evaluation" was removed as a visible step -- its value
+    # is derived (Reservoir x Trap x Seal), computed at read time
+    # (calculate_total_cos) and surfaced as ``derisking`` in the /detail
+    # payload's computed overview.
+    (8, "Segmentation Slides", "Risk Analysis"),
+    (9, "Moving Tolerance", "Pre-Well Delivery"),
+    (10, "Approval to Stake", "Pre-Well Delivery"),
+    (11, "Well Site Location", "Pre-Well Delivery"),
+    (12, "Pre-Drilling GeoX Assessment", "Pre-Well Delivery"),
     (13, "BP Execution Gate", "Well Delivery"),
     (14, "Well Proposal", "Well Delivery"),
     (15, "Site Preparation", "Well Delivery"),
@@ -161,17 +199,52 @@ PIPELINE_TEMPLATES = [
     (27, "PDA", "Post-Testing"),
 ]
 
-# The steps merged away by v4. They are never materialized for a NEW project;
-# EXISTING project_tasks rows carrying these names survive as is_active = 0
-# (rows, EAV data and history all intact), which is why every EAV reader is
-# retired-inclusive -- see workflow.summary.get_project_dynamic_field_map,
-# reporting._bp_task_fields and portfolio_export._task_fields.
+# The steps merged/retired away by v4 and v5. They are never materialized for a
+# NEW project; EXISTING project_tasks rows carrying these names survive as
+# is_active = 0 (rows, EAV data and history all intact), which is why every EAV
+# reader is retired-inclusive -- see
+# workflow.summary.get_project_dynamic_field_map, reporting._bp_task_fields and
+# portfolio_export._task_fields.
 RETIRED_TASK_NAMES = (
+    # v4 (BP)
     "URED Update",
     "Post-Drilling Resource Assessment",
     "Resource Assessment Update",
     "Executive Summary Final",
+    # v5 (prospect): both CoS halves folded into "Trap and Seal CoS"; the
+    # Well Creation sign-off became a checkbox on "Approval to Stake".
+    "Trap CoS",
+    "Seal CoS",
+    "Well Creation",
 )
+
+# v5 renames: CURRENT name -> the pre-v5 name the same row used to carry.
+# Renames rewrite ``project_tasks.task_name`` in place, so after the migration
+# the rows THEMSELVES answer to the new name and no runtime read strictly needs
+# the old one. The map exists because two places still meet the old spelling:
+#   - ``lead_summary_snapshots`` froze its {task_name: {key: value}} JSON at
+#     promotion time and is never rewritten (it is a historical record), so the
+#     client's snapshot-merged field map still holds old-name buckets;
+#   - the rename skips a project that somehow carries BOTH names (UNIQUE
+#     (project_id, task_name)), exactly like the v3 quicklook guard, leaving a
+#     stale old-name row behind for manual reconciliation.
+# Both are read-side concerns only -- see the fallback chains below.
+RENAMED_TASK_NAMES = {
+    "Area Definition": "Reservoir Area Definition",
+    "Resource Assessment": "Lead Resource Assessment",
+    "Segmentation Slides": "Prospect Evaluation Presentation",
+    "Moving Tolerance": "Staking Moving Tolerance",
+    "Pre-Drilling GeoX Assessment": "Pre-Drilling Resource Assessment",
+}
+
+# The v5 CoS merge, named once for every reader that has to address it.
+MERGED_COS_TASK_NAME = "Trap and Seal CoS"
+MERGED_COS_LEGACY_NAMES = ("Trap CoS", "Seal CoS")
+
+# The Well Creation retirement's replacement: a checkbox on "Approval to Stake"
+# recording that the well record exists. v5 backfills it (= '1') for every
+# project whose Well Creation step had been Approved.
+STAKING_WELL_CREATED_KEY = "staking_well_created"
 
 
 # ---------------------------------------------------------------------------
@@ -226,9 +299,16 @@ AUTO_COMPLETE_COMMENT = (
 # (same EAV key, different task_name bucket), so a well whose values were
 # entered before the merge still resolves. get_project_dynamic_field_map is
 # retired-inclusive precisely so those legacy buckets are present.
+#
+# The v5 renames add a second entry to the two lead-phase keys for the SAME
+# reason in reverse: those rows were renamed in place, so the CURRENT name is
+# listed first and the pre-v5 spelling second, covering a project the rename's
+# both-names guard skipped (and keeping the ladder readable as history).
 _OVERVIEW_READ_SOURCES = {
-    "lead_ogip": [("Lead Resource Assessment", "lead_piip_gas_mean")],
-    "pre_drill_estimation": [("Pre-Drilling Resource Assessment", "pre_drill_piip_gas_mean")],
+    "lead_ogip": [("Resource Assessment", "lead_piip_gas_mean"),
+                  ("Lead Resource Assessment", "lead_piip_gas_mean")],
+    "pre_drill_estimation": [("Pre-Drilling GeoX Assessment", "pre_drill_piip_gas_mean"),
+                             ("Pre-Drilling Resource Assessment", "pre_drill_piip_gas_mean")],
     "post_drill_estimation": [("SAD Update", "resource_update_gas_mean"),
                               ("Resource Assessment Update", "resource_update_gas_mean"),
                               ("SAD Model", "post_drill_piip_gas_mean"),
@@ -243,6 +323,21 @@ _OVERVIEW_READ_SOURCES = {
                        ("GHEER", "gheer_classification")],
 }
 
+# The Total-CoS inputs as ordered (task_name, field_key) ladders -- surviving
+# step first, the v5-retired half second. Unlike every other v5 read, THIS pair
+# genuinely needs the fallback: the merge did not rename a row, it created a new
+# one, so a lead's pre-v5 trap_cos_pct/seal_cos_pct live under the retired
+# "Trap CoS" / "Seal CoS" task_ids. (v5 also COPIES those values onto the merged
+# row so the merged FORM prefills -- the ladder is what covers the rows the copy
+# guard skipped, and any project whose merged row already existed.)
+TRAP_COS_SOURCES = (("Trap and Seal CoS", "trap_cos_pct"),
+                    ("Trap CoS", "trap_cos_pct"))
+SEAL_COS_SOURCES = (("Trap and Seal CoS", "seal_cos_pct"),
+                    ("Seal CoS", "seal_cos_pct"))
+# Reservoir CoS was neither renamed nor merged; named alongside its two
+# siblings so calculate_total_cos reads one uniform shape.
+RESERVOIR_COS_ROWS_SOURCES = (("Reservoir CoS", "reservoir_cos_rows"),)
+
 # The LATEST saved Mean Gas (BCF) for one record, as an ordered
 # ((task_name, field_key), ...) precedence -- newest assessment first, each
 # surviving step immediately followed by the retired step it absorbed.
@@ -252,7 +347,8 @@ _OVERVIEW_READ_SOURCES = {
 # pre-drill, then lead) is the server-side twin of LATEST_PIIP_SOURCES in
 # static/js/views/detail-form.js
 # (POST_DRILL_PIIP_SOURCES + LEAD_PIIP_SOURCES, where the lead half is
-# [Pre-Drilling Resource Assessment, Lead Resource Assessment]).
+# [Pre-Drilling GeoX Assessment, Resource Assessment], each followed by its
+# pre-v5 spelling).
 #
 # Read by workflow.projects._annotate_mean_gas to put ``mean_gas_bcf`` on every
 # board row (Card 1E's Total Mean OGIP tile). P90/P10 are NEVER consulted: the

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from conftest import create_project, get_tasks
 
-PROSPECT_STAGES = {"Lead Identification", "Risking", "Segmentation", "Pre-Well Delivery"}
+PROSPECT_STAGES = {"Lead Assessment", "Risk Analysis", "Pre-Well Delivery"}
 
 
 def _assign(client, task_id, assignee, revision, cascade=False):

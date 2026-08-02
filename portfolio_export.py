@@ -414,7 +414,7 @@ def get_portfolio_export_rows(session) -> List[dict]:
 def get_staking_export_rows(session) -> List[dict]:
     """One row per mature lead (business_plan_enabled == 0 Portfolio members).
 
-    X/Y prefer the 'Staking Moving Tolerance' step's own staking_well_x/y
+    X/Y prefer the 'Moving Tolerance' step's own staking_well_x/y
     (once a user has moved/confirmed a location) and fall back to the
     project's lead_x/lead_y (the pre-fill source, req 5) when the step has
     never been touched. Batches one EAV query (the 8 staking keys) and one

@@ -14,7 +14,8 @@ from typing import Dict
 import cos
 import db
 
-from .constants import _OVERVIEW_LEGACY_KEYS, _OVERVIEW_READ_SOURCES
+from .constants import (RESERVOIR_COS_ROWS_SOURCES, SEAL_COS_SOURCES, TRAP_COS_SOURCES,
+                        _OVERVIEW_LEGACY_KEYS, _OVERVIEW_READ_SOURCES)
 
 
 def get_project_overview(session, project_id: int):
@@ -37,10 +38,13 @@ def get_project_overview(session, project_id: int):
 
     overview = {key: first_filled(sources) for key, sources in _OVERVIEW_READ_SOURCES.items()}
     overview.update({key: "" for key in _OVERVIEW_LEGACY_KEYS})
+    # Surviving-first ladders: the v5 merge left a lead's pre-merge Trap/Seal
+    # values under the retired "Trap CoS" / "Seal CoS" buckets, which this map
+    # still carries (it is retired-inclusive).
     overview["derisking"] = total_cos_from_fields(
-        (field_map.get("Reservoir CoS") or {}).get("reservoir_cos_rows"),
-        first_filled([("Trap CoS", "trap_cos_pct")]),
-        first_filled([("Seal CoS", "seal_cos_pct")]),
+        first_filled(RESERVOIR_COS_ROWS_SOURCES),
+        first_filled(TRAP_COS_SOURCES),
+        first_filled(SEAL_COS_SOURCES),
     )
     return overview
 
@@ -132,14 +136,32 @@ def total_cos_from_fields(reservoir_rows_json, trap, seal):
     return str(values.get("presence_cos", "") or "")
 
 
+def first_task_field_value(session, project_id, sources):
+    """First non-blank value across an ordered ((task_name, field_key), ...) ladder.
+
+    The per-project twin of get_project_overview's ``first_filled``, for the
+    callers that read one value rather than composing the whole overview.
+    """
+    for task_name, field_key in sources:
+        value = _task_field_value(session, project_id, task_name, field_key)
+        if value:
+            return value
+    return ""
+
+
 def calculate_total_cos(session, project_id):
     """Compute a project's Total Chance of Success at read time.
 
     Pure READ -- nothing is stored and no history is written: the value is
     recomposed from the Reservoir/Trap/Seal CoS task inputs on every call, so
     it can never go stale.
+
+    Each input is read through its surviving-first ladder: since v5 the Trap and
+    Seal inputs live on the merged "Trap and Seal CoS" step, with the retired
+    "Trap CoS" / "Seal CoS" rows as the fallback that keeps a lead scored before
+    the merge reading exactly the same number.
     """
-    raw_rows = _task_field_value(session, project_id, "Reservoir CoS", "reservoir_cos_rows")
-    trap = _task_field_value(session, project_id, "Trap CoS", "trap_cos_pct")
-    seal = _task_field_value(session, project_id, "Seal CoS", "seal_cos_pct")
+    raw_rows = first_task_field_value(session, project_id, RESERVOIR_COS_ROWS_SOURCES)
+    trap = first_task_field_value(session, project_id, TRAP_COS_SOURCES)
+    seal = first_task_field_value(session, project_id, SEAL_COS_SOURCES)
     return total_cos_from_fields(raw_rows, trap, seal)

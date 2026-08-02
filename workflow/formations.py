@@ -92,8 +92,7 @@ def auto_complete_non_prospective_steps(session, project_id):
     :func:`non_prospective_quicklook_fluid`. Post-commit because every step of
     the walk (assign / submit / approve / the gate-satisfying field save) opens
     its OWN write transaction, which must not nest inside the upsert's
-    ``BEGIN IMMEDIATE`` -- the same reason lifecycle applies its Well Creation
-    rename after the field transaction commits.
+    ``BEGIN IMMEDIATE``.
 
     Scope: the active rows named in ``NON_PROSPECTIVE_AUTO_COMPLETE_STEPS``
     whose stage is in the project's ``applicable_stages``. All four live in the
