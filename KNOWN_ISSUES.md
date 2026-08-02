@@ -122,8 +122,9 @@ opened.
 
 ## KI-004: A Seal CoS above 100% is storable and then 400s the detail endpoint
 
-**Status:** OPEN — found by the final cross-workflow audit (`asas-redesign` @
-07d1ce9) while auditing a freshly seeded database.
+**Status:** RESOLVED — fixed on `asas-redesign` after the final cross-workflow
+audit. See "Resolution" below; the report of the defect is kept verbatim as the
+record of what was wrong.
 
 **Priority:** P1 — the affected lead's detail page cannot be opened at all, and
 the only recovery is a write to a form the UI can no longer render.
@@ -181,10 +182,56 @@ from activity 1.33 x permeability 0.87).
   boundary, and `GET /api/projects/<id>/detail` stays 200 for every lead in a
   freshly seeded database.
 
+### Resolution
+
+Two layers, because the defect is a DISAGREEMENT between a write and a read and
+each half has to be answered on its own terms. The formula is deliberately
+unchanged — clamping it would turn a mis-entry into a plausible 100%, and
+changing a CoS formula is CONTRIBUTING recipe 3's own procedure, not a bug fix's.
+
+1. **The save refuses.** `workflow/lifecycle.py::_guard_seal_cos_range`, called
+   from `_apply_seal_cos_calculation` (the single hook both `save_task` and
+   `save_task_dynamic_fields` run), rejects a recomputed Seal CoS outside
+   `[0, 100]` with a `ValueError` naming the value and the inputs the offending
+   branch multiplied: *"Seal CoS computes to 116% from these inputs; adjust Most
+   recent age of activity or Fracture Permeability."* → HTTP 400. No partial
+   write: `save_task_dynamic_fields` runs the hook before it opens its
+   transaction, and `save_task` runs it inside one, before the first DML
+   statement. 100.0 exactly is accepted — the boundary is inclusive, matching
+   `_cos_probability`. The Trap and Reservoir hooks need no equivalent: their
+   results come from a fixed score table and a model probability respectively,
+   so they cannot leave the domain by construction.
+2. **The read degrades.** `workflow/summary.py::total_cos_from_fields` catches
+   the `ValueError` `cos.calculate_presence_cos` raises on an already-stored
+   out-of-domain input, logs one warning through the module logger, and returns
+   `""` — the Total reads as unavailable (the UI's em-dash) instead of failing
+   the request. Every read-only surface that resolves a Total goes through that
+   one function, so `GET /api/projects/<id>/detail`, the board, the portfolio
+   rows and the Excel export all degrade identically. The offending
+   `seal_cos_pct` is still returned in `/detail`'s `fields`, so the user can see
+   what to fix; repairing it is a write, and the write is where it is refused.
+3. **The seed stops producing them.** `seed_dev.py::_seal_fields` draws
+   `seal_recent_activity_age` from `random.uniform(0.1, 1.0)` (was `0.1, 1.4`).
+   Above 0.9 the formula takes the `activity x fracture_permeability` branch, so
+   the old ceiling times the 0.9 permeability ceiling was 126%; the new one is
+   90%, and ~11% of draws still exercise that branch.
+
+**Covering tests** (`tests/test_cos.py`):
+`test_seal_cos_above_100_is_refused_by_the_dynamic_fields_save`,
+`test_seal_cos_above_100_is_refused_by_the_full_save_too`,
+`test_refused_seal_cos_save_writes_nothing_at_all`,
+`test_seal_cos_of_exactly_100_is_accepted`,
+`test_seal_guard_names_the_average_branch_inputs_when_that_branch_overflows`,
+`test_trap_and_reservoir_cos_cannot_leave_the_cos_domain`,
+`test_detail_endpoint_survives_a_poisoned_seal_cos` (poisons the row with raw
+SQL, exactly as a pre-guard legacy row would look, and asserts 200 +
+`derisking == ""`), `test_poisoned_seal_cos_degrades_everywhere_the_total_is_read`.
+
 ## KI-005: Opening a lead rewrites its PIIP and reopens a grandfathered step
 
-**Status:** OPEN — found by the final cross-workflow audit (`asas-redesign` @
-07d1ce9). Reproducible against the repository seed database.
+**Status:** RESOLVED — fixed on `asas-redesign` after the final cross-workflow
+audit. See "Resolution" below; the report of the defect is kept verbatim as the
+record of what was wrong.
 
 **Priority:** P1 — a passive page view mutates the record, its completion, its
 audit trail and a headline KPI, with no user action and no Save.
@@ -258,3 +305,47 @@ page view can flip.
   asserts zero mutating requests, and an engine test that a field write which
   does not touch the predicate's keys leaves a grandfathered Approved step
   alone.
+
+### Resolution
+
+The engine's reasoning was never wrong — "the reopen branch can only ever fire
+as a response to THE USER'S OWN SAVE OF THIS TASK" is the right rule, and
+`workflow/lifecycle.py` is unchanged. What broke it was a CLIENT issuing a save
+the user never made, so that is what was fixed.
+
+**The interaction gate** (`static/js/views/lead-assessment.js`). Card 2B's
+contract is that "PIIP results and plots update automatically when valid inputs
+or the SELECTED SCENARIO CHANGE". MOUNTING is neither, so the auto-run no longer
+fires on it:
+
+- `renderLeadAssessment` no longer ends in `scheduleCalculation(0)`. A mount is
+  a READ: the stored `lead_piip_*` values are already on screen (rendered by
+  `workspaceMarkup` through `resultsFromStoredFields`), and the only mount-time
+  work left is `renderMountStatus`, which runs the PURE `resolveCalculation` to
+  show the idle/error hint. Zero requests, zero writes.
+- `state.userDirty` starts false and is set by exactly two DOM event handlers:
+  `onFieldInput` (an `input`/`change` on a Section 1/2 field) and the scenario
+  radio's `change` listener, both via `markUserEdit`. Hydration cannot set it —
+  `renderLeadAssessment` bakes stored values into the markup's `value=`
+  attributes, `rerenderThicknessSection` rebuilds with `outerHTML`, and
+  `syncDerivedInputs` assigns `input.value` directly; none of the three
+  dispatches an event.
+- `scheduleCalculation` returns early without arming the timer while
+  `userDirty` is false, and `runCalculation` re-checks the flag at FIRE time, so
+  no future caller can arm the debounce around the gate.
+
+`persistResults` is otherwise untouched: a genuine edit still recomputes and
+still persists, so the Resource Assessment item still completes itself.
+
+**Covering tests.** Front-end harness
+(`static/tests/test-lead-assessment.js`, fetch stubbed, calls counted):
+`MOUNTING an assessed lead is a READ — zero requests, stored results shown`,
+`mounting a lead with valid inputs but NO stored result still writes nothing`,
+`the user's first edit arms the auto-run — exactly one debounced run`,
+`a scenario click is the OTHER genuine interaction`. End-to-end
+(`scripts/e2e_card_2b.py`, step 8, real browser + real server): with the lead's
+Resource Assessment saved and Approved, both the audit's own repro (click the
+card, touch nothing) and the stronger case (mount the consolidated page and idle
+past five debounce windows) leave the stored `lead_piip_gas_mean`, the Approved
+status and the history row count byte-identical, with no `Field Reopen` event —
+and a subsequent real edit still recomputes and persists.

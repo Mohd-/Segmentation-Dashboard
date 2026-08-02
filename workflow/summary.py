@@ -9,6 +9,7 @@ Trap x Seal). Nothing here writes anything, so the values can never go stale.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Dict
 
 import cos
@@ -16,6 +17,8 @@ import db
 
 from .constants import (RESERVOIR_COS_ROWS_SOURCES, SEAL_COS_SOURCES, TRAP_COS_SOURCES,
                         _OVERVIEW_LEGACY_KEYS, _OVERVIEW_READ_SOURCES)
+
+logger = logging.getLogger(__name__)
 
 
 def get_project_overview(session, project_id: int):
@@ -130,9 +133,28 @@ def total_cos_from_fields(reservoir_rows_json, trap, seal):
     Trap CoS x Seal CoS, as a whole-percent string. Shared by
     get_project_overview (per project) and reporting's batched BP-well reads so
     the formula exists in exactly one place.
+
+    A STORED VALUE THIS FORMULA REFUSES DEGRADES TO UNAVAILABLE -- it never
+    fails the request (KI-004). ``cos.calculate_presence_cos`` raises ValueError
+    on a component CoS outside 0-100%, and every caller here is a READ:
+    ``GET /api/projects/<id>/detail``, the portfolio rows, the BP-well report.
+    A read-only endpoint must never 400 on data it merely found, or one bad row
+    written before the save-time guard existed (``lifecycle._guard_seal_cos_range``)
+    takes the whole page down with it -- which is exactly the bug that was filed.
+    So the Total reads as blank, the UI shows its em-dash, and the reason lands
+    in the log once per read rather than in the user's face forever. Repairing
+    the row is a WRITE, and the save path is where it is refused.
     """
     reservoir = first_reservoir_cos_row_value(reservoir_rows_json, "reservoir_cos_pct")
-    values = cos.calculate_presence_cos(reservoir, str(trap or "").strip(), str(seal or "").strip())
+    trap = str(trap or "").strip()
+    seal = str(seal or "").strip()
+    try:
+        values = cos.calculate_presence_cos(reservoir, trap, seal)
+    except ValueError as exc:
+        logger.warning(
+            "Total Chance of Success unavailable -- stored CoS inputs out of domain "
+            "(reservoir=%r, trap=%r, seal=%r): %s", reservoir, trap, seal, exc)
+        return ""
     return str(values.get("presence_cos", "") or "")
 
 

@@ -677,17 +677,91 @@ function resourceCalls(calls) {
   return calls.filter(function (call) { return call.url.indexOf('/resource-assessment') >= 0; });
 }
 
-test('lead-assessment: mounting with valid inputs auto-runs — no Calculate click', function () {
+function fieldWriteCalls(calls) {
+  return calls.filter(function (call) { return call.url.indexOf('/dynamic-fields') >= 0; });
+}
+
+// A GENUINE user interaction: a real input event on a real field, which is the
+// only thing that may arm the persisting auto-run (KI-005). `value` is optional
+// — re-typing the value that is already there is still an interaction.
+function userEdits(mounted, key, value) {
+  var input = mounted.root.querySelector('[data-la-field="' + key + '"]');
+  if (value != null) input.value = value;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  return input;
+}
+
+// A complete, already-assessed lead: valid stored inputs AND the stored PIIP
+// results a previous run wrote. This is the shape KI-005's page view rewrote.
+var ASSESSED_LEAD = {
+  'GRV Inputs': { grv_p90_thousand_acre_ft: '12.6', grv_p10_thousand_acre_ft: '17.3' },
+  'Resource Assessment': {
+    lead_piip_gas_p90: '9.02', lead_piip_gas_mean: '13.52', lead_piip_gas_p10: '18.1',
+    lead_resource_scenario: DEFAULT_SCENARIO, lead_calculation_method: 'GRV',
+    polygons_surfaces_loaded: '1'
+  }
+};
+
+function settle(ms) {
+  return new Promise(function (resolve) { setTimeout(resolve, ms == null ? 1200 : ms); });
+}
+
+/* KI-005. The auto-run PERSISTS (POST /resource-assessment, then PATCH
+   /dynamic-fields onto the Resource Assessment task), so a mount that fired it
+   turned merely OPENING a lead into a write: the stored assessment was
+   overwritten, the board's Total Mean OGIP tile moved, and the server's
+   post-save field-completion engine reopened an Approved step. Card 2B's
+   contract is "valid inputs or the SELECTED SCENARIO CHANGE" — mounting is
+   neither. */
+
+test('lead-assessment: MOUNTING an assessed lead is a READ — zero requests, stored results shown', function () {
+  var mounted = mountPage(ASSESSED_LEAD);
+  assert.equal(leadAssessmentActive(), true);
+  // The stored numbers are on screen immediately, straight out of the stored
+  // fields — no run produced them.
+  var boxes = mounted.root.querySelectorAll('.la-result-gas .la-result-box');
+  assert.equal(boxes[0].textContent, '9.02');
+  assert.equal(boxes[1].textContent, '13.52');
+  assert.equal(boxes[2].textContent, '18.1');
+  // Wait well past DEBOUNCE_MS: a mount-scheduled run would have landed by now.
+  return settle().then(function () {
+    assert.equal(resourceCalls(mounted.calls).length, 0,
+      'a page VIEW computes nothing');
+    assert.equal(fieldWriteCalls(mounted.calls).length, 0,
+      'and above all PERSISTS nothing — the stored assessment is untouched');
+    // The stored numbers are still the stored numbers.
+    assert.equal(mounted.root.querySelectorAll('.la-result-gas .la-result-box')[1].textContent, '13.52');
+    teardownLeadAssessment();
+  });
+});
+
+test('lead-assessment: mounting a lead with valid inputs but NO stored result still writes nothing', function () {
   var mounted = mountPage({
     'GRV Inputs': { grv_p90_thousand_acre_ft: '12.6', grv_p10_thousand_acre_ft: '17.3' }
   });
-  assert.equal(leadAssessmentActive(), true);
-  return waitFor(function () { return resourceCalls(mounted.calls).length > 0; }, 5000).then(function () {
+  // Nothing to display yet (the plots are figures, not stored values), and the
+  // page will not go and fetch some: results appear on the user's first edit.
+  assert.equal(mounted.root.querySelector('.la-result-gas .la-result-box').textContent, '—');
+  return settle().then(function () {
+    assert.equal(mounted.calls.filter(function (call) {
+      return call.url.indexOf('/folders/') < 0;
+    }).length, 0, 'the folder row is the ONLY thing a mount asks the server for');
+    teardownLeadAssessment();
+  });
+});
+
+test('lead-assessment: the user\'s first edit arms the auto-run — exactly one debounced run', function () {
+  var mounted = mountPage(ASSESSED_LEAD);
+  return settle(800).then(function () {
+    assert.equal(resourceCalls(mounted.calls).length, 0, 'still nothing on the mounted page');
+    userEdits(mounted, 'grv_p10_thousand_acre_ft', '19.4');
+    return waitFor(function () { return resourceCalls(mounted.calls).length > 0; }, 5000);
+  }).then(function () {
     var call = resourceCalls(mounted.calls)[0];
     assert.match(call.url, /\/api\/tasks\/103\/resource-assessment/,
       'addressed to the Resource Assessment task');
     assert.deepEqual(call.body, {
-      scenario: DEFAULT_SCENARIO, method: 'GRV', grv_p90: 12.6, grv_p10: 17.3
+      scenario: DEFAULT_SCENARIO, method: 'GRV', grv_p90: 12.6, grv_p10: 19.4
     });
     // The response lands in the result boxes without any further interaction,
     // rounded by the SAME formatStored rule the persisted values use.
@@ -695,6 +769,21 @@ test('lead-assessment: mounting with valid inputs auto-runs — no Calculate cli
       return mounted.root.querySelector('.la-result-gas .la-result-box').textContent === '12.0';
     }, 5000);
   }).then(function () {
+    assert.equal(resourceCalls(mounted.calls).length, 1, 'one edit, one run');
+    teardownLeadAssessment();
+  });
+});
+
+test('lead-assessment: a scenario click is the OTHER genuine interaction', function () {
+  var mounted = mountPage(ASSESSED_LEAD);
+  return settle(800).then(function () {
+    assert.equal(resourceCalls(mounted.calls).length, 0);
+    var condensate = mounted.root.querySelector('input[name="la-scenario"][value="condensate_field_a"]');
+    condensate.checked = true;
+    condensate.dispatchEvent(new Event('change', { bubbles: true }));
+    return waitFor(function () { return resourceCalls(mounted.calls).length > 0; }, 5000);
+  }).then(function () {
+    assert.equal(resourceCalls(mounted.calls)[0].body.scenario, 'condensate_field_a');
     teardownLeadAssessment();
   });
 });
@@ -739,6 +828,8 @@ test('lead-assessment: a successful run PERSISTS the lead_piip_* keys the old Ap
     'GRV Inputs': { grv_p90_thousand_acre_ft: '12.6', grv_p10_thousand_acre_ft: '17.3' },
     'Resource Assessment': { lead_resource_scenario: 'condensate_field_a' }
   });
+  // The write is still a write — it just needs a user behind it now.
+  userEdits(mounted, 'grv_p10_thousand_acre_ft');
   return waitFor(function () {
     return mounted.calls.some(function (call) {
       return call.url.indexOf('/dynamic-fields') >= 0 && call.body && call.body.fields;
@@ -785,6 +876,7 @@ test('lead-assessment: switching scenario clears the stale result and re-runs', 
   var mounted = mountPage({
     'GRV Inputs': { grv_p90_thousand_acre_ft: '12.6', grv_p10_thousand_acre_ft: '17.3' }
   });
+  userEdits(mounted, 'grv_p10_thousand_acre_ft');
   return waitFor(function () { return resourceCalls(mounted.calls).length > 0; }).then(function () {
     var condensate = mounted.root.querySelector('input[name="la-scenario"][value="condensate_field_a"]');
     condensate.checked = true;
@@ -817,6 +909,8 @@ test('lead-assessment: teardown makes a late response a no-op', function () {
   var mounted = mountPage({
     'GRV Inputs': { grv_p90_thousand_acre_ft: '12.6', grv_p10_thousand_acre_ft: '17.3' }
   });
+  // Arm the auto-run, then navigate away inside the debounce window.
+  userEdits(mounted, 'grv_p10_thousand_acre_ft');
   teardownLeadAssessment();
   assert.equal(leadAssessmentActive(), false);
   // The debounce timer was cancelled, so nothing is even sent.

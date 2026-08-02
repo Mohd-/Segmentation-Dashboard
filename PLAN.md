@@ -311,8 +311,8 @@ Files: `static/css/base.css`, `static/css/components.css`,
   before D's portfolio work only if touching shared CSS; otherwise
   independent.
 - Bump `?v=` query strings in `index.html` for changed CSS/JS files.
-- Tests to run after each track: `.venv/bin/python -m pytest -q` (524 backend
-  tests) and `.venv/bin/python run_frontend_tests.py` (413 front-end harness
+- Tests to run after each track: `.venv/bin/python -m pytest -q` (532 backend
+  tests) and `.venv/bin/python run_frontend_tests.py` (416 front-end harness
   tests) — plus manual verification per track's Verify section, ideally with a
   browser screenshot pass at desktop and ~640px widths.
 - `tests/test_api_contract.py` pins JSON shapes — Track B's `/api/me`

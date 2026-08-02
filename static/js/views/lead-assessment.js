@@ -739,12 +739,33 @@ function renderResults() {
 
 export var DEBOUNCE_MS = 600;
 
-// Schedule a calculation for the CURRENT inputs. Called on every input change,
-// on every scenario change, and once on mount. The debounce is what makes
+// THE INTERACTION GATE (KI-005). The auto-run PERSISTS -- it POSTs
+// /resource-assessment and then PATCHes the lead_piip_* keys onto the Resource
+// Assessment task -- so it may only ever fire in response to something the USER
+// DID on this page. Card 2B's contract is "PIIP results and plots update
+// automatically when valid inputs or the SELECTED SCENARIO CHANGE"; MOUNTING is
+// neither. Firing on mount made merely CLICKING A LEAD CARD rewrite its stored
+// assessment (the board's Total Mean OGIP tile moved because somebody looked at
+// a lead) and, through the server's post-save field-completion engine, reopen an
+// Approved step that predates the confirmations -- a write the user never made.
+//
+// Exactly two things set this flag, both of them DOM event handlers:
+// onFieldInput (input/change on a Section 1/2 field) and the scenario radio's
+// change listener. Hydration cannot: renderLeadAssessment bakes stored values
+// into the markup's value= attributes, rerenderThicknessSection rebuilds the
+// section with outerHTML, and syncDerivedInputs assigns input.value directly --
+// none of which dispatches an input/change event.
+function markUserEdit() {
+  if (state) state.userDirty = true;
+}
+
+// Schedule a calculation for the CURRENT inputs. Called on every input change
+// and on every scenario change -- NEVER on mount. The debounce is what makes
 // typing "1250" one request instead of four; the signature check is what makes
-// an edit that changes nothing the engine reads zero requests.
+// an edit that changes nothing the engine reads zero requests; the userDirty
+// gate is what makes a page VIEW zero requests.
 export function scheduleCalculation(delay) {
-  if (!state) return;
+  if (!state || !state.userDirty) return;
   if (debounceTimer) clearTimeout(debounceTimer);
   var wait = delay == null ? DEBOUNCE_MS : delay;
   debounceTimer = setTimeout(function () {
@@ -756,6 +777,9 @@ export function scheduleCalculation(delay) {
 function runCalculation() {
   var activeState = state;
   if (!activeState) return;
+  // Belt-and-braces: the gate is re-checked at FIRE time, not only at schedule
+  // time, so no future caller can arm the timer around it.
+  if (!activeState.userDirty) return;
   var values = readFormValues(byId('dynamic-fields'));
   var resolved = resolveCalculation(values);
   if (resolved.status === 'error') { setStatus(resolved.message, 'error'); return; }
@@ -796,9 +820,13 @@ function runCalculation() {
 //
 // Independent of Save by design: the card removes the Apply button, and a
 // result the user can see but has not "applied" is exactly the stale-preview
-// problem the old flow had. The write carries no revision (PATCH
-// /dynamic-fields is the fields-only endpoint and takes no optimistic lock), so
-// it cannot 409 against the user's in-progress typing.
+// problem the old flow had. It is NOT independent of the USER, though -- this
+// is the write KI-005 caught firing on a page view, and it is now reachable
+// only from behind the interaction gate (see markUserEdit).
+//
+// The write carries no revision (PATCH /dynamic-fields is the fields-only
+// endpoint and takes no optimistic lock), so it cannot 409 against the user's
+// in-progress typing.
 function persistResults(activeState, result, resolved) {
   var fields = buildLeadApplyFields(result, {
     scenario: activeState.scenario,
@@ -886,6 +914,9 @@ function rerenderThicknessSection() {
 
 function onFieldInput(element) {
   if (!state) return;
+  // A real input/change event on a real field: from here on the auto-run is
+  // allowed to persist (see markUserEdit).
+  markUserEdit();
   var key = element.getAttribute('data-la-field');
   var column = columnOf(key);
   // Section 1, conversion mode: the first value typed into a convertible row
@@ -959,6 +990,8 @@ function wireScenarios(root) {
     input.dataset.laBound = 'true';
     input.addEventListener('change', function () {
       if (!state || !input.checked) return;
+      // The card's OTHER named trigger: "or the selected scenario change".
+      markUserEdit();
       state.scenario = input.value;
       // A scenario change invalidates the previous run outright: the displayed
       // numbers belong to the OLD scenario, and a condensate/dry-gas switch
@@ -1058,6 +1091,10 @@ export function renderLeadAssessment(root, options) {
     display: stored,
     plots: { gas: '', liquid: '' },
     signature: '',
+    // FALSE until a DOM event handler says otherwise -- see markUserEdit.
+    // Mounting, hydrating and re-rendering this page never set it, and the
+    // persisting auto-run cannot fire while it is false.
+    userDirty: false,
     earlier: earlierComments(Store.tasks)
   };
   root.innerHTML = workspaceMarkup(state);
@@ -1075,10 +1112,25 @@ export function renderLeadAssessment(root, options) {
     comments.placeholder = 'Comments, assumptions, rationale, or required notes...';
   }
   renderFolderRow(options.onCopy || function () {});
-  // Mount-time run, so a lead whose inputs are already valid shows its results
-  // and plots without the user touching anything -- the card's "update
-  // automatically" applies to arriving on the page, not only to editing on it.
-  scheduleCalculation(0);
+  // MOUNT IS A READ (KI-005). The results the page opens on are the STORED
+  // lead_piip_* values, already rendered by workspaceMarkup above via
+  // resultsFromStoredFields -- no request, no recompute, no write. The plots
+  // are rendered figures rather than stored values, so their slots stay empty
+  // until the user's first edit or scenario change produces a fresh run.
+  //
+  // The only mount-time work left is the STATUS line, and it is display-only:
+  // resolveCalculation is a pure function of the inputs on screen, so the page
+  // can still say "enter a GRV pair..." or name a half-entered pair without
+  // touching the network.
+  renderMountStatus();
+}
+
+// The idle/error hint for the inputs as they arrived, with no run behind it.
+function renderMountStatus() {
+  if (!state) return;
+  var resolved = resolveCalculation(state.values);
+  if (resolved.status === 'ready') { setStatus('', ''); return; }
+  setStatus(resolved.message, resolved.status === 'error' ? 'error' : 'idle');
 }
 
 // ---------------------------------------------------------------------------

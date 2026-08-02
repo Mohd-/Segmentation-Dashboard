@@ -299,9 +299,19 @@ def _reservoir_cos_rows(force_ar_one=False):
 
 def _seal_fields():
     """Raw Seal CoS inputs; save_task_dynamic_fields computes seal_cos_pct
-    from these via the real formula (cos.calculate_seal_cos)."""
+    from these via the real formula (cos.calculate_seal_cos).
+
+    The activity range is capped at 1.0 (it was 0.1-1.4 until KI-004): above
+    0.9 the formula takes the ``activity x fracture_permeability`` branch and
+    range-checks nothing, so a draw over 1/0.9 -- the largest permeability
+    below -- produced a stored seal_cos_pct above 100%. That value is outside
+    the domain every READER accepts, and roughly one seeded lead per run was
+    therefore born with a detail page that could not be opened. 1.0 x the 0.9
+    permeability ceiling is 90%, comfortably inside the domain, and still
+    leaves ~11% of draws exercising the "recently active" branch.
+    """
     return {
-        "seal_recent_activity_age": round(random.uniform(0.1, 1.4), 2),
+        "seal_recent_activity_age": round(random.uniform(0.1, 1.0), 2),
         "seal_dip": round(random.uniform(0.1, 0.9), 2),
         "seal_azimuth_vs_shmax": round(random.uniform(0.1, 0.9), 2),
         "seal_fault_level_confidence": round(random.uniform(0.1, 0.9), 2),

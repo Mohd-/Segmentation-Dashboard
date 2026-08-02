@@ -120,6 +120,182 @@ def test_seal_cos_survives_saves_without_form_inputs(client):
 
 
 # ---------------------------------------------------------------------------
+# KI-004: a Seal CoS outside 0-100% must be unstorable, and a legacy one that
+# is already stored must not be able to fail a READ.
+#
+# The write and the read used to disagree about the domain: calculate_seal_cos
+# range-checks each INPUT but not its PRODUCT (activity x fracture permeability
+# on the "recently active" branch), while _cos_probability -- reached from
+# GET /api/projects/<id>/detail on every call -- rejects anything above 100.
+# The fix is two-layered and BOTH layers are pinned here.
+# ---------------------------------------------------------------------------
+
+# The audit's own repro inputs: 1.33 x 0.87 = 1.1571 -> 116%.
+POISON_SEAL_INPUTS = {
+    "seal_recent_activity_age": "1.33",
+    "seal_fracture_permeability": "0.87",
+    "seal_dip": "0.23",
+    "seal_azimuth_vs_shmax": "0.52",
+    "seal_fault_level_confidence": "0.59",
+}
+
+
+def _seal_task(client, pid):
+    return get_task_by_name(client, pid, "Trap and Seal CoS")
+
+
+def test_seal_cos_above_100_is_refused_by_the_dynamic_fields_save(client):
+    """LAYER 1. The save that produced the poisoned row now 400s, and its
+    message names the computed value AND the two inputs that produced it."""
+    pid = create_project(client, "SEAL-GUARD-1")
+    seal = _seal_task(client, pid)
+    resp = client.patch(f"/api/tasks/{seal['task_id']}/dynamic-fields",
+                        json={"fields": dict(POISON_SEAL_INPUTS)})
+    assert resp.status_code == 400
+    assert resp.get_json()["detail"] == (
+        "Seal CoS computes to 116% from these inputs; "
+        "adjust Most recent age of activity or Fracture Permeability."
+    )
+
+
+def test_seal_cos_above_100_is_refused_by_the_full_save_too(client):
+    """The same guard on the other save path (PATCH /api/tasks/<id>)."""
+    pid = create_project(client, "SEAL-GUARD-2")
+    seal = _seal_task(client, pid)
+    resp = client.patch(f"/api/tasks/{seal['task_id']}",
+                        json={"fields": dict(POISON_SEAL_INPUTS), "comments": "attempt"})
+    assert resp.status_code == 400
+    assert "116%" in resp.get_json()["detail"]
+
+
+def test_refused_seal_cos_save_writes_nothing_at_all(client):
+    """NO PARTIAL WRITE. The refusal is raised before the first DML statement on
+    both paths, so neither the offending inputs nor the comment land, and a
+    previously good seal_cos_pct is still the stored one."""
+    pid = create_project(client, "SEAL-GUARD-3")
+    seal = _seal_task(client, pid)
+    ok = client.patch(f"/api/tasks/{seal['task_id']}/dynamic-fields", json={"fields": {
+        "seal_recent_activity_age": "0.95", "seal_fracture_permeability": "0.5",
+    }})
+    assert ok.status_code == 200
+    before = client.get(f"/api/tasks/{seal['task_id']}/dynamic-fields").get_json()
+    assert before.get("seal_cos_pct") == "48"
+
+    assert client.patch(f"/api/tasks/{seal['task_id']}/dynamic-fields",
+                        json={"fields": dict(POISON_SEAL_INPUTS)}).status_code == 400
+    assert client.patch(f"/api/tasks/{seal['task_id']}",
+                        json={"fields": dict(POISON_SEAL_INPUTS),
+                              "comments": "should not be stored"}).status_code == 400
+
+    after = client.get(f"/api/tasks/{seal['task_id']}/dynamic-fields").get_json()
+    assert after == before, "the refused saves left the stored fields untouched"
+    task = _seal_task(client, pid)
+    assert not (task.get("comments") or ""), "and the comment never landed either"
+
+
+def test_seal_cos_of_exactly_100_is_accepted(client):
+    """The boundary is INCLUSIVE -- 100% is a legitimate certainty, and
+    _cos_probability accepts it. Only past it is a mis-entry."""
+    pid = create_project(client, "SEAL-GUARD-4")
+    seal = _seal_task(client, pid)
+    resp = client.patch(f"/api/tasks/{seal['task_id']}/dynamic-fields", json={"fields": {
+        "seal_recent_activity_age": "1.0", "seal_fracture_permeability": "1.0",
+    }})
+    assert resp.status_code == 200
+    fields = client.get(f"/api/tasks/{seal['task_id']}/dynamic-fields").get_json()
+    assert fields.get("seal_cos_pct") == "100"
+
+
+def test_seal_guard_names_the_average_branch_inputs_when_that_branch_overflows(client):
+    """The message points at whichever inputs the OFFENDING branch multiplied.
+    Below the 0.9 activity threshold that is the three directional terms and
+    the permeability, not the activity age."""
+    import workflow
+
+    with pytest.raises(ValueError, match="Dip, Azimuth vs. SHmax, Fault Level of Confidence"):
+        workflow.lifecycle._apply_seal_cos_calculation(
+            {"task_name": "Trap and Seal CoS"},
+            {"seal_recent_activity_age": "0.5", "seal_fracture_permeability": "2.0",
+             "seal_dip": "0.9", "seal_azimuth_vs_shmax": "0.9",
+             "seal_fault_level_confidence": "0.9"})
+
+
+def test_trap_and_reservoir_cos_cannot_leave_the_cos_domain(client):
+    """WHY ONLY SEAL IS GUARDED. The other two save-time recomputes are bounded
+    by construction: Trap CoS returns a member of a fixed score table and
+    Reservoir CoS a model probability, so neither can produce the out-of-domain
+    percentage Seal CoS could."""
+    import cos
+
+    assert all(0 <= score * 100 <= 100 for score in cos._TRAP_COS_SCORES)
+    # Every reachable trap answer, including the 0.5 floor, is inside the domain.
+    for b in ("1", "50", "100", "130", "314", "10000"):
+        computed = cos.calculate_trap_cos("100", b)
+        assert computed is None or 0 <= int(computed) <= 100
+
+
+def _poison_seal_row(client, pid, value="116"):
+    """Write an out-of-domain seal_cos_pct straight into the database.
+
+    Deliberately RAW SQL: the save-time guard above now makes this shape
+    unreachable through the API, but rows written before it exists are exactly
+    what the read side has to survive. This is the legacy row, reproduced.
+    """
+    from conftest import raw_sqlite_connect
+
+    seal = _seal_task(client, pid)
+    conn = raw_sqlite_connect(client.db_path)
+    with conn:
+        conn.execute(
+            "INSERT INTO task_dynamic_fields (task_id, field_key, field_value, updated_at) "
+            "VALUES (?, 'seal_cos_pct', ?, '2026-01-01T00:00:00Z') "
+            "ON CONFLICT(task_id, field_key) DO UPDATE SET field_value = excluded.field_value",
+            (seal["task_id"], value))
+    conn.close()
+
+
+def test_detail_endpoint_survives_a_poisoned_seal_cos(client):
+    """LAYER 2. The audit's repro, with the poisoning done in SQL because the
+    API no longer allows it: GET /api/projects/<id>/detail must stay 200 and
+    report the Total as UNAVAILABLE, never 400. A read-only endpoint that can
+    be bricked by stored data is the actual defect -- the guard above only
+    stops NEW ones."""
+    pid = create_project(client, "SEAL-POISON-1")
+    reservoir = get_task_by_name(client, pid, "Reservoir CoS")
+    client.patch(f"/api/tasks/{reservoir['task_id']}/dynamic-fields",
+                 json={"fields": {"reservoir_cos_rows": json.dumps([{"reservoir_cos_pct": "70"}])}})
+    seal = _seal_task(client, pid)
+    client.patch(f"/api/tasks/{seal['task_id']}/dynamic-fields",
+                 json={"fields": {"trap_cos_pct": "50"}})
+    _poison_seal_row(client, pid)
+
+    resp = client.get(f"/api/projects/{pid}/detail")
+    assert resp.status_code == 200, resp.get_json()
+    body = resp.get_json()
+    assert body["overview"]["derisking"] == "", "Total CoS degrades to unavailable (the em-dash path)"
+    # The offending value is still VISIBLE, so the user can see what to fix --
+    # degrading the derived Total is not the same as hiding the stored input.
+    assert body["fields"]["Trap and Seal CoS"]["seal_cos_pct"] == "116"
+
+
+def test_poisoned_seal_cos_degrades_everywhere_the_total_is_read(client):
+    """The tolerance lives in total_cos_from_fields, so every read-only surface
+    that resolves a Total -- the board, the portfolio rows, the Excel export --
+    degrades identically instead of one of them 400ing."""
+    pid = create_project(client, "SEAL-POISON-2")
+    seal = _seal_task(client, pid)
+    client.patch(f"/api/tasks/{seal['task_id']}/dynamic-fields",
+                 json={"fields": {"trap_cos_pct": "50"}})
+    _poison_seal_row(client, pid, "150")
+
+    assert client.get(f"/api/projects/{pid}").status_code == 200
+    assert client.get("/api/projects").status_code == 200
+    rows = client.get("/api/portfolio/rows")
+    assert rows.status_code == 200
+    assert client.get("/api/export/excel").status_code == 200
+
+
+# ---------------------------------------------------------------------------
 # calculate_reservoir_cos_rows
 # ---------------------------------------------------------------------------
 

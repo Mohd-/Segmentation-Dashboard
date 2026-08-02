@@ -241,7 +241,7 @@ first — this guide, and the front-end code it describes, is a separate layer f
 There IS a front-end test suite (no linter, though). It lives in `static/tests/`: a tiny
 zero-dependency ES-module harness (`harness.js` — `test()`, `assert.*`, `fixture()`,
 `mockFetch()`, `waitFor()`), a page that imports every test module and runs them
-(`runner.html`), and 18 `test-*.js` modules totalling 413 tests. Run it from the repo root:
+(`runner.html`), and 18 `test-*.js` modules totalling 416 tests. Run it from the repo root:
 
 ```bash
 .venv/bin/python run_frontend_tests.py                  # headless, prints a report

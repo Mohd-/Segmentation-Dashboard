@@ -11,7 +11,7 @@ from typing import Any, Dict
 
 import cos
 import db
-from helpers import today_str, utc_now_str
+from helpers import to_float_or_none, today_str, utc_now_str
 
 from .constants import (
     CHECKBOX_SUBMIT_FROM_STATUSES,
@@ -94,6 +94,52 @@ def _apply_trap_cos_calculation(session, task, fields):
     return fields
 
 
+def _guard_seal_cos_range(fields, computed):
+    """Refuse to STORE a Seal CoS outside the domain every reader accepts.
+
+    KI-004. ``cos.calculate_seal_cos`` range-checks each INPUT but not its
+    PRODUCT: on the "recently active" branch (activity > 0.9) the result is
+    ``activity x fracture_permeability``, and an activity above 1.0 pushes that
+    past 100%. The read side is stricter -- ``cos._cos_probability`` rejects
+    anything outside 0-100 -- and that read is the Total-CoS recomputation that
+    ``GET /api/projects/<id>/detail`` performs on EVERY call. So a percentage
+    the save accepted with 200 used to brick the lead's detail page permanently.
+
+    Two halves fix that disagreement and this is the first: the SAVE refuses,
+    naming the value and the inputs that produced it, so a bad number never
+    reaches the database. (The second is the read-time tolerance in
+    ``summary.total_cos_from_fields``, which degrades a value that is ALREADY
+    stored to "unavailable" instead of failing the request.)
+
+    The formula itself is deliberately untouched -- clamping it would silently
+    turn a mis-entry into a plausible 100%, and changing it is CONTRIBUTING
+    recipe 3's own procedure, not a bug fix's.
+
+    Only the Seal hook needs this. Trap CoS returns a value drawn from the fixed
+    ``cos._TRAP_COS_SCORES`` table (0.5-1.0 -> 50-100) and Reservoir CoS a model
+    probability, so neither can leave the domain by construction -- pinned by
+    ``tests/test_cos.py::test_trap_and_reservoir_cos_cannot_leave_the_cos_domain``.
+    """
+    if not str(computed or "").strip():
+        return
+    try:
+        percent = float(computed)
+    except (TypeError, ValueError):  # pragma: no cover - calculate_seal_cos returns a number
+        return
+    if 0 <= percent <= 100:
+        return
+    # Name the two inputs the offending branch actually multiplied, so the user
+    # is sent to the field they can fix rather than to the whole form.
+    activity = to_float_or_none((fields or {}).get("seal_recent_activity_age"))
+    if activity is not None and activity > 0.9:
+        offenders = "Most recent age of activity or Fracture Permeability"
+    else:
+        offenders = "Dip, Azimuth vs. SHmax, Fault Level of Confidence or Fracture Permeability"
+    raise ValueError(
+        f"Seal CoS computes to {int(round(percent))}% from these inputs; adjust {offenders}."
+    )
+
+
 def _apply_seal_cos_calculation(task, fields):
     """Seal CoS recompute hook (formula-derived, never manually keyed).
 
@@ -101,10 +147,17 @@ def _apply_seal_cos_calculation(task, fields):
     comment-only save, or one carrying just the merged step's Trap half, must
     not wipe the stored result with a blank-form recompute. Returns ``fields``
     (copied only when something was computed).
+
+    A recompute that lands outside 0-100% raises (``_guard_seal_cos_range``)
+    BEFORE anything is written. Both callers are safe against a partial write:
+    ``save_task_dynamic_fields`` runs this hook before it opens its transaction,
+    and ``save_task`` runs it inside one, before the first DML statement -- so
+    either way the save is refused whole.
     """
     if task.get("task_name") in _SEAL_COS_STEPS and any(key in fields for key in _SEAL_COS_INPUT_KEYS):
         fields = dict(fields)
         fields["seal_cos_pct"] = cos.calculate_seal_cos(fields)
+        _guard_seal_cos_range(fields, fields["seal_cos_pct"])
     return fields
 
 

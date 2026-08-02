@@ -170,6 +170,8 @@ The system calculates and stores **Seal CoS (%)** automatically when the compone
 
 The result is displayed as a whole-number percentage, such as `44%`. Inputs should be entered as decimal factors used by the technical formula (for example, `0.44` for 44%).
 
+The formula is unchanged, but since KI-004 the **result** is range-checked when it is saved: a set of inputs whose Seal CoS works out above 100% (or below 0%) is refused with a message naming the computed value and the inputs to adjust, for example *"Seal CoS computes to 116% from these inputs; adjust Most recent age of activity or Fracture Permeability."* Exactly `100%` is still accepted. Leads saved **before** this check may carry an out-of-range percentage; those keep displaying it, and their Total Chance of Success simply reads as unavailable until the Seal inputs are corrected and re-saved.
+
 ### v14 — Lead mean gas in Well Summary
 
 - **Mean PIIP Gas (BCF) — Lead Phase** is now shown in the right-hand Well Summary as soon as it is saved in **Resource Assessment**.

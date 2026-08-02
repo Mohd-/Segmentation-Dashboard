@@ -14,7 +14,11 @@ The journey, in order:
   5. tick "Polygons and surfaces are placed in the shared folder";
   6. press Save Updates ONCE;
   7. assert all four Lead Assessment rail rows read Approved (green) and the
-     board card's four Lead Assessment dots are Completed.
+     board card's four Lead Assessment dots are Completed;
+  8. KI-005 -- REOPEN the now-Approved lead, both by clicking its card and by
+     clicking a Lead Assessment rail row, wait out the auto-run's debounce, and
+     assert that LOOKING at it changed nothing: the stored PIIP mean, the step's
+     Approved status and the absence of a "Field Reopen" history event.
 
 Screenshots (--out, default ./screenshots/card-2b):
   01-full-light.png       the finished page, light theme
@@ -129,6 +133,31 @@ def board_tracked_items(project_id):
     return {item["label"]: item["status"] for item in row["tracked_items"]}
 
 
+def api_get(path):
+    import json
+    with urllib.request.urlopen(f"{ROOT_URL}{path}", timeout=10) as response:
+        return json.loads(response.read())
+
+
+def server_state(project_id):
+    """The three things a PAGE VIEW must never move (KI-005).
+
+    Read straight from the API rather than from the DOM, because the defect was
+    a WRITE: the screen can look right while the record behind it has already
+    been rewritten.
+    """
+    tasks = api_get(f"/api/projects/{project_id}/tasks")
+    resource = next(t for t in tasks if t["task_name"] == "Resource Assessment")
+    fields = api_get(f"/api/tasks/{resource['task_id']}/dynamic-fields")
+    history = api_get(f"/api/activity?project_id={project_id}")
+    return {
+        "status": resource["status"],
+        "mean": fields.get("lead_piip_gas_mean", ""),
+        "reopens": [row for row in history if row.get("action_type") == "Field Reopen"],
+        "events": len(history),
+    }
+
+
 def unstick(page, off):
     """Turn every position:sticky element static (screenshot hygiene only)."""
     page.evaluate(
@@ -240,6 +269,56 @@ def run(out_dir: Path, headed: bool) -> int:
         for step in LEAD_STEPS:
             check(items.get(step) == "Completed",
                   f"board tracked item {step!r} is Completed (got {items.get(step)!r})")
+
+        # --- KI-005: OPENING the finished lead must not rewrite it ------------
+        # The lead is now exactly the shape the audit poisoned: a saved,
+        # Approved Resource Assessment carrying stored lead_piip_* values. A
+        # page view used to POST /resource-assessment + PATCH /dynamic-fields
+        # from the auto-run, which replaced the stored mean AND drove the
+        # Approved step back to In Progress with a Field Reopen event.
+        before = server_state(project_id)
+        check(before["status"] == "Approved" and before["mean"] not in ("", None),
+              f"baseline: Resource Assessment Approved with a stored mean ({before['mean']})")
+
+        # (a) the audit's own repro -- click the card, open nothing, type
+        #     nothing, save nothing.
+        page.goto(ROOT_URL, wait_until="networkidle")
+        page.locator(f'.lead-card:has-text("{LEAD_NAME}"), .project-card:has-text("{LEAD_NAME}")').first.click()
+        page.wait_for_selector("#detail-shell:not(.hidden)")
+        page.wait_for_timeout(3000)  # DEBOUNCE_MS is 600; this is five times it.
+        after_card = server_state(project_id)
+        check(after_card == before,
+              f"clicking the lead card changed nothing on the server ({after_card} vs {before})")
+
+        # (b) the stronger case -- MOUNT the consolidated page itself and idle
+        #     on it. This is where the auto-run lives. (The rail auto-reveals
+        #     the CURRENT step's stage, which is no longer this one, so the
+        #     Lead Assessment group has to be opened first.)
+        page.locator(".rail-stage-head:has-text('LEAD ASSESSMENT')").click()
+        page.locator('.component-item:has-text("Resource Assessment")').first.click()
+        page.wait_for_selector(".la-workspace")
+        stored_mean_on_screen = page.locator(".la-result-gas .la-result-box").nth(1).inner_text()
+        check(stored_mean_on_screen not in ("", "—"),
+              f"the STORED results render on arrival, read-only ({stored_mean_on_screen})")
+        page.wait_for_timeout(3000)
+        after_mount = server_state(project_id)
+        check(after_mount["mean"] == before["mean"],
+              f"the stored PIIP mean is unchanged by a page view ({after_mount['mean']})")
+        check(after_mount["status"] == "Approved",
+              f"the Approved step is still Approved ({after_mount['status']})")
+        check(not after_mount["reopens"],
+              f"no Field Reopen event exists ({after_mount['reopens']})")
+        check(after_mount["events"] == before["events"],
+              f"and no history row was written at all ({after_mount['events']} vs {before['events']})")
+
+        # ...and the auto-run STILL WORKS when the user actually edits.
+        grv = field(page, "grv_p10_thousand_acre_ft")
+        grv.fill("19.40")
+        grv.dispatch_event("input")
+        page.wait_for_selector('.la-result-gas .ra-plot img', timeout=30000)
+        edited = server_state(project_id)
+        check(edited["mean"] != before["mean"],
+              f"a real edit still recomputes and persists ({before['mean']} -> {edited['mean']})")
 
         # --- the OTHER stages keep the generic per-step form -------------------
         page.locator(".rail-stage-head:has-text('RISK ANALYSIS')").click()
