@@ -1020,3 +1020,384 @@ def test_the_submit_gate_tick_inside_the_approval_walk_does_not_reconcile(client
     events = [row["action_type"] for row in history(client, task["task_id"])]
     assert "Component Approved" in events
     assert "Field Completion" not in events
+
+
+# ---------------------------------------------------------------------------
+# Card 4A -- Moving Tolerance (eight fields, all eight required)
+# ---------------------------------------------------------------------------
+# The staking tolerance is one capture: the lead's X/Y plus THREE complete
+# max-distance/azimuth option pairs. Anything less still SAVES -- a partial
+# capture is a normal work-in-progress save -- it just leaves the item In
+# Progress, which is what a half-filled pair should read as.
+
+TOLERANCE_STEP = "Moving Tolerance"
+
+TOLERANCE_LOCATION = {"staking_well_x": "532100.5", "staking_well_y": "2895120.1"}
+TOLERANCE_OPTIONS = {
+    "staking_opt1_max_distance_m": "150", "staking_opt1_azimuth_deg": "45",
+    "staking_opt2_max_distance_m": "220", "staking_opt2_azimuth_deg": "180",
+    "staking_opt3_max_distance_m": "90", "staking_opt3_azimuth_deg": "310",
+}
+TOLERANCE_OK = dict(TOLERANCE_LOCATION, **TOLERANCE_OPTIONS)
+
+
+def test_card_4a_registers_moving_tolerance_with_all_eight_fields(client):
+    """The declarative spec IS the card: eight required keys, no ordering rule.
+
+    Deliberately no ``required_greater`` and no range rule -- the card is
+    explicit that this step gains a completion rule and nothing else. A
+    distance/azimuth pair has no natural ordering (they are not percentiles),
+    and an azimuth range would be a NEW constraint on production data.
+    """
+    import workflow
+
+    spec = workflow.FIELD_COMPLETION[TOLERANCE_STEP]
+    assert set(spec) == {"required_present"}, "no checkbox and no ordering half"
+    assert list(spec["required_present"]) == [
+        "staking_well_x", "staking_well_y",
+        "staking_opt1_max_distance_m", "staking_opt1_azimuth_deg",
+        "staking_opt2_max_distance_m", "staking_opt2_azimuth_deg",
+        "staking_opt3_max_distance_m", "staking_opt3_azimuth_deg",
+    ]
+    # The eight are NUMERIC (not positive-only): an azimuth of 0 is due north.
+    assert set(spec["required_present"]) <= workflow.NUMERIC_FIELDS
+    assert not (set(spec["required_present"]) & workflow.POSITIVE_NUMBER_FIELDS)
+
+
+def test_moving_tolerance_completes_only_on_all_eight_fields(client):
+    """The completion matrix: 0 -> 4 -> 7 -> 8 fields."""
+    login(client, SUPERVISOR)
+    pid = create_project(client, "FC-4A-MATRIX")
+    task = get_task_by_name(client, pid, TOLERANCE_STEP)
+
+    # 0 of 8 -- a fresh step.
+    assert tracked_item(client, pid, TOLERANCE_STEP) != "Completed"
+
+    # 4 of 8 -- the location and one whole option pair.
+    task = save(client, task, dict(TOLERANCE_LOCATION,
+                                   staking_opt1_max_distance_m="150",
+                                   staking_opt1_azimuth_deg="45"))
+    assert task["status"] != "Approved"
+    assert tracked_item(client, pid, TOLERANCE_STEP) != "Completed"
+
+    # 7 of 8 -- everything but the last azimuth. STILL not complete: two
+    # directions to move a rig in is not the tolerance the surveyors are owed.
+    seven = dict(TOLERANCE_OK)
+    seven["staking_opt3_azimuth_deg"] = ""
+    task = save(client, task, seven)
+    assert task["status"] != "Approved"
+
+    # 8 of 8.
+    task = save(client, task, TOLERANCE_OK)
+    assert task["status"] == "Approved"
+    assert tracked_item(client, pid, TOLERANCE_STEP) == "Completed"
+
+
+def test_one_filled_member_of_a_pair_saves_but_does_not_complete(client):
+    """A half pair is SAVED (the value survives) and the item stays open."""
+    login(client, SUPERVISOR)
+    pid = create_project(client, "FC-4A-HALFPAIR")
+    task = get_task_by_name(client, pid, TOLERANCE_STEP)
+    half = dict(TOLERANCE_OK)
+    half["staking_opt2_azimuth_deg"] = ""
+    task = save(client, task, half)
+    assert task["status"] != "Approved"
+    # The partial save is a real write: the distance the user typed is stored.
+    fields = client.get(f"/api/tasks/{task['task_id']}/dynamic-fields").get_json()
+    assert fields["staking_opt2_max_distance_m"] == "220"
+    assert fields.get("staking_opt2_azimuth_deg", "") == ""
+
+
+def test_a_zero_azimuth_is_due_north_and_completes_the_step(client):
+    """The NUMERIC_FIELDS choice, end to end.
+
+    A positive-only rule (POSITIVE_NUMBER_FIELDS) would refuse to complete a
+    perfectly ordinary capture, because 0 degrees is due north -- and a max
+    distance of 0 is a rig that may not move, which is a decision, not a blank.
+    """
+    login(client, SUPERVISOR)
+    pid = create_project(client, "FC-4A-ZERO")
+    task = get_task_by_name(client, pid, TOLERANCE_STEP)
+    zeroed = dict(TOLERANCE_OK, staking_opt1_azimuth_deg="0", staking_opt3_max_distance_m="0")
+    task = save(client, task, zeroed)
+    assert task["status"] == "Approved"
+
+
+def test_a_non_numeric_coordinate_is_an_absent_one(client):
+    """"TBD" in a coordinate box is not a coordinate."""
+    login(client, SUPERVISOR)
+    pid = create_project(client, "FC-4A-TBD")
+    task = get_task_by_name(client, pid, TOLERANCE_STEP)
+    task = save(client, task, dict(TOLERANCE_OK, staking_well_x="TBD"))
+    assert task["status"] != "Approved"
+    task = save(client, task, {"staking_well_x": "532100.5"})
+    assert task["status"] == "Approved"
+
+
+def test_clearing_one_tolerance_field_reopens_the_completed_step(client):
+    login(client, SUPERVISOR)
+    pid = create_project(client, "FC-4A-REOPEN")
+    task = save(client, get_task_by_name(client, pid, TOLERANCE_STEP), TOLERANCE_OK)
+    assert task["status"] == "Approved"
+    task = save(client, task, {"staking_opt2_max_distance_m": ""})
+    assert task["status"] == "In Progress"
+    assert tracked_item(client, pid, TOLERANCE_STEP) != "Completed"
+    assert "Field Reopen" in [row["action_type"] for row in history(client, task["task_id"])]
+
+
+# ---------------------------------------------------------------------------
+# Card 4B -- the TWO tracked items of the consolidated Staking Letters page
+# ---------------------------------------------------------------------------
+# One page, one Save, TWO tracked outcomes: the Save PATCHes each owning task in
+# turn and the engine decides each item from the fields that item owns.
+
+STAKE_STEP = "Approval to Stake"
+WELLSITE_STEP = "Well Site Location"
+
+STAKE_OK = {"staking_well_created": "1", "approval_stake_letter_loaded": "1"}
+WELLSITE_OK = {"wellsite_letter_loaded": "1", "staked_x": "532100.5", "staked_y": "2895120.1"}
+
+
+def test_card_4b_registers_both_staking_letter_items(client):
+    """Two items, and no field gates both -- otherwise one Save moves two dots."""
+    import workflow
+
+    stake = workflow.FIELD_COMPLETION[STAKE_STEP]
+    wellsite = workflow.FIELD_COMPLETION[WELLSITE_STEP]
+    assert stake == {"required_checked": ("staking_well_created", "approval_stake_letter_loaded")}
+    assert wellsite == {"required_checked": ("wellsite_letter_loaded",),
+                        "required_present": ("staked_x", "staked_y")}
+    claimed = []
+    for spec in (stake, wellsite):
+        claimed.extend(spec.get("required_checked", ()))
+        claimed.extend(spec.get("required_present", ()))
+    assert len(claimed) == len(set(claimed)), "no field gates two different items"
+    # Checkbox 1 is the v5 backfill, named once in the domain vocabulary.
+    assert workflow.STAKING_WELL_CREATED_KEY == "staking_well_created"
+    assert workflow.STAKING_WELL_CREATED_KEY in stake["required_checked"]
+    # The retired step is NOT resurrected as a tracked item.
+    assert "Well Creation" in workflow.RETIRED_TASK_NAMES
+    assert "Well Creation" not in workflow.FIELD_COMPLETION
+
+
+def test_the_stake_letter_alone_is_not_completion(client):
+    """A filed letter for a well that does not exist is a document with no subject."""
+    login(client, SUPERVISOR)
+    pid = create_project(client, "FC-4B-LETTER-ONLY")
+    task = save(client, get_task_by_name(client, pid, STAKE_STEP),
+                {"approval_stake_letter_loaded": "1"})
+    assert task["status"] != "Approved"
+    assert tracked_item(client, pid, STAKE_STEP) != "Completed"
+
+
+def test_well_creation_alone_is_not_completion_either(client):
+    login(client, SUPERVISOR)
+    pid = create_project(client, "FC-4B-WELL-ONLY")
+    task = save(client, get_task_by_name(client, pid, STAKE_STEP), {"staking_well_created": "1"})
+    assert task["status"] != "Approved"
+
+
+def test_both_boxes_complete_approval_to_stake_and_nothing_else(client):
+    login(client, SUPERVISOR)
+    pid = create_project(client, "FC-4B-BOTH")
+    task = save(client, get_task_by_name(client, pid, STAKE_STEP), STAKE_OK)
+    assert task["status"] == "Approved"
+    assert tracked_item(client, pid, STAKE_STEP) == "Completed"
+    # ...and its page-mate is untouched by this save.
+    assert tracked_item(client, pid, WELLSITE_STEP) != "Completed"
+
+
+def test_a_v5_backfilled_lead_only_has_to_file_the_letter(client):
+    """Migration v5 wrote staking_well_created='1' for every lead whose retired
+    Well Creation step had been Approved. Such a lead opens the page with box
+    one already ticked, so ticking box two ALONE completes the item.
+    """
+    login(client, SUPERVISOR)
+    pid = create_project(client, "FC-4B-BACKFILL")
+    task = get_task_by_name(client, pid, STAKE_STEP)
+    # Stand in for the migration: a direct field write, no reconcile of its own.
+    resp = client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
+                        json={"fields": {"staking_well_created": "1"}})
+    assert resp.status_code == 200, resp.get_json()
+    task = get_task_by_name(client, pid, STAKE_STEP)
+    assert task["status"] != "Approved", "the backfill alone completes nothing"
+
+    task = save(client, task, {"approval_stake_letter_loaded": "1"})
+    assert task["status"] == "Approved"
+    assert tracked_item(client, pid, STAKE_STEP) == "Completed"
+
+
+def test_the_wellsite_letter_needs_both_staked_coordinates(client):
+    login(client, SUPERVISOR)
+    pid = create_project(client, "FC-4B-COORDS")
+    task = get_task_by_name(client, pid, WELLSITE_STEP)
+
+    task = save(client, task, {"wellsite_letter_loaded": "1"})
+    assert task["status"] != "Approved", "a letter with no location leaves the site undefined"
+
+    task = save(client, task, {"staked_x": "532100.5"})
+    assert task["status"] != "Approved", "one coordinate is not a location"
+
+    task = save(client, task, {"staked_y": "2895120.1"})
+    assert task["status"] == "Approved"
+    assert tracked_item(client, pid, WELLSITE_STEP) == "Completed"
+
+
+def test_coordinates_without_the_letter_are_not_completion(client):
+    login(client, SUPERVISOR)
+    pid = create_project(client, "FC-4B-NO-LETTER")
+    task = save(client, get_task_by_name(client, pid, WELLSITE_STEP),
+                {"staked_x": "532100.5", "staked_y": "2895120.1"})
+    assert task["status"] != "Approved"
+
+
+def test_a_zero_or_negative_staked_coordinate_is_still_a_coordinate(client):
+    """NUMERIC_FIELDS, not POSITIVE_NUMBER_FIELDS -- see the 4A twin."""
+    login(client, SUPERVISOR)
+    pid = create_project(client, "FC-4B-ZERO")
+    task = save(client, get_task_by_name(client, pid, WELLSITE_STEP),
+                {"wellsite_letter_loaded": "1", "staked_x": "0", "staked_y": "-120"})
+    assert task["status"] == "Approved"
+    # But free text is not.
+    task = save(client, task, {"staked_x": "TBD"})
+    assert task["status"] == "In Progress"
+
+
+def test_unticking_the_wellsite_letter_reopens_it_WITHOUT_clearing_the_survey(client):
+    """THE PROMISE the page makes: hiding the fields never deletes the values.
+
+    The consolidated page keeps the two inputs in the DOM when the box is
+    unticked, so the save writes the SAME coordinates back beside the cleared
+    confirmation. Only the item reopens; re-ticking finds the survey intact.
+    """
+    login(client, SUPERVISOR)
+    pid = create_project(client, "FC-4B-KEEP")
+    task = save(client, get_task_by_name(client, pid, WELLSITE_STEP), WELLSITE_OK)
+    assert task["status"] == "Approved"
+
+    # Exactly what the page's buildSavePlan sends after an untick.
+    task = save(client, task, dict(WELLSITE_OK, wellsite_letter_loaded=""))
+    assert task["status"] == "In Progress"
+    fields = client.get(f"/api/tasks/{task['task_id']}/dynamic-fields").get_json()
+    assert fields["staked_x"] == "532100.5"
+    assert fields["staked_y"] == "2895120.1"
+
+    # Re-ticking alone completes it again -- nothing had to be retyped.
+    task = save(client, task, {"wellsite_letter_loaded": "1"})
+    assert task["status"] == "Approved"
+
+
+def test_one_page_press_produces_TWO_tracked_outcomes(client):
+    """The end-to-end shape of one Save Updates press on the Staking Letters page.
+
+    The page groups its five values by owning task and PATCHes each dirty one in
+    turn -- two writes, two completed tracked items, one lead.
+    """
+    login(client, SUPERVISOR)
+    pid = create_project(client, "FC-4B-PAGE")
+    stake = save(client, get_task_by_name(client, pid, STAKE_STEP), STAKE_OK)
+    wellsite = save(client, get_task_by_name(client, pid, WELLSITE_STEP), WELLSITE_OK)
+    assert stake["status"] == "Approved"
+    assert wellsite["status"] == "Approved"
+    assert tracked_item(client, pid, STAKE_STEP) == "Completed"
+    assert tracked_item(client, pid, WELLSITE_STEP) == "Completed"
+    # Both items still keep their OWN comments column -- the page shows one
+    # editable box and folds the other in read-only, it does not merge them.
+    save(client, get_task_by_name(client, pid, STAKE_STEP), {}, comments="letter chased")
+    tasks = {t["task_name"]: t for t in client.get(f"/api/projects/{pid}/tasks").get_json()}
+    assert tasks[STAKE_STEP]["comments"] == "letter chased"
+    assert (tasks[WELLSITE_STEP]["comments"] or "") == ""
+
+
+# ---------------------------------------------------------------------------
+# Card 4C -- Pre-Drilling GeoX Assessment keeps the MANUAL walk
+# ---------------------------------------------------------------------------
+
+def test_the_geox_assessment_is_deliberately_not_field_driven(client):
+    """Card 4C reuses the CURRENT completion rule, unmodified.
+
+    Today that is the manual submit -> approve walk, so the step must have NO
+    FIELD_COMPLETION entry: adding one would change a rule the card explicitly
+    leaves alone. (It is not a manual-APPROVAL step in the card 3D sense either
+    -- it simply has no field rule yet.)
+    """
+    import workflow
+
+    assert "Pre-Drilling GeoX Assessment" not in workflow.FIELD_COMPLETION
+    assert "Pre-Drilling GeoX Assessment" not in workflow.CHECKBOX_SUBMIT_STEPS
+
+
+def test_the_geox_assessment_still_completes_by_the_manual_walk(client):
+    login(client, SUPERVISOR)
+    pid = create_project(client, "FC-4C-WALK")
+    step = "Pre-Drilling GeoX Assessment"
+    # A calculator write (the step's only inputs) moves nothing on its own.
+    task = get_task_by_name(client, pid, step)
+    client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
+                 json={"fields": {"pre_drill_piip_gas_mean": "22.8"}})
+    assert get_task_by_name(client, pid, step)["status"] != "Approved"
+
+    drive_to_approved(client, pid, step)
+    assert tracked_item(client, pid, "GeoX Assessment") == "Completed"
+
+
+def test_pre_well_delivery_four_of_four_matures_the_whole_lead(client):
+    """The 12/12 walk: every tracked item Completed -> the lead is Completed.
+
+    Cards 4A/4B close three of Pre-Well Delivery's four items from field state;
+    the GeoX assessment closes by its unchanged manual walk. With Lead
+    Assessment and Risk Analysis already done, that is 12 of 12 -- and a
+    fully-matured lead LEAVES the prospect board and JOINS the Portfolio.
+    """
+    login(client, SUPERVISOR)
+    pid = create_project(client, "FC-4-1212")
+
+    # --- Lead Assessment (card 2B) ---------------------------------------
+    _save_step(client, pid, AREA_STEP, AREA_OK)
+    _save_step(client, pid, THICKNESS_STEP, THICKNESS_OK)
+    _save_step(client, pid, GRV_STEP, GRV_OK)
+    ra = get_task_by_name(client, pid, RA_STEP)
+    client.patch(f"/api/tasks/{ra['task_id']}/dynamic-fields",
+                 json={"fields": {"lead_piip_gas_mean": "19.4"}})
+    _save_step(client, pid, RA_STEP, {"polygons_surfaces_loaded": "1"})
+
+    # --- Risk Analysis (cards 3A / 3B / 3C / 3D) --------------------------
+    _save_step(client, pid, "Reservoir CoS",
+               {"reservoir_cos_rows": json.dumps(RESERVOIR_ROWS), "reservoir_slides_loaded": "1"})
+    _save_step(client, pid, "Trap and Seal CoS",
+               dict(SEAL_INPUTS, sarah_quwarah_thickness_ft="120", seal_slides_loaded="1"))
+    _save_step(client, pid, "Seismic Signature Validation", {"seismic_slides_loaded": "1"})
+    # Card 3D keeps its human approval: the save submits, a supervisor approves.
+    slides = _save_step(client, pid, "Segmentation Slides", {"segmentation_slides_loaded": "1"})
+    assert slides["status"] == "Ready"
+    _transition(client, get_task_by_name(client, pid, "Segmentation Slides"), "approve")
+
+    # 8 of 12 so far -- the lead is not mature yet.
+    assert client.get(f"/api/projects/{pid}").get_json()["overall_status"] != "Completed"
+
+    # --- Pre-Well Delivery (cards 4A / 4B / 4C) ---------------------------
+    _save_step(client, pid, TOLERANCE_STEP, TOLERANCE_OK)
+    _save_step(client, pid, STAKE_STEP, STAKE_OK)
+    _save_step(client, pid, WELLSITE_STEP, WELLSITE_OK)
+    drive_to_approved(client, pid, "Pre-Drilling GeoX Assessment")
+
+    # --- 12 of 12 ---------------------------------------------------------
+    project = client.get(f"/api/projects/{pid}").get_json()
+    assert project["overall_status"] == "Completed"
+    assert len(project["tracked_items"]) == 12
+    assert all(item["status"] == "Completed" for item in project["tracked_items"]), \
+        project["tracked_items"]
+
+    # The BOARD (and every KPI derived from it) excludes it outright: a matured
+    # lead is no longer open prospect work, it is a proposal.
+    board = client.get("/api/projects?pipeline_filter=prospect").get_json()
+    assert pid not in [r["project_id"] for r in board]
+
+    # ...and the Portfolio picks it up as a mature lead, STAKED (card 4B's
+    # Approval to Stake is what reporting._approval_to_stake_map reads).
+    resp = client.get("/api/portfolio/rows")
+    assert resp.status_code == 200, resp.get_json()
+    portfolio = resp.get_json()["rows"]
+    entry = next(r for r in portfolio if r["project_id"] == pid)
+    assert entry["is_mature_lead"] == 1
+    assert entry["status"] == "Staked"

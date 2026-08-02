@@ -2212,3 +2212,80 @@ button.ghost.success-outline:hover { background: var(--success-100); }
    DARK tone there, which is right for the fill but leaves the numeral at
    --text-muted too close to it to read at 14px. */
 :root[data-theme="dark"] .la-num { color: var(--ink-800); }
+
+/* =========================================================================
+   Card 4B — the CONSOLIDATED STAKING LETTERS page
+   (views/staking-letters.js), mounted into the SAME #dynamic-fields body on a
+   lead page's "Approval to Stake" and "Well Site Location" steps.
+
+   Same arrangement as card 2B one stage later, so the body switches out of its
+   3-column field grid the same way and the page controls its own geometry.
+   Everything else is deliberately quieter than 2B: one card, three checkbox
+   rows in process order, and the staked location revealed under the third.
+   ========================================================================= */
+.dynamic-fields.staking-letters-body { display: block; }
+
+.sl-workspace { display: flex; flex-direction: column; gap: var(--space-3); }
+
+.sl-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  display: flex; flex-direction: column; gap: var(--space-3);
+}
+
+/* The three confirmations read as a LIST, not as three boxed cards: the
+   generic .check-label chrome (border, sunken row, bottom-alignment for a form
+   grid this page does not use) would turn one sequence of statements into
+   three competing tiles. Box + sentence, full width, in order. */
+.sl-card .sl-check {
+  align-self: stretch;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  min-height: 0;
+  gap: var(--space-3);
+  font-size: var(--text-md);
+  color: var(--ink-800);
+  line-height: 1.4;
+}
+.sl-card .sl-check input { flex: none; width: 18px; height: 18px; accent-color: var(--asas-navy); }
+
+/* ---- The revealed staking location --------------------------------------
+   Indented under the third checkbox, because it is that box's consequence
+   rather than a fourth item. `.hidden` (the app-wide utility) is what the
+   reveal toggles — the inputs stay in the DOM carrying their values, so an
+   untick can never clear a stored survey. */
+.sl-location {
+  margin-left: calc(18px + var(--space-3));
+  display: flex; flex-direction: column; gap: var(--space-2);
+}
+.sl-location-heading { font-size: var(--text-md); font-weight: 700; color: var(--ink-800); }
+.sl-location-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.sl-cell { display: flex; flex-direction: column; gap: 2px; }
+
+.sl-field-error {
+  display: none;
+  font-size: var(--text-xs);
+  line-height: 1.3;
+  color: var(--danger-600);
+}
+.sl-field-error.is-shown { display: block; }
+.sl-invalid { border-color: var(--danger-500); }
+
+/* The read-only provenance fold, identical in shape to card 2B's. */
+.sl-earlier {
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3); font-size: var(--text-sm);
+  background: var(--surface-sunken);
+}
+.sl-earlier > summary { cursor: pointer; color: var(--text-muted); font-weight: 700; }
+.sl-earlier-entry { margin-top: var(--space-2); }
+.sl-earlier-entry b { font-size: var(--text-xs); color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em; }
+.sl-earlier-entry p { margin: 2px 0 0; white-space: pre-wrap; color: var(--text); }
+
+@media (max-width: 1100px) {
+  .sl-location-row { grid-template-columns: minmax(0, 1fr); }
+}

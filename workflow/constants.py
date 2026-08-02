@@ -517,6 +517,68 @@ FIELD_COMPLETION = {
         "required_checked": ("polygons_surfaces_loaded",),
         "required_present": ("lead_piip_gas_mean",),
     },
+    # ---- Card 4A: Moving Tolerance. The step's WHOLE capture is its predicate:
+    # the lead's X/Y plus THREE complete max-distance/azimuth option pairs --
+    # eight fields, all eight required. A staking tolerance with two options is
+    # not a smaller tolerance, it is an unfinished one: the surveyors are handed
+    # three directions to move the rig within, and the step's own form asks for
+    # exactly three. Anything less still SAVES (a partial capture is a normal
+    # work-in-progress save; nothing here rejects a write) -- it just leaves the
+    # item In Progress, which is what a half-filled pair should read as.
+    #
+    # THE NUMERIC CHOICE, stated: these are NUMERIC_FIELDS, not
+    # POSITIVE_NUMBER_FIELDS. An azimuth of 0 degrees is due north -- a perfectly
+    # ordinary bearing -- so a >0 rule would silently refuse to complete a
+    # legitimate capture, and no positive-only rule exists for them anywhere
+    # today (the client's own numericFieldError admits 0 and rejects only
+    # negatives). The X/Y coordinates keep their pre-existing shape too: UTM
+    # eastings/northings are six/seven digits (schema.js marks them bigOk) and
+    # carry no magnitude rule beyond "it is a number".
+    #
+    # No azimuth-range (0-360) or distance ceiling is imposed: the card is
+    # explicit that this step gains no new constraints, only a completion rule.
+    "Moving Tolerance": {
+        "required_present": (
+            "staking_well_x", "staking_well_y",
+            "staking_opt1_max_distance_m", "staking_opt1_azimuth_deg",
+            "staking_opt2_max_distance_m", "staking_opt2_azimuth_deg",
+            "staking_opt3_max_distance_m", "staking_opt3_azimuth_deg",
+        ),
+    },
+    # ---- Card 4B: the TWO tracked items of the consolidated Staking Letters
+    # page. Same shape as card 2B's four: one page, one Save, but each item
+    # still completes from the fields IT owns, so ticking the first two boxes
+    # turns exactly one dot green.
+    #
+    # Approval to Stake = the well record exists AND its letter is filed. The
+    # first key is the v5 backfill (STAKING_WELL_CREATED_KEY): the retired "Well
+    # Creation" step's sign-off became this checkbox, and migration v5 wrote '1'
+    # for every project whose Well Creation row had been Approved -- so a
+    # pre-v5 lead arrives here with box 1 already ticked and only has to file the
+    # letter. Well creation is a PREREQUISITE recorded here, never a fifth
+    # tracked item: the step is retired and stays retired.
+    #
+    # The letter box ALONE is deliberately insufficient. A filed Approval to
+    # Stake letter for a well that does not exist yet is a document without a
+    # subject, and the portfolio reads this exact step's status as "Staked"
+    # (reporting._approval_to_stake_map) -- so the rule that closes it is the
+    # rule that says a lead has been staked.
+    "Approval to Stake": {
+        "required_checked": (STAKING_WELL_CREATED_KEY, "approval_stake_letter_loaded"),
+    },
+    # Well Site Location = the Wellsite Location letter is filed AND the location
+    # it names is recorded. The letter is the deliverable; the staked coordinates
+    # are what the rest of the business reads off it, and a filed letter whose
+    # coordinates were never captured leaves the well site undefined. The two
+    # inputs are only REVEALED once the box is ticked (progressive disclosure on
+    # the page), which is the same order the predicate states.
+    #
+    # staked_x/staked_y are NUMERIC_FIELDS for the same reason the Moving
+    # Tolerance coordinates are: UTM readings, no sign or magnitude rule.
+    "Well Site Location": {
+        "required_checked": ("wellsite_letter_loaded",),
+        "required_present": ("staked_x", "staked_y"),
+    },
 }
 
 # Keys whose "has a valid value" means a POSITIVE NUMBER, not merely a non-blank
@@ -536,6 +598,28 @@ POSITIVE_NUMBER_FIELDS = frozenset({
 })
 
 
+# Keys whose "has a valid value" means A NUMBER -- any number, including zero
+# and negatives -- rather than merely a non-blank string. The looser sibling of
+# POSITIVE_NUMBER_FIELDS above, and the third (and last) entry in the engine's
+# value-validator table (lifecycle._field_present).
+#
+# Card 4A/4B's coordinates and bearings live here because they are genuinely
+# unbounded readings: a UTM easting is a six/seven-digit magnitude with no upper
+# rule, and an azimuth of 0 degrees is due north. What they must NOT be is the
+# free text a plain non-blank test would accept -- "TBD" in a coordinate box is
+# an absent coordinate, and a step whose staking location reads "TBD" is not a
+# staked one.
+NUMERIC_FIELDS = frozenset({
+    # Card 4A -- Moving Tolerance's eight inputs.
+    "staking_well_x", "staking_well_y",
+    "staking_opt1_max_distance_m", "staking_opt1_azimuth_deg",
+    "staking_opt2_max_distance_m", "staking_opt2_azimuth_deg",
+    "staking_opt3_max_distance_m", "staking_opt3_azimuth_deg",
+    # Card 4B -- the staked location revealed by the Wellsite Location letter.
+    "staked_x", "staked_y",
+})
+
+
 def positive_number(value):
     """Does a stored dynamic-field value parse as a number > 0? (pure)"""
     try:
@@ -550,6 +634,15 @@ def _number_or_none(value):
         return float(str(value or "").strip())
     except (TypeError, ValueError):
         return None
+
+
+def is_number(value):
+    """Does a stored dynamic-field value parse as a number at all? (pure)
+
+    The NUMERIC_FIELDS validator: blank, "TBD" and "12 m" are absent; "0",
+    "-6500" and "532100.5" are present.
+    """
+    return _number_or_none(value) is not None
 
 # Steps whose completion is a HUMAN APPROVAL and must never become field-driven.
 # "Segmentation Slides" is the one tracked item the board still shows as

@@ -12,6 +12,12 @@ import {
   isLeadAssessmentStep, leadAssessmentActive, renderLeadAssessment,
   saveLeadAssessment, teardownLeadAssessment
 } from './lead-assessment.js';
+// Card 4B: the consolidated Staking Letters workspace -- the same arrangement
+// one stage later, for Pre-Well Delivery's two letter steps.
+import {
+  isStakingLetterStep, stakingLettersActive, renderStakingLetters,
+  saveStakingLetters, teardownStakingLetters
+} from './staking-letters.js';
 
 export function ensureUsers() {
   if (Store.users) return Promise.resolve(Store.users);
@@ -249,33 +255,67 @@ export function setComponentReferenceMode(referenceOnly) {
   form.classList.toggle('reference-only', referenceOnly);
 }
 
-// Card 2B. A LEAD page's four Lead Assessment steps no longer have four forms:
-// each of them opens the ONE consolidated workspace. This is the only branch
-// that decides it, and it is deliberately narrow -- a BP well, a reference view
-// and every other stage fall straight through to the generic form below.
+// CONSOLIDATED PAGES (cards 2B and 4B). Some tracked items no longer have a
+// form each: a group of them opens ONE workspace whose sections are those
+// items, laid out the way the work is actually done. Each entry names the
+// module that owns such a page.
 //
-// The workspace mounts into #dynamic-fields (the generic grid's own container),
+// The gate is deliberately narrow and identical for both: a LEAD page, the
+// record's CURRENT pipeline, and a step the page claims. A BP well, a reference
+// view and every other step fall straight through to the generic form below.
+//
+// A workspace mounts into #dynamic-fields (the generic grid's own container),
 // so the shell's comments box, folder slot and Save button sit exactly where
-// they always did and need no markup of their own; the editor head's step
-// number/title are hidden, because the page IS the stage, not one step of it.
-function useConsolidatedLeadAssessment(task) {
+// they always did and need no markup of their own. `title` is what the editor
+// head reads while it is mounted -- null means "hide the head entirely" (card
+// 2B's page IS the whole stage, so naming one step would be a lie), a string
+// means "keep the head, name the PAGE" (card 4B's two letters are one
+// deliverable called Staking Letters, and a page with no title at all reads as
+// a rendering bug).
+var CONSOLIDATED_PAGES = [
+  { claims: isLeadAssessmentStep, render: renderLeadAssessment, title: null,
+    bodyClass: 'lead-assessment-body' },
+  { claims: isStakingLetterStep, render: renderStakingLetters, title: 'Staking Letters',
+    bodyClass: 'staking-letters-body' }
+];
+
+// The consolidated page that claims this task, or null for the generic form.
+function consolidatedPageFor(task) {
   var shell = byId('detail-shell');
-  return !!shell && shell.classList.contains('detail-shell-lead') &&
-    isCurrentPipelineView() && isLeadAssessmentStep(task.task_name);
+  if (!shell || !shell.classList.contains('detail-shell-lead') || !isCurrentPipelineView()) return null;
+  return CONSOLIDATED_PAGES.find(function (page) { return page.claims(task.task_name); }) || null;
 }
 
-// Show/hide the per-STEP furniture the consolidated page replaces. Restored on
-// every other component, so switching away from the workspace leaves the
-// generic form exactly as it was.
-function setConsolidatedChrome(consolidated) {
+// Show/hide the per-STEP furniture a consolidated page replaces. Every class it
+// touches is reset first, so switching from one workspace to the other -- or
+// away to a generic form -- never leaves the previous page's chrome behind.
+function setConsolidatedChrome(page) {
   var root = byId('dynamic-fields');
-  if (root) root.classList.toggle('lead-assessment-body', consolidated);
+  if (root) {
+    CONSOLIDATED_PAGES.forEach(function (entry) {
+      root.classList.toggle(entry.bodyClass, !!page && page.bodyClass === entry.bodyClass);
+    });
+  }
   var number = byId('component-number');
-  if (number) number.classList.toggle('hidden', consolidated);
+  if (number) number.classList.toggle('hidden', !!page);
   var title = byId('component-title');
-  if (title) title.classList.toggle('hidden', consolidated);
+  // A page with its own title keeps the heading and renames it; a page without
+  // one hides it. The generic form always restores the step's own name (
+  // loadComponent writes it back before this runs).
+  if (title) {
+    title.classList.toggle('hidden', !!page && !page.title);
+    if (page && page.title) title.textContent = page.title;
+  }
   var save = byId('save-component');
-  if (save) save.classList.toggle('save-primary', consolidated);
+  if (save) save.classList.toggle('save-primary', !!page);
+}
+
+// Tear down every consolidated page EXCEPT the one about to mount (or all of
+// them, when a generic form is). Each teardown is a no-op on a page that was
+// not mounted, so this stays a plain sweep rather than a bookkeeping exercise.
+function teardownOtherConsolidatedPages(page) {
+  if (!page || page.render !== renderLeadAssessment) teardownLeadAssessment();
+  if (!page || page.render !== renderStakingLetters) teardownStakingLetters();
 }
 
 export function loadComponent(task) {
@@ -292,25 +332,24 @@ export function loadComponent(task) {
   renderPriorityChip(task);
   byId('comments').placeholder = commentPlaceholder(task.task_name);
   byId('comments').value = task.comments || '';
-  var consolidated = useConsolidatedLeadAssessment(task);
+  var consolidated = consolidatedPageFor(task);
   setConsolidatedChrome(consolidated);
+  teardownOtherConsolidatedPages(consolidated);
   if (consolidated) {
-    // No per-step field fetch and no per-step folder card: the workspace reads
-    // all four steps' values out of Store.allFields (already on the /detail
-    // payload) and resolves its own lead-scoped Polygons & Surfaces folder.
-    // The lifecycle action row is hidden too -- these four items complete from
-    // their field state (workflow/constants.py FIELD_COMPLETION), so a Submit
-    // or Approve button here would offer a walk nobody has to make.
+    // No per-step field fetch: the workspace reads every step's values out of
+    // Store.allFields (already on the /detail payload) and resolves its own
+    // folder row. The lifecycle action row is hidden too -- these items
+    // complete from their field state (workflow/constants.py FIELD_COMPLETION),
+    // so a Submit or Approve button here would offer a walk nobody has to make.
     teardownResourceCalculator();
     var previousFolder = byId('component-folder-card');
     if (previousFolder) previousFolder.remove();
     resetActionButtons(actionButtons());
-    renderLeadAssessment(byId('dynamic-fields'), { onCopy: copyText });
+    consolidated.render(byId('dynamic-fields'), { onCopy: copyText });
     setComponentReferenceMode(!isCurrentPipelineView());
     renderRightPanel(tasksForPipeline(Store.pipeline));
     return Promise.resolve();
   }
-  teardownLeadAssessment();
   return Promise.all([API.fields(task.task_id), API.componentFolder(Store.projectId, task.task_id)]).then(function (results) {
     renderFields(task.task_name, results[0] || {});
     renderResourceCalculatorSection(task, results[0] || {});
@@ -1105,11 +1144,13 @@ export function savedMessage(savedTask, statusBeforeSave) {
 export function saveComponent(event) {
   event.preventDefault();
   if (!Store.task) return;
-  // Card 2B: the consolidated workspace owns its own batched save (one button,
-  // four owning tasks, one PATCH each). Checked FIRST because everything below
-  // -- getFields, validateStepFields, the single-task PATCH -- is written for a
-  // one-step form and would harvest nothing from this page's markup.
+  // Cards 2B / 4B: a consolidated workspace owns its own batched save (one
+  // button, several owning tasks, one PATCH each). Checked FIRST because
+  // everything below -- getFields, validateStepFields, the single-task PATCH --
+  // is written for a one-step form and would harvest nothing from those pages'
+  // markup. Only one can ever be mounted (loadComponent tears the other down).
   if (leadAssessmentActive()) return saveLeadAssessment();
+  if (stakingLettersActive()) return saveStakingLetters();
   if (!isCurrentPipelineView()) return msg('Switch back to the current pipeline to save changes.', 'error');
   var fields = getFields();
   // Generic input sanity checks (numeric/negative/max/percent, area & thickness

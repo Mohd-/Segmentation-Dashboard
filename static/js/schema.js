@@ -234,10 +234,27 @@ export var SCHEMA = {
     { key: 'grv_p90_thousand_acre_ft', label: 'GRV (10³ acre.ft) P90', type: 'number', bigOk: true, row: 'lead_grv' },
     { key: 'grv_p10_thousand_acre_ft', label: 'GRV (10³ acre.ft) P10', type: 'number', bigOk: true, row: 'lead_grv' }
   ],
-  // v5 tracked item with no inputs of its own yet -- declared (rather than
-  // left absent) so the step reads as a deliberately field-less component
-  // everywhere.
-  'Well Site Location': [],
+  // Card 4B, second half. The Wellsite Location letter's confirmation plus the
+  // STAKED LOCATION it names -- the two coordinates the rest of the business
+  // reads off that letter. `showIf` on the pair is the progressive disclosure
+  // the consolidated page renders (views/staking-letters.js owns the real
+  // page; this entry is what the project editor's all-fields card and any
+  // reference view render, and it reproduces the same reveal through the
+  // generic form's own data-show-if machinery).
+  //
+  // bigOk: true -- UTM eastings/northings, six/seven digits, exactly like the
+  // Moving Tolerance pair below. The labels double as PLACEHOLDERS on the
+  // consolidated page (the mockup's light-gray ghosts); the generic form shows
+  // them as captions.
+  //
+  // Server-side twin: workflow/constants.py FIELD_COMPLETION['Well Site
+  // Location'] -- the box AND both coordinates, so a ticked letter with no
+  // location leaves the item In Progress.
+  'Well Site Location': [
+    { key: 'wellsite_letter_loaded', label: 'The Wellsite Location letter is placed in the shared folder', type: 'checkbox' },
+    { key: 'staked_x', label: 'Staked X Coordinate', type: 'number', bigOk: true, showIf: 'wellsite_letter_loaded', section: 'Staking Location', row: 'staked_location' },
+    { key: 'staked_y', label: 'Staked Y Coordinate', type: 'number', bigOk: true, showIf: 'wellsite_letter_loaded', row: 'staked_location' }
+  ],
   // Card 3C. The step's ONLY input, and its whole definition of done: ticking
   // it and saving drives the step to Completed with no approve click, and
   // unticking it reopens the step. The rule itself is server-side --
@@ -282,17 +299,37 @@ export var SCHEMA = {
   ],
   // v18: 'Presence CoS Evaluation' removed as a step -- the derived value is
   // surfaced as "Total Chance of Success" from /detail's overview.derisking.
-  'Pre-Drilling GeoX Assessment': piip('pre_drill_piip'),
-  // Old moving_* values remain in the DB untouched; the step now captures the
-  // well location (prefilled from the project's lead X/Y) plus three
-  // distance/azimuth option pairs.
-  // Four 2-column rows stacked: the well location pair, then one row per staking
-  // option (max distance + azimuth). Row ids group each pair; keys/labels stay.
+  // Card 4C. NO editable dynamic fields: the step HOSTS the resource
+  // calculator (views/resource-calculator.js, prefix 'pre_drill' -- see
+  // FIELD_PREFIX_BY_STEP there), and the calculator both reads and writes the
+  // pre_drill_piip_* trio itself. The piip() grid this entry used to carry
+  // declared THE SAME EIGHT KEYS as editable inputs, so the two rendered side
+  // by side on one page and the generic Save harvested the grid straight over
+  // whatever the calculator's Apply had just written.
+  //
+  // The fix MIRRORS 'Resource Assessment' above, which met the identical clash
+  // when it started hosting the calculator: the grid goes, the calculator's own
+  // read-only results panel is the step's display of those numbers, and the EAV
+  // keys are untouched (nothing is renamed, nothing is orphaned -- every reader
+  // in _OVERVIEW_READ_SOURCES / LATEST_PIIP_SOURCES keeps resolving). The
+  // project-editor.js all-fields card for this step is therefore comments-only
+  // now, exactly like Resource Assessment's.
+  'Pre-Drilling GeoX Assessment': [],
+  // Card 4A. Old moving_* values remain in the DB untouched; the step captures
+  // the LEAD's coordinates (prefilled from the project's lead X/Y) plus three
+  // max-distance/azimuth option pairs -- eight fields in four 2-column rows,
+  // which is the card's mockup verbatim. Row ids group each pair; the KEYS are
+  // production data and never change, only the two location labels did.
+  //
+  // Server-side twin: workflow/constants.py FIELD_COMPLETION['Moving
+  // Tolerance'] requires ALL EIGHT. No azimuth-range or distance constraint is
+  // added here either -- the generic numericFieldError rules (numeric, not
+  // negative, bigOk cap) are the whole validation, unchanged.
   'Moving Tolerance': [
     // bigOk: true -- UTM coordinates (see validateStepFields), routinely
     // six/seven digits.
-    { key: 'staking_well_x', label: 'Well Location X', type: 'number', defaultFrom: 'lead_x', row: 'staking_loc', bigOk: true },
-    { key: 'staking_well_y', label: 'Well Location Y', type: 'number', defaultFrom: 'lead_y', row: 'staking_loc', bigOk: true },
+    { key: 'staking_well_x', label: 'Lead X Coordinate', type: 'number', defaultFrom: 'lead_x', row: 'staking_loc', bigOk: true },
+    { key: 'staking_well_y', label: 'Lead Y Coordinate', type: 'number', defaultFrom: 'lead_y', row: 'staking_loc', bigOk: true },
     { key: 'staking_opt1_max_distance_m', label: 'Option 1 Max Distance (m)', type: 'number', row: 'staking_opt1' },
     { key: 'staking_opt1_azimuth_deg', label: 'Option 1 Azimuth (°)', type: 'number', row: 'staking_opt1' },
     { key: 'staking_opt2_max_distance_m', label: 'Option 2 Max Distance (m)', type: 'number', row: 'staking_opt2' },
@@ -300,7 +337,23 @@ export var SCHEMA = {
     { key: 'staking_opt3_max_distance_m', label: 'Option 3 Max Distance (m)', type: 'number', row: 'staking_opt3' },
     { key: 'staking_opt3_azimuth_deg', label: 'Option 3 Azimuth (°)', type: 'number', row: 'staking_opt3' }
   ],
-  'Approval to Stake': [],
+  // Card 4B, first half. Two confirmations, in the order the work happens:
+  // the well record exists, then its Approval to Stake letter is filed.
+  //
+  // staking_well_created is the v5 BACKFILLED key (workflow/constants.py
+  // STAKING_WELL_CREATED_KEY): the retired "Well Creation" step's sign-off
+  // became this box, and the migration ticked it for every project whose Well
+  // Creation row had been Approved -- so a pre-v5 lead opens the page with box
+  // one already ticked. It is a prerequisite recorded here, NOT a third tracked
+  // item.
+  //
+  // Server-side twin: FIELD_COMPLETION['Approval to Stake'] requires BOTH, and
+  // that step's status is what the Portfolio reads as "Staked"
+  // (reporting._approval_to_stake_map).
+  'Approval to Stake': [
+    { key: 'staking_well_created', label: 'Well creation and well folder are completed', type: 'checkbox' },
+    { key: 'approval_stake_letter_loaded', label: 'The Approval to Stake letter is placed in the shared folder', type: 'checkbox' }
+  ],
   // sarh_formation_prognosis_pre_drill keeps its key (renaming EAV keys
   // orphans stored data); only the label dropped "(Pre-Drill)".
   'Well Proposal': [{ key: 'sarh_formation_prognosis_pre_drill', label: 'SARH Formation Prognosis', type: 'text' }, { key: 'vsp_required', label: 'VSP Required?', type: 'select', options: ['No', 'Yes'] }, { key: 'vsp_request_link', label: 'New Request Placeholder', type: 'link', value: '#' }, { key: 'urinsight_link', label: 'URINSIGHT', type: 'link', value: 'https://urinsight/', linkText: 'Create the well proposal in URINSIGHT' }],

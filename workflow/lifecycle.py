@@ -23,6 +23,7 @@ from .constants import (
     FIELD_REOPEN_COMMENT,
     FIELD_REOPEN_EVENT,
     MERGED_COS_TASK_NAME,
+    NUMERIC_FIELDS,
     POSITIVE_NUMBER_FIELDS,
     REQUIRED_FIELDS_FOR_SUBMIT,
     STATUSES,
@@ -32,6 +33,7 @@ from .constants import (
     applicable_stages,
     checkbox_submit_met,
     field_completion_met,
+    is_number,
     positive_number,
     unmet_submit_requirements,
 )
@@ -737,11 +739,18 @@ def _field_present(field_key, value):
     GRV percentiles and stored PIIP mean are physical magnitudes, so "0", "-3"
     and "abc" are all non-blank and all absent for completion purposes (see that
     constant).
+
+    ``NUMERIC_FIELDS`` is the third and last: cards 4A/4B's coordinates and
+    bearings are unbounded readings -- an azimuth of 0 is due north and a TVDSS-
+    style negative is legitimate -- so the ONLY thing they reject is a value that
+    is not a number ("TBD" in a staked-coordinate box is an absent coordinate).
     """
     if field_key == "reservoir_cos_rows":
         return bool(first_reservoir_cos_row_value(value, "reservoir_cos_pct"))
     if field_key in POSITIVE_NUMBER_FIELDS:
         return positive_number(value)
+    if field_key in NUMERIC_FIELDS:
+        return is_number(value)
     return str(value or "").strip() != ""
 
 

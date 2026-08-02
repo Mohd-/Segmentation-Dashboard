@@ -213,6 +213,49 @@ def test_status_staked_when_approval_to_stake_approved(client):
     assert row["fluid"] == ""  # no fluid recorded yet
 
 
+def test_status_staked_is_driven_by_card_4b_s_two_checkboxes(client):
+    """Card 4B moved 'Approval to Stake' onto the field-completion engine, and
+    THIS column is what that step's status has always meant.
+
+    The Portfolio read is unchanged (reporting._approval_to_stake_map still
+    looks for status == 'Approved'); what changed is who puts it there. So the
+    contract to pin is the whole chain: ticking BOTH confirmations on the
+    Staking Letters page -> the engine approves the step -> the record reads
+    Staked. Ticking only the letter must NOT, or a lead with no well record
+    would show up staked.
+    """
+    pid = create_project(client, "STATUS-4B", **BP_KWARGS)
+    task = get_task_by_name(client, pid, "Approval to Stake")
+
+    # The letter alone: still Proposed.
+    resp = client.patch(f"/api/tasks/{task['task_id']}", json={
+        "fields": {"approval_stake_letter_loaded": "1"}, "revision": task["revision"],
+    })
+    assert resp.status_code == 200, resp.get_json()
+    assert resp.get_json()["task"]["status"] != "Approved"
+    assert _row_for(client, pid)["status"] == "Proposed"
+
+    # Both boxes: the engine approves the step and the record reads Staked.
+    task = get_task_by_name(client, pid, "Approval to Stake")
+    resp = client.patch(f"/api/tasks/{task['task_id']}", json={
+        "fields": {"staking_well_created": "1", "approval_stake_letter_loaded": "1"},
+        "revision": task["revision"],
+    })
+    assert resp.status_code == 200, resp.get_json()
+    assert resp.get_json()["task"]["status"] == "Approved"
+    assert _row_for(client, pid)["status"] == "Staked"
+
+    # And unticking reopens the step, so the record falls back to Proposed --
+    # the Portfolio can never show a stake that was withdrawn.
+    task = get_task_by_name(client, pid, "Approval to Stake")
+    resp = client.patch(f"/api/tasks/{task['task_id']}", json={
+        "fields": {"staking_well_created": "1", "approval_stake_letter_loaded": ""},
+        "revision": task["revision"],
+    })
+    assert resp.status_code == 200, resp.get_json()
+    assert _row_for(client, pid)["status"] == "Proposed"
+
+
 def test_fluid_wins_status_and_final_beats_quicklook(client):
     pid = create_project(client, "STATUS-3", **BP_KWARGS)
     _save_fields(client, pid, "Quicklook Logs", {"quicklook_fluid_type": "Gas"})

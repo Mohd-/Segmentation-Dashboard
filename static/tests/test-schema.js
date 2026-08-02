@@ -293,6 +293,130 @@ test('schema.SCHEMA: every v5 prospect step has an entry', function () {
   });
 });
 
+/* --- Cards 4A / 4B / 4C: the Pre-Well Delivery steps ------------------------
+   The KEYS are production data and must never move; the two Moving Tolerance
+   location LABELS did (the step captures the LEAD's coordinates, not a well's),
+   and the layout is four 2-column rows — the location pair, then one row per
+   staking option. */
+
+function stepKeys(step) { return (SCHEMA[step] || []).map(function (field) { return field.key; }); }
+
+test('schema.SCHEMA: Moving Tolerance keeps its eight production keys, in mockup order', function () {
+  assert.deepEqual(stepKeys('Moving Tolerance'), [
+    'staking_well_x', 'staking_well_y',
+    'staking_opt1_max_distance_m', 'staking_opt1_azimuth_deg',
+    'staking_opt2_max_distance_m', 'staking_opt2_azimuth_deg',
+    'staking_opt3_max_distance_m', 'staking_opt3_azimuth_deg'
+  ]);
+});
+
+test('schema.SCHEMA: Moving Tolerance carries the card\'s exact labels', function () {
+  var byKey = {};
+  SCHEMA['Moving Tolerance'].forEach(function (field) { byKey[field.key] = field; });
+  assert.equal(byKey.staking_well_x.label, 'Lead X Coordinate');
+  assert.equal(byKey.staking_well_y.label, 'Lead Y Coordinate');
+  [1, 2, 3].forEach(function (n) {
+    assert.equal(byKey['staking_opt' + n + '_max_distance_m'].label,
+      'Option ' + n + ' Max Distance (m)');
+    assert.equal(byKey['staking_opt' + n + '_azimuth_deg'].label,
+      'Option ' + n + ' Azimuth (°)');
+  });
+});
+
+test('schema.SCHEMA: Moving Tolerance lays out four 2-column rows', function () {
+  var rows = [];
+  SCHEMA['Moving Tolerance'].forEach(function (field) {
+    if (rows[rows.length - 1] !== field.row) rows.push(field.row);
+  });
+  assert.deepEqual(rows, ['staking_loc', 'staking_opt1', 'staking_opt2', 'staking_opt3'],
+    'each row pairs exactly two fields');
+  // The location pair still prefills from the project's lead X/Y and stays
+  // exempt from the 9999 cap (UTM coordinates run to seven digits).
+  var location = SCHEMA['Moving Tolerance'].slice(0, 2);
+  assert.deepEqual(location.map(function (f) { return f.defaultFrom; }), ['lead_x', 'lead_y']);
+  assert.ok(location.every(function (f) { return f.bigOk === true; }));
+  // NO new constraint was added: the option pairs are plain numbers with the
+  // generic rules only (numeric, not negative, 9999 cap).
+  SCHEMA['Moving Tolerance'].slice(2).forEach(function (field) {
+    assert.equal(field.type, 'number', field.key);
+    assert.equal(field.bigOk, undefined, field.key + ' keeps the generic cap');
+    assert.equal(field.showIf, undefined, field.key + ' is never conditional');
+  });
+});
+
+test('validateStepFields: a 0-degree azimuth is a perfectly ordinary bearing', function () {
+  // Due north. The client admits it and the server's NUMERIC_FIELDS validator
+  // agrees — the step completes on it.
+  assert.equal(validateStepFields('Moving Tolerance', {
+    staking_opt1_azimuth_deg: '0', staking_opt1_max_distance_m: '150'
+  }), null);
+});
+
+/* --- Card 4B: the Staking Letters keys, as the GENERIC form renders them ----
+   views/staking-letters.js owns the real consolidated page; these entries are
+   what the project editor's all-fields card and any reference view render, and
+   they carry the same keys, labels and reveal. */
+
+test('schema.SCHEMA: Approval to Stake declares both confirmations, in process order', function () {
+  assert.deepEqual(stepKeys('Approval to Stake'),
+    ['staking_well_created', 'approval_stake_letter_loaded']);
+  SCHEMA['Approval to Stake'].forEach(function (field) {
+    assert.equal(field.type, 'checkbox', field.key + ' is a checkbox');
+  });
+  assert.deepEqual(SCHEMA['Approval to Stake'].map(function (f) { return f.label; }), [
+    'Well creation and well folder are completed',
+    'The Approval to Stake letter is placed in the shared folder'
+  ]);
+});
+
+test('schema.SCHEMA: Well Site Location reveals the staked coordinates behind its letter', function () {
+  assert.deepEqual(stepKeys('Well Site Location'), ['wellsite_letter_loaded', 'staked_x', 'staked_y']);
+  var fields = SCHEMA['Well Site Location'];
+  assert.equal(fields[0].type, 'checkbox');
+  assert.equal(fields[0].label, 'The Wellsite Location letter is placed in the shared folder');
+  // Both coordinates hide behind the SAME key, so the generic form's row
+  // grouping hides them as one unit (rowGroupMarkup's shared-showIf branch).
+  assert.deepEqual(fields.slice(1).map(function (f) { return f.showIf; }),
+    ['wellsite_letter_loaded', 'wellsite_letter_loaded']);
+  assert.deepEqual(fields.slice(1).map(function (f) { return f.row; }),
+    ['staked_location', 'staked_location']);
+  assert.deepEqual(fields.slice(1).map(function (f) { return f.label; }),
+    ['Staked X Coordinate', 'Staked Y Coordinate']);
+  // UTM readings: exempt from the 9999 cap, exactly like Moving Tolerance's.
+  assert.ok(fields.slice(1).every(function (f) { return f.type === 'number' && f.bigOk === true; }));
+  assert.equal(fields[1].section, 'Staking Location');
+});
+
+/* --- Card 4C: Pre-Drilling GeoX Assessment ---------------------------------
+   The step HOSTS the resource calculator, which reads and writes the
+   pre_drill_piip_* trio itself. The piip() grid it used to declare named THE
+   SAME KEYS as editable inputs, so the two rendered side by side and the
+   generic Save harvested the grid over whatever Apply had just written. */
+
+test('schema.SCHEMA: the GeoX assessment declares NO duplicate of the calculator\'s keys', function () {
+  assert.deepEqual(stepKeys('Pre-Drilling GeoX Assessment'), [],
+    'the calculator is the step\'s entire body');
+  // Mirrors Resource Assessment, which met the identical clash first: its only
+  // field is the confirmation, never a piip() trio.
+  assert.ok(stepKeys('Resource Assessment').every(function (key) {
+    return key.indexOf('lead_piip') < 0;
+  }), 'and the lead assessment never re-declares its calculator keys either');
+});
+
+test('schema.SCHEMA: no step declares an editable input for a calculator-written key', function () {
+  // The general rule the two cards above are instances of: a key the resource
+  // calculator writes (prefix + _piip_*) must not ALSO be a typed SCHEMA field
+  // on the step that hosts the calculator.
+  ['lead', 'pre_drill'].forEach(function (prefix) {
+    Object.keys(SCHEMA).forEach(function (step) {
+      (SCHEMA[step] || []).forEach(function (field) {
+        assert.ok(String(field.key).indexOf(prefix + '_piip_') !== 0,
+          step + ' must not declare ' + field.key + ' (the calculator owns it)');
+      });
+    });
+  });
+});
+
 // --- field-driven completion (cards 3A / 3C) -------------------------------
 // The RULE is server-side (workflow/constants.py FIELD_COMPLETION keys it on
 // these exact field keys). SCHEMA's job is only to RENDER the confirmations, so
