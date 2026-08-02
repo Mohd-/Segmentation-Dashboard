@@ -23,9 +23,14 @@
 .status.approved { background: var(--success-100); color: var(--success-700); border-color: var(--success-500); }
 .status.not-assigned { background: var(--gray-100); color: var(--text-faint); }
 
+/* Priority reads as a HEAT SCALE — gray, orange, red — the same vocabulary the
+   lead board's card borders use (.lead-card-low/-medium/-high). Deliberately
+   NOT the blue "info" trio: blue is the app's neutral/informational hue and
+   said nothing about urgency, so a Medium chip and an In Progress status chip
+   were indistinguishable. */
 .priority-low { color: var(--text-faint); }
-.priority-medium { background: var(--info-100); color: var(--info-700); border-color: var(--info-500); }
-.priority-high { background: var(--warning-100); color: var(--warning-700); border-color: var(--warning-500); }
+.priority-medium { background: var(--warning-100); color: var(--warning-700); border-color: var(--warning-500); }
+.priority-high { background: var(--danger-100); color: var(--danger-700); border-color: var(--danger-500); }
 
 /* =========================================================================
    Add New Lead (Card 1D)
@@ -39,16 +44,25 @@
    button for the fields — and showing the "Press Enter to create" hint, which
    sits INSIDE the row and is shorter than the inputs — never moves the board
    below. An inline error is absolutely positioned (it cannot push the row
-   either); the panel adds bottom padding via .has-error so the message never
-   spills onto the filter panel.
+   either); the BAND (.lead-controls, which now hosts this control) adds bottom
+   padding via .has-error so the message never spills onto the board.
+
+   The control lives inside the one controls band now, so its two states size
+   differently: collapsed it is a fixed-width flex item beside the filters;
+   expanded (.is-expanded, set by views/lead-create.js) it claims the band's
+   full row and the filters/KPIs wrap below it, rather than squeezing four
+   dropdowns into whatever the three inputs leave over.
    ========================================================================= */
-.new-lead-panel { padding: var(--space-3) var(--space-4); }
-.new-lead-panel.has-error { padding-bottom: calc(var(--space-3) + 15px); }
-.new-lead-controls { display: flex; align-items: center; min-height: 40px; }
+.new-lead-controls { display: flex; align-items: center; min-height: 40px; flex: 0 0 auto; }
+.new-lead-controls.is-expanded { flex: 1 1 100%; }
 
 .new-lead-button {
-  padding: 9px var(--space-6);
-  min-width: 240px;
+  /* Sized to SHARE the one controls band: the button, four filter dropdowns,
+     Clear Filters and the three KPI tiles all have to fit one line at ~1500px
+     (see the measurements in the Card 2A report). It still reads as the band's
+     primary action — it is the only filled navy control on the page. */
+  padding: 9px var(--space-5);
+  min-width: 200px;
   background: var(--asas-navy-fill);
   border: 1px solid var(--asas-navy-fill);
   border-radius: var(--radius-md);
@@ -262,15 +276,25 @@
    (placeMenu): .pipeline-panel and .lead-column both clip their overflow, so
    an absolutely positioned menu would be cut off by the stage container.
    ========================================================================= */
-/* The controls band: the filter row takes the free width, the Card 1E KPI
-   tiles sit at the right end. One row, one bottom margin — the filter row
-   itself no longer carries one (it is now a child, not the band). */
+/* The ONE controls band (owner-approved consolidation): the navy Add New Lead
+   button, then the filter row taking the free width, then the Card 1E KPI
+   tiles at the right end. One row, one bottom margin — neither child carries
+   one (they are children, not the band).
+
+   It WRAPS rather than overflowing: below ~1100px the KPI row is forced onto
+   its own second line (button + filters above it) by the media query further
+   down, and the expanded Add New Lead control claims a full row of its own at
+   any width (see .new-lead-controls.is-expanded). */
 .lead-controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-3) var(--space-4);
   margin-bottom: var(--space-4);
 }
+/* Bottom room for the absolutely positioned Add-New-Lead inline error, so the
+   message never spills onto the board below. */
+.lead-controls.has-error { padding-bottom: 15px; }
 .lead-filter-row {
   display: flex;
   flex-wrap: wrap;
@@ -285,7 +309,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  min-width: 168px;
+  min-width: 160px;
   padding: 9px var(--space-3);
   background: var(--surface);
   border: 1px solid var(--border-strong);
@@ -709,6 +733,80 @@
 }
 .rail-all-fields:hover { background: none; color: var(--brand-600); }
 
+/* =========================================================================
+   Card 2A — the shared LEAD detail shell
+
+   Applied by views/detail.js as .detail-shell-lead, so a BP well page and any
+   reference view keep the original shell verbatim. Three changes only: a wider
+   summary column, one outlined back control, and the three-stage sidebar.
+   ========================================================================= */
+/* The summary column extends LEFT (the editor column's floor drops, the rail
+   holds its width), so the Lead Summary is wider without ever clipping the
+   centre form. */
+.detail-shell-lead { grid-template-columns: 272px minmax(360px, 1fr) minmax(400px, 460px); }
+
+/* The single back control: outlined, up-arrow, top-left of every lead page. */
+.back-to-board {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 8px var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: none;
+  color: var(--ink-800);
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+.back-to-board:hover { background: var(--surface-sunken); border-color: var(--asas-navy); color: var(--asas-navy); }
+.back-to-board .lucide { width: 18px; height: 18px; flex: 0 0 auto; }
+/* The lead name is the page's title: larger and bolder than the well shell's,
+   and the head loses the subtitle/link rows beneath it. */
+.detail-shell-lead .rail-head { border-bottom: 0; padding-bottom: var(--space-3); }
+.detail-shell-lead .rail-head h3 {
+  margin: var(--space-4) 0 var(--space-3);
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: 800;
+  letter-spacing: .01em;
+  color: var(--ink-900);
+}
+
+/* The three-stage sidebar. Each stage is a boxed row (not the well rail's bare
+   header): the ACTIVE one carries the dark ASAS navy accent — a left rule plus
+   a navy label — so the current stage reads at a glance. */
+.rail-stage-lead { border: 1px solid transparent; border-radius: var(--radius-md); margin-bottom: var(--space-1); }
+.rail-stage-lead .rail-stage-head {
+  border-top: 0;
+  padding: var(--space-3) var(--space-3);
+  font-size: var(--text-sm);
+  letter-spacing: .05em;
+  color: var(--text-muted);
+  border-left: 3px solid transparent;
+  border-radius: var(--radius-md);
+}
+.rail-stage-lead .rail-stage-head:hover { color: var(--asas-navy); background: var(--surface-sunken); }
+.rail-stage-lead.is-active { border-color: var(--border); background: var(--surface-sunken); }
+.rail-stage-lead.is-active .rail-stage-head { color: var(--asas-navy); border-left-color: var(--asas-navy); }
+.rail-stage-lead.is-active .stage-icon,
+.rail-stage-lead.is-active .rail-stage-count { color: var(--asas-navy); }
+.rail-stage-lead .stage-icon { display: inline-flex; }
+.rail-stage-lead .stage-icon .lucide { width: 18px; height: 18px; }
+.rail-stage-lead .rail-stage-count { font-variant-numeric: tabular-nums; }
+.rail-stage-lead .rail-stage-body { padding: 0 var(--space-2) var(--space-2); }
+/* A tracked item with no stored step behind it yet: present, ordered, and
+   plainly not actionable (the title attribute says why). */
+.component-item-future {
+  opacity: .55;
+  cursor: default;
+  background: var(--surface-sunken);
+  border-style: dashed;
+  border-left-color: var(--border);
+}
+.component-item-future .component-num { background: transparent; color: var(--text-faint); }
+
 .component-list { display: flex; flex-direction: column; gap: var(--space-1); overflow-y: auto; flex: 1; min-height: 0; padding-right: 2px; }
 
 /* Stage accordion: each group is a full-width header button + a collapsible
@@ -820,8 +918,8 @@
    variant's resting tint on hover so it doesn't fill teal from button:hover.
    Scoped to button.priority so the non-button chips elsewhere are untouched. */
 button.priority:hover { background: var(--gray-050); }
-button.priority.priority-medium:hover { background: var(--info-100); }
-button.priority.priority-high:hover { background: var(--warning-100); }
+button.priority.priority-medium:hover { background: var(--warning-100); }
+button.priority.priority-high:hover { background: var(--danger-100); }
 .editor-assignee {
   margin-left: auto;
   width: auto;
@@ -927,8 +1025,14 @@ button.priority.priority-high:hover { background: var(--warning-100); }
 .summary-list b { color: var(--ink-900); text-align: right; }
 
 .action-row { display: flex; gap: var(--space-3); justify-content: space-between; }
-.action-row button:last-child { margin-left: auto; background: var(--success-500); }
-.action-row button:last-child:hover { background: var(--success-600); }
+/* Card 2A: the detailed pages' primary SAVE action is dark ASAS navy, not
+   green. Green is this app's "approved / complete" signal (status chips, the
+   Approve transition) and a save is neither — it is the page's own primary
+   action, so it wears the brand's primary fill. Shared class: the lead pages
+   and the BP well page carry the same button, deliberately, so the two shells
+   keep one primary-action color. */
+.action-row button:last-child { margin-left: auto; background: var(--asas-navy-fill); border-color: var(--asas-navy-fill); color: var(--asas-navy-ink); }
+.action-row button:last-child:hover { background: var(--asas-navy-fill-hover); border-color: var(--asas-navy-fill-hover); }
 
 /* Repeatable field (e.g. Reservoir CoS evaluations) rendered as a compact
    mini-spreadsheet: one muted header row of column labels, then slim rows of
@@ -1099,6 +1203,115 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .summary-popover-check input { width: auto; }
 .summary-popover-actions { display: flex; gap: var(--space-2); margin-top: var(--space-1); }
 .summary-popover-actions button { flex: 1; min-width: 0; padding: 8px 10px; font-size: var(--text-sm); }
+
+/* =========================================================================
+   Card 2A — the shared LEAD SUMMARY component (views/lead-summary.js)
+
+   A self-contained block: its own header + gear, a slim progress bar, five
+   left-aligned sections of evenly distributed value columns, and a footer
+   carrying the seismic reference. Deliberately NOT collapsible — no folds, no
+   chevrons — so the whole lead reads without a single interaction.
+
+   Palette: a slightly-darker-gray panel (--surface-sunken) with dark ASAS navy
+   for the title, the progress fill and the accents; separators are single 1px
+   rules on each section's TOP edge, so no boundary can double up.
+   ========================================================================= */
+/* The component IS the card on a lead page, so the shell's own card chrome
+   steps aside rather than framing it twice. */
+.detail-shell-lead .summary-card { background: none; border: 0; padding: 0; }
+.ls-card {
+  position: relative;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+}
+.ls-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.ls-title {
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--asas-navy);
+}
+.ls-gear { flex: 0 0 auto; width: 28px; height: 28px; color: var(--asas-navy); }
+.ls-gear .lucide { width: 18px; height: 18px; }
+
+.ls-progress { display: flex; align-items: center; gap: var(--space-3); margin: var(--space-4) 0; }
+.ls-progress-track {
+  flex: 1;
+  min-width: 0;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--gray-200);
+  overflow: hidden;
+}
+.ls-progress-track span { display: block; height: 100%; background: var(--asas-navy); border-radius: var(--radius-pill); }
+.ls-progress-figures { flex: 0 0 auto; display: flex; align-items: baseline; gap: var(--space-2); }
+.ls-progress-figures b { font-family: var(--font-display); font-variant-numeric: tabular-nums; font-size: var(--text-lg); font-weight: 800; color: var(--ink-900); }
+.ls-progress-figures small { color: var(--text-faint); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+
+.ls-section { padding: var(--space-3) 0; border-top: 1px solid var(--border); }
+.ls-section-title {
+  margin-bottom: var(--space-2);
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  font-weight: 800;
+  color: var(--asas-navy);
+  text-align: left;
+}
+.ls-grid { display: grid; gap: var(--space-2); align-items: end; }
+.ls-col { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ls-col-label { color: var(--text-muted); font-size: var(--text-xs); font-weight: 700; }
+.ls-col-value {
+  font-family: var(--font-display);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-md);
+  font-weight: 800;
+  color: var(--ink-900);
+  overflow-wrap: anywhere;
+}
+.ls-footer {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+.ls-footer-sep { color: var(--border-strong); }
+
+/* The gear menu: three items, anchored under the header, closed by default. */
+.ls-menu {
+  position: absolute;
+  top: calc(var(--space-4) + 32px);
+  right: var(--space-4);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 176px;
+  padding: var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+.ls-menu-item {
+  padding: 8px var(--space-3);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  color: var(--ink-800);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  text-align: left;
+}
+.ls-menu-item:hover { background: var(--surface-sunken); color: var(--asas-navy); }
+.ls-menu-item-danger { color: var(--danger-700); }
+.ls-menu-item-danger:hover { background: var(--danger-100); color: var(--danger-700); }
 
 /* Well-card reservoirs list: one quiet line per formation (name + filled
    metrics + fluid tag). A barren formation shows a "tight" note (SARH always
@@ -1683,6 +1896,23 @@ button.ghost.success-outline:hover { background: var(--success-100); }
    Responsive — component level
    ========================================================================= */
 @media (max-width: 1100px) {
+  /* The one controls band wraps to TWO rows here: the Add New Lead button and
+     the four filters keep the first line, the three KPI tiles take the second.
+     The separator rotates with the layout — a left border would divide nothing
+     once the tiles sit underneath — and stays a SINGLE border (the row's top
+     edge), never a pair of adjacent edges. */
+  .lead-kpi-row {
+    flex: 1 1 100%;
+    padding-left: 0;
+    padding-top: var(--space-3);
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+  /* ...and the first line has to hold the button AND all four filters, or the
+     band would silently become three rows. Both controls give up a little
+     width here so it stays exactly two. */
+  .new-lead-button { min-width: 176px; }
+  .lf-trigger { min-width: 132px; }
   .pipeline-toolbar { flex-direction: column; }
   .pipeline-toolbar select { flex-basis: auto; width: 100%; }
   .pipeline-board { grid-auto-columns: minmax(245px, 80vw); }
@@ -1714,7 +1944,12 @@ button.ghost.success-outline:hover { background: var(--success-100); }
      — the left border would divide nothing once the row sits underneath — and
      it stays a SINGLE border (the row's top edge), never a pair. */
   .lead-controls { flex-direction: column; align-items: stretch; gap: var(--space-3); }
+  /* Column direction: flex-basis is a HEIGHT here, so the 1100px rule's
+     `flex: 1 1 100%` must be undone or the KPI row would claim the band's full
+     height. Each child is simply auto-sized and full-width by align-items. */
+  .new-lead-controls, .new-lead-controls.is-expanded, .lead-filter-row { flex: 0 0 auto; }
   .lead-kpi-row {
+    flex: 0 0 auto;
     flex-wrap: wrap;
     justify-content: space-between;
     gap: var(--space-3);

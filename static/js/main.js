@@ -1,7 +1,7 @@
 import { byId, all, esc, fillSelect, range } from './dom.js';
-import { Store, currentProjectPipeline } from './state.js';
+import { Store } from './state.js';
 import { API } from './api.js';
-import { activateTab, scrollToTab } from './navigation.js';
+import { activateTab, backToBoard } from './navigation.js';
 import { refreshProspect, refreshBP, renderLeadBoard } from './views/pipeline.js';
 import { initLeadFilters, setLeadUsers } from './views/lead-filters.js';
 import { initLeadKpis, renderLeadKpis } from './views/lead-kpis.js';
@@ -35,6 +35,7 @@ export function showTab(name) {
 }
 
 function safeOn(id, event, handler) { var element = byId(id); if (element) element.addEventListener(event, handler); }
+
 
 /* The three app-chrome actions the Card 1F gear menu triggers.
 
@@ -105,12 +106,8 @@ export function wire() {
   safeOn('submit-component', 'click', function () { transitionComponent('submit'); });
   safeOn('approve-component', 'click', function () { transitionComponent('approve'); });
   safeOn('return-component', 'click', function () { transitionComponent('return'); });
-  safeOn('back-to-overview', 'click', function () {
-    var pipeline = currentProjectPipeline();
-    activateTab(pipeline);
-    byId('detail-shell').classList.add('hidden');
-    scrollToTab(pipeline);
-  });
+  safeOn('back-to-overview', 'click', backToBoard);
+  safeOn('back-to-board', 'click', backToBoard);
   safeOn('open-project-editor', 'click', function () {
     if (Store.projectId) openProjectEditor(Store.projectId);
   });

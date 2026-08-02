@@ -268,6 +268,14 @@ def _tracked_items(status_by_task):
     thing a brand-new lead's Not Assigned rows read. "Not Assigned" is not a
     display status: the card shows work as done, waiting, or ongoing, nothing
     else.
+
+    ``steps`` carries the item's SOURCE STEP NAMES (a list, possibly empty) so a
+    client can open the real step behind a tracked item without re-implementing
+    the _TRACKED_ITEMS mapping. Card 2A's three-stage detail sidebar needs
+    exactly that: it lists the real steps under the three display stages, and
+    renders a dimmed placeholder for the two items that have no step yet. The
+    mapping stays derived in ONE place (here), and the whole key disappears with
+    this adapter when the permanent step migration lands.
     """
     items = []
     for stage, label, sources, ready_shows_pending in _TRACKED_ITEMS:
@@ -279,7 +287,8 @@ def _tracked_items(status_by_task):
             status = "Pending Approval"
         else:
             status = "In Progress"
-        items.append({"stage": stage, "label": label, "status": status})
+        items.append({"stage": stage, "label": label, "status": status,
+                      "steps": list(sources)})
     return items
 
 

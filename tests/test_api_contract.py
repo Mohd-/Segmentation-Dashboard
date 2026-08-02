@@ -288,7 +288,11 @@ def test_list_projects_row_shape(client):
     assert row["assignees"] == []                          # nothing assigned yet
     assert row["lead_priority"] in ("High", "Medium", "Low")
     assert len(row["tracked_items"]) == 12
-    assert all(set(item) == {"stage", "label", "status"} for item in row["tracked_items"])
+    # Card 2A widened each ITEM by one key: `steps`, the item's source step
+    # names, so the lead detail page's three-stage sidebar can open the real
+    # step behind an item without re-implementing the _TRACKED_ITEMS mapping.
+    assert all(set(item) == {"stage", "label", "status", "steps"} for item in row["tracked_items"])
+    assert all(isinstance(item["steps"], list) for item in row["tracked_items"])
     # Card 1C widened it by one more DERIVED key: the record's field, feeding
     # the lead board's Field filter (there is no stored field column).
     assert row["field"] == "ROWSHAPE"
@@ -401,6 +405,17 @@ def test_project_detail_shape(client):
     # project_overview table); derisking carries the computed Total CoS.
     assert isinstance(body["overview"], dict)
     assert "derisking" in body["overview"]
+    # Card 2A: the detail payload's project row is the FULL project dict, so it
+    # already carries the same derived card fields the board rows do
+    # (get_project -> _annotate_derived_state -> _annotate_card_state). The
+    # lead detail page's three-stage sidebar and its Lead Summary progress bar
+    # read tracked_items straight from here -- same derivation as the board, so
+    # the two surfaces can never disagree. Pinned so the detail payload is not
+    # narrowed to the board's projection without noticing.
+    assert len(body["project"]["tracked_items"]) == 12
+    assert all(set(item) == {"stage", "label", "status", "steps"}
+               for item in body["project"]["tracked_items"])
+    assert body["project"]["display_stage"] == "Lead Assessment"
 
 
 # ---------------------------------------------------------------------------

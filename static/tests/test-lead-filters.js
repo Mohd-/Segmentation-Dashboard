@@ -11,6 +11,7 @@ import {
   onLeadsFiltered, UNASSIGNED
 } from '../js/views/lead-filters.js';
 import { setComponentReferenceMode } from '../js/views/detail-form.js';
+import { backToBoard } from '../js/navigation.js';
 import { Store } from '../js/state.js';
 
 var ROOT = 'lf-test-root';
@@ -502,4 +503,44 @@ test('detail-form leaving reference mode does NOT enable the assignee select for
     Store.project = savedProject;
     Store.pipeline = savedPipeline;
   }
+});
+
+/* -------------------------------------------------------------------------
+   Card 2A round trip: board -> lead detail -> Back to Segment Maturation.
+
+   The single back control is NAVIGATION ONLY (navigation.js backToBoard), so
+   the board must come back exactly as it was left: same selection, same
+   filtered rowset. This is the regression that keeps a future "refresh on the
+   way back" from quietly resetting the user's filters.
+   ------------------------------------------------------------------------- */
+
+test('board -> detail -> Back preserves the active filters and the filtered rowset', function () {
+  var shell = fixture(
+    '<nav class="tabs">' +
+      '<button data-tab="prospect" type="button" aria-selected="false">Prospect</button>' +
+      '<button data-tab="bp" type="button" aria-selected="false">BP</button>' +
+    '</nav>' +
+    '<section id="tab-prospect" class="tab"></section>' +
+    '<section id="tab-bp" class="tab"></section>' +
+    '<section id="detail-shell"></section>'
+  );
+  var host = mount(
+    [lead('GALV-2', { project_id: 1, assignees: ['R. Khalid'] }),
+     lead('LUNA-2', { project_id: 2, assignees: ['S. Ali'] })],
+    USERS
+  );
+  choose(host, 'assignee', 'R. Khalid');
+  assert.deepEqual(names(), ['GALV-2'], 'a filter is active before the round trip');
+  var before = leadFilterState();
+
+  // ... the user opens GALV-2's lead detail page, then uses the one back
+  // control at its top left.
+  Store.project = { project_id: 1, project_name: 'GALV-2', pipeline_type: 'prospect' };
+  backToBoard();
+
+  assert.ok(shell.querySelector('#detail-shell').classList.contains('hidden'), 'the detail shell closes');
+  assert.ok(shell.querySelector('#tab-prospect').classList.contains('active'), 'the board tab is active again');
+  assert.deepEqual(leadFilterState(), before, 'the selection is untouched');
+  assert.deepEqual(names(), ['GALV-2'], 'the same filtered rowset, not a refetch');
+  Store.project = null;
 });

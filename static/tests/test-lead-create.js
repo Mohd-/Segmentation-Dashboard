@@ -16,8 +16,12 @@ import { initLeadFilters, setLeadRows, leadFilterState, filteredLeads } from '..
 // The Add New Lead markup exactly as static/index.html carries it, plus the
 // containers the success path's board refresh + openDetail touch (so a real
 // create can run end to end without exploding on a missing element).
+// The wrapper is the ONE controls band (.lead-controls) now, not the retired
+// standalone .new-lead-panel: the Add New Lead control moved INSIDE the band
+// beside the filters and KPIs, and the inline-error bottom padding moved with
+// it (views/lead-create.js closest('.lead-controls')).
 var MARKUP = [
-  '<div class="panel new-lead-panel">',
+  '<div class="panel pipeline-panel"><div class="lead-controls">',
   '  <div id="new-lead-controls" class="new-lead-controls">',
   '    <button id="new-lead-open" type="button" class="new-lead-button" aria-expanded="false" aria-controls="new-lead-fields">+ Add New Lead</button>',
   '    <div id="new-lead-fields" class="new-lead-fields hidden">',
@@ -39,7 +43,7 @@ var MARKUP = [
   '      <p id="new-lead-hint" class="nl-hint">Press Enter to create</p>',
   '    </div>',
   '  </div>',
-  '</div>',
+  '</div></div>',
   // Board / detail scaffolding the post-create refresh writes into.
   '<div id="lc-filter-row"></div>',
   '<div id="prospect-pipeline"></div>',
@@ -571,4 +575,33 @@ test('a successful create refreshes the board through the Card 1C rowset', async
   assert.equal(filteredLeads()[0].project_name, 'FRESH-1',
     'the new lead arrives via setLeadRows, so the active filters decide visibility');
   await settled();
+});
+
+/* -------------------------------------------------------------------------
+   The ONE controls band: Add New Lead now expands IN PLACE inside the band
+   (owner-approved main-page consolidation), so the two band-level classes the
+   layout depends on have to follow the control's state.
+   ------------------------------------------------------------------------- */
+
+test('expanding Add New Lead marks the control expanded so it claims the band row', function () {
+  mount();
+  var controls = el('new-lead-controls');
+  assert.equal(controls.classList.contains('is-expanded'), false, 'collapsed at rest');
+  openNewLead();
+  assert.ok(controls.classList.contains('is-expanded'),
+    'expanded: CSS gives it flex: 1 1 100% so the filters wrap below instead of being squeezed');
+  press('new-lead-name', 'Escape');
+  assert.equal(controls.classList.contains('is-expanded'), false, 'cancel restores the collapsed band row');
+});
+
+test('an inline error pads the CONTROLS BAND, not the retired new-lead panel', function () {
+  var host = mount();
+  var band = host.querySelector('.lead-controls');
+  openNewLead();
+  fill('', '', '');
+  press('new-lead-name', 'Enter');
+  assert.ok(band.classList.contains('has-error'),
+    'the band reserves room so the absolutely positioned message never spills onto the board');
+  press('new-lead-name', 'Escape');
+  assert.equal(band.classList.contains('has-error'), false, 'cleared with the control');
 });

@@ -68,6 +68,22 @@ unauthorized control in the UI.
 
 ## KI-003: The all-fields Back action loses its originating pipeline context
 
+**Status:** RESOLVED (Card 2A) — closed with all three acceptance criteria met.
+`backToPortfolio` is now `backFromEditor` (`static/js/views/project-editor.js`):
+it returns to the ORIGINATING record's detail view in that record's own
+pipeline via `openDetail`, which is the acceptance criterion's preferred
+destination — the editor is only ever opened from a record (the Lead Summary
+gear's "Edit All Inputs" on a lead page, the rail's "Edit all project fields"
+on a BP well page). Only a stateless editor with no selected record falls
+through to Portfolio, and that fallback now calls `refreshPortfolio()` before
+showing the tab, so a session that has never opened Portfolio can no longer
+land on a table that was never fetched. The button's label follows the
+destination ("Back to Lead" / "Back to Well"). Regression coverage: *"KI-003
+the editor Back returns to the ORIGINATING record detail and pipeline"* and
+*"KI-003 with no record selected, Back refreshes Portfolio before showing it"*
+in `static/tests/test-navigation.js`, both driven from a FRESH fixture in which
+Portfolio has never been loaded — the exact precondition of the report.
+
 **Priority:** P2
 **Affected files:** `static/js/views/project-editor.js`, `static/js/main.js`
 

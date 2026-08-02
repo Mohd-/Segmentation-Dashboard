@@ -16,7 +16,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/css/base.css?v=10">
-  <link rel="stylesheet" href="/static/css/components.css?v=29">
+  <link rel="stylesheet" href="/static/css/components.css?v=30">
 </head>
 <body>
   <section id="login-page" class="login-page hidden">
@@ -72,52 +72,57 @@
 
   <main class="app-chrome">
     <section id="tab-prospect" class="tab active" role="tabpanel">
-      <!-- Card 1D — Add New Lead. One control, two states, in place: the navy
-           button, or exactly three inline fields (Lead Name, Lead X, Lead Y).
-           NO <form>, no Create/Cancel buttons and no modal by design: Enter
-           from any field creates, Escape or an outside click cancels
-           (views/lead-create.js owns every one of those rules). The X/Y inputs
-           are type=text + inputmode=decimal, NOT type=number — a number input
-           reports '' for malformed content, which would hide the very thing
-           the "Enter a valid Lead X Coordinate." message exists to report. -->
-      <div class="panel new-lead-panel">
-        <div id="new-lead-controls" class="new-lead-controls">
-          <button id="new-lead-open" type="button" class="new-lead-button"
-                  aria-expanded="false" aria-controls="new-lead-fields">+ Add New Lead</button>
-          <div id="new-lead-fields" class="new-lead-fields hidden">
-            <div class="nl-field">
-              <label class="visually-hidden" for="new-lead-name">Lead Name</label>
-              <input id="new-lead-name" class="nl-input" type="text" placeholder="Lead Name"
-                     autocomplete="off" spellcheck="false" maxlength="120" enterkeyhint="done"
-                     aria-describedby="new-lead-name-error">
-              <p id="new-lead-name-error" class="nl-error" hidden></p>
-            </div>
-            <div class="nl-field">
-              <label class="visually-hidden" for="new-lead-x">Lead X Coordinate</label>
-              <input id="new-lead-x" class="nl-input" type="text" inputmode="decimal"
-                     placeholder="Lead X Coordinate" autocomplete="off" spellcheck="false"
-                     enterkeyhint="done" aria-describedby="new-lead-x-error">
-              <p id="new-lead-x-error" class="nl-error" hidden></p>
-            </div>
-            <div class="nl-field">
-              <label class="visually-hidden" for="new-lead-y">Lead Y Coordinate</label>
-              <input id="new-lead-y" class="nl-input" type="text" inputmode="decimal"
-                     placeholder="Lead Y Coordinate" autocomplete="off" spellcheck="false"
-                     enterkeyhint="done" aria-describedby="new-lead-y-error">
-              <p id="new-lead-y-error" class="nl-error" hidden></p>
-            </div>
-            <p id="new-lead-hint" class="nl-hint">Press Enter to create</p>
-          </div>
-        </div>
-      </div>
       <div class="panel pipeline-panel">
-        <!-- The controls band: filters on the left, KPIs on the right, one
-             row. Two containers rather than one because views/lead-filters.js
-             rebuilds #lead-filter-row's innerHTML wholesale (its options are
-             data-driven) and would wipe any sibling markup placed inside it.
-             The 1px separators live on .lead-kpi-row and .kpi-tile-ogip —
-             one border per boundary, never a pair of adjacent edges. -->
+        <!-- ONE controls band (owner-approved consolidation): the Add New Lead
+             control, the filter row and the KPI row on a single horizontal
+             line — button | Assignee | Field | Status | Priority | donut |
+             leads | OGIP. Three containers rather than one because
+             views/lead-filters.js rebuilds #lead-filter-row's innerHTML
+             wholesale (its options are data-driven) and would wipe any sibling
+             markup placed inside it; views/lead-kpis.js does the same to
+             #lead-kpi-row. The 1px separators live on .lead-kpi-row and
+             .kpi-tile-ogip — one border per boundary, never a pair of adjacent
+             edges. Below ~1100px the band wraps to two rows (button + filters,
+             then the KPIs) — see components.css. -->
         <div class="lead-controls">
+          <!-- Card 1D — Add New Lead. One control, two states, IN PLACE (now
+               in place WITHIN the band): the navy button, or exactly three
+               inline fields (Lead Name, Lead X, Lead Y). NO <form>, no
+               Create/Cancel buttons and no modal by design: Enter from any
+               field creates, Escape or an outside click cancels
+               (views/lead-create.js owns every one of those rules). The X/Y
+               inputs are type=text + inputmode=decimal, NOT type=number — a
+               number input reports '' for malformed content, which would hide
+               the very thing the "Enter a valid Lead X Coordinate." message
+               exists to report. -->
+          <div id="new-lead-controls" class="new-lead-controls">
+            <button id="new-lead-open" type="button" class="new-lead-button"
+                    aria-expanded="false" aria-controls="new-lead-fields">+ Add New Lead</button>
+            <div id="new-lead-fields" class="new-lead-fields hidden">
+              <div class="nl-field">
+                <label class="visually-hidden" for="new-lead-name">Lead Name</label>
+                <input id="new-lead-name" class="nl-input" type="text" placeholder="Lead Name"
+                       autocomplete="off" spellcheck="false" maxlength="120" enterkeyhint="done"
+                       aria-describedby="new-lead-name-error">
+                <p id="new-lead-name-error" class="nl-error" hidden></p>
+              </div>
+              <div class="nl-field">
+                <label class="visually-hidden" for="new-lead-x">Lead X Coordinate</label>
+                <input id="new-lead-x" class="nl-input" type="text" inputmode="decimal"
+                       placeholder="Lead X Coordinate" autocomplete="off" spellcheck="false"
+                       enterkeyhint="done" aria-describedby="new-lead-x-error">
+                <p id="new-lead-x-error" class="nl-error" hidden></p>
+              </div>
+              <div class="nl-field">
+                <label class="visually-hidden" for="new-lead-y">Lead Y Coordinate</label>
+                <input id="new-lead-y" class="nl-input" type="text" inputmode="decimal"
+                       placeholder="Lead Y Coordinate" autocomplete="off" spellcheck="false"
+                       enterkeyhint="done" aria-describedby="new-lead-y-error">
+                <p id="new-lead-y-error" class="nl-error" hidden></p>
+              </div>
+              <p id="new-lead-hint" class="nl-hint">Press Enter to create</p>
+            </div>
+          </div>
           <!-- Card 1C filter row: Assignee (multi) / Field / Status / Priority,
                built and owned entirely by views/lead-filters.js (the options are
                dynamic — active users and the fields the current leads live in).
@@ -173,13 +178,27 @@
     <section id="detail-shell" class="detail-shell panel hidden" aria-live="polite">
       <aside class="component-rail">
         <div class="rail-head">
-          <div class="rail-nav">
+          <!-- Card 2A — the ONE back control of every LEAD detail page. Plain
+               navigation, no state change: it returns to the Segment Maturation
+               board with the board's filters and rowset untouched (main.js just
+               re-activates the tab and hides this shell; nothing refetches). A
+               real <button>, so Enter and Space activate it for free.
+               Lead pages only — views/detail.js hides it and reveals #rail-nav
+               below for a BP WELL, whose shell is deliberately unchanged. -->
+          <button id="back-to-board" class="ghost back-to-board hidden" type="button"
+                  aria-label="Back to Segment Maturation"><svg aria-hidden="true" focusable="false" class="lucide lucide-arrow-up" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="m5 12 7-7 7 7"/> <path d="M12 19V5"/> </svg> <span>Back to Segment Maturation</span></button>
+          <!-- The BP well shell's original two controls, untouched. Hidden on
+               lead pages (the single control above replaces both there). -->
+          <div id="rail-nav" class="rail-nav">
             <button id="back-to-overview" class="ghost" type="button"><svg aria-hidden="true" focusable="false" class="lucide lucide-arrow-left" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="m12 19-7-7 7-7"/> <path d="M19 12H5"/> </svg> Back to Pipeline</button>
             <button id="switch-pipeline-view" class="ghost rail-switch-pipeline" type="button">View Other Pipeline</button>
           </div>
           <h3 id="detail-name">Select Lead / Well</h3>
           <p id="detail-subtitle">Choose a pipeline card to open its components.</p>
           <p id="detail-view-note" class="detail-view-note hidden"></p>
+          <!-- Lead pages relocate this into the Lead Summary gear as
+               "Edit All Inputs" (views/lead-summary.js clicks it), so the link
+               itself is hidden there; the BP well shell still shows it. -->
           <button id="open-project-editor" class="link-button rail-all-fields" type="button">Edit all project fields</button>
         </div>
         <div id="component-list" class="component-list"></div>
@@ -209,7 +228,11 @@
 
       <aside class="summary-panel">
         <div class="summary-card">
-          <div class="summary-card-head">
+          <!-- The WELL card's static header. The Card 2A LEAD SUMMARY component
+               renders its own header + gear (it is a self-contained, portable
+               block — views/lead-summary.js), so views/detail.js hides this one
+               on lead pages and shows it for a BP well. -->
+          <div id="summary-card-head" class="summary-card-head">
             <h3 id="summary-title">Lead Summary</h3>
             <button id="summary-settings-toggle" type="button" class="icon-btn" title="Manage lead / well" aria-label="Manage lead / well" aria-haspopup="dialog" aria-expanded="false"><svg aria-hidden="true" focusable="false" class="lucide lucide-settings" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/> <circle cx="12" cy="12" r="3"/> </svg></button>
           </div>
@@ -330,6 +353,6 @@
     <img id="ra-lightbox-img" alt="">
   </dialog>
 
-  <script type="module" src="/static/js/main.js?v=25"></script>
+  <script type="module" src="/static/js/main.js?v=26"></script>
 </body>
 </html>

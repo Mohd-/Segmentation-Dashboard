@@ -182,3 +182,22 @@ each lands with an upgrade-and-replay test (CONTRIBUTING.md recipe 5).
   rows means adding a field is a front-end-only change — no migration, no
   model edit. The few values reporting needs are composed from these rows at
   read time via `_OVERVIEW_READ_SOURCES` (see "Derive, don't store").
+- **The detail shell has TWO layouts, chosen by pipeline.** A prospect LEAD
+  opened in its own pipeline renders the Card 2A shell (one outlined "Back to
+  Segment Maturation" control, the enlarged lead name, the three-stage sidebar,
+  and the shared Lead Summary component from `static/js/views/lead-summary.js`);
+  a BP WELL — and any cross-pipeline REFERENCE view of either record — keeps
+  the original shell verbatim. `views/detail.js isLeadView()` is the single
+  guard; the markup for both lives in `static/index.html` and is toggled, so
+  neither layout can drift from the other's ids. A reference view deliberately
+  keeps the old shell because its "← Back to <pipeline>" control is the only
+  way out of reference mode.
+- **Active Well and the phase move live on the WELL side of the summary
+  panel.** The Card 2A lead gear offers exactly three lead actions (Edit All
+  Inputs / Rename Lead / Delete Lead). The Active Well flag and
+  Promote-to-BP-Well / Recall-to-Lead-Phase are well-level concerns and now
+  render only in the well (and reference-view) settings popover, supervisor-
+  gated exactly as before. Nothing became unreachable: for a BP well both are
+  where they always were, and for a lead both remain available through
+  "Edit All Inputs" → the all-fields editor's Properties card, which carries
+  the same Active Well checkbox and the same supervisor-only phase row.

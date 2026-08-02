@@ -162,8 +162,8 @@ export function clearNewLeadErrors() {
     if (input) input.removeAttribute('aria-invalid');
     if (error) { error.textContent = ''; error.hidden = true; }
   });
-  var panel = controls() && controls().closest ? controls().closest('.new-lead-panel') : null;
-  if (panel) panel.classList.remove('has-error');
+  var band = controls() && controls().closest ? controls().closest('.lead-controls') : null;
+  if (band) band.classList.remove('has-error');
 }
 
 // Paint every error, then park focus on the FIRST invalid field. Entered values
@@ -179,8 +179,8 @@ function showErrors(errors) {
     if (input) input.setAttribute('aria-invalid', 'true');
     if (error) { error.textContent = entry.message; error.hidden = false; }
   });
-  var panel = controls() && controls().closest ? controls().closest('.new-lead-panel') : null;
-  if (panel) panel.classList.add('has-error');
+  var band = controls() && controls().closest ? controls().closest('.lead-controls') : null;
+  if (band) band.classList.add('has-error');
   var firstInvalid = fieldInput(errors[0].key);
   if (firstInvalid) firstInvalid.focus();
 }
@@ -219,6 +219,12 @@ export function openNewLead() {
   button.classList.add('hidden');
   button.setAttribute('aria-expanded', 'true');
   box.classList.remove('hidden');
+  // The control now lives INSIDE the one controls band, so expanding has to
+  // claim the band's full row (three inputs + hint won't share a line with
+  // four filter dropdowns). CSS-only consequence -- see
+  // .new-lead-controls.is-expanded in components.css.
+  var root = controls();
+  if (root) root.classList.add('is-expanded');
   var name = fieldInput('name');
   if (name) name.focus();
 }
@@ -235,6 +241,8 @@ export function closeNewLead(restoreFocus) {
   box.classList.add('hidden');
   button.classList.remove('hidden');
   button.setAttribute('aria-expanded', 'false');
+  var root = controls();
+  if (root) root.classList.remove('is-expanded');
   if (restoreFocus) button.focus();
 }
 

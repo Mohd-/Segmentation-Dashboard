@@ -1,4 +1,5 @@
-import { byId, all, esc, isFilled, msg, fmtNum } from '../dom.js';
+import { byId, all, esc, isFilled, truthy, msg, fmtNum } from '../dom.js';
+import { ICONS } from '../icons.js';
 import { API } from '../api.js';
 import { currentUserName, currentProjectPipeline, isCurrentPipelineView, Store, resetSelection } from '../state.js';
 import { activateTab } from '../navigation.js';
@@ -8,6 +9,44 @@ import { canTransitionPhase, promoteProject, recallProject } from './transitions
 import { loadComponent, LATEST_PIIP_SOURCES, POST_DRILL_PIIP_SOURCES, LEAD_PIIP_SOURCES, copyText } from './detail-form.js';
 import { refreshAllBoards } from './pipeline.js';
 import { refreshAudit } from './audit.js';
+// Card 2A: the shared Lead Summary block. It is PURE -- this module resolves
+// every value out of Store and hands it one plain object (see leadSummaryData).
+import { leadSummaryHtml, wireLeadSummary, closeLeadSummaryMenu } from './lead-summary.js';
+// The board's own completion arithmetic, imported rather than re-derived: the
+// Lead Summary progress bar and the board KPI donut must read one formula over
+// one dataset (the lead's 12 tracked items).
+import { completedItemCount, TRACKED_ITEM_COUNT } from './lead-kpis.js';
+
+// A LEAD detail page is the redesigned Card 2A shell (single back control, big
+// name, three-stage sidebar, wide Lead Summary). EVERY branch below guards on
+// this, because two shells are deliberately out of scope for it:
+//   - a BP WELL's detail page keeps its original shell, untouched;
+//   - a REFERENCE view (either record seen through the opposite pipeline) keeps
+//     the original shell too -- its "← Back to <current pipeline>" control is
+//     the only way out of a reference view, and the single Card 2A back control
+//     does not replace it.
+function isLeadView() {
+  return currentProjectPipeline() === 'prospect' && isCurrentPipelineView();
+}
+
+/* The stored stage group -> the board's three DISPLAY stages. TRANSITIONAL: an
+   exact mirror of workflow/projects.py's _DISPLAY_STAGE_BY_STAGE (the Card 1B
+   presentation adapter), needed here only to place a step under the right
+   sidebar heading; it disappears with the same permanent step migration that
+   deletes the server-side adapter. BP stage groups are absent on purpose. */
+var LEAD_DISPLAY_STAGE_BY_STAGE = {
+  'Lead Identification': 'Lead Assessment',
+  'Risking': 'Risk Analysis',
+  'Segmentation': 'Risk Analysis',
+  'Pre-Well Delivery': 'Pre-Well Delivery'
+};
+// Same glyphs the board columns use, so a stage reads identically on both
+// surfaces.
+var LEAD_STAGE_ICONS = {
+  'Lead Assessment': 'clipboard-check',
+  'Risk Analysis': 'gauge',
+  'Pre-Well Delivery': 'rig'
+};
 
 export function tasksForPipeline(pipeline) {
   // Prefer the authoritative stage lists from /api/meta (Store.meta); the
@@ -104,9 +143,115 @@ function syncStageOpenState() {
 // picked, so the default-open stage is set here rather than at render time).
 export function revealTaskStage(task) {
   if (!task) return;
-  openStage = task.stage_group;
+  // The lead sidebar's headings are the three DISPLAY stages, not the stored
+  // stage groups, so the key has to be translated there (see
+  // LEAD_DISPLAY_STAGE_BY_STAGE). The BP rail is keyed by the stored group.
+  openStage = isLeadView()
+    ? (LEAD_DISPLAY_STAGE_BY_STAGE[task.stage_group] || task.stage_group)
+    : task.stage_group;
   openStageProjectId = Store.projectId;
   syncStageOpenState();
+  syncActiveStage();
+}
+
+// The lead sidebar marks its OPEN stage as the active one (navy accent +
+// underline). Applied in place, alongside syncStageOpenState, so toggling a
+// stage never re-renders the list.
+function syncActiveStage() {
+  all('.rail-stage-lead').forEach(function (stage) {
+    stage.classList.toggle('is-active', stage.getAttribute('data-stage') === openStage);
+  });
+}
+
+/* -------------------------------------------------------------------------
+   Card 2A — the three-stage LEAD sidebar
+
+   Exactly three rows: LEAD ASSESSMENT / RISK ANALYSIS / PRE-WELL DELIVERY,
+   each with the x/4 counter of the lead's TRACKED ITEMS (derived server-side,
+   the same twelve the board cards and the KPI donut read) and a chevron
+   (down = expanded, right = collapsed).
+
+   Under an expanded stage sit that stage's REAL steps, regrouped under the
+   three headings -- this is presentation only, the stored 12-step prospect
+   pipeline is untouched. Three transitional details, all of which disappear
+   with the permanent step migration:
+     * a tracked item maps to its source steps via the `steps` list the server
+       now sends with each item, so the mapping is never duplicated here;
+     * "Trap and Seal" therefore renders as its TWO real steps (Trap CoS,
+       Seal CoS) -- both must stay reachable;
+     * "GRV Inputs" and "Well Site Location" have no backing step at all yet
+       and render as dimmed, non-clickable rows.
+   Any prospect step no tracked item references (today: "Well Creation") is
+   appended to its own display stage, so regrouping can never hide a step.
+   ------------------------------------------------------------------------- */
+
+// [{ stage, done, total, rows: [{ task | label }] }] in board order, built from
+// the server's tracked_items plus the project's own task rows.
+export function leadStageGroups(trackedItems, tasks) {
+  var items = trackedItems || [];
+  var taskByName = {};
+  (tasks || []).forEach(function (task) { taskByName[task.task_name] = task; });
+  var order = [];
+  var byStage = {};
+  items.forEach(function (item) {
+    var stage = item.stage;
+    if (!byStage[stage]) { byStage[stage] = { stage: stage, done: 0, total: 0, rows: [] }; order.push(stage); }
+    var group = byStage[stage];
+    group.total += 1;
+    if (item.status === 'Completed') group.done += 1;
+    var sources = item.steps || [];
+    if (!sources.length) {
+      // No stored step behind this item yet -- a dimmed placeholder, never a
+      // click target and never counted as work that can be opened.
+      group.rows.push({ label: item.label, task: null });
+      return;
+    }
+    sources.forEach(function (name) {
+      var task = taskByName[name];
+      // A source the project does not carry (a legacy/retired row) still shows
+      // its name rather than vanishing, dimmed like the not-yet-built items.
+      group.rows.push({ label: name, task: task || null });
+      if (task) task._leadRailPlaced = true;
+    });
+  });
+  // Steps no tracked item references (e.g. "Well Creation") keep their place in
+  // the workflow: appended to whichever display stage their stored group maps
+  // to, so the regrouped sidebar never loses a real step.
+  (tasks || []).forEach(function (task) {
+    if (task._leadRailPlaced) { delete task._leadRailPlaced; return; }
+    var stage = LEAD_DISPLAY_STAGE_BY_STAGE[task.stage_group] || task.stage_group;
+    if (!byStage[stage]) { byStage[stage] = { stage: stage, done: 0, total: 0, rows: [] }; order.push(stage); }
+    byStage[stage].rows.push({ label: task.task_name, task: task });
+  });
+  return order.map(function (stage) { return byStage[stage]; });
+}
+
+function leadRailRowHtml(row) {
+  if (!row.task) {
+    return '<div class="component-item component-item-future"' +
+      ' title="(coming with a later step migration)" aria-disabled="true">' +
+      '<span class="component-num" aria-hidden="true">·</span><b>' + esc(row.label) + '</b></div>';
+  }
+  var slug = String(row.task.status || 'Not Assigned').toLowerCase().replace(/\s+/g, '-');
+  return '<button type="button" class="component-item status-' + slug + '" data-task-id="' + row.task.task_id + '">' +
+    '<span class="component-num">' + esc(row.task.sequence_no) + '</span><b>' + esc(row.label) + '</b></button>';
+}
+
+function renderLeadRail(tasks) {
+  var groups = leadStageGroups((Store.project || {}).tracked_items, tasks);
+  byId('component-list').innerHTML = groups.map(function (group) {
+    var isOpen = group.stage === openStage;
+    var icon = ICONS[LEAD_STAGE_ICONS[group.stage]] || '';
+    return '<div class="rail-stage rail-stage-lead' + (isOpen ? ' is-active' : '') + '" data-stage="' + esc(group.stage) + '">' +
+      '<button type="button" class="rail-stage-head' + (isOpen ? ' open' : '') + '" data-stage="' + esc(group.stage) +
+      '" aria-expanded="' + isOpen + '">' +
+      '<span class="stage-icon" aria-hidden="true">' + icon + '</span>' +
+      '<span class="rail-stage-name">' + esc(group.stage) + '</span>' +
+      '<span class="rail-stage-count">' + group.done + '/' + group.total + '</span>' +
+      '<span class="rail-stage-chevron" aria-hidden="true"></span></button>' +
+      '<div class="rail-stage-body' + (isOpen ? '' : ' collapsed') + '" data-stage="' + esc(group.stage) + '">' +
+      group.rows.map(leadRailRowHtml).join('') + '</div></div>';
+  }).join('') || '<div class="empty-state">No components in this pipeline.</div>';
 }
 
 export function renderDetail() {
@@ -117,9 +262,21 @@ export function renderDetail() {
   var otherPipeline = Store.pipeline === 'bp' ? 'prospect' : 'bp';
   var otherLabel = otherPipeline === 'bp' ? 'Business Plan Execution' : 'Prospect Maturation';
   var isReference = !isCurrentPipelineView();
+  var leadView = isLeadView();
   byId('detail-name').textContent = Store.project.project_name || 'Lead / Well';
   byId('detail-subtitle').textContent = viewLabel + (isReference ? ' · Reference view' : ' · Current phase');
   byId('back-to-overview').textContent = '← Back to ' + currentLabel;
+  /* Card 2A shell swap. The LEAD page shows one outlined back control and an
+     enlarged lead name; the "Prospect Maturation · Current phase" subtitle and
+     the visible "Edit all project fields" link are gone (the latter is
+     relocated into the Lead Summary gear as "Edit All Inputs" and is clicked
+     through this still-wired button). The BP well page and every reference
+     view keep the original two controls, subtitle and link. */
+  byId('detail-shell').classList.toggle('detail-shell-lead', leadView);
+  byId('back-to-board').classList.toggle('hidden', !leadView);
+  byId('rail-nav').classList.toggle('hidden', leadView);
+  byId('detail-subtitle').classList.toggle('hidden', leadView);
+  byId('open-project-editor').classList.toggle('hidden', leadView);
   var switchButton = byId('switch-pipeline-view');
   switchButton.textContent = isReference ? '← Back to ' + currentLabel : 'View ' + otherLabel + ' →';
   switchButton.setAttribute('aria-label', switchButton.textContent + ' for ' + (Store.project.project_name || 'this record'));
@@ -132,6 +289,13 @@ export function renderDetail() {
   // Accordion state is per-project: a fresh selection starts fully collapsed
   // (revealTaskStage opens the selected task's stage right after this render).
   if (Store.projectId !== openStageProjectId) { openStage = null; openStageProjectId = Store.projectId; }
+  if (leadView) {
+    renderLeadRail(tasks);
+    wireRailHandlers();
+    renderRightPanel(tasks);
+    return;
+  }
+  // ---- BP well / reference view: the original stage rail, untouched --------
   // Tasks arrive ordered by sequence_no, so a new stage group begins wherever
   // stage_group changes between consecutive items.
   var groups = [];
@@ -157,6 +321,15 @@ export function renderDetail() {
       '<span class="rail-stage-chevron" aria-hidden="true"></span></button>' +
       '<div class="rail-stage-body' + (isOpen ? '' : ' collapsed') + '" data-stage="' + esc(group.stage) + '">' + items + '</div></div>';
   }).join('') || '<div class="empty-state">No components in this pipeline.</div>';
+  wireRailHandlers();
+  renderRightPanel(tasks);
+}
+
+// Stage headers toggle in place; component rows load their step. Shared by the
+// lead sidebar and the BP rail -- both render the same class contract, so one
+// wiring pass serves either. (`.component-item-future` rows are <div>s with no
+// data-task-id, so they are inert by construction.)
+function wireRailHandlers() {
   all('.rail-stage-head').forEach(function (head) {
     head.addEventListener('click', function () {
       var stage = head.getAttribute('data-stage');
@@ -165,15 +338,15 @@ export function renderDetail() {
       openStage = (openStage === stage) ? null : stage;
       openStageProjectId = Store.projectId;
       syncStageOpenState();
+      syncActiveStage();
     });
   });
-  all('.component-item').forEach(function (button) {
+  all('.component-item[data-task-id]').forEach(function (button) {
     button.addEventListener('click', function () {
       var taskId = Number(button.getAttribute('data-task-id'));
       loadComponent(Store.tasks.find(function (task) { return task.task_id === taskId; }));
     });
   });
-  renderRightPanel(tasks);
 }
 
 // Review the same record's other phase without changing its persisted phase.
@@ -225,9 +398,12 @@ export function reservoirCosPrimary(fieldMap) {
     var parts = [];
     if (isFilled(block)) parts.push(block);
     if (isFilled(row.seismic_volume_ar_number)) parts.push('AR ' + row.seismic_volume_ar_number);
-    return { pct: String(row.reservoir_cos_pct), ref: parts.join(' · ') };
+    // `block` / `ar` are the same two values `ref` joins, kept separate for the
+    // Card 2A Lead Summary footer, which lays them out itself ("Block A | AR-n").
+    return { pct: String(row.reservoir_cos_pct), ref: parts.join(' · '),
+             block: block || '', ar: row.seismic_volume_ar_number || '' };
   }
-  return { pct: '', ref: '' };
+  return { pct: '', ref: '', block: '', ar: '' };
 }
 // Legacy one-string form ("Block · AR n: NN%"), kept for back-compat callers.
 export function reservoirCosSummary(fieldMap) {
@@ -250,6 +426,27 @@ function gasTrio(sources, fieldMap) {
     return { p90: fields[prefix + '_gas_p90'], mean: fields[meanKey], p10: fields[prefix + '_gas_p10'] };
   }
   return { p90: '', mean: '', p10: '' };
+}
+
+// The liquid (condensate) trio, or NULL when the lead has none.
+//
+// `<prefix>_has_liquid` IS the saved "this was a Condensate scenario" marker:
+// the calculator writes it '1' exactly when the run produced condensate, i.e.
+// when the selected scenario's resource_type is condensate (see
+// views/resource-calculator.js buildLeadApplyFields), and '' otherwise. So this
+// reads SAVED DATA, never the scenario dropdown's current position. Same source
+// ladder and same precedence as gasTrio, so gas and liquid can only ever come
+// from a step the lead actually recorded; null hides the section outright.
+function liquidTrio(sources, fieldMap) {
+  var sourceMap = fieldMap || Store.allFields;
+  for (var i = 0; i < sources.length; i += 1) {
+    var fields = sourceMap[sources[i][0]] || {};
+    var prefix = sources[i][1].replace(/_gas_mean$/, '');
+    if (!truthy(fields[prefix + '_has_liquid'])) continue;
+    return { p90: fields[prefix + '_liquid_p90'], mean: fields[prefix + '_liquid_mean'],
+             p10: fields[prefix + '_liquid_p10'] };
+  }
+  return null;
 }
 
 // "Actual" formation data resolves across phases newest-first: a formation's
@@ -535,7 +732,73 @@ function wireSummarySettings() {
   });
 }
 
+/* Card 2A: resolve the shared Lead Summary's ONE data object out of Store.
+   Everything the component renders is decided here; leadSummaryHtml itself
+   reads no state. Kept exported so a test can assert the SHAPE without the
+   markup. */
+export function leadSummaryData() {
+  var fields = Store.allFields || {};
+  var resCos = reservoirCosPrimary(fields);
+  var thickness = fields['Thickness Estimation'] || {};
+  var area = fields['Reservoir Area Definition'] || {};
+  return {
+    // The lead's twelve TRACKED ITEMS, derived server-side and already on the
+    // /detail payload's project row (get_project runs the same annotation the
+    // board rows get). Counted with the board's own helper, so the card's
+    // "NN% n / 12" and the board donut can never disagree. A record without
+    // tracked items (a BP well) simply reads 0 / 12.
+    progress: {
+      completed: completedItemCount(Store.project || {}),
+      total: TRACKED_ITEM_COUNT
+    },
+    gas: gasTrio(LATEST_PIIP_SOURCES, fields),
+    liquid: liquidTrio(LATEST_PIIP_SOURCES, fields),
+    // The FINAL calculated thicknesses in feet. The two-way TWT (ms) inputs the
+    // Card 2B form will carry are a different pair of keys entirely and are
+    // deliberately never read here.
+    thickness: {
+      formation: thickness.formation_thickness_ft,
+      reservoir: thickness.reservoir_thickness_ft
+    },
+    area: { p90: area.p90_area_km2, p10: area.p10_area_km2 },
+    cos: {
+      reservoir: resCos.pct,
+      trap: (fields['Trap CoS'] || {}).trap_cos_pct,
+      seal: (fields['Seal CoS'] || {}).seal_cos_pct,
+      // Derived at read time (Reservoir x Trap x Seal) and delivered by
+      // /detail's overview -- never recomputed on the client.
+      total: (Store.overview || {}).derisking
+    },
+    block: resCos.block,
+    ar: resCos.ar,
+    canManage: isCurrentPipelineView()
+  };
+}
+
 export function renderRightPanel(tasks) {
+  var staticHead = byId('summary-card-head');
+  if (isLeadView()) {
+    /* ---- Card 2A: the shared LEAD SUMMARY component ----------------------
+       It renders its own header + gear, so the card's static header is hidden
+       here; it is restored for the well card below. The three gear items are
+       exactly Edit All Inputs / Rename Lead / Delete Lead -- "Edit All Inputs"
+       triggers the SAME #open-project-editor action the (now hidden) rail link
+       used to expose, clicked through rather than imported so this module does
+       not take a circular dependency on views/project-editor.js. */
+    if (staticHead) staticHead.classList.add('hidden');
+    byId('lead-summary').innerHTML = leadSummaryHtml(leadSummaryData());
+    wireLeadSummary({
+      onEditAll: function () {
+        var button = byId('open-project-editor');
+        if (button) button.click();
+      },
+      onRename: renameSelectedProject,
+      onDelete: deleteSelectedProject
+    });
+    return;
+  }
+  if (staticHead) staticHead.classList.remove('hidden');
+  closeLeadSummaryMenu();
   // `tasks` is already scoped to the operating pipeline's stages (see
   // tasksForPipeline), so every row counts toward progress.
   var completed = tasks.filter(function (task) { return DONE[task.status]; }).length;
@@ -682,20 +945,35 @@ export function renderRightPanel(tasks) {
     var foldersFoldHtml = foldSection('folders', 'Folders', foldersHtml(folderSectionKeys));
     bodyHtml = leadMetricsHtml(Store.allFields, LATEST_PIIP_SOURCES) + foldersFoldHtml;
   }
-  // Popover: what the compact card dropped but still needs a home -- the Active
-  // Well flag, the phase move, and rename/delete. The phase button is
-  // supervisor-only (canTransitionPhase) and, like every action in here, is
-  // withheld from the reference view; transitions.js owns the confirm + PATCH.
-  var phaseButtonHtml = '';
-  if (canTransitionPhase() && !referenceOnly) {
-    phaseButtonHtml = '<div class="summary-popover-actions">' + (isBP
-      ? '<button id="summary-phase-action" type="button" class="ghost danger-outline">Recall to Lead Phase…</button>'
-      : '<button id="summary-phase-action" type="button" class="ghost">Promote to BP Well…</button>') + '</div>';
+  /* Popover: what the compact card dropped but still needs a home -- the Active
+     Well flag, the phase move, and rename/delete. The phase button is
+     supervisor-only (canTransitionPhase) and, like every action in here, is
+     withheld from the reference view; transitions.js owns the confirm + PATCH.
+
+     Card 2A RELOCATION: the Active Well checkbox and the phase move are WELL
+     concerns, so they now render only in this (well / reference) popover --
+     the redesigned Lead Summary gear carries exactly three lead actions and
+     neither of these. Nothing was removed from the app: for a BP well both
+     controls are exactly where they were, and for a LEAD both remain reachable
+     through "Edit All Inputs" -> the all-fields editor's Properties card
+     (its Active Well checkbox and its supervisor-gated "Promote to BP Well…"
+     phase row), plus this popover whenever the lead is opened through the
+     Business Plan Execution reference view. */
+  var relocatedHtml = '';
+  if (viewingBP) {
+    var phaseButtonHtml = '';
+    if (canTransitionPhase() && !referenceOnly) {
+      phaseButtonHtml = '<div class="summary-popover-actions">' + (isBP
+        ? '<button id="summary-phase-action" type="button" class="ghost danger-outline">Recall to Lead Phase…</button>'
+        : '<button id="summary-phase-action" type="button" class="ghost">Promote to BP Well…</button>') + '</div>';
+    }
+    relocatedHtml =
+      '<label class="summary-popover-check"><input id="summary-active-flag" type="checkbox" ' +
+      (isActive ? 'checked' : '') + '> Active Well</label>' + phaseButtonHtml;
   }
   var popoverHtml =
     '<div id="summary-settings" class="summary-popover hidden" role="dialog" aria-label="Manage ' + recordKind.toLowerCase() + '">' +
-    '<label class="summary-popover-check"><input id="summary-active-flag" type="checkbox" ' + (isActive ? 'checked' : '') + '> Active Well</label>' +
-    phaseButtonHtml +
+    relocatedHtml +
     '<div class="summary-popover-actions"><button id="rename-record" type="button" class="ghost">Rename ' + recordKind + '</button><button id="delete-record" type="button" class="danger">Delete ' + recordKind + '</button></div></div>';
 
   byId('summary-title').textContent = viewingBP ? 'Well Summary' : 'Lead Summary';

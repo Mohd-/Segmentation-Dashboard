@@ -20,7 +20,15 @@ function renderStatusChip(status) {
   if (!chip) return;
   var value = status || 'Not Assigned';
   chip.textContent = value;
-  chip.className = 'status editor-status-chip ' + String(value).toLowerCase().replace(/\s+/g, '-');
+  // Card 2A: a LEAD detail page carries no separate status badge beside the
+  // step title -- its header is the assignee select and the priority chip, and
+  // a fresh lead's badge only ever read "NOT ASSIGNED". The BP well page keeps
+  // it. The class is rewritten wholesale on every render, so the visibility has
+  // to be re-decided here rather than toggled once elsewhere.
+  var shell = byId('detail-shell');
+  var leadPage = !!shell && shell.classList.contains('detail-shell-lead');
+  chip.className = 'status editor-status-chip ' + String(value).toLowerCase().replace(/\s+/g, '-') +
+    (leadPage ? ' hidden' : '');
 }
 
 var PRIORITY_CYCLE = { Low: 'Medium', Medium: 'High', High: 'Low' };

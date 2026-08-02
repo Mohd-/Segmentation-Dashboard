@@ -85,9 +85,19 @@ def test_tracked_items_shape_order_and_stages(client):
         LEAD_ASSESSMENT_LABELS + RISK_ANALYSIS_LABELS + PRE_WELL_LABELS)
     assert [item["stage"] for item in items] == (
         ["Lead Assessment"] * 4 + ["Risk Analysis"] * 4 + ["Pre-Well Delivery"] * 4)
-    # Exactly three keys per item -- the card renders nothing else.
+    # Exactly four keys per item: the three the CARD renders, plus Card 2A's
+    # `steps` (the item's source step names) that the lead detail page's
+    # three-stage sidebar opens the real components from.
     for item in items:
-        assert set(item) == {"stage", "label", "status"}
+        assert set(item) == {"stage", "label", "status", "steps"}
+    by_label = {item["label"]: item["steps"] for item in items}
+    # The two items with NO stored step yet stay empty -- the sidebar renders
+    # them as dimmed, non-clickable placeholder rows.
+    assert by_label["GRV Inputs"] == []
+    assert by_label["Well Site Location"] == []
+    # The one multi-source item keeps BOTH of its steps, in order.
+    assert by_label["Trap and Seal"] == ["Trap CoS", "Seal CoS"]
+    assert by_label["Thickness Estimation"] == ["Thickness Estimation"]
 
 
 def test_a_fresh_lead_reads_entirely_in_progress(client):
