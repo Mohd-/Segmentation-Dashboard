@@ -8,6 +8,7 @@ exposes the full public API exactly as the single-file module did:
 - users.py      -- login identity lookups (seeded from config.SEED_USERS).
 - projects.py   -- project CRUD + the derived board state.
 - lifecycle.py  -- task reads/saves, assignment, submit/approve/return.
+- mapdata.py    -- the map's wells overlay (project coordinates + board state).
 - notifications.py -- who a transition tells, and the per-user bell feed.
 - promotion.py  -- lead-summary snapshots, BP promotion / demotion, flags.
 - formations.py -- well-level formation data (project_formations).
@@ -97,6 +98,7 @@ from .lifecycle import (
     set_task_priority,
     transition_task,
 )
+from .mapdata import map_wells
 from .notifications import (
     list_notifications,
     mark_all_read,
@@ -163,6 +165,8 @@ __all__ = [
     "get_project_tasks", "get_task",
     "get_task_dynamic_fields", "satisfy_submit_gate", "save_task",
     "save_task_dynamic_fields", "set_task_priority", "transition_task",
+    # mapdata
+    "map_wells",
     # notifications
     "list_notifications", "mark_all_read", "mark_read", "notification_feed",
     "notify_transition", "unread_count",

@@ -47,6 +47,7 @@ import config
 import db
 import export_excel
 import folders
+import map_layers
 import reporting
 import resource_calc
 import workflow
@@ -759,6 +760,39 @@ def activity():
     except ValueError:
         project_id_int = None
     return json_response(reporting.get_activity_log(session, project_id=project_id_int, limit=500))
+
+
+# ---------------------------------------------------------------------------
+# Map (UTM Zone 37N). Layers are files on the map share (map_layers.py); the
+# wells overlay is derived project state (workflow.map_wells). Coordinates are
+# metres and are never reprojected on the way out.
+# ---------------------------------------------------------------------------
+
+@app.get("/api/map/layers")
+def map_layers_list():
+    """Available layers as metadata only; the ``borders`` backdrop comes first."""
+    return json_response({"layers": map_layers.list_layers()})
+
+
+@app.get("/api/map/layers/<path:name>")
+def map_layer(name):
+    """One layer's geometry (UTM37 metres) as GeoJSON-like features.
+
+    ``borders`` is a prebuilt JSON file, passed through verbatim rather than
+    re-serialized. Every other name resolves to a shapefile set: an invalid or
+    traversing name raises ValueError -> 400 and an unknown one
+    FileNotFoundError -> 404, both through the centralized handlers.
+    """
+    if name == map_layers.BORDERS_LAYER_NAME:
+        return app.response_class(map_layers.load_borders(), mimetype="application/json")
+    return json_response(map_layers.load_layer(name))
+
+
+@app.get("/api/map/wells")
+def map_wells():
+    """Lead / well pins: staked coordinates when known, else the lead's."""
+    session = db.get_session()
+    return json_response({"wells": workflow.map_wells(session)})
 
 
 @app.get("/api/export/excel")

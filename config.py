@@ -89,6 +89,43 @@ def resource_scenarios_path() -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Map data (the UTM Zone 37N viewer -- map_layers.py + the /api/map/* routes)
+# ---------------------------------------------------------------------------
+# Everything the map draws lives under ONE directory so a deployment points at
+# a share with a single env var (SEGMENT_TRACKER_MAP_DATA_DIR):
+#
+#   <map data dir>/layers/            the shapefile sets (.shp + .shx + .dbf)
+#   <map data dir>/borders_utm37.json the prebuilt country outlines
+#
+# Read lazily (like db_path()) so tests can re-point the map directory per test.
+# Coordinates are used AS-IS: every file here must already be in UTM37N metres.
+
+def map_data_dir() -> Path:
+    """Root of the map data tree, from SEGMENT_TRACKER_MAP_DATA_DIR."""
+    raw = os.environ.get("SEGMENT_TRACKER_MAP_DATA_DIR", str(BASE_DIR / "data" / "map"))
+    return Path(raw).expanduser().resolve()
+
+
+def map_layers_dir() -> Path:
+    """Directory holding the shapefile sets; one set = one selectable layer.
+
+    Deployment data (or generated samples from scripts/seed_map_layers.py), so
+    it is NOT versioned -- see .gitignore. A missing directory is not an error:
+    the layer list is simply empty.
+    """
+    return map_data_dir() / "layers"
+
+
+def map_borders_file() -> Path:
+    """The prebuilt Saudi/Iraq/Jordan/Kuwait outlines in UTM37N metres.
+
+    Unlike the layers directory this file IS versioned: it is the fixed
+    backdrop every other layer is read against.
+    """
+    return map_data_dir() / "borders_utm37.json"
+
+
+# ---------------------------------------------------------------------------
 # Security / auth
 # ---------------------------------------------------------------------------
 

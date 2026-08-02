@@ -16,7 +16,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/css/base.css?v=10">
-  <link rel="stylesheet" href="/static/css/components.css?v=32">
+  <link rel="stylesheet" href="/static/css/components.css?v=33">
 </head>
 <body>
   <section id="login-page" class="login-page hidden">
@@ -169,9 +169,60 @@
     </section>
 
     <section id="tab-map" class="tab" role="tabpanel">
-      <div class="panel placeholder-panel">
-        <h3>Map</h3>
-        <p>Map functionality will be implemented in a future update.</p>
+      <!-- The canvas map (views/map-view.js + js/map/*). Flat Cartesian
+           UTM Zone 37N metres — no tiles and no map library, so every
+           distance on it is exact rather than latitude-corrected.
+
+           Everything below is CHROME ONLY: the layer list, the summary
+           figures, the color panel and the tooltip are all rendered by JS
+           (a hidden canvas measures 0x0, so the view also initialises
+           lazily on first activation and re-measures on every one). The
+           ids here are the DOM contract map-view.js looks up by name —
+           renaming one silently detaches its handler. -->
+      <div class="panel map-panel">
+        <aside class="map-sidebar">
+          <div class="map-sidebar-head">
+            <h3>Layers</h3>
+            <span class="map-crs">UTM 37N</span>
+          </div>
+          <div class="map-sidebar-actions">
+            <button id="map-fit-all" type="button" class="ghost" title="Zoom to fit every visible layer">Fit all</button>
+            <button id="map-reload" type="button" class="ghost" title="Reload the layer list and wells from the server">Reload</button>
+          </div>
+          <!-- Ordered top -> bottom = topmost drawn first. The wells overlay
+               is pinned at the head and country borders at the foot; only
+               the shapefile rows between them carry the up/down controls. -->
+          <div id="map-layer-list" class="map-layer-list" aria-live="polite"></div>
+        </aside>
+
+        <div class="map-stage">
+          <canvas id="map-canvas" class="map-canvas"></canvas>
+
+          <div id="map-summary" class="map-summary">
+            <button id="map-summary-toggle" type="button" class="map-summary-toggle" aria-expanded="true" aria-controls="map-summary-body">Map summary</button>
+            <div id="map-summary-body" class="map-summary-body" aria-live="polite"></div>
+          </div>
+
+          <div class="map-toolbox" role="group" aria-label="Map tools">
+            <div class="map-tool-row">
+              <button id="map-tool-pointer" type="button" class="map-tool" aria-pressed="true" title="Pointer: hover for feature details">Pointer</button>
+              <button id="map-tool-measure" type="button" class="map-tool" aria-pressed="false" title="Measure: click to add points, double-click or Escape to finish">Measure</button>
+              <button id="map-measure-clear" type="button" class="map-tool" title="Erase the measurement">Clear</button>
+              <button id="map-colors-toggle" type="button" class="map-tool" aria-expanded="false" aria-controls="map-color-panel" title="Layer colors">Colors</button>
+            </div>
+            <div id="map-measure-readout" class="map-measure-readout" hidden></div>
+          </div>
+
+          <div id="map-color-panel" class="map-color-panel" hidden></div>
+
+          <div class="map-zoom" role="group" aria-label="Zoom">
+            <button id="map-zoom-in" type="button" aria-label="Zoom in">+</button>
+            <button id="map-zoom-out" type="button" aria-label="Zoom out">&minus;</button>
+          </div>
+
+          <div id="map-readout" class="map-readout" hidden></div>
+          <div id="map-tooltip" class="map-tooltip" hidden></div>
+        </div>
       </div>
     </section>
 
@@ -353,6 +404,6 @@
     <img id="ra-lightbox-img" alt="">
   </dialog>
 
-  <script type="module" src="/static/js/main.js?v=28"></script>
+  <script type="module" src="/static/js/main.js?v=29"></script>
 </body>
 </html>

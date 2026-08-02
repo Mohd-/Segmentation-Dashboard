@@ -33,6 +33,7 @@ the stored percentage.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import sys
@@ -64,6 +65,52 @@ EXTRA_USERS = [
 # (folders.parse_field_and_well) expects.
 PROSPECT_FIELD_CODES = ["GALV", "ORYX", "FYNN", "CROX", "WREN", "IBEX", "LUNA", "VEGA"]
 BP_FIELD_CODES = ["MDFT", "QASM", "SARH", "RUBX", "TANQ", "HOFR", "DYNE", "KELS", "BRAN"]
+
+# ---------------------------------------------------------------------------
+# Map coordinates (UTM Zone 37N metres -- the plane the map surface draws in)
+# ---------------------------------------------------------------------------
+# Every seeded record is born with a lead X/Y so the map has pins in dev. One
+# CENTER per field code, because a field is a place: GALV-1 and GALV-2 belong
+# beside each other, not scattered across the country. The centers sit inside
+# Saudi Arabia's UTM37N extent (eastings ~250-800 km, northings ~2200-3300 km)
+# and are grouped into the four quadrants scripts/seed_map_layers.py draws its
+# sample blocks around -- that script imports LEAD_CLUSTER_CENTERS from here,
+# so the blocks always enclose the wells and the two never drift apart.
+#
+# Offsets within a field are DETERMINISTIC (a hash of the record name, never
+# random): re-seeding puts the same well in the same place, and the map is
+# diffable across runs. random.seed(42) governs the rest of this script, but a
+# coordinate drawn from the shared stream would move every well whenever any
+# earlier draw changed.
+LEAD_CLUSTER_CENTERS = {
+    # North-west quadrant (Block A)
+    "GALV": (350000.0, 3100000.0),
+    "ORYX": (460000.0, 2950000.0),
+    "FYNN": (330000.0, 2870000.0),
+    "MDFT": (470000.0, 3180000.0),
+    "QASM": (390000.0, 2980000.0),
+    # North-east quadrant (Block B)
+    "CROX": (600000.0, 3100000.0),
+    "WREN": (720000.0, 2950000.0),
+    "SARH": (650000.0, 2870000.0),
+    "RUBX": (740000.0, 3180000.0),
+    # South-west quadrant (Block C)
+    "IBEX": (340000.0, 2600000.0),
+    "LUNA": (460000.0, 2450000.0),
+    "TANQ": (380000.0, 2320000.0),
+    "HOFR": (490000.0, 2620000.0),
+    # South-east quadrant (Block D)
+    "VEGA": (610000.0, 2600000.0),
+    "DYNE": (730000.0, 2450000.0),
+    "KELS": (620000.0, 2320000.0),
+    "BRAN": (750000.0, 2620000.0),
+}
+
+# Half-width of the per-record scatter around its field center, in metres. A
+# few km: far enough apart to be distinguishable pins at field zoom, close
+# enough that the field still reads as one cluster (and well inside the sample
+# blocks, whose edges are ~30 km further out).
+LEAD_CLUSTER_JITTER_M = 5000.0
 
 DRILLED_FLUIDS = ["Dry", "Gas", "Water", "Condensate", "Liquid", "Gas over Water"]
 GHEER_CLASSIFICATIONS = ["Development", "Appraisal", "Exploration"]
@@ -104,6 +151,29 @@ def _unique_name(session, prefix) -> str:
                             {"name": candidate}):
             return candidate
         n += 1
+
+
+def _lead_coordinates(name):
+    """Deterministic (lead_x, lead_y) in UTM37N metres for a record name.
+
+    The field code (the part before the dash, exactly as
+    folders.parse_field_and_well splits it) picks the cluster center; a
+    BLAKE2b digest of the full name picks the offset inside it. hashlib, not
+    the builtin ``hash``, because PYTHONHASHSEED randomizes the latter per
+    process -- the same seed run twice would then place the same well in two
+    places. An unknown code (a hand-added field) gets no coordinates rather
+    than an invented location.
+    """
+    code = name.split("-")[0]
+    center = LEAD_CLUSTER_CENTERS.get(code)
+    if not center:
+        return None, None
+    digest = hashlib.blake2b(name.encode("utf-8"), digest_size=8).digest()
+    # Two independent 24-bit slices -> two offsets in [-jitter, +jitter].
+    span = 2 * LEAD_CLUSTER_JITTER_M
+    dx = (int.from_bytes(digest[0:3], "big") / 0xFFFFFF) * span - LEAD_CLUSTER_JITTER_M
+    dy = (int.from_bytes(digest[3:6], "big") / 0xFFFFFF) * span - LEAD_CLUSTER_JITTER_M
+    return round(center[0] + dx, 1), round(center[1] + dy, 1)
 
 
 def _ar_number(n) -> str:
@@ -475,7 +545,9 @@ def _seed_prospect_leads(session, users, role_by_name, supervisors):
     for i, stage in enumerate(stage_targets):
         code = PROSPECT_FIELD_CODES[i % len(PROSPECT_FIELD_CODES)]
         name = _unique_name(session, code)
-        pid = workflow.add_project(session, name, changed_by=random.choice(users))
+        lead_x, lead_y = _lead_coordinates(name)
+        pid = workflow.add_project(session, name, changed_by=random.choice(users),
+                                   lead_x=lead_x, lead_y=lead_y)
         tasks = [t for t in workflow.get_project_tasks(session, pid)
                 if t["stage_group"] in workflow.PROSPECT_STAGES]
 
@@ -504,7 +576,9 @@ def _seed_prospect_leads(session, users, role_by_name, supervisors):
     for i in range(3):
         code = PROSPECT_FIELD_CODES[(len(stage_targets) + i) % len(PROSPECT_FIELD_CODES)]
         name = _unique_name(session, code)
-        pid = workflow.add_project(session, name, changed_by=random.choice(users))
+        lead_x, lead_y = _lead_coordinates(name)
+        pid = workflow.add_project(session, name, changed_by=random.choice(users),
+                                   lead_x=lead_x, lead_y=lead_y)
         tasks = [t for t in workflow.get_project_tasks(session, pid)
                 if t["stage_group"] in workflow.PROSPECT_STAGES]
         _seed_pipeline_progress(session, tasks, len(tasks), "Not Assigned", users, role_by_name, supervisors)
@@ -535,7 +609,9 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
     project_ids = []
     for i, code in enumerate(BP_FIELD_CODES):
         name = _unique_name(session, code)
-        pid = workflow.add_project(session, name, changed_by=random.choice(users))
+        lead_x, lead_y = _lead_coordinates(name)
+        pid = workflow.add_project(session, name, changed_by=random.choice(users),
+                                   lead_x=lead_x, lead_y=lead_y)
         project_ids.append(pid)
 
         tasks = workflow.get_project_tasks(session, pid)

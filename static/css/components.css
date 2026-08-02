@@ -2289,3 +2289,239 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 @media (max-width: 1100px) {
   .sl-location-row { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* =========================================================================
+   Map tab — canvas map viewer
+   Ported from the standalone UTM37 viewer and re-skinned onto the app's
+   tokens. Layout: a fixed-width layer sidebar beside a stage that the canvas
+   fills, with the summary panel, toolbox, zoom pad, readout and tooltip all
+   floating INSIDE that stage (position:absolute against .map-stage) so none
+   of them can reflow the canvas and force a re-measure.
+
+   Theme: nothing here hardcodes a color. The chrome resolves through the
+   :root tokens (so dark mode re-skins it with the rest of the app), and the
+   canvas itself reads the same custom properties through getComputedStyle at
+   paint time — see map/map-canvas.js's themeColors(). The only per-element
+   dark overrides are the two translucent scrims at the end of this section,
+   which have to be tinted rather than re-pointed.
+   ========================================================================= */
+.map-panel {
+  /* Header (64) + tabs (64) + main's vertical padding (2 x 24) + the panel's
+     own bottom margin (12) + the two 1px borders the header and tab strip
+     add (which the sum used to miss, and 2px is all it takes to put a
+     scrollbar on the page). The map is a viewport-height workspace, not a
+     document that scrolls. */
+  --map-chrome: 190px;
+  padding: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 268px minmax(0, 1fr);
+  height: calc(100vh - var(--map-chrome));
+  min-height: 440px;
+}
+
+/* ---- Sidebar: the ordered layer list ------------------------------------ */
+.map-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+.map-sidebar-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2);
+  padding: var(--space-3) var(--space-4) var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+.map-sidebar-head h3 { margin: 0; }
+.map-crs { font-size: var(--text-xs); color: var(--text-faint); font-family: var(--font-mono); }
+.map-sidebar-actions { display: flex; gap: var(--space-2); padding: var(--space-3) var(--space-4); }
+.map-sidebar-actions button { flex: 1; font-size: var(--text-sm); padding: var(--space-1) var(--space-2); }
+
+.map-layer-list { flex: 1; overflow-y: auto; padding: 0 var(--space-2) var(--space-4); min-height: 0; }
+.map-empty-hint { padding: var(--space-3); font-size: var(--text-sm); color: var(--text-muted); line-height: 1.4; }
+
+.map-layer {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+}
+.map-layer:hover { background: var(--surface-sunken); border-color: var(--border); }
+.map-layer-check { flex: none; width: 15px; height: 15px; accent-color: var(--asas-navy); cursor: pointer; }
+.map-swatch {
+  flex: none; width: 14px; height: 14px; padding: 0;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  cursor: pointer; box-shadow: none;
+}
+.map-swatch:hover { border-color: var(--asas-blue); }
+.map-layer-name {
+  flex: 1; min-width: 0; cursor: pointer;
+  font-size: var(--text-sm); color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.map-layer-count { flex: none; font-size: var(--text-xs); color: var(--text-faint); font-variant-numeric: tabular-nums; }
+/* A listed layer whose geometry would not load. Deliberately quiet — the row
+   still works (it can be hidden, recolored, reordered); the marker only says
+   why the canvas is empty, with the server's message in its title. Both
+   themes come free: --warning-700 is re-pointed by the dark palette. */
+.map-layer-error { flex: none; font-size: var(--text-xs); line-height: 1; color: var(--warning-700); cursor: help; }
+.map-layer-actions { flex: none; display: flex; align-items: center; gap: 1px; }
+.map-layer-btn {
+  background: transparent; border: 0; box-shadow: none;
+  padding: 2px; border-radius: var(--radius-sm);
+  color: var(--text-faint); cursor: pointer; line-height: 0;
+}
+.map-layer-btn:hover { color: var(--asas-blue); background: var(--brand-050); }
+.map-layer-btn .lucide { width: 14px; height: 14px; }
+
+/* ---- Stage: the canvas and everything floating on it -------------------- */
+.map-stage { position: relative; min-width: 0; background: var(--surface-sunken); overflow: hidden; }
+.map-canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+.map-canvas.dragging { cursor: grabbing; }
+.map-canvas.measuring { cursor: crosshair; }
+
+/* ---- Summary panel (top-left, collapsible) ------------------------------ */
+.map-summary {
+  position: absolute; top: var(--space-3); left: var(--space-3); z-index: 3;
+  min-width: 186px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+.map-summary-toggle {
+  width: 100%; text-align: left; background: transparent; border: 0; box-shadow: none;
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-display); letter-spacing: .03em;
+  font-size: var(--text-sm); color: var(--ink-800); cursor: pointer;
+}
+.map-summary-toggle::after { content: '−'; float: right; color: var(--text-faint); }
+.map-summary.is-collapsed .map-summary-toggle::after { content: '+'; }
+.map-summary-toggle:hover { background: var(--surface-sunken); }
+.map-summary-body { padding: 0 var(--space-3) var(--space-2); }
+.map-summary-row {
+  display: flex; justify-content: space-between; gap: var(--space-4);
+  padding: 2px 0; font-size: var(--text-sm);
+}
+.map-summary-key { color: var(--text-muted); }
+.map-summary-value { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+.map-summary-note {
+  margin: var(--space-2) 0 0; max-width: 200px;
+  font-size: var(--text-xs); line-height: 1.35; color: var(--text-faint);
+}
+
+/* ---- Toolbox (top-right) + the color panel it opens --------------------- */
+.map-toolbox {
+  position: absolute; top: var(--space-3); right: var(--space-3); z-index: 3;
+  display: flex; flex-direction: column; align-items: flex-end; gap: var(--space-1);
+}
+.map-tool-row {
+  display: flex; gap: 1px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+.map-tool {
+  background: transparent; border: 0; box-shadow: none; border-radius: 0;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-sm); color: var(--text-muted); cursor: pointer;
+}
+.map-tool:hover { background: var(--surface-sunken); color: var(--text); }
+.map-tool[aria-pressed="true"], .map-tool[aria-expanded="true"] {
+  background: var(--asas-navy-fill); color: var(--asas-navy-ink);
+}
+.map-measure-readout {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 2px var(--space-2);
+  font-size: var(--text-xs); font-variant-numeric: tabular-nums; color: var(--text-muted);
+}
+
+.map-color-panel {
+  position: absolute; top: 62px; right: var(--space-3); z-index: 4;
+  width: 218px; max-height: 320px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
+  padding: var(--space-2);
+}
+.map-color-head {
+  font-family: var(--font-display); letter-spacing: .03em;
+  font-size: var(--text-xs); text-transform: uppercase; color: var(--text-faint);
+  padding: 0 var(--space-1) var(--space-2);
+}
+.map-color-row {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-1); border-radius: var(--radius-sm);
+  font-size: var(--text-sm); color: var(--text); cursor: pointer;
+}
+.map-color-row:hover { background: var(--surface-sunken); }
+.map-color-row span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-color-row input[type="color"] {
+  flex: none; width: 26px; height: 20px; padding: 0;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: none; cursor: pointer;
+}
+
+/* ---- Zoom pad, coordinate readout, tooltip ------------------------------ */
+.map-zoom {
+  position: absolute; right: var(--space-3); bottom: var(--space-3); z-index: 3;
+  display: flex; flex-direction: column; gap: 1px;
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md); overflow: hidden;
+}
+.map-zoom button {
+  width: 32px; height: 32px; padding: 0; border: 0; border-radius: 0; box-shadow: none;
+  background: var(--surface); color: var(--ink-800);
+  font-size: var(--text-md); line-height: 1; cursor: pointer;
+}
+.map-zoom button:hover { background: var(--surface-sunken); }
+
+.map-readout {
+  position: absolute; left: var(--space-3); bottom: var(--space-3); z-index: 3;
+  font-size: var(--text-xs); font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  background: var(--map-scrim, rgba(255, 255, 255, .82));
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 2px var(--space-2);
+  pointer-events: none;
+}
+
+.map-tooltip {
+  position: absolute; z-index: 6; max-width: 280px;
+  font-size: var(--text-xs); line-height: 1.35;
+  background: var(--map-scrim, rgba(255, 255, 255, .97));
+  border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-2) var(--space-3);
+  pointer-events: none;
+}
+.map-tt-title { font-weight: 700; color: var(--asas-navy); margin-bottom: 2px; }
+.map-tt-sub { font-size: var(--text-xs); color: var(--text-faint); margin-bottom: var(--space-1); }
+.map-tooltip table { border-collapse: collapse; width: 100%; }
+.map-tooltip td { padding: 1px 0; vertical-align: top; color: var(--text); }
+.map-tooltip td.k { color: var(--text-muted); padding-right: var(--space-3); white-space: nowrap; }
+.map-tooltip td.n { text-align: right; font-variant-numeric: tabular-nums; }
+.map-tt-metric { margin-top: var(--space-1); font-weight: 700; color: var(--text); }
+.map-tt-inside { margin-top: 2px; color: var(--text); }
+.map-tt-inside .k { color: var(--text-muted); }
+.map-tt-section { margin-top: var(--space-2); border-top: 1px solid var(--border); padding-top: var(--space-1); }
+.map-tt-section-head { font-weight: 700; color: var(--text-muted); margin-bottom: 2px; }
+.map-tt-total { margin-top: 2px; font-weight: 700; color: var(--text); }
+.map-tt-empty { color: var(--text-faint); }
+
+/* The two translucent scrims: a pale wash over the canvas in light mode, a
+   dark one on dark. Everything else in this section re-skins for free through
+   the tokens, so this is the whole dark-theme delta. */
+:root[data-theme="dark"] .map-readout,
+:root[data-theme="dark"] .map-tooltip { --map-scrim: rgba(23, 34, 49, .95); }
+
+@media (max-width: 1100px) {
+  .map-panel { grid-template-columns: 220px minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .map-panel { --map-chrome: 158px; grid-template-columns: minmax(0, 1fr); grid-template-rows: 180px minmax(0, 1fr); }
+  .map-sidebar { border-right: 0; border-bottom: 1px solid var(--border); }
+}

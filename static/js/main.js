@@ -10,6 +10,7 @@ import { initHeaderMenus } from './views/header-menus.js';
 import { refreshPortfolio } from './views/portfolio.js';
 import { initPortfolioAnalysis } from './views/portfolio-analysis.js';
 import { refreshAudit } from './views/audit.js';
+import { refreshMap } from './views/map-view.js';
 import { saveComponent, assignComponent, transitionComponent, cyclePriorityChip, ensureUsers } from './views/detail-form.js';
 import { openProjectEditor } from './views/project-editor.js';
 import { performLogin, fetchUserOptions } from './auth.js';
@@ -31,6 +32,10 @@ export function showTab(name) {
   if (name === 'prospect') refreshProspect();
   if (name === 'bp') refreshBP();
   if (name === 'portfolio') refreshPortfolio();
+  // The map canvas is 0x0 while the tab is display:none, so refreshMap() is
+  // BOTH the lazy first-time boot and the per-activation re-measure. It runs
+  // after activateTab() above, i.e. once the section is actually laid out.
+  if (name === 'map') refreshMap();
   if (name === 'audit') refreshAudit();
 }
 
