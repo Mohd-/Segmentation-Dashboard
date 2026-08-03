@@ -192,7 +192,7 @@ def test_checkbox_save_completes_the_step_with_no_approve_click(client):
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-SEISMIC-1")
     task = get_task_by_name(client, pid, "Seismic Signature Validation")
-    assert task["status"] == "Not Assigned"
+    assert task["status"] == "In Progress"
     assert tracked_item(client, pid, "Seismic Validation") == "In Progress"
 
     saved = save(client, task, {"seismic_slides_loaded": "1"})
@@ -220,8 +220,11 @@ def test_completion_logs_one_engine_event_naming_the_saving_user(client):
     assert engine[0]["changed_by"] == SUPERVISOR
     assert {row["changed_by"] for row in events} == {SUPERVISOR}
     # And it really WALKED the machine rather than writing Approved directly.
+    # "Component Assigned" comes FIRST now: creation auto-assignment assigned
+    # the step (In Progress) before any save, so the engine's walk resumes at
+    # submit -> approve with no assign leg of its own.
     assert [row["action_type"] for row in events if row["action_type"].startswith("Component ")] == [
-        "Component Inputs Updated", "Component Assigned", "Component Submitted", "Component Approved",
+        "Component Assigned", "Component Inputs Updated", "Component Submitted", "Component Approved",
     ]
 
 
@@ -297,13 +300,13 @@ def test_reservoir_checkbox_alone_is_not_completion(client):
     task = get_task_by_name(client, pid, "Reservoir CoS")
 
     saved = save(client, task, {"reservoir_slides_loaded": "1"})
-    assert saved["status"] == "Not Assigned"
+    assert saved["status"] == "In Progress"
     assert tracked_item(client, pid, "Reservoir") == "In Progress"
 
     # An explicitly EMPTY sheet is stored as the non-blank string "[]" -- still
     # no result, still not complete.
     saved = save(client, saved, {"reservoir_slides_loaded": "1", "reservoir_cos_rows": json.dumps([])})
-    assert saved["status"] == "Not Assigned"
+    assert saved["status"] == "In Progress"
 
 
 def test_reservoir_rows_alone_are_not_completion(client):
@@ -314,7 +317,7 @@ def test_reservoir_rows_alone_are_not_completion(client):
     saved = save(client, task, {"reservoir_cos_rows": json.dumps(RESERVOIR_ROWS)})
     stored = client.get(f"/api/tasks/{task['task_id']}/dynamic-fields").get_json()
     assert json.loads(stored["reservoir_cos_rows"])[0]["reservoir_cos_pct"]  # scored
-    assert saved["status"] == "Not Assigned"
+    assert saved["status"] == "In Progress"
     assert tracked_item(client, pid, "Reservoir") == "In Progress"
 
 
@@ -382,7 +385,7 @@ def test_trap_and_seal_checkbox_alone_is_not_completion(client):
     task = get_task_by_name(client, pid, COS_STEP)
 
     saved = save(client, task, {"seal_slides_loaded": "1"})
-    assert saved["status"] == "Not Assigned"
+    assert saved["status"] == "In Progress"
     assert tracked_item(client, pid, "Trap and Seal") == "In Progress"
 
 
@@ -403,7 +406,7 @@ def test_trap_complete_with_seal_incomplete_stays_in_progress(client):
     stored = _stored(client, task["task_id"])
     assert stored["trap_cos_pct"] == "80"          # the Trap half really scored
     assert not stored.get("seal_cos_pct")          # ... and the Seal half did not
-    assert saved["status"] == "Not Assigned"
+    assert saved["status"] == "In Progress"
     assert tracked_item(client, pid, "Trap and Seal") == "In Progress"
 
 
@@ -419,7 +422,7 @@ def test_seal_complete_with_trap_incomplete_stays_in_progress(client):
     stored = _stored(client, task["task_id"])
     assert stored["seal_cos_pct"] == "48"
     assert not stored.get("trap_cos_pct")
-    assert saved["status"] == "Not Assigned"
+    assert saved["status"] == "In Progress"
 
 
 def test_both_cos_results_plus_the_checkbox_complete_the_step(client):
@@ -449,7 +452,7 @@ def test_both_results_without_the_checkbox_are_not_completion(client):
     fields = dict(SEAL_INPUTS)
     fields["sarah_quwarah_thickness_ft"] = "130"
     saved = save(client, task, fields)
-    assert saved["status"] == "Not Assigned"
+    assert saved["status"] == "In Progress"
 
     saved = save(client, saved, {"seal_slides_loaded": "1"})
     assert saved["status"] == "Approved"
@@ -667,7 +670,10 @@ def _save_step(client, pid, step, fields, expect=200):
     return save(client, get_task_by_name(client, pid, task_name), fields, expect=expect)
 
 
-def _assert_lead_lifecycle_not_field_driven(client, pid, expected="Not Assigned"):
+def _assert_lead_lifecycle_not_field_driven(client, pid, expected="In Progress"):
+    # "In Progress" is a fresh logged-in lead's creation state now: the
+    # creation auto-assignment assigns every prospect step to its creator
+    # (or a configured rule assignee), which moves it out of Not Assigned.
     task = get_task_by_name(client, pid, LEAD_STEP)
     assert task["status"] == expected
     assert not [row for row in history(client, task["task_id"])
@@ -740,7 +746,7 @@ def test_area_definition_completes_on_a_valid_p90_p10_pair(client):
     assert tracked_item(client, pid, AREA_STEP) != "Completed"
 
     task = _save_step(client, pid, AREA_STEP, AREA_OK)
-    assert task["status"] == "Not Assigned"
+    assert task["status"] == "In Progress"
     assert tracked_item(client, pid, AREA_STEP) == "Completed"
     # And ONLY that item -- its three page-mates are untouched by this save.
     for other in (THICKNESS_STEP, GRV_STEP, RA_STEP):
@@ -751,7 +757,7 @@ def test_area_definition_needs_BOTH_percentiles(client):
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-2B-AREA-HALF")
     task = _save_step(client, pid, AREA_STEP, {"p90_area_km2": "12.60"})
-    assert task["status"] == "Not Assigned"
+    assert task["status"] == "In Progress"
     assert tracked_item(client, pid, AREA_STEP) != "Completed"
 
 
@@ -776,7 +782,7 @@ def test_area_definition_rejects_an_equal_or_inverted_pair(client):
     assert task["status"] != "Approved", "and the server never reorders it for the user"
     assert tracked_item(client, pid, AREA_STEP) != "Completed"
     # Fix the order and it closes.
-    assert _save_step(client, pid, AREA_STEP, AREA_OK)["status"] == "Not Assigned"
+    assert _save_step(client, pid, AREA_STEP, AREA_OK)["status"] == "In Progress"
     assert tracked_item(client, pid, AREA_STEP) == "Completed"
 
 
@@ -784,9 +790,9 @@ def test_a_completed_area_checkpoint_reopens_without_reopening_the_lifecycle(cli
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-2B-AREA-REOPEN")
     task = _save_step(client, pid, AREA_STEP, AREA_OK)
-    assert task["status"] == "Not Assigned"
+    assert task["status"] == "In Progress"
     task = _save_step(client, pid, AREA_STEP, {"p10_area_km2": ""})
-    assert task["status"] == "Not Assigned"
+    assert task["status"] == "In Progress"
     assert tracked_item(client, pid, AREA_STEP) != "Completed"
     _assert_lead_lifecycle_not_field_driven(client, pid)
 
@@ -804,18 +810,18 @@ def test_the_tvdss_neither_completes_nor_reopens_area_definition(client):
     pid = create_project(client, "FC-2B-TVDSS")
     # (a) TVDSS alone completes nothing.
     task = _save_step(client, pid, AREA_STEP, {"top_formation_tvdss_ft": "-6500"})
-    assert task["status"] == "Not Assigned"
+    assert task["status"] == "In Progress"
     # (b) a complete area pair completes the item WITHOUT any TVDSS...
     task = _save_step(client, pid, AREA_STEP, AREA_OK)
-    assert task["status"] == "Not Assigned"
+    assert task["status"] == "In Progress"
     # (c) ...and changing the TVDSS afterwards does not reopen it. The negative
     # depth is stored verbatim -- never coerced, never rejected by the
     # positivity rule that guards this task's other two keys.
-    assert _save_step(client, pid, AREA_STEP, {"top_formation_tvdss_ft": "-7100"})["status"] == "Not Assigned"
+    assert _save_step(client, pid, AREA_STEP, {"top_formation_tvdss_ft": "-7100"})["status"] == "In Progress"
     area_id = get_task_by_name(client, pid, LEAD_STEP)["task_id"]
     assert _stored(client, area_id)["top_formation_tvdss_ft"] == "-7100"
     # (d) nor does clearing it.
-    assert _save_step(client, pid, AREA_STEP, {"top_formation_tvdss_ft": ""})["status"] == "Not Assigned"
+    assert _save_step(client, pid, AREA_STEP, {"top_formation_tvdss_ft": ""})["status"] == "In Progress"
     assert tracked_item(client, pid, AREA_STEP) == "Completed"
 
 
@@ -823,10 +829,10 @@ def test_grv_inputs_completes_on_a_valid_pair_and_reopens_on_an_inverted_one(cli
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-2B-GRV")
     assert _save_step(client, pid, GRV_STEP, {"grv_p90_thousand_acre_ft": "12.60"})["status"] != "Approved"
-    assert _save_step(client, pid, GRV_STEP, GRV_OK)["status"] == "Not Assigned"
+    assert _save_step(client, pid, GRV_STEP, GRV_OK)["status"] == "In Progress"
     assert tracked_item(client, pid, GRV_STEP) == "Completed"
     inverted = _save_step(client, pid, GRV_STEP, {"grv_p10_thousand_acre_ft": "1.0"})
-    assert inverted["status"] == "Not Assigned"
+    assert inverted["status"] == "In Progress"
     assert tracked_item(client, pid, GRV_STEP) != "Completed"
 
 
@@ -842,7 +848,7 @@ def test_thickness_estimation_completes_on_both_rows_in_the_right_order(client):
     # One row only.
     assert _save_step(client, pid, THICKNESS_STEP, {"reservoir_thickness_ft": "200"})["status"] != "Approved"
     # Both rows, correctly ordered.
-    assert _save_step(client, pid, THICKNESS_STEP, THICKNESS_OK)["status"] == "Not Assigned"
+    assert _save_step(client, pid, THICKNESS_STEP, THICKNESS_OK)["status"] == "In Progress"
     assert tracked_item(client, pid, THICKNESS_STEP) == "Completed"
 
 
@@ -856,7 +862,7 @@ def test_thickness_estimation_rejects_an_equal_or_inverted_pair(client):
     task = _save_step(client, pid, THICKNESS_STEP, {"formation_thickness_ft": "150"})
     assert task["status"] != "Approved"
     assert tracked_item(client, pid, THICKNESS_STEP) != "Completed"
-    assert _save_step(client, pid, THICKNESS_STEP, THICKNESS_OK)["status"] == "Not Assigned"
+    assert _save_step(client, pid, THICKNESS_STEP, THICKNESS_OK)["status"] == "In Progress"
     assert tracked_item(client, pid, THICKNESS_STEP) == "Completed"
 
 
@@ -872,11 +878,11 @@ def test_the_twt_columns_and_source_marker_never_affect_completion(client):
     """
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-2B-TWT")
-    assert _save_step(client, pid, THICKNESS_STEP, THICKNESS_OK)["status"] == "Not Assigned"
+    assert _save_step(client, pid, THICKNESS_STEP, THICKNESS_OK)["status"] == "In Progress"
     for fields in ({"twt_reservoir_ms": "1500"}, {"twt_formation_ms": "1800"},
                    {"thickness_source_mode": "twt"}, {"twt_reservoir_ms": ""},
                    {"thickness_source_mode": ""}):
-        assert _save_step(client, pid, THICKNESS_STEP, fields)["status"] == "Not Assigned", fields
+        assert _save_step(client, pid, THICKNESS_STEP, fields)["status"] == "In Progress", fields
     assert tracked_item(client, pid, THICKNESS_STEP) == "Completed"
 
 
@@ -894,7 +900,7 @@ def test_resource_assessment_needs_the_checkbox_AND_a_stored_piip_mean(client):
 
     # (a) The confirmation alone: no volume to carry into the portfolio.
     task = save(client, task, {"polygons_surfaces_loaded": "1"})
-    assert task["status"] == "Not Assigned"
+    assert task["status"] == "In Progress"
     assert tracked_item(client, pid, RA_STEP) != "Completed"
 
     # (b) The auto-run's write lands through the FIELDS-ONLY endpoint, and the
@@ -910,13 +916,13 @@ def test_resource_assessment_piip_alone_is_not_completion(client):
     pid = create_project(client, "FC-2B-RA-PIIP")
     task = get_task_by_name(client, pid, LEAD_STEP)
     task = save(client, task, {"lead_piip_gas_mean": "19.4"})
-    assert task["status"] == "Not Assigned", "field writes do not advance the lifecycle"
+    assert task["status"] == "In Progress", "field writes do not advance the lifecycle"
     task = save(client, task, {"polygons_surfaces_loaded": "1"})
-    assert task["status"] == "Not Assigned"
+    assert task["status"] == "In Progress"
     assert tracked_item(client, pid, RA_STEP) == "Completed"
     # Unticking clears the checkpoint but does not reopen the lifecycle.
     task = save(client, task, {"polygons_surfaces_loaded": ""})
-    assert task["status"] == "Not Assigned"
+    assert task["status"] == "In Progress"
     assert tracked_item(client, pid, RA_STEP) != "Completed"
 
 
@@ -926,9 +932,9 @@ def test_a_blank_or_zero_piip_mean_does_not_complete_resource_assessment(client)
     pid = create_project(client, "FC-2B-RA-ZERO")
     task = get_task_by_name(client, pid, LEAD_STEP)
     task = save(client, task, {"polygons_surfaces_loaded": "1", "lead_piip_gas_mean": "0"})
-    assert task["status"] == "Not Assigned"
+    assert task["status"] == "In Progress"
     task = save(client, task, {"lead_piip_gas_mean": "19.4"})
-    assert task["status"] == "Not Assigned"
+    assert task["status"] == "In Progress"
     assert tracked_item(client, pid, RA_STEP) == "Completed"
 
 
@@ -980,7 +986,7 @@ def test_a_box_model_lead_shows_piip_but_lead_assessment_stays_three_of_four(cli
     # ...and GRV Inputs is emphatically NOT one of them.
     assert tracked_item(client, pid, GRV_STEP) != "Completed"
     merged = get_task_by_name(client, pid, LEAD_STEP)
-    assert merged["status"] == "Not Assigned"
+    assert merged["status"] == "In Progress"
     merged_fields = client.get(f"/api/tasks/{merged['task_id']}/dynamic-fields").get_json()
     assert not merged_fields.get("grv_p90_thousand_acre_ft")
     assert not merged_fields.get("grv_p10_thousand_acre_ft")

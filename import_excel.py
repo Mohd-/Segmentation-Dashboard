@@ -925,8 +925,13 @@ def import_rows(session, rows, update=False) -> ImportReport:
                     workflow.update_project_name(session, pid, name, changed_by=IMPORT_USER,
                                                  lead_x=lead_x, lead_y=lead_y)
             else:
+                # auto_assign=False: an imported record carries its own
+                # historical lifecycle state -- the creation auto-assignment
+                # rules are for brand-new leads, and _ensure_approved below
+                # must find steps exactly as a pre-rule creation left them
+                # (Not Assigned, then walked as IMPORT_USER).
                 pid = workflow.add_project(session, name, changed_by=IMPORT_USER,
-                                           lead_x=lead_x, lead_y=lead_y)
+                                           lead_x=lead_x, lead_y=lead_y, auto_assign=False)
                 created_pid = pid
             warnings, notes = _import_record(session, row, record_type, year, fluid, pid, is_update)
             warnings = xy_warnings + warnings

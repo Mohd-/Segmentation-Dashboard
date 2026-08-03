@@ -473,6 +473,10 @@ def run_sweep(base_url):
         count_mutation(alpha_id)
     check(isinstance(out, dict) and out.get("task", {}).get("status") == "In Progress",
           "assignment moves task to In Progress", "In Progress", out)
+    # Creation auto-assignment already put the RULE steps (Seismic Signature
+    # Validation -> Tahira; every Pre-Well Delivery step -> Saad/Salem) In
+    # Progress, so the cascade only fills the rows still Not Assigned here.
+    before_cascade = {t["task_id"]: t.get("status") for t in get_tasks(c, alpha_id)}
     status, out = c.request("POST", f"/api/tasks/{t2['task_id']}/assign",
                             {"assignee": "Employee", "cascade": True,
                              "revision": t2.get("revision"), "changed_by": "Stress Harness"},
@@ -482,8 +486,11 @@ def run_sweep(base_url):
     after = get_tasks(c, alpha_id)
     cascaded = [t for t in after if t["sequence_no"] > t2["sequence_no"]
                 and t["sequence_no"] <= PROSPECT_TASK_COUNT]
-    check(len(cascaded) > 0 and all(t.get("status") == "In Progress" and t.get("assigned_to") == "Employee" for t in cascaded),
-          "cascade assigns later prospect steps", "all In Progress/Employee",
+    check(len(cascaded) > 0 and all(
+              t.get("status") == "In Progress"
+              and (t.get("assigned_to") == "Employee"
+                   or before_cascade.get(t["task_id"]) != "Not Assigned") for t in cascaded),
+          "cascade assigns later prospect steps", "all In Progress; Not Assigned rows -> Employee",
           [(t["task_name"], t.get("status"), t.get("assigned_to")) for t in cascaded if t.get("status") != "In Progress"])
     bp_side = [t for t in after if t["sequence_no"] > PROSPECT_TASK_COUNT]
     check(len(bp_side) > 0 and all(t.get("status") == "Not Assigned" for t in bp_side),

@@ -546,7 +546,8 @@ def _check_expected_revision(task, expected_revision):
         raise StaleRevisionError("This component was updated by someone else. Refresh and review the latest values.")
 
 
-def assign_task(session, task_id, assignee, cascade=True, changed_by="Web User", expected_revision=None):
+def assign_task(session, task_id, assignee, cascade=True, changed_by="Web User", expected_revision=None,
+                comment=None):
     """Assign a component to an active user; optionally cascade to later steps.
 
     The v17 lifecycle has no manual status field: assignment IS the act that
@@ -566,6 +567,10 @@ def assign_task(session, task_id, assignee, cascade=True, changed_by="Web User",
       task only, and the target's UPDATE is itself revision-guarded like
       save_task/transition_task (StaleRevisionError -> 409). Every changed row
       gets a revision bump and one "Component Assigned" history event.
+    - ``comment`` optionally replaces the default "Assigned to <name>." history
+      comment on every logged event; creation auto-assignment
+      (workflow.projects._auto_assign_new_lead) uses it to distinguish its
+      events from a human's click without inventing a second event type.
 
     Returns the fresh target task row (same shape as save_task) so the UI can
     adopt the new revision.
@@ -628,7 +633,7 @@ def assign_task(session, task_id, assignee, cascade=True, changed_by="Web User",
                 raise StaleRevisionError("This component was updated by someone else. Refresh and review the latest values.")
             log_task_event(session, row["task_id"], row["project_id"], row["task_name"],
                            "Component Assigned", old_status, new_status, changed_by,
-                           f"Assigned to {canonical_name}.")
+                           comment or f"Assigned to {canonical_name}.")
 
         # No completed_at sync: assignment only moves Not Assigned ->
         # In Progress, which can never complete or reopen the applicable set

@@ -25,6 +25,16 @@ PROSPECT_STEPS = [
     "Well Site Location", "Pre-Drilling GeoX Assessment",
 ]
 
+# The steps a fresh ANONYMOUSLY-created lead has auto-assigned at creation:
+# the configured rule steps (config.STEP_ASSIGNMENT_RULES -> Tahira on Seismic
+# Signature Validation; config.PRE_WELL_ASSIGNEES -> Saad/Salem on every
+# Pre-Well Delivery step). The creator-default tier does not fire here because
+# the anonymous actor "Web User" is not an active users row.
+AUTO_ASSIGNED_FRESH_STEPS = {
+    "Seismic Signature Validation", "Moving Tolerance", "Approval to Stake",
+    "Well Site Location", "Pre-Drilling GeoX Assessment",
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers -- everything goes through the real endpoints
@@ -120,11 +130,21 @@ def test_tracked_items_shape_order_and_stages(client):
 def test_a_fresh_lead_reads_unstarted_checkpoints_and_open_work(client):
     pid = create_project(client, "TRACKED-FRESH-1")
     row = _board_row(client, pid)
-    assert all(task["status"] == "Not Assigned" for task in get_tasks(client, pid))
+    # Creation auto-assignment: the configured rule steps (Seismic Signature
+    # Validation -> Tahira; every Pre-Well Delivery step -> Saad/Salem) start
+    # In Progress; the rest stay Not Assigned because the anonymous creator
+    # ("Web User") is not an active user.
+    statuses = {task["task_name"]: task["status"] for task in get_tasks(client, pid)}
+    for name, status in statuses.items():
+        expected = "In Progress" if name in AUTO_ASSIGNED_FRESH_STEPS else "Not Assigned"
+        assert status == expected, (name, status)
     assert list(_items(row).values())[:4] == ["Not Started"] * 4
     assert list(_items(row).values())[4:] == ["In Progress"] * 8
     assert row["display_stage"] == "Lead Assessment"
-    assert row["assignees"] == []
+    # Rule assignees only, in sequence order: Tahira (step 4) first, then the
+    # Saad/Salem picks of the four Pre-Well Delivery steps (deduped).
+    assert row["assignees"][0] == "Tahira"
+    assert set(row["assignees"][1:]) <= {"Saad", "Salem"}
 
 
 def test_filling_one_checkpoint_completes_that_item_only(client):
@@ -233,7 +253,14 @@ def test_assignees_are_distinct_ordered_and_blank_free(client):
     _assign(client, get_task_by_name(client, pid, "Approval to Stake"), "Staff Member")
 
     row = _board_row(client, pid)
-    assert row["assignees"] == ["Staff Member", "Employee"]  # sequence order, deduped
+    # Sequence order, deduped: the two manual assignments land around the
+    # creation auto-assignees (Tahira on step 4, Saad/Salem on the Pre-Well
+    # steps; "Staff Member" on Approval to Stake overwrote one of those picks
+    # and must still appear only ONCE, from its first occurrence).
+    names = row["assignees"]
+    assert names[:3] == ["Staff Member", "Employee", "Tahira"]
+    assert set(names[3:]) <= {"Saad", "Salem"}
+    assert len(names) == len(set(names))  # deduped
     # assignees is NOT current_owner: the current task here is still the
     # unassigned first step, so the existing derivation is untouched.
     assert row["current_owner"] is None
@@ -244,7 +271,11 @@ def test_assignees_ignore_tasks_outside_the_operating_pipeline(client):
     must not add a name to the lead card."""
     pid = create_project(client, "ASSIGNEES-2")
     _assign(client, get_task_by_name(client, pid, "Well Proposal"), "Employee")
-    assert _board_row(client, pid)["assignees"] == []
+    # Only the creation auto-assignees (prospect-stage rows) appear; the
+    # BP-stage assignment never does.
+    names = _board_row(client, pid)["assignees"]
+    assert "Employee" not in names
+    assert names[0] == "Tahira" and set(names[1:]) <= {"Saad", "Salem"}
 
 
 # ---------------------------------------------------------------------------
@@ -301,13 +332,14 @@ def test_lead_priority_defaults_to_low_when_no_value_is_recognized(client):
 def test_new_lead_board_defaults(client):
     """One assertion block for every default Card 1D specifies for a fresh lead:
     Lead Assessment column, four Not Started checkpoints plus eight open items,
-    no assignees ("Unassigned" on the card), Low priority
+    the creation auto-assignees (Tahira + the Saad/Salem picks), Low priority
     (gray border), and the name-derived field."""
     pid = create_project(client, "NEWDEF-3", lead_x="123.5", lead_y="-456.25")
     row = _board_row(client, pid)
 
     assert row["display_stage"] == "Lead Assessment"     # the stored stage group
-    assert row["assignees"] == []
+    assert row["assignees"][0] == "Tahira"
+    assert set(row["assignees"][1:]) <= {"Saad", "Salem"}
     assert row["lead_priority"] == "Low"
     assert len(row["tracked_items"]) == 12
     assert [item["status"] for item in row["tracked_items"][:4]] == ["Not Started"] * 4
@@ -321,11 +353,16 @@ def test_new_lead_board_defaults(client):
 
 
 def test_new_lead_leaves_every_stored_step_not_assigned_and_low(client):
-    """Nothing is auto-completed at creation, and the stored priority backing the
-    gray card is Low on every materialized step."""
+    """Nothing is auto-COMPLETED at creation, and the stored priority backing the
+    gray card is Low on every materialized step. Creation auto-ASSIGNMENT moves
+    only the configured rule steps to In Progress; nothing reaches Ready or
+    Approved, and the anonymous creator assigns nothing else."""
     pid = create_project(client, "NEWDEF-4")
     tasks = get_tasks(client, pid)
-    assert {task["status"] for task in tasks} == {"Not Assigned"}
+    for task in tasks:
+        expected = ("In Progress" if task["task_name"] in AUTO_ASSIGNED_FRESH_STEPS
+                    else "Not Assigned")
+        assert task["status"] == expected, (task["task_name"], task["status"])
     assert {task["priority"] for task in tasks} == {"Low"}
 
 

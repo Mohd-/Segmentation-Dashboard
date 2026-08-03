@@ -28,10 +28,23 @@ def _fill_assessment_checkpoints(client, pid):
     assert resp.status_code == 200, resp.get_json()
 
 
-def test_new_prospect_project_has_24_tasks_all_not_assigned(client):
-    # v17 lifecycle: every step (including the first) starts Not Assigned;
-    # assignment is what moves a step to In Progress. current_task still
-    # anchors on the first step. v7 consolidates four assessment rows into one.
+# The steps the creation auto-assignment rules cover for an ANONYMOUS creation
+# (config.STEP_ASSIGNMENT_RULES -> Tahira; config.PRE_WELL_ASSIGNEES ->
+# Saad/Salem on every Pre-Well Delivery step). The creator-default tier stays
+# inert here: the anonymous "Web User" actor is not an active users row.
+AUTO_ASSIGNED_FRESH_STEPS = {
+    "Seismic Signature Validation", "Moving Tolerance", "Approval to Stake",
+    "Well Site Location", "Pre-Drilling GeoX Assessment",
+}
+
+
+def test_new_prospect_project_has_24_tasks_with_only_rule_steps_assigned(client):
+    # v17 lifecycle: a step starts Not Assigned and assignment is what moves it
+    # to In Progress. Creation auto-assignment applies exactly that mechanism
+    # to the configured rule steps, so THOSE arrive In Progress with an
+    # assignee while everything else still starts Not Assigned. current_task
+    # still anchors on the first step. v7 consolidates four assessment rows
+    # into one.
     pid = create_project(client, "SEED-PROSPECT-1")
     tasks = get_tasks(client, pid)
     assert len(tasks) == 24
@@ -41,7 +54,11 @@ def test_new_prospect_project_has_24_tasks_all_not_assigned(client):
     assert first["status"] == "Not Assigned"
 
     for task in tasks[1:]:
-        assert task["status"] == "Not Assigned"
+        if task["task_name"] in AUTO_ASSIGNED_FRESH_STEPS:
+            assert task["status"] == "In Progress", task["task_name"]
+            assert task["assigned_to"], task["task_name"]
+        else:
+            assert task["status"] == "Not Assigned", task["task_name"]
 
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["current_task"] == "Lead Assessment"

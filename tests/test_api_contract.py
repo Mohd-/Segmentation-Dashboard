@@ -285,7 +285,11 @@ def test_list_projects_row_shape(client):
     # later card can't quietly drop one the board renders from.
     row = rows[0]
     assert row["display_stage"] == "Lead Assessment"      # the stored stage group itself
-    assert row["assignees"] == []                          # nothing assigned yet
+    # Creation auto-assignment: the configured rule assignees (Tahira on
+    # Seismic Signature Validation, then the Saad/Salem Pre-Well picks) appear
+    # on a brand-new lead; the anonymous creator does not.
+    assert row["assignees"][0] == "Tahira"
+    assert set(row["assignees"][1:]) <= {"Saad", "Salem"}
     assert row["lead_priority"] in ("High", "Medium", "Low")
     assert len(row["tracked_items"]) == 12
     # Card 2A widened each ITEM by one key: `steps`, the item's source step

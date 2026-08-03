@@ -7,6 +7,10 @@ task rows at read time -- never stored (see _annotate_derived_state).
 from __future__ import annotations
 
 import logging
+# Module-level on purpose: the creation auto-assignment picks randomly from
+# multi-candidate pools (random.choice), and tests seed/monkeypatch through
+# this module attribute for determinism.
+import random
 from datetime import date
 from typing import Any, Dict, List
 
@@ -20,7 +24,7 @@ from helpers import health_from_target, parse_iso_date, today_str, utc_now_str
 
 from .constants import (BP_EXECUTION_STAGES, LATEST_MEAN_GAS_SOURCES,
                         LEAD_ASSESSMENT_CHECKPOINTS, PIPELINE_TEMPLATES,
-                        STAGE_ORDER, applicable_stages,
+                        PROSPECT_STAGES, STAGE_ORDER, applicable_stages,
                         lead_assessment_checkpoint_met)
 from .history import log_task_event
 
@@ -144,9 +148,125 @@ def _fill_project_surfaces(session, project_id):
             surfaces_fill.fill_ground_elevation(session, project_id)
 
 
+# ---------------------------------------------------------------------------
+# Creation auto-assignment (owner items 6-9)
+# ---------------------------------------------------------------------------
+
+# The distinguishing history comment on every creation auto-assignment event
+# (the event type stays "Component Assigned" -- same mechanism as POST /assign,
+# one event per step, so the audit trail reads uniformly).
+AUTO_ASSIGN_COMMENT_SUFFIX = "(auto-assigned at creation)"
+
+# The stage-level rule's stage (owner item 9): every step of this stage group
+# draws from config.PRE_WELL_ASSIGNEES unless an explicit per-step rule wins.
+_PRE_WELL_STAGE = "Pre-Well Delivery"
+
+
+def _resolve_creation_assignee(task_name, stage_group, creator):
+    """The assignee a NEW prospect step gets at creation, or None. (pure)
+
+    Resolution order (first match wins; each tier is skipped when it yields no
+    usable candidate, falling through to the next):
+
+      1. explicit per-step rule: config.STEP_ASSIGNMENT_RULES[step]["assignees"]
+         (owner item 6 -- Seismic Signature Validation -> Tahira);
+      2. stage rule: any Pre-Well Delivery step draws from
+         config.PRE_WELL_ASSIGNEES (owner item 9 -- Saad/Salem);
+      3. role rule: config.STEP_ASSIGNMENT_RULES[step]["role"], resolved
+         through config.STEP_ROLE_POOLS (owner item 8); an empty/absent pool
+         means the rule does not fire yet -- the pools ship empty until
+         Nawaf's sheet arrives;
+      4. the CREATOR (owner item 7). A blank or "System" creator (an
+         automated/anonymous context, not a person) yields None -- the step
+         stays Not Assigned rather than being pinned on a placeholder.
+
+    Multi-candidate tiers pick RANDOMLY via the module-level ``random``
+    (assumption flagged: "randomly selected member" is owner item 8's wording,
+    applied to Saad/Salem as well; tests seed/monkeypatch it).
+    """
+    rule = config.STEP_ASSIGNMENT_RULES.get(task_name) or {}
+    explicit = [str(name).strip() for name in (rule.get("assignees") or ())
+                if str(name or "").strip()]
+    if explicit:
+        return random.choice(explicit)
+    if stage_group == _PRE_WELL_STAGE:
+        stage_pool = [str(name).strip() for name in (config.PRE_WELL_ASSIGNEES or ())
+                      if str(name or "").strip()]
+        if stage_pool:
+            return random.choice(stage_pool)
+    role = str(rule.get("role") or "").strip()
+    if role:
+        role_pool = [str(name).strip() for name in (config.STEP_ROLE_POOLS.get(role) or ())
+                     if str(name or "").strip()]
+        if role_pool:
+            return random.choice(role_pool)
+    creator = str(creator or "").strip()
+    if creator and creator.lower() != "system":
+        return creator
+    return None
+
+
+def _auto_assign_new_lead(session, project_id, changed_by):
+    """Assign every prospect step of a NEWLY created lead per the config rules.
+
+    POST-COMMIT (called by add_project after the creation transaction), because
+    it WALKS the real assignment mechanism: one lifecycle.assign_task call per
+    step (cascade=False -- neighbouring steps carry different rules), which
+    opens its own write transaction, stamps actual_start, moves
+    Not Assigned -> In Progress and logs one "Component Assigned" event per
+    step -- exactly what POST /api/tasks/<id>/assign leaves behind, with the
+    AUTO_ASSIGN_COMMENT_SUFFIX comment marking it as creation automation.
+    Never a raw status UPDATE, and assignment triggers no completion hooks
+    (assign_task has none), so a fresh lead's empty fields stay untouched.
+
+    Scope: the PROSPECT operating pipeline only (owner item 7's "all steps"
+    read as all steps of the lead's operating pipeline). The 15 BP-execution
+    rows a prospect also materializes stay Not Assigned, so promotion to BP
+    keeps its current behavior; BP-pipeline records never reach here at all
+    (add_project gates on pipeline_type).
+
+    A resolved name that is not an ACTIVE users-table row is logged and
+    SKIPPED (the step stays Not Assigned): assign_task refuses unknown
+    assignees, and a mistyped config name must surface as an unassigned step,
+    not fail lead creation. The local imports avoid the projects <-> lifecycle
+    module cycle (lifecycle imports _fill_project_surfaces from here).
+    """
+    from .lifecycle import assign_task
+    from .users import find_active_user
+
+    tasks = db.fetch_all(session, """
+        SELECT task_id, task_name, stage_group, status
+        FROM project_tasks
+        WHERE project_id = :project_id AND is_active = 1
+          AND stage_group IN :stages AND status = 'Not Assigned'
+        ORDER BY sequence_no
+    """, {"project_id": project_id, "stages": PROSPECT_STAGES})
+    for task in tasks:
+        assignee = _resolve_creation_assignee(task["task_name"], task["stage_group"], changed_by)
+        if not assignee:
+            continue
+        user = find_active_user(session, assignee)
+        if not user:
+            logger.warning("Project %s: creation auto-assignment of %r resolved %r, "
+                           "which is not an active user; leaving the step Not Assigned",
+                           project_id, task["task_name"], assignee)
+            continue
+        assign_task(session, task["task_id"], user["name"], cascade=False,
+                    changed_by=changed_by,
+                    comment=f"Assigned to {user['name']} {AUTO_ASSIGN_COMMENT_SUFFIX}.")
+
+
 def add_project(session, project_name, start_date=None, target_date=None, changed_by="System", lead_x=None, lead_y=None,
-                business_plan_year=None, business_plan_enabled=False, active_well_enabled=False, pipeline_type="prospect"):
-    """Create a project and materialize its 24 workflow tasks; return project_id."""
+                business_plan_year=None, business_plan_enabled=False, active_well_enabled=False, pipeline_type="prospect",
+                auto_assign=True):
+    """Create a project and materialize its 24 workflow tasks; return project_id.
+
+    ``auto_assign`` (default True) applies the creation auto-assignment rules
+    (see _auto_assign_new_lead) to a PROSPECT lead's steps. import_excel passes
+    False: an imported record carries its own historical lifecycle state, and
+    the importer's _ensure_approved walk must find steps exactly as a pre-rule
+    creation left them.
+    """
     project_name = (project_name or '').strip()
     if not project_name:
         raise ValueError("Lead / well name is required.")
@@ -199,6 +319,9 @@ def add_project(session, project_name, start_date=None, target_date=None, change
         project_id = _insert_project_with_tasks(session, project_name, start_date, target_date, changed_by,
                                                 lead_x, lead_y, year_val, bp_enabled, active_well_enabled,
                                                 pipeline_type, first_template, now)
+        # Post-commit, prospect only: BP records and promotion are untouched.
+        if auto_assign and pipeline_type == "prospect":
+            _auto_assign_new_lead(session, project_id, changed_by)
         _fill_project_surfaces(session, project_id)
         return project_id
     except IntegrityError as exc:

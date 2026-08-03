@@ -199,9 +199,14 @@ def test_unticking_never_withdraws_a_pending_submission(client):
 
 def test_a_checked_save_on_an_unassigned_step_assigns_the_saving_user(client):
     """Assignment is the only door out of "Not Assigned", so the save has to
-    name somebody -- the person who ticked the box."""
-    login(client, EMPLOYEE)
+    name somebody -- the person who ticked the box.
+
+    Created ANONYMOUSLY (before login) so the step really is Not Assigned:
+    a logged-in creation would auto-assign it to its creator (the creation
+    auto-assignment's creator-default tier), which is a different test.
+    """
     pid = create_project(client, "SS-ASSIGN-1")
+    login(client, EMPLOYEE)
     task = slides_task(client, pid)
     assert task["status"] == "Not Assigned"
 
