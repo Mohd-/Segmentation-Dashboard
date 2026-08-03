@@ -276,19 +276,25 @@ export var SCHEMA = {
   // The two halves keep their EXACT field keys (renaming an EAV key orphans
   // stored data, and both server-side recompute hooks are keyed on them), so
   // this entry is literally the old Trap array followed by the old Seal array
-  // with a section heading over each. Both readonly outputs are still written
-  // by the server on save (workflow/lifecycle.py's re-keyed hooks fire on this
-  // step's name now).
+  // with a section heading over each.
+  //
+  // ASAS redesign: both CoS percentages are REAL editable inputs now (readonly
+  // dropped), computed LIVE client-side as their inputs change (cos-rules.js,
+  // wired in detail-form.js) and overtypeable by hand -- a typed value persists
+  // until an input next changes. The server hooks (workflow/lifecycle.py) skip
+  // their recompute when the payload carries the pct explicitly, which every
+  // save from this form now does. The Trap half's input and its CoS share one
+  // row (`row: 'trap_cos'`) so the pair reads side by side.
   'Trap and Seal CoS': [
-    { key: 'sarah_quwarah_thickness_ft', label: 'Sarah-Quwarah Thickness (ft)', type: 'number', section: 'Trap' },
-    { key: 'trap_cos_pct', label: 'Trap CoS (%)', type: 'number', readonly: true },
+    { key: 'sarah_quwarah_thickness_ft', label: 'Sarah-Quwarah Thickness (ft)', type: 'number', section: 'Trap', row: 'trap_cos' },
+    { key: 'trap_cos_pct', label: 'Trap CoS (%)', type: 'number', row: 'trap_cos' },
     { key: 'seal_recent_activity_age', label: 'Most recent age of activity', type: 'number', section: 'Seal' },
     { key: 'seal_dip', label: 'Dip', type: 'number' },
     { key: 'seal_azimuth_vs_shmax', label: 'Azimuth vs. SHmax', type: 'number' },
     { key: 'seal_fault_level_confidence', label: 'Fault Level of Confidence', type: 'number' },
     { key: 'seal_fracture_permeability', label: 'Fracture Permeability', type: 'number' },
     { key: 'seal_pore_pressure_gradient_psi_ft', label: 'Pore Pressure Gradient (psi/ft)', type: 'number' },
-    { key: 'seal_cos_pct', label: 'Seal CoS (%)', type: 'number', readonly: true },
+    { key: 'seal_cos_pct', label: 'Seal CoS (%)', type: 'number' },
     // Card 3B. Last field of the (section-less continuation of the) Seal half,
     // so it renders beneath the Seal inputs and above the Comments box -- the
     // dynamic-fields grid is emitted in array order and precedes Comments in
@@ -526,11 +532,11 @@ var MAX_NUMBER = 9999;
 
 // Every rule is skipped for a blank value -- every field here is optional;
 // only a value the user actually typed gets sanity-checked. `pct` runs the
-// <=100 rule for keys ending in `_pct`. Exported (in addition to
-// validateStepFields) because no *writable* `_pct` field exists in SCHEMA
-// today -- every current one is `readonly: true` (Reservoir/Trap/Seal CoS) --
-// so rule (d) has no real end-to-end path through validateStepFields to
-// exercise in a test yet; this lets the rule itself stay covered.
+// <=100 rule for keys ending in `_pct`. Writable `_pct` fields exist since the
+// ASAS redesign made trap_cos_pct / seal_cos_pct editable, so rule (d) now has
+// a real end-to-end path through validateStepFields (it mirrors the server's
+// KI-004-shaped 0-100 guard on explicitly-sent CoS values); the export also
+// lets the rule stay covered in isolation.
 export function numericFieldError(label, raw, bigOk, pct) {
   if (!isFilled(raw)) return null;
   var value = Number(raw);

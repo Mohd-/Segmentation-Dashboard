@@ -278,10 +278,19 @@ test('schema.SCHEMA: Trap and Seal CoS is the two old forms concatenated, keys v
   // A section heading opens each half, so the merged form still reads as two.
   assert.equal(fields[0].section, 'Trap');
   assert.equal(fields[2].section, 'Seal');
-  // Both computed percentages stay server-written, never typed.
-  assert.ok(SCHEMA['Trap and Seal CoS'].filter(function (f) {
+  // ASAS redesign: both percentages are REAL editable number inputs (computed
+  // live client-side via cos-rules.js and overtypeable by hand) -- readonly is
+  // gone, so they render with data-field and are harvested by getFields.
+  SCHEMA['Trap and Seal CoS'].filter(function (f) {
     return f.key === 'trap_cos_pct' || f.key === 'seal_cos_pct';
-  }).every(function (f) { return f.readonly === true; }), 'both outputs stay readonly');
+  }).forEach(function (f) {
+    assert.equal(f.readonly, undefined, f.key + ' is editable now');
+    assert.equal(f.type, 'number', f.key + ' is a plain number input');
+  });
+  // The Trap half's input and its CoS share ONE row, so the pair renders side
+  // by side instead of floating on separate lines.
+  assert.equal(fields[0].row, 'trap_cos');
+  assert.equal(fields[1].row, 'trap_cos');
 });
 
 test('schema.SCHEMA: every v5 prospect step has an entry', function () {
@@ -603,20 +612,28 @@ test('validateStepFields: bigOk-flagged fields are exempt from the 9999 cap', fu
   assert.equal(validateStepFields('Moving Tolerance', { staking_well_x: '650000' }), null);
 });
 
-// No *writable* field ending in `_pct` exists in SCHEMA today (every current
-// one -- Reservoir/Trap/Seal CoS -- is readonly:true, so validateStepFields
-// never reaches it), so rule (d) is exercised on the exported
-// numericFieldError helper directly -- see its doc comment in schema.js.
 test('validateStepFields: (d) numericFieldError rejects an out-of-range percentage', function () {
   assert.equal(numericFieldError('Porosity (%)', '150', false, true), 'Porosity (%) must not exceed 100%.');
   assert.equal(numericFieldError('Porosity (%)', '100', false, true), null, '100% itself is in range');
   assert.equal(numericFieldError('Porosity (%)', '45.5', false, true), null);
 });
 
-test('validateStepFields: readonly:true fields are never checked (Trap CoS output is calculated, not typed)', function () {
-  // trap_cos_pct is readonly; a value that would otherwise fail every rule
-  // must not block the save of its own step.
-  assert.equal(validateStepFields('Trap CoS', { trap_cos_pct: '-1234567' }), null);
+// ASAS redesign: trap_cos_pct / seal_cos_pct are writable number inputs on the
+// merged step, so rule (d) has a real end-to-end path through
+// validateStepFields now -- the client-side 0-100 net for a manual CoS entry,
+// mirroring the server's explicit-value range guard (workflow/lifecycle.py).
+test('validateStepFields: (d) end-to-end -- a manual Trap/Seal CoS outside 0-100 blocks the save', function () {
+  assert.equal(validateStepFields('Trap and Seal CoS', { trap_cos_pct: '101' }),
+    'Trap CoS (%) must not exceed 100%.');
+  assert.equal(validateStepFields('Trap and Seal CoS', { seal_cos_pct: '116' }),
+    'Seal CoS (%) must not exceed 100%.');
+  assert.equal(validateStepFields('Trap and Seal CoS', { trap_cos_pct: '-3' }),
+    'Trap CoS (%) must not be negative.');
+  assert.equal(validateStepFields('Trap and Seal CoS', { seal_cos_pct: 'abc' }),
+    'Seal CoS (%) must be numeric.');
+  // Both boundaries are inclusive, and blank always passes (the field is optional).
+  assert.equal(validateStepFields('Trap and Seal CoS', { trap_cos_pct: '100', seal_cos_pct: '0' }), null);
+  assert.equal(validateStepFields('Trap and Seal CoS', { trap_cos_pct: '', seal_cos_pct: '' }), null);
 });
 
 test('validateStepFields: repeatable numeric columns are checked (cheap parse-back of the JSON rows)', function () {

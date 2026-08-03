@@ -7,6 +7,7 @@ In Progress. Every mutation is optimistic-lock guarded (StaleRevisionError
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Dict
 
 import cos
@@ -62,14 +63,47 @@ _TRAP_COS_STEPS = frozenset({MERGED_COS_TASK_NAME, "Trap CoS"})
 _SEAL_COS_STEPS = frozenset({MERGED_COS_TASK_NAME, "Seal CoS"})
 
 
-def _apply_trap_cos_calculation(session, task, fields):
-    """Trap CoS recompute hook.
+def _guard_explicit_cos_range(label, value):
+    """Refuse an EXPLICITLY-SENT CoS percentage outside the 0-100 domain.
 
-    Mirrors the Seal CoS recompute pattern (fire only on the owning task's
-    save). ``cos.calculate_trap_cos`` returns ``None`` when either input is
-    missing/non-numeric (or <= 0), meaning "not computed": the stored /
-    manually entered value stays untouched in that case, same contract as
-    Seal CoS's blank-form handling. The cross-task input (the Thickness
+    KI-004's guard for the other door into the same column. Since the client
+    became the primary calculator (live recompute + manual entry on the merged
+    step), a save may carry ``trap_cos_pct`` / ``seal_cos_pct`` directly, and
+    the recompute hooks stand down for it -- so the range discipline that
+    ``_guard_seal_cos_range`` applies to a COMPUTED result must apply to the
+    sent value too, or a manual 116% would brick the detail read exactly the
+    way KI-004 described. Blank is allowed (an explicit blank clears the
+    stored value); non-numeric is refused for the same reason out-of-range is
+    (``cos._cos_probability`` on the read side accepts neither).
+    """
+    raw = str(value if value is not None else "").strip()
+    if not raw:
+        return
+    try:
+        percent = float(raw.replace("%", ""))
+    except (TypeError, ValueError):
+        raise ValueError(f"{label} must be numeric.")
+    if not math.isfinite(percent) or percent < 0 or percent > 100:
+        raise ValueError(f"{label} must be between 0 and 100%.")
+
+
+def _apply_trap_cos_calculation(session, task, fields):
+    """Trap CoS hook: honor a client-sent value, recompute for input-only saves.
+
+    The CLIENT is the primary calculator now: the merged step's form computes
+    trap_cos_pct live (static/js/cos-rules.js mirrors cos.calculate_trap_cos)
+    and the field is directly editable, so a payload that CARRIES
+    ``trap_cos_pct`` -- auto-calculated or manually typed, the hook cannot and
+    need not tell -- is stored as sent, range-guarded to the 0-100 domain
+    every reader accepts. Recomputing over it here would make a deliberate
+    manual override impossible.
+
+    A payload carrying the INPUT without the pct (an older client, the Excel
+    importer's input-only rows, maintenance scripts) still gets the server
+    recompute, so no path stores an input/result pair that disagrees.
+    ``cos.calculate_trap_cos`` returns ``None`` when either input is
+    missing/non-numeric (or <= 0), meaning "not computed": the stored value
+    stays untouched in that case. The cross-task input (the Thickness
     Estimation SARH thickness) is fetched here because cos.py must stay
     database-free -- same division of labor as Presence CoS.
 
@@ -82,10 +116,14 @@ def _apply_trap_cos_calculation(session, task, fields):
     Shared by save_task and save_task_dynamic_fields. Returns ``fields``
     (copied only when something was computed).
     """
-    project_id = task["project_id"]
-    if task.get("task_name") in _TRAP_COS_STEPS and "sarah_quwarah_thickness_ft" in fields:
+    if task.get("task_name") not in _TRAP_COS_STEPS:
+        return fields
+    if "trap_cos_pct" in fields:
+        _guard_explicit_cos_range("Trap CoS", fields.get("trap_cos_pct"))
+        return fields
+    if "sarah_quwarah_thickness_ft" in fields:
         computed = cos.calculate_trap_cos(
-            _task_field_value(session, project_id, "Thickness Estimation", "formation_thickness_ft"),
+            _task_field_value(session, task["project_id"], "Thickness Estimation", "formation_thickness_ft"),
             fields.get("sarah_quwarah_thickness_ft"),
         )
         if computed is not None:
@@ -141,20 +179,34 @@ def _guard_seal_cos_range(fields, computed):
 
 
 def _apply_seal_cos_calculation(task, fields):
-    """Seal CoS recompute hook (formula-derived, never manually keyed).
+    """Seal CoS hook: honor a client-sent value, recompute for input-only saves.
 
-    Recomputes ONLY when the payload carries the form's own inputs: a
-    comment-only save, or one carrying just the merged step's Trap half, must
-    not wipe the stored result with a blank-form recompute. Returns ``fields``
-    (copied only when something was computed).
+    Same contract as :func:`_apply_trap_cos_calculation`: the merged step's
+    form computes seal_cos_pct live (static/js/cos-rules.js mirrors
+    cos.calculate_seal_cos) and the field is directly editable, so a payload
+    carrying ``seal_cos_pct`` explicitly is stored as sent -- range-guarded by
+    ``_guard_explicit_cos_range`` (KI-004 applies to the sent value exactly as
+    it does to a computed one) but never recomputed over.
+
+    A payload carrying the form's own inputs WITHOUT the pct (older clients,
+    the Excel importer's input rows) still recomputes; one carrying neither --
+    a comment-only save, or just the merged step's Trap half -- must not wipe
+    the stored result with a blank-form recompute. Returns ``fields`` (copied
+    only when something was computed).
 
     A recompute that lands outside 0-100% raises (``_guard_seal_cos_range``)
-    BEFORE anything is written. Both callers are safe against a partial write:
-    ``save_task_dynamic_fields`` runs this hook before it opens its transaction,
-    and ``save_task`` runs it inside one, before the first DML statement -- so
-    either way the save is refused whole.
+    BEFORE anything is written, as does an out-of-domain explicit value. Both
+    callers are safe against a partial write: ``save_task_dynamic_fields`` runs
+    this hook before it opens its transaction, and ``save_task`` runs it inside
+    one, before the first DML statement -- so either way the save is refused
+    whole.
     """
-    if task.get("task_name") in _SEAL_COS_STEPS and any(key in fields for key in _SEAL_COS_INPUT_KEYS):
+    if task.get("task_name") not in _SEAL_COS_STEPS:
+        return fields
+    if "seal_cos_pct" in fields:
+        _guard_explicit_cos_range("Seal CoS", fields.get("seal_cos_pct"))
+        return fields
+    if any(key in fields for key in _SEAL_COS_INPUT_KEYS):
         fields = dict(fields)
         fields["seal_cos_pct"] = cos.calculate_seal_cos(fields)
         _guard_seal_cos_range(fields, fields["seal_cos_pct"])

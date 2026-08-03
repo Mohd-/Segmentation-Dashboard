@@ -493,8 +493,11 @@ def _prospect_step_fields(task_name, force_ar_one=False, force_pore_pressure=Fal
     if task_name == "Reservoir CoS":
         return {"reservoir_cos_rows": _reservoir_cos_rows(force_ar_one=force_ar_one)}
     if task_name == workflow.MERGED_COS_TASK_NAME:
-        # One save carrying both halves: the server recomputes trap_cos_pct
-        # (from Thickness Estimation) and seal_cos_pct (from the 5 inputs).
+        # One save carrying both halves. The explicit trap_cos_pct is KEPT as
+        # sent (the client is the primary calculator now; the server hook
+        # stands down for a payload that carries the pct); seal_cos_pct is
+        # absent from the payload, so the server still recomputes it from the
+        # 5 inputs.
         fields = {"sarah_quwarah_thickness_ft": round(random.uniform(60, 400), 1),
                   "trap_cos_pct": str(random.randint(20, 90))}
         fields.update(_seal_fields())

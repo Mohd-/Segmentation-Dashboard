@@ -478,11 +478,11 @@ def test_trap_cos_threshold_table_examples(client, a, b, expected):
     assert cos.calculate_trap_cos(a, b) == expected
 
 
-def test_trap_cos_save_persists_computed_value_sourced_from_thickness_task(client):
-    """Saving the Trap CoS form (with the cross-task Sarah prognosis thickness
-    present on Thickness Estimation) must persist the FORMULA-COMPUTED
-    trap_cos_pct -- both through the dynamic-fields PATCH and the full save --
-    overriding whatever was typed into the now-readonly percentage."""
+def test_trap_cos_input_only_save_still_computes_from_thickness_task(client):
+    """A payload carrying the Trap INPUT without a trap_cos_pct (an older
+    client, the Excel importer's input-only rows) still gets the server
+    recompute, sourced cross-task from Thickness Estimation -- both through
+    the dynamic-fields PATCH and the full save."""
     import cos
 
     pid = create_project(client, "TRAP-CALC-1")
@@ -494,7 +494,6 @@ def test_trap_cos_save_persists_computed_value_sourced_from_thickness_task(clien
     trap = get_task_by_name(client, pid, "Trap and Seal CoS")
     resp = client.patch(f"/api/tasks/{trap['task_id']}/dynamic-fields", json={"fields": {
         "sarah_quwarah_thickness_ft": "130",
-        "trap_cos_pct": "1",  # stale manual value; must be overwritten by the formula
     }})
     assert resp.status_code == 200
     fields = client.get(f"/api/tasks/{trap['task_id']}/dynamic-fields").get_json()
@@ -508,15 +507,163 @@ def test_trap_cos_save_persists_computed_value_sourced_from_thickness_task(clien
     assert fields.get("trap_cos_pct") == cos.calculate_trap_cos("100", "314") == "100"
 
 
+# ---------------------------------------------------------------------------
+# ASAS redesign: the CLIENT is the primary CoS calculator. A payload that
+# explicitly carries trap_cos_pct / seal_cos_pct (live-computed or manually
+# typed -- the hook cannot tell and must not care) is stored as sent; the
+# server recompute stands down. The KI-004 range discipline moves with it:
+# an explicitly-sent value outside 0-100 is refused before anything is
+# written, on both save paths.
+# ---------------------------------------------------------------------------
+
+def test_explicit_trap_cos_value_skips_the_server_recompute(client):
+    """Inputs + an explicit trap_cos_pct in ONE payload: the sent value wins,
+    even though the formula over the same inputs would give a different one."""
+    import cos
+
+    pid = create_project(client, "TRAP-EXPLICIT-1")
+    thickness = get_task_by_name(client, pid, "Thickness Estimation")
+    client.patch(f"/api/tasks/{thickness['task_id']}/dynamic-fields",
+                 json={"fields": {"formation_thickness_ft": "100"}})
+    trap = get_task_by_name(client, pid, "Trap and Seal CoS")
+    assert cos.calculate_trap_cos("100", "130") == "80"  # what a recompute would say
+
+    resp = client.patch(f"/api/tasks/{trap['task_id']}/dynamic-fields", json={"fields": {
+        "sarah_quwarah_thickness_ft": "130",
+        "trap_cos_pct": "42",  # manual override, sent by the client
+    }})
+    assert resp.status_code == 200
+    fields = client.get(f"/api/tasks/{trap['task_id']}/dynamic-fields").get_json()
+    assert fields.get("trap_cos_pct") == "42"
+
+    # The full-save path honors the explicit value the same way.
+    resp = client.patch(f"/api/tasks/{trap['task_id']}", json={"fields": {
+        "sarah_quwarah_thickness_ft": "130", "trap_cos_pct": "37",
+    }})
+    assert resp.status_code == 200
+    fields = client.get(f"/api/tasks/{trap['task_id']}/dynamic-fields").get_json()
+    assert fields.get("trap_cos_pct") == "37"
+
+
+def test_explicit_seal_cos_value_skips_the_server_recompute(client):
+    """Same contract for the Seal half: inputs + an explicit seal_cos_pct in
+    one payload stores the sent value, not the formula's 48."""
+    pid = create_project(client, "SEAL-EXPLICIT-1")
+    seal = get_task_by_name(client, pid, "Trap and Seal CoS")
+    resp = client.patch(f"/api/tasks/{seal['task_id']}/dynamic-fields", json={"fields": {
+        "seal_recent_activity_age": "0.95",
+        "seal_fracture_permeability": "0.5",
+        "seal_cos_pct": "33",  # manual override; the formula would say 48
+    }})
+    assert resp.status_code == 200
+    fields = client.get(f"/api/tasks/{seal['task_id']}/dynamic-fields").get_json()
+    assert fields.get("seal_cos_pct") == "33"
+
+    # An input-only follow-up save recomputes over the manual value -- the
+    # "manual persists until an input next changes (without a pct)" rule.
+    resp = client.patch(f"/api/tasks/{seal['task_id']}/dynamic-fields", json={"fields": {
+        "seal_recent_activity_age": "0.95", "seal_fracture_permeability": "0.5",
+    }})
+    assert resp.status_code == 200
+    fields = client.get(f"/api/tasks/{seal['task_id']}/dynamic-fields").get_json()
+    assert fields.get("seal_cos_pct") == "48"
+
+
+def test_explicit_seal_cos_outside_the_domain_is_refused_on_both_paths(client):
+    """KI-004 still guards the explicit door: a sent seal_cos_pct past 100 (or
+    below 0) is refused whole, and the message names the field's rule."""
+    pid = create_project(client, "SEAL-EXPLICIT-GUARD-1")
+    seal = get_task_by_name(client, pid, "Trap and Seal CoS")
+    resp = client.patch(f"/api/tasks/{seal['task_id']}/dynamic-fields",
+                        json={"fields": {"seal_cos_pct": "116"}})
+    assert resp.status_code == 400
+    assert resp.get_json()["detail"] == "Seal CoS must be between 0 and 100%."
+
+    resp = client.patch(f"/api/tasks/{seal['task_id']}",
+                        json={"fields": {"seal_cos_pct": "-3"}, "comments": "attempt"})
+    assert resp.status_code == 400
+    assert "between 0 and 100" in resp.get_json()["detail"]
+
+    # Nothing landed: no seal_cos_pct row, no comment.
+    fields = client.get(f"/api/tasks/{seal['task_id']}/dynamic-fields").get_json()
+    assert "seal_cos_pct" not in fields
+    task = get_task_by_name(client, pid, "Trap and Seal CoS")
+    assert not (task.get("comments") or "")
+
+
+def test_explicit_trap_cos_outside_the_domain_or_non_numeric_is_refused(client):
+    """The Trap half gets the same guard: by-construction boundedness only
+    holds for COMPUTED values, so the explicit door needs its own check."""
+    pid = create_project(client, "TRAP-EXPLICIT-GUARD-1")
+    trap = get_task_by_name(client, pid, "Trap and Seal CoS")
+    resp = client.patch(f"/api/tasks/{trap['task_id']}/dynamic-fields",
+                        json={"fields": {"trap_cos_pct": "101"}})
+    assert resp.status_code == 400
+    assert resp.get_json()["detail"] == "Trap CoS must be between 0 and 100%."
+
+    resp = client.patch(f"/api/tasks/{trap['task_id']}/dynamic-fields",
+                        json={"fields": {"trap_cos_pct": "abc"}})
+    assert resp.status_code == 400
+    assert resp.get_json()["detail"] == "Trap CoS must be numeric."
+
+    # Boundaries are inclusive; an explicit blank clears the stored value.
+    assert client.patch(f"/api/tasks/{trap['task_id']}/dynamic-fields",
+                        json={"fields": {"trap_cos_pct": "100"}}).status_code == 200
+    assert client.patch(f"/api/tasks/{trap['task_id']}/dynamic-fields",
+                        json={"fields": {"trap_cos_pct": ""}}).status_code == 200
+    fields = client.get(f"/api/tasks/{trap['task_id']}/dynamic-fields").get_json()
+    assert fields.get("trap_cos_pct") == ""
+
+
+@pytest.mark.parametrize("field_key,label", [
+    ("trap_cos_pct", "Trap CoS"),
+    ("seal_cos_pct", "Seal CoS"),
+])
+def test_explicit_cos_non_finite_values_are_refused(client, field_key, label):
+    """NaN slips past ordinary ``< 0`` / ``> 100`` comparisons, while
+    infinities are numeric but outside the finite percentage domain.  Both CoS
+    inputs must reject every non-finite spelling on both API save paths.
+    """
+    pid = create_project(client, f"{label.upper()}-EXPLICIT-FINITE-GUARD")
+    task = get_task_by_name(client, pid, "Trap and Seal CoS")
+
+    for value in ("nan", "NaN", "inf", "-inf", "Infinity", "-Infinity"):
+        resp = client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
+                            json={"fields": {field_key: value}})
+        assert resp.status_code == 400, value
+        assert resp.get_json()["detail"] == f"{label} must be between 0 and 100%."
+
+    # The full component-save route shares the same hook and guard.
+    resp = client.patch(f"/api/tasks/{task['task_id']}",
+                        json={"fields": {field_key: "nan"}, "comments": "attempt"})
+    assert resp.status_code == 400
+    assert resp.get_json()["detail"] == f"{label} must be between 0 and 100%."
+
+    # Every refusal is atomic: neither the invalid field nor the comment lands.
+    fields = client.get(f"/api/tasks/{task['task_id']}/dynamic-fields").get_json()
+    assert field_key not in fields
+    task = get_task_by_name(client, pid, "Trap and Seal CoS")
+    assert not (task.get("comments") or "")
+
+
 def test_trap_cos_save_keeps_stored_value_when_thickness_missing(client):
     """When the Thickness Estimation task has no Sarah prognosis thickness yet,
-    calculate_trap_cos returns None and the Trap CoS save hook must leave the
-    stored trap_cos_pct untouched (same contract as before the formula)."""
+    an INPUT-ONLY save cannot compute (calculate_trap_cos returns None) and
+    must leave the stored trap_cos_pct untouched; a payload carrying the pct
+    explicitly stores it regardless (the client is the primary calculator)."""
     pid = create_project(client, "TRAP-CALC-2")
     trap = get_task_by_name(client, pid, "Trap and Seal CoS")
     resp = client.patch(f"/api/tasks/{trap['task_id']}/dynamic-fields", json={"fields": {
         "sarah_quwarah_thickness_ft": "250",
         "trap_cos_pct": "55",
+    }})
+    assert resp.status_code == 200
+    fields = client.get(f"/api/tasks/{trap['task_id']}/dynamic-fields").get_json()
+    assert fields.get("trap_cos_pct") == "55"
+
+    # Input-only follow-up: still nothing to compute from, "55" survives.
+    resp = client.patch(f"/api/tasks/{trap['task_id']}/dynamic-fields", json={"fields": {
+        "sarah_quwarah_thickness_ft": "260",
     }})
     assert resp.status_code == 200
     fields = client.get(f"/api/tasks/{trap['task_id']}/dynamic-fields").get_json()

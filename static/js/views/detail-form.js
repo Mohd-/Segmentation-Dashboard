@@ -2,6 +2,7 @@ import { byId, all, esc, isFilled, truthy, msg } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName, currentRole, canManageAssignments, isCurrentPipelineView, Store } from '../state.js';
 import { SCHEMA, FORMATIONS, FORMATION_METRICS, FLUID_TYPES, SEISMIC_BLOCKS, CHECKBOX_SUBMIT_STEPS, validateStepFields, submitBlockedMessage } from '../schema.js';
+import { calculateTrapCos, calculateSealCos } from '../cos-rules.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { renderDetail, renderRightPanel, chooseInitialTask, tasksForPipeline, parseRepeatableRows, refreshAfterRecordChange, revealTaskStage } from './detail.js';
 import { refreshAllBoards } from './pipeline.js';
@@ -945,6 +946,59 @@ function sectionLabelMarkup(fields, startIndex, values) {
   var attr = shared ? ' data-show-if="' + esc(shared) + '"' : '';
   return '<div class="' + cls + '"' + attr + '>' + esc(section) + '</div>';
 }
+// ---------------------------------------------------------------------------
+// Live Trap / Seal CoS recompute (the "Trap and Seal CoS" step).
+//
+// The CoS percentages are plain editable inputs; on every change of a FORMULA
+// INPUT the matching CoS field is recomputed client-side (cos-rules.js, the
+// exact mirror of cos.py) and overwritten. Nothing listens on the CoS fields
+// themselves, so a manually typed value persists until an input next changes
+// -- the precedence rule, simple and predictable. The server hooks
+// (workflow/lifecycle.py) skip their own recompute when the payload carries
+// the pct explicitly, which a save from this form now always does (getFields
+// harvests both), so what the user sees is exactly what is stored.
+// ---------------------------------------------------------------------------
+
+// The Seal formula's own inputs (cos.calculate_seal_cos reads exactly these;
+// the pore-pressure gradient is a recorded rider, not a formula input, so a
+// change to it never overwrites a manually entered Seal CoS).
+var SEAL_COS_INPUT_KEYS = [
+  'seal_recent_activity_age', 'seal_dip', 'seal_azimuth_vs_shmax',
+  'seal_fault_level_confidence', 'seal_fracture_permeability'
+];
+
+function bindLiveCosCalculation(componentName, root) {
+  if (componentName !== 'Trap and Seal CoS') return;
+  function input(key) { return root.querySelector('[data-field="' + esc(key) + '"]'); }
+  // null means "not computable" (an input is missing/non-numeric): leave the
+  // field -- same contract as the server's None. '' (blank Seal form) and a
+  // computed percent both overwrite.
+  function writeCos(key, computed) {
+    var element = input(key);
+    if (element && computed !== null) element.value = computed;
+  }
+  function listen(key, recompute) {
+    var element = input(key);
+    if (!element) return;
+    element.addEventListener('input', recompute);
+    element.addEventListener('change', recompute);
+  }
+  listen('sarah_quwarah_thickness_ft', function () {
+    // The cross-task Sarah prognosis thickness (Thickness Estimation) comes
+    // from the saved field map on the /detail payload -- the same read the
+    // server's hook performs against the database.
+    writeCos('trap_cos_pct', calculateTrapCos(
+      val('Thickness Estimation', 'formation_thickness_ft'),
+      (input('sarah_quwarah_thickness_ft') || {}).value
+    ));
+  });
+  SEAL_COS_INPUT_KEYS.forEach(function (key) {
+    listen(key, function () {
+      writeCos('seal_cos_pct', calculateSealCos(getFields(root)));
+    });
+  });
+}
+
 // `root` (default #dynamic-fields) is the container to render into, so the
 // project editor can drive many component grids from this one renderer.
 // `onInput` (default: the step editor's live conditional-visibility + summary
@@ -974,6 +1028,9 @@ export function renderFields(componentName, values, root, onInput) {
     }
   }
   root.innerHTML = html;
+  // Bound BEFORE the generic per-field handler so a live CoS recompute has
+  // already written its value when previewSummaryInputs harvests the form.
+  bindLiveCosCalculation(componentName, root);
   var handler = onInput || function () {
     updateConditionalVisibility(root);
     previewSummaryInputs();
