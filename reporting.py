@@ -175,6 +175,11 @@ _BP_TASK_FIELD_KEYS = [
     "lead_piip_gas_mean", "pre_drill_piip_gas_mean",
     "post_drill_piip_gas_mean", "resource_update_gas_mean",
     "bp_gate_classification", "gheer_classification",
+    # Area Definition inputs also feed the map's filtered Total Area summary.
+    # Keeping them in this retired-inclusive batched reader preserves old
+    # values across task migrations and gives Portfolio/map consumers one fold
+    # rule: an active non-blank wins; its blank cannot erase a retired value.
+    "p90_area_km2", "p10_area_km2",
 ]
 
 
@@ -363,6 +368,43 @@ def record_status(fields, staked, fluid=None):
     if fluid:
         return fluid
     return "Staked" if staked else "Proposed"
+
+
+def map_attributes_by_project(session, project_ids):
+    """Reporting attributes for every requested map project, keyed by id.
+
+    Unlike :func:`get_portfolio_rows`, this helper does NOT apply Portfolio
+    membership: the map includes immature leads too.  Its three reads are
+    batched across the complete id list and the result is deliberately
+    left-join-shaped -- every requested id gets a row, even when it has no EAV
+    or formation data yet.
+
+    ``record_status`` and ``total_cos`` are the exact Portfolio semantics.
+    Area values are stripped stored strings (not coerced numbers), leaving the
+    client to validate/aggregate them just as it does the percentage string.
+    """
+    ids = list(project_ids or [])
+    if not ids:
+        return {}
+    task_fields = _bp_task_fields(session, ids)
+    stake_map = _approval_to_stake_map(session, ids)
+    sarh_formations = sarh_formations_by_phase(session, ids)
+    result = {}
+    for project_id in ids:
+        fields = task_fields.get(project_id, {})
+        fluid = resolve_well_fluid(fields, sarh_formations.get(project_id, {}))
+        result[project_id] = {
+            "record_status": record_status(
+                fields, stake_map.get(project_id, False), fluid=fluid),
+            "total_cos": workflow.total_cos_from_fields(
+                fields.get("reservoir_cos_rows"),
+                fields.get("trap_cos_pct"),
+                fields.get("seal_cos_pct"),
+            ),
+            "p90_area_km2": _first_filled(fields.get("p90_area_km2")),
+            "p10_area_km2": _first_filled(fields.get("p10_area_km2")),
+        }
+    return result
 
 
 def get_portfolio_rows(session, year="All", activity="All"):

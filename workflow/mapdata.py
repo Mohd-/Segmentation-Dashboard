@@ -8,6 +8,10 @@ exists rather than from anything stored for the map:
   latest Mean Gas) comes from :func:`workflow.projects.get_projects`, so a
   pin's label can never disagree with the same record's board card -- the
   mean-gas precedence ladder in particular is NOT reimplemented here;
+- its filter/summary attributes (BP year, reporting status, Total CoS and
+  area bounds) use reporting's batched, retired-inclusive field semantics.
+  This is a left join over every positioned project, not Portfolio membership,
+  so an immature lead stays on the map as Proposed with blank measures;
 - the position is the STAKED coordinate when the well has one, else the lead's
   planned coordinate. Staked X/Y are user inputs on the Pre-Well Delivery
   "Well Site Location" step (task_dynamic_fields), so they arrive through one
@@ -102,10 +106,15 @@ def map_wells(session) -> List[Dict[str, Any]]:
     Completed records are INCLUDED (include_completed=True): a drilled well is
     exactly the thing a map of the acreage must show.
     """
+    # Local import keeps the workflow package's import graph acyclic:
+    # reporting imports workflow at module load, while map_wells is only called
+    # after application/module initialisation is complete.
+    import reporting
+
     projects = get_projects(session, include_completed=True)
     staked = _staked_coordinates(session, [p["project_id"] for p in projects])
 
-    wells = []
+    positioned = []
     for project in projects:
         fields = staked.get(project["project_id"]) or {}
         position = _coordinate_pair(fields.get("staked_x"), fields.get("staked_y"))
@@ -115,6 +124,17 @@ def map_wells(session) -> List[Dict[str, Any]]:
             source = "lead"
         if position is None:
             continue
+        positioned.append((project, position, source))
+
+    # Three fixed-size reporting reads for the complete plotted set (task EAV,
+    # stake state and SARH fluid formations), never one lookup per pin.
+    attributes = reporting.map_attributes_by_project(
+        session, [project["project_id"] for project, _position, _source in positioned])
+
+    wells = []
+    for project, position, source in positioned:
+        attrs = attributes[project["project_id"]]
+        gas_field = project.get("field")
         wells.append({
             "project_id": project["project_id"],
             "project_name": project.get("project_name"),
@@ -123,7 +143,18 @@ def map_wells(session) -> List[Dict[str, Any]]:
             # truth for status/stage/field/mean gas across every surface.
             "overall_status": project.get("overall_status"),
             "display_stage": project.get("display_stage"),
-            "field": project.get("field"),
+            # ``field`` is retained for the existing tooltip. ``gas_field`` is
+            # the canonical filter key shared with Portfolio, and both values
+            # originate in folders.parse_field_and_well via get_projects.
+            "field": gas_field,
+            "gas_field": gas_field,
+            "year": project.get("business_plan_year"),
+            "record_status": attrs["record_status"],
+            # Whole-percent string / blank exactly like Portfolio. Quadrant
+            # cutoffs and area midpoint aggregation are client concerns.
+            "total_cos": attrs["total_cos"],
+            "p90_area_km2": attrs["p90_area_km2"],
+            "p10_area_km2": attrs["p10_area_km2"],
             "mean_gas_bcf": project.get("mean_gas_bcf"),
             "x": position[0],
             "y": position[1],

@@ -36,6 +36,14 @@ export var BORDERS_DEFAULT_COLOR = '#8fa3b8';
 export var MAP_STATE_KEY = 'asas.map.state';
 export var MAP_STATE_VERSION = 1;
 
+// The map and portfolio cross-plot intentionally use the same four quadrant
+// names and inclusive cutoffs.  `total_cos` is delivered as a percentage, so
+// 50 (not 0.5) is the boundary here.
+export var MAP_QUADRANT_LABELS = ['Super Stars', 'Value Hunter', 'Risk Takers', 'Dogs'];
+export var MAP_COS_CUTOFF_PCT = 50;
+export var MAP_OGIP_CUTOFF_BCF = 10;
+export var MAP_FILTER_KEYS = ['field', 'year', 'status', 'quadrant'];
+
 /* -------------------------------------------------------------------------
    Geometry (pure)
    ------------------------------------------------------------------------- */
@@ -124,6 +132,74 @@ export function hasCoords(well) {
     && well.x !== null && well.y !== null && well.x !== '' && well.y !== '';
 }
 
+function presentNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  var numeric = Number(value);
+  return isFinite(numeric) ? numeric : null;
+}
+
+export function quadrantOfWell(well) {
+  if (!well) return '';
+  var cos = presentNumber(well.total_cos);
+  // The established map payload calls this figure mean_gas_bcf; accept the
+  // portfolio spelling too so the filter remains safe across API versions.
+  var ogip = presentNumber(well.mean_ogip);
+  if (ogip === null) ogip = presentNumber(well.mean_gas_bcf);
+  if (cos === null || ogip === null) return '';
+  var highCos = cos >= MAP_COS_CUTOFF_PCT;
+  var highOgip = ogip >= MAP_OGIP_CUTOFF_BCF;
+  if (highCos) return highOgip ? 'Super Stars' : 'Value Hunter';
+  return highOgip ? 'Risk Takers' : 'Dogs';
+}
+
+export function mapFilterValue(well, key) {
+  if (!well) return '';
+  var value;
+  if (key === 'field') value = well.gas_field == null || well.gas_field === '' ? well.field : well.gas_field;
+  else if (key === 'status') value = well.record_status == null || well.record_status === '' ? well.overall_status : well.record_status;
+  else if (key === 'quadrant') return quadrantOfWell(well);
+  else value = well[key];
+  return value === null || value === undefined || value === '' ? '' : String(value);
+}
+
+export function filterWells(wells, selections) {
+  var selected = selections || {};
+  return (wells || []).filter(function (well) {
+    return MAP_FILTER_KEYS.every(function (key) {
+      var accepted = Array.isArray(selected[key]) ? selected[key].map(String) : [];
+      return !accepted.length || accepted.indexOf(mapFilterValue(well, key)) >= 0;
+    });
+  });
+}
+
+export function mapFilterOptions(wells, key) {
+  if (key === 'quadrant') return MAP_QUADRANT_LABELS.slice();
+  var seen = {};
+  var values = [];
+  (wells || []).forEach(function (well) {
+    var value = mapFilterValue(well, key);
+    if (!value || seen[value]) return;
+    seen[value] = true;
+    values.push(value);
+  });
+  values.sort(key === 'year'
+    ? function (a, b) { return Number(a) - Number(b); }
+    : function (a, b) { return a.localeCompare(b); });
+  return values;
+}
+
+// A project's representative area is the midpoint of its P90/P10 bounds.
+// When only one bound is present that bound is the best available estimate;
+// when neither is present the project contributes zero to the map total.
+export function areaMidpoint(well) {
+  var p90 = presentNumber(well && well.p90_area_km2);
+  var p10 = presentNumber(well && well.p10_area_km2);
+  if (p90 !== null && p10 !== null) return (p90 + p10) / 2;
+  if (p90 !== null) return p90;
+  if (p10 !== null) return p10;
+  return 0;
+}
+
 /* -------------------------------------------------------------------------
    Well <-> polygon association (pure)
    ------------------------------------------------------------------------- */
@@ -186,15 +262,13 @@ export function computeAssociations(wells, layers) {
    Summary panel numbers (pure)
    ------------------------------------------------------------------------- */
 
-/* The four figures the floating summary panel shows.
+/* The three figures the floating summary panel shows.
 
-   visibleLayers counts the MAP layers that are ticked (shapefiles + the
-   borders pseudo-layer); the wells overlay is reported separately as
-   wellsPlotted rather than being counted as a layer.
-
-   totalOgip sums at full precision and is rounded once, by the caller, for
-   display — a null mean_gas_bcf contributes 0 to the sum (there is nothing
-   to add) even though it displays as an em dash on its own. */
+   `wells` is already the FILTERED map payload. The endpoint intentionally
+   returns positioned projects, so these are the dots visible on the map.
+   Total Area sums areaMidpoint's one-bound fallback across that filtered
+   payload at full precision. The coordinate guard remains backwards-safe for
+   older/cached rows when counting wells shown and Total Mean OGIP. */
 export function computeSummary(layers, wells, associations) {
   var visibleLayers = (layers || []).filter(function (layer) { return layer && layer.visible; }).length;
   var plotted = (wells || []).filter(hasCoords);
@@ -205,12 +279,14 @@ export function computeSummary(layers, wells, associations) {
     if ((polysFor[index] || []).length) wellsInside += 1;
   });
   var totalOgip = plotted.reduce(function (sum, well) { return sum + ogipValue(well.mean_gas_bcf); }, 0);
+  var totalArea = (wells || []).reduce(function (sum, well) { return sum + areaMidpoint(well); }, 0);
   return {
     visibleLayers: visibleLayers,
     wellsPlotted: plotted.length,
     wellsInside: wellsInside,
     wellsTotal: (wells || []).length,
-    totalOgip: totalOgip
+    totalOgip: totalOgip,
+    totalArea: totalArea
   };
 }
 
@@ -290,7 +366,9 @@ export class LayerStore {
     this.layers = new Map();          // name -> layer object
     this.order = [];                  // shapefile names, bottom -> top
     this.bordersName = null;
+    this.allWells = [];
     this.wells = [];
+    this.wellFilters = { field: [], year: [], status: [], quadrant: [] };
     this.wellsVisible = true;
     this.wellsColor = WELLS_DEFAULT_COLOR;
     this.summaryCollapsed = false;
@@ -451,12 +529,40 @@ export class LayerStore {
      stays null rather than becoming Number(null) === 0, which would plot
      every uncoordinated project at the UTM origin. */
   setWells(wells) {
-    this.wells = (wells || []).map(function (well) {
+    this.allWells = (wells || []).map(function (well) {
       return Object.assign({}, well, { x: toCoordinate(well.x), y: toCoordinate(well.y) });
     });
+    // A reload can remove the last row carrying a selected Field/Year/Status.
+    // Drop selections that no longer have a rendered option; otherwise the
+    // overlay could stay empty while no visible checkbox explains why. The
+    // Quadrant list is fixed, so valid quadrant selections naturally survive.
+    var self = this;
+    MAP_FILTER_KEYS.forEach(function (key) {
+      var available = mapFilterOptions(self.allWells, key);
+      self.wellFilters[key] = (self.wellFilters[key] || []).filter(function (value) {
+        return available.indexOf(String(value)) >= 0;
+      });
+    });
+    this._applyWellFilters();
     this.invalidate();
     return this;
   }
+
+  setWellFilters(selections) {
+    var input = selections || {};
+    var next = {};
+    MAP_FILTER_KEYS.forEach(function (key) {
+      next[key] = Array.isArray(input[key]) ? input[key].map(String) : [];
+    });
+    this.wellFilters = next;
+    this._applyWellFilters();
+    this.invalidate();
+    return this;
+  }
+
+  _applyWellFilters() { this.wells = filterWells(this.allWells, this.wellFilters); }
+
+  filterOptions(key) { return mapFilterOptions(this.allWells, key); }
 
   plottedWells() { return this.wells.filter(hasCoords); }
 

@@ -30,8 +30,9 @@ import { byId, all, esc } from '../dom.js';
 import { ICONS } from '../icons.js';
 import {
   LayerStore, WELLS_ID, readMapState, writeMapState,
-  formatOgip, ogipValue, polygonLabel, featureKey
+  MAP_FILTER_KEYS, formatOgip, ogipValue, polygonLabel, featureKey
 } from '../map/map-store.js';
+import { formatUtm37Coordinate } from '../map/utm37.js';
 import { MapCanvas } from '../map/map-canvas.js';
 import { MeasureTool, TOOL_POINTER, TOOL_MEASURE, formatDistance } from '../map/map-tools.js';
 import { fetchMapLayers, fetchMapLayer, fetchMapWells } from '../map/map-api.js';
@@ -56,6 +57,11 @@ var EMPTY_HINT = 'No shapefile layers found. Drop shapefile sets into data/map/l
 // The summary's Total Mean OGIP: summed at full precision upstream, rounded
 // exactly once, here, for display.
 export function formatOgipTotal(value) {
+  var numeric = Number(value);
+  return (isFinite(numeric) ? numeric : 0).toFixed(1);
+}
+
+export function formatAreaTotal(value) {
   var numeric = Number(value);
   return (isFinite(numeric) ? numeric : 0).toFixed(1);
 }
@@ -125,10 +131,9 @@ export function polygonTooltipHtml(layer, feature, wells) {
 
 export function summaryHtml(summary) {
   var rows = [
-    ['Visible layers', String(summary.visibleLayers)],
-    ['Wells plotted', String(summary.wellsPlotted)],
-    ['Wells in polygons', String(summary.wellsInside)],
-    ['Total Mean OGIP', formatOgipTotal(summary.totalOgip) + ' BCF']
+    ['Total Mean OGIP', formatOgipTotal(summary.totalOgip) + ' BCF'],
+    ['Total Area', formatAreaTotal(summary.totalArea) + ' km²'],
+    ['Wells shown', String(summary.wellsPlotted)]
   ];
   var body = rows.map(function (row) {
     return '<div class="map-summary-row"><span class="map-summary-key">' + esc(row[0])
@@ -138,6 +143,31 @@ export function summaryHtml(summary) {
     ? '<p class="map-summary-note">No project coordinates are recorded yet.</p>'
     : '';
   return body + note;
+}
+
+var FILTER_LABELS = { field: 'Field', year: 'BP Year', status: 'Status', quadrant: 'Quadrant' };
+
+function wellFilterHtml() {
+  return '<div class="map-well-filters" aria-label="Well filters">'
+    + '<div class="map-well-filters-title">Well filters</div>'
+    + MAP_FILTER_KEYS.map(function (key) {
+      var selected = store.wellFilters[key] || [];
+      var options = store.filterOptions(key);
+      return '<fieldset class="map-well-filter" data-filter="' + esc(key) + '"><legend>' + esc(FILTER_LABELS[key]) + '</legend>'
+        + '<div class="map-well-filter-options">' + options.map(function (value) {
+          return '<label class="portfolio-filter-option map-well-filter-option"><input type="checkbox" value="' + esc(value) + '"'
+            + (selected.indexOf(value) >= 0 ? ' checked' : '') + '><span>' + esc(value) + '</span></label>';
+        }).join('') + '</div></fieldset>';
+    }).join('') + '</div>';
+}
+
+function selectionsFromSidebar(list) {
+  var selections = {};
+  MAP_FILTER_KEYS.forEach(function (key) {
+    selections[key] = all('.map-well-filter[data-filter="' + key + '"] input[type="checkbox"]:checked', list)
+      .map(function (box) { return box.value; });
+  });
+  return selections;
 }
 
 /* -------------------------------------------------------------------------
@@ -177,7 +207,7 @@ function renderSidebar() {
   if (!list) return;
   var rows = sidebarRows();
   var hasShapefiles = rows.some(function (row) { return row.layer && !row.layer.isBorders; });
-  list.innerHTML = rows.map(function (row, index) {
+  list.innerHTML = wellFilterHtml() + rows.map(function (row, index) {
     var checkId = 'map-layer-chk-' + index;
     // A layer that was listed but could not be fetched is otherwise just an
     // empty ticked checkbox — nothing on the canvas and no reason given. The
@@ -200,6 +230,15 @@ function renderSidebar() {
       + '<button type="button" class="map-layer-btn map-layer-zoom" title="Zoom to layer" aria-label="Zoom to ' + esc(row.label) + '">' + ICONS['target'] + '</button>'
       + '</span></div>';
   }).join('') + (hasShapefiles ? '' : '<p class="map-empty-hint">' + esc(EMPTY_HINT) + '</p>');
+
+  all('.map-well-filter input[type="checkbox"]', list).forEach(function (box) {
+    box.addEventListener('change', function () {
+      store.setWellFilters(selectionsFromSidebar(list));
+      var count = list.querySelector('.map-layer[data-layer="' + WELLS_ID + '"] .map-layer-count');
+      if (count) count.textContent = String(store.plottedWells().length);
+      afterDataChange();
+    });
+  });
 
   all('.map-layer', list).forEach(function (rowEl) {
     var id = rowEl.getAttribute('data-layer');
@@ -461,7 +500,7 @@ function wire() {
     var readout = byId('map-readout');
     if (!readout) return;
     readout.hidden = false;
-    readout.textContent = 'E ' + wx.toFixed(0) + '   N ' + wy.toFixed(0) + '   (UTM37N m)';
+    readout.textContent = formatUtm37Coordinate(wx, wy);
   };
   view.onPick = handlePick;
   view.onLeave = hideHoverChrome;

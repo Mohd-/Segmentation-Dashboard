@@ -11,9 +11,11 @@ import { test, assert, fixture, mockFetch } from './harness.js';
 import {
   LayerStore, WELLS_ID, MAP_STATE_KEY, PALETTE,
   pointInRings, polygonLabel, formatOgip, ogipValue, hasCoords, featureKey,
-  computeAssociations, computeSummary, unionBbox,
+  computeAssociations, computeSummary, unionBbox, areaMidpoint,
+  quadrantOfWell, filterWells, mapFilterOptions,
   readMapState, writeMapState, normalizeState
 } from '../js/map/map-store.js';
+import { utm37ToWgs84, formatLonLat, formatUtm37Coordinate } from '../js/map/utm37.js';
 import {
   MeasureTool, formatDistance, segmentLengths, cumulativeLengths, totalDistance
 } from '../js/map/map-tools.js';
@@ -22,7 +24,7 @@ import {
   clampScale, normalizeWheelDelta, MIN_SCALE, MAX_SCALE, WHEEL_LINE_PX
 } from '../js/map/map-canvas.js';
 import {
-  wellTooltipHtml, polygonTooltipHtml, summaryHtml, formatOgipTotal, wellLabel,
+  wellTooltipHtml, polygonTooltipHtml, summaryHtml, formatOgipTotal, formatAreaTotal, wellLabel,
   hitIdentity, errorHint, refreshMap
 } from '../js/views/map-view.js';
 
@@ -72,6 +74,11 @@ function layerMeta() {
 }
 
 function names(layers) { return layers.map(function (layer) { return layer.name; }); }
+
+function assertClose(actual, expected, tolerance, message) {
+  assert.ok(Math.abs(actual - expected) <= tolerance,
+    (message || 'values differ') + ': expected ' + expected + ' ± ' + tolerance + ', got ' + actual);
+}
 
 /* -------------------------------------------------------------------------
    pointInRings — even-odd, holes included
@@ -141,6 +148,89 @@ test('map: unionBbox grows a box and tolerates nulls on either side', function (
   assert.deepEqual(unionBbox([0, 0, 1, 1], null), [0, 0, 1, 1]);
   assert.deepEqual(unionBbox([0, 0, 1, 1], [-2, 3, 4, 4]), [-2, 0, 4, 4]);
   assert.equal(unionBbox(null, null), null);
+});
+
+test('map: inverse UTM37N returns known WGS84 points', function () {
+  var origin = utm37ToWgs84(500000, 0);
+  assertClose(origin.lat, 0, 1e-9);
+  assertClose(origin.lon, 39, 1e-9, 'zone 37 central meridian');
+
+  // Standard WGS84 UTM fixtures: 166021.443 m is 3 degrees west of a zone's
+  // central meridian at the equator; 4,649,776.225 m is 42 degrees north on it.
+  var westEdge = utm37ToWgs84(166021.4431, 0);
+  assertClose(westEdge.lat, 0, 1e-8);
+  assertClose(westEdge.lon, 36, 1e-7);
+  var north42 = utm37ToWgs84(500000, 4649776.22482);
+  assertClose(north42.lat, 42, 1e-7);
+  assertClose(north42.lon, 39, 1e-9);
+});
+
+test('map: inverse UTM hemisphere handling and coordinate precision are explicit', function () {
+  var south42 = utm37ToWgs84(500000, 5350223.77518, false);
+  assertClose(south42.lat, -42, 1e-7);
+  assertClose(south42.lon, 39, 1e-9);
+  assert.equal(formatLonLat(-45.123456, -12.345678, 3), '45.123°W  12.346°S');
+  assert.equal(formatLonLat(39, 0, 5), '39.00000°E  0.00000°N');
+  assert.equal(formatUtm37Coordinate(500000.4, 0, 4),
+    'E 500000   N 0   (UTM37N m)   WGS84 39.0000°E  0.0000°N');
+  assert.match(formatUtm37Coordinate(null, 10), /E —.*WGS84 —/);
+});
+
+/* -------------------------------------------------------------------------
+   Well filters + area rules
+   ------------------------------------------------------------------------- */
+
+function filterRows() {
+  return [
+    { project_name: 'A', gas_field: 'North', year: 2025, record_status: 'Active', total_cos: 50, mean_gas_bcf: 10 },
+    { project_name: 'B', gas_field: 'North', year: 2026, record_status: 'Draft', total_cos: 49.999, mean_gas_bcf: 20 },
+    { project_name: 'C', gas_field: 'South', year: 2025, record_status: 'Active', total_cos: 75, mean_ogip: 5 },
+    { project_name: 'D', field: 'Legacy', year: 2025, overall_status: 'Legacy status', total_cos: 10, mean_gas_bcf: 2 }
+  ];
+}
+
+test('map: quadrants use inclusive 50 percent CoS and 10 BCF OGIP cutoffs', function () {
+  var rows = filterRows();
+  assert.equal(quadrantOfWell(rows[0]), 'Super Stars', 'both exact cutoffs are on the high side');
+  assert.equal(quadrantOfWell(rows[1]), 'Risk Takers', '49.999 percent is below the CoS cutoff');
+  assert.equal(quadrantOfWell(rows[2]), 'Value Hunter', 'mean_ogip spelling is accepted');
+  assert.equal(quadrantOfWell(rows[3]), 'Dogs');
+  assert.equal(quadrantOfWell({ total_cos: null, mean_gas_bcf: 20 }), '', 'missing measures have no quadrant');
+});
+
+test('map: all four checklist dimensions compose and empty selections do not constrain', function () {
+  var rows = filterRows();
+  assert.deepEqual(filterWells(rows, {}).map(function (row) { return row.project_name; }), ['A', 'B', 'C', 'D']);
+  var selected = { field: ['North'], year: ['2025'], status: ['Active'], quadrant: ['Super Stars'] };
+  assert.deepEqual(filterWells(rows, selected).map(function (row) { return row.project_name; }), ['A']);
+  assert.deepEqual(filterWells(rows, { field: ['Legacy'], status: ['Legacy status'] })
+    .map(function (row) { return row.project_name; }), ['D'], 'legacy field/status keys remain filterable');
+});
+
+test('map: filter options are distinct, sorted, and quadrants stay fixed', function () {
+  var rows = filterRows();
+  assert.deepEqual(mapFilterOptions(rows, 'field'), ['Legacy', 'North', 'South']);
+  assert.deepEqual(mapFilterOptions(rows, 'year'), ['2025', '2026']);
+  assert.deepEqual(mapFilterOptions(rows, 'status'), ['Active', 'Draft', 'Legacy status']);
+  assert.deepEqual(mapFilterOptions([], 'quadrant'), ['Super Stars', 'Value Hunter', 'Risk Takers', 'Dogs']);
+});
+
+test('map: a wells reload prunes selected options that no longer exist', function () {
+  var store = new LayerStore();
+  store.setWells([{ project_name: 'A', gas_field: 'North', x: 1, y: 1 }]);
+  store.setWellFilters({ field: ['North'] });
+  assert.equal(store.wells.length, 1);
+  store.setWells([{ project_name: 'B', gas_field: 'South', x: 2, y: 2 }]);
+  assert.deepEqual(store.wellFilters.field, [], 'the invisible North selection is removed');
+  assert.deepEqual(store.wells.map(function (well) { return well.project_name; }), ['B'],
+    'the replacement rowset is not silently hidden');
+});
+
+test('map: area midpoint uses two bounds, falls back to one, and treats missing as zero', function () {
+  assert.equal(areaMidpoint({ p90_area_km2: 4, p10_area_km2: 8 }), 6);
+  assert.equal(areaMidpoint({ p90_area_km2: '5', p10_area_km2: null }), 5);
+  assert.equal(areaMidpoint({ p90_area_km2: '', p10_area_km2: 7 }), 7);
+  assert.equal(areaMidpoint({}), 0);
 });
 
 /* -------------------------------------------------------------------------
@@ -227,6 +317,18 @@ test('map: summary total OGIP sums plotted wells, treating a null figure as 0', 
   var summary = computeSummary(layers, wells, computeAssociations(wells, layers));
   assert.equal(summary.totalOgip, 15, '10 + 5 + null(0); the uncoordinated W4 is not plotted at all');
   assert.equal(formatOgipTotal(summary.totalOgip), '15.0');
+});
+
+test('map: summary area sums midpoint estimates over every filtered well', function () {
+  var wells = [
+    { x: 1, y: 1, p90_area_km2: 4, p10_area_km2: 8 },
+    { x: 1.5, y: 1.5, p90_area_km2: 5, p10_area_km2: null },
+    { x: 2, y: 2, p90_area_km2: null, p10_area_km2: 7 }
+  ];
+  var summary = computeSummary([], wells, computeAssociations(wells, []));
+  assert.equal(summary.wellsPlotted, 3);
+  assert.equal(summary.totalArea, 18, '6 midpoint + 5 P90 fallback + 7 P10 fallback');
+  assert.equal(formatAreaTotal(summary.totalArea), '18.0');
 });
 
 test('map: summary drops wells-inside when the containing layer is hidden', function () {
@@ -713,19 +815,23 @@ test('map: wellLabel falls back to the project id, then to a generic label', fun
    Summary panel markup
    ------------------------------------------------------------------------- */
 
-test('map: the summary panel renders the four live figures', function () {
-  var html = summaryHtml({ visibleLayers: 3, wellsPlotted: 12, wellsInside: 7, totalOgip: 123.456, wellsTotal: 12 });
-  assert.match(html, /Visible layers<\/span><span class="map-summary-value">3/);
-  assert.match(html, /Wells plotted<\/span><span class="map-summary-value">12/);
-  assert.match(html, /Wells in polygons<\/span><span class="map-summary-value">7/);
+test('map: the summary panel renders exactly the three requested live figures', function () {
+  var html = summaryHtml({ visibleLayers: 3, wellsPlotted: 12, wellsInside: 7, totalOgip: 123.456, totalArea: 44.44, wellsTotal: 12 });
   assert.match(html, /Total Mean OGIP<\/span><span class="map-summary-value">123\.5 BCF/);
+  assert.match(html, /Total Area<\/span><span class="map-summary-value">44\.4 km²/);
+  assert.match(html, /Wells shown<\/span><span class="map-summary-value">12/);
+  var host = document.createElement('div');
+  host.innerHTML = html;
+  assert.equal(host.querySelectorAll('.map-summary-row').length, 3);
+  assert.equal(/Visible layers|Wells plotted|Wells in polygons/.test(host.textContent), false);
   assert.equal(/map-summary-note/.test(html), false, 'no empty-state note when wells are plotted');
 });
 
 test('map: with no plotted wells the summary reads zero and says why', function () {
-  var html = summaryHtml({ visibleLayers: 2, wellsPlotted: 0, wellsInside: 0, totalOgip: 0, wellsTotal: 0 });
-  assert.match(html, /Wells plotted<\/span><span class="map-summary-value">0/);
+  var html = summaryHtml({ visibleLayers: 2, wellsPlotted: 0, wellsInside: 0, totalOgip: 0, totalArea: 0, wellsTotal: 0 });
+  assert.match(html, /Wells shown<\/span><span class="map-summary-value">0/);
   assert.match(html, /Total Mean OGIP<\/span><span class="map-summary-value">0\.0 BCF/);
+  assert.match(html, /Total Area<\/span><span class="map-summary-value">0\.0 km²/);
   assert.match(html, /No project coordinates are recorded yet/);
 });
 
@@ -794,9 +900,9 @@ function mapFetchStub() {
       body = geometry[decodeURIComponent(path.slice('/api/map/layers/'.length))] || { features: [] };
     } else if (path === '/api/map/wells') {
       body = { wells: [
-        { project_id: 1, project_name: 'W1', display_stage: 'Staking', overall_status: 'In Progress', x: 2, y: 2, mean_gas_bcf: 10 },
-        { project_id: 2, project_name: 'W2', display_stage: 'Drilling', overall_status: 'In Progress', x: 50, y: 50, mean_gas_bcf: null },
-        { project_id: 3, project_name: 'W3', display_stage: 'Lead', overall_status: 'In Progress', x: null, y: null, mean_gas_bcf: 4 }
+        { project_id: 1, project_name: 'W1', display_stage: 'Staking', overall_status: 'In Progress', gas_field: 'North', year: 2025, record_status: 'Active', total_cos: 50, x: 2, y: 2, mean_gas_bcf: 10, p90_area_km2: 5, p10_area_km2: 15 },
+        { project_id: 2, project_name: 'W2', display_stage: 'Drilling', overall_status: 'In Progress', gas_field: 'South', year: 2026, record_status: 'Draft', total_cos: 40, x: 50, y: 50, mean_gas_bcf: null, p90_area_km2: 2, p10_area_km2: null },
+        { project_id: 3, project_name: 'W3', display_stage: 'Lead', overall_status: 'In Progress', gas_field: 'North', year: 2025, record_status: 'Active', total_cos: 80, x: 12, y: 12, mean_gas_bcf: 4, p90_area_km2: 1, p10_area_km2: 3 }
       ] };
     } else {
       body = {};
@@ -833,11 +939,25 @@ test('map: refreshMap boots the tab — sidebar order, summary figures, toolbox 
     assert.match(marker.getAttribute('title'), /cannot be read/);
     assert.equal(root.querySelectorAll('.map-layer[data-layer="blocks"] .map-layer-error').length, 0);
 
-    // Summary: two wells have coordinates, one of them lands inside a polygon.
+    // Summary: all map payload rows are positioned; one lands in Block A.
     var summary = document.getElementById('map-summary-body').textContent;
-    assert.match(summary, /Wells plotted2/);
-    assert.match(summary, /Wells in polygons1/, 'W2 at (50,50) is outside every shapefile polygon');
-    assert.match(summary, /Total Mean OGIP10\.0 BCF/, 'W2 has no figure (0) and W3 is not plotted');
+    assert.match(summary, /Wells shown3/);
+    assert.match(summary, /Total Mean OGIP14\.0 BCF/, 'W2 has no figure and contributes 0');
+    assert.match(summary, /Total Area14\.0 km²/, 'area includes every row in the filtered map payload');
+
+    // Four independent checklist groups are populated from the full rowset.
+    assert.equal(root.querySelectorAll('.map-well-filter').length, 4);
+    assert.equal(root.querySelectorAll('.map-well-filter[data-filter="field"] input').length, 2);
+    assert.equal(root.querySelectorAll('.map-well-filter[data-filter="quadrant"] input').length, 4);
+    var south = root.querySelector('.map-well-filter[data-filter="field"] input[value="South"]');
+    south.checked = true;
+    south.dispatchEvent(new Event('change', { bubbles: true }));
+    summary = document.getElementById('map-summary-body').textContent;
+    assert.match(summary, /Wells shown1/);
+    assert.match(summary, /Total Mean OGIP0\.0 BCF/);
+    assert.match(summary, /Total Area2\.0 km²/);
+    south.checked = false;
+    south.dispatchEvent(new Event('change', { bubbles: true }));
 
     // The up control really moves a layer, re-renders and persists.
     root.querySelector('.map-layer[data-layer="blocks"] .map-layer-move[data-dir="1"]').click();

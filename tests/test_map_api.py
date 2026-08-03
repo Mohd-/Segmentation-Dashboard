@@ -16,7 +16,7 @@ import json
 import pytest
 import shapefile  # pyshp
 
-from conftest import create_project, get_task_by_name
+from conftest import create_project, get_task_by_name, get_tasks
 
 # Two rings: a 100 km square with a 20 km square hole. Pins the part-splitting
 # in map_layers._shape_geometry -- the outer ring and the hole must come back
@@ -235,8 +235,10 @@ def test_missing_borders_file_returns_an_empty_feature_collection(client, map_di
 # board row it is composed from carries dates, folder paths and revisions the
 # map has no business publishing).
 WELL_ROW_KEYS = [
-    "coord_source", "display_stage", "field", "mean_gas_bcf", "overall_status",
-    "pipeline_type", "project_id", "project_name", "x", "y",
+    "coord_source", "display_stage", "field", "gas_field", "mean_gas_bcf",
+    "overall_status", "p10_area_km2", "p90_area_km2", "pipeline_type",
+    "project_id", "project_name", "record_status", "total_cos", "x", "y",
+    "year",
 ]
 
 
@@ -244,6 +246,17 @@ def _wells(client):
     resp = client.get("/api/map/wells")
     assert resp.status_code == 200
     return resp.get_json()["wells"]
+
+
+def _well_for(client, project_id):
+    return next(well for well in _wells(client) if well["project_id"] == project_id)
+
+
+def _save_fields(client, project_id, task_name, fields):
+    task = get_task_by_name(client, project_id, task_name)
+    resp = client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
+                        json={"fields": fields})
+    assert resp.status_code == 200, resp.get_json()
 
 
 def _save_staked(client, project_id, fields):
@@ -280,7 +293,15 @@ def test_wells_row_shape_and_lead_coordinates(client):
     # Derived by the same rules the board uses -- no stored field column, and
     # nothing recorded yet means a null mean gas (not a zero).
     assert well["field"] == "MAPPY"
+    assert well["gas_field"] == "MAPPY"
     assert well["mean_gas_bcf"] is None
+    # An immature, non-BP lead is a left-join participant: it stays visible as
+    # Proposed with a null year and blank report measures.
+    assert well["year"] is None
+    assert well["record_status"] == "Proposed"
+    assert well["total_cos"] == ""
+    assert well["p90_area_km2"] == ""
+    assert well["p10_area_km2"] == ""
     # Coordinates pass through as floats, unprojected.
     assert well["coord_source"] == "lead"
     assert well["x"] == 512000.5
@@ -320,3 +341,126 @@ def test_staked_only_records_appear_without_any_lead_pair(client):
     well = _wells(client)[0]
     assert well["coord_source"] == "staked"
     assert (well["x"], well["y"]) == (601000.0, 2705000.0)
+
+
+def test_map_reporting_attributes_match_portfolio_semantics(client):
+    """BP year, fluid/stake status, CoS percent and area bounds ride together."""
+    pid = create_project(client, "FILTERS-1", lead_x="512000", lead_y="2903000",
+                         pipeline_type="bp", business_plan_enabled=True,
+                         business_plan_year=2031)
+    _save_fields(client, pid, "Reservoir CoS", {"reservoir_cos_rows": json.dumps([
+        {"reservoir_cos_pct": "50"},
+    ])})
+    _save_fields(client, pid, "Trap and Seal CoS",
+                 {"trap_cos_pct": "80", "seal_cos_pct": "50"})
+    _save_fields(client, pid, "Area Definition",
+                 {"p90_area_km2": " 2.4 ", "p10_area_km2": "9.8"})
+    _save_fields(client, pid, "Resource Assessment", {"lead_piip_gas_mean": "12.5"})
+
+    stake = get_task_by_name(client, pid, "Approval to Stake")
+    resp = client.patch(f"/api/tasks/{stake['task_id']}", json={
+        "status": "Approved", "revision": stake["revision"],
+    })
+    assert resp.status_code == 200, resp.get_json()
+
+    well = _well_for(client, pid)
+    assert well["year"] == 2031
+    assert well["record_status"] == "Staked"
+    # Total CoS is a WHOLE percentage, not the 0.2 fraction used by the plot.
+    assert well["total_cos"] == "20"
+    assert well["mean_gas_bcf"] == 12.5
+    # Area bounds remain strings; whitespace is normalized by the reporting
+    # read ladder and numeric validation/aggregation stays a client concern.
+    assert well["p90_area_km2"] == "2.4"
+    assert well["p10_area_km2"] == "9.8"
+
+    resp = client.put(f"/api/projects/{pid}/formations", json={
+        "phase": "final", "rows": [{"formation": "SARH", "fluid": "Gas"}],
+    })
+    assert resp.status_code == 200, resp.get_json()
+    assert _well_for(client, pid)["record_status"] == "Gas"
+
+
+def test_map_area_fold_keeps_retired_fallback_but_active_nonblank_wins(client, app_modules):
+    """The reporting fold's retired-row precedence applies to both area keys."""
+    _main, db = app_modules
+    pid = create_project(client, "AREA-LEGACY-1", lead_x="500000", lead_y="2800000")
+    active = get_task_by_name(client, pid, "Area Definition")
+    # Active P90 should win; active blank P10 must not erase the legacy value.
+    _save_fields(client, pid, "Area Definition",
+                 {"p90_area_km2": "2.4", "p10_area_km2": ""})
+
+    session = db.new_session()
+    try:
+        with db.write_transaction(session):
+            result = db.execute(session, """
+                INSERT INTO project_tasks
+                    (project_id, sequence_no, task_name, stage_group, status,
+                     priority, is_active, revision)
+                VALUES (:project_id, 999, 'Legacy Area Definition',
+                        'Lead Assessment', 'Approved', 'Medium', 0, 0)
+            """, {"project_id": pid})
+            legacy_task_id = result.lastrowid
+            db.execute_many(session, """
+                INSERT INTO task_dynamic_fields
+                    (task_id, field_key, field_value, updated_at)
+                VALUES (:task_id, :field_key, :field_value, '2020-01-01 00:00:00')
+            """, [
+                {"task_id": legacy_task_id, "field_key": "p90_area_km2", "field_value": "1.1"},
+                {"task_id": legacy_task_id, "field_key": "p10_area_km2", "field_value": "8.8"},
+            ])
+    finally:
+        session.close()
+
+    well = _well_for(client, pid)
+    assert active["task_id"] < legacy_task_id  # precedence is activity, not id
+    assert well["p90_area_km2"] == "2.4"
+    assert well["p10_area_km2"] == "8.8"
+
+
+def test_completed_positioned_lead_remains_on_the_map(client):
+    pid = create_project(client, "MAP-DONE-1", lead_x="500000", lead_y="2800000")
+    for task in get_tasks(client, pid):
+        if task["stage_group"] in {"Lead Assessment", "Risk Analysis", "Pre-Well Delivery"}:
+            resp = client.patch(f"/api/tasks/{task['task_id']}", json={
+                "status": "Approved", "revision": task["revision"],
+            })
+            assert resp.status_code == 200, resp.get_json()
+
+    well = _well_for(client, pid)
+    assert well["overall_status"] == "Completed"
+    assert well["record_status"] in {"Proposed", "Staked"}
+
+
+def test_map_reporting_reads_are_batched_for_the_whole_overlay(client, app_modules):
+    """Adding pins cannot add a task/formation reporting query per project."""
+    from sqlalchemy import event
+
+    _main, db = app_modules
+    for index in range(4):
+        create_project(client, f"MAP-BATCH-{index}",
+                       lead_x=str(500000 + index), lead_y=str(2800000 + index))
+
+    statements = []
+
+    def _record(_conn, _cursor, statement, *_args):
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    engine = db.get_engine()
+    event.listen(engine, "before_cursor_execute", _record)
+    try:
+        assert len(_wells(client)) == 4
+    finally:
+        event.remove(engine, "before_cursor_execute", _record)
+
+    # Mean OGIP, staked coordinates and reporting fields each have one EAV
+    # query for all four ids; SARH fluid and staking status each have one too.
+    field_reads = [sql for sql in statements
+                   if "JOIN task_dynamic_fields tdf" in sql and "tdf.field_key IN" in sql]
+    formation_reads = [sql for sql in statements if "FROM project_formations" in sql]
+    stake_reads = [sql for sql in statements
+                   if "MAX(CASE WHEN pt.status = 'Approved'" in sql]
+    assert len(field_reads) == 3, field_reads
+    assert len(formation_reads) == 1, formation_reads
+    assert len(stake_reads) == 1, stake_reads
