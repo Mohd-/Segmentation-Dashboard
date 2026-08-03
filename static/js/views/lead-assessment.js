@@ -508,14 +508,27 @@ function numberInput(key, value, options) {
     (options.readonly ? ' readonly class="la-derived"' : '') + '>';
 }
 
-function errorSlot(key) {
-  return '<span class="la-field-error" data-error-for="' + esc(key) + '" role="alert"></span>';
+// Which fields report into which card's error strip, in stable reading order
+// (the same order ERROR_ORDER walks). One strip per card, at the card's
+// BOTTOM — below the grid, so a message can appear and wrap without moving a
+// single input row (the owner's "consistent location below", not per-cell).
+var SECTION_FIELDS = {
+  thickness: ['twt_reservoir_ms', 'twt_formation_ms', 'reservoir_thickness_ft', 'formation_thickness_ft'],
+  volume: ['p90_area_km2', 'p10_area_km2', 'grv_p90_thousand_acre_ft', 'grv_p10_thousand_acre_ft'],
+  structure: ['top_formation_tvdss_ft']
+};
+
+// The card-bottom strip itself: hidden (and costing no height) while clean.
+function errorStrip(section) {
+  return '<p class="la-card-errors" data-la-errors="' + esc(section) + '" role="alert" hidden></p>';
 }
 
-// One cell of a twin card's value grid: the input plus its own error slot, so
-// a message lands under the box it belongs to.
+// One cell of a twin card's value grid. The cell holds ONLY the input — error
+// messages go to the card's strip, and .la-invalid on the input points at the
+// offending field — so a message can never grow a cell and shift the twin
+// grids out of line.
 function cell(key, value, options) {
-  return '<div class="la-cell">' + numberInput(key, value, options) + errorSlot(key) + '</div>';
+  return '<div class="la-cell">' + numberInput(key, value, options) + '</div>';
 }
 
 function cardHead(number, title) {
@@ -544,6 +557,7 @@ export function thicknessSectionMarkup(values, meta, mode) {
     '<span class="la-col-head">Thickness (ft)</span>' + rows +
     '</div>' +
     (pending ? '<p class="la-note" data-la-note="conversion">' + esc(MESSAGES.conversionPending) + '</p>' : '') +
+    errorStrip('thickness') +
     '</section>';
 }
 
@@ -563,7 +577,7 @@ export function volumeSectionMarkup(values) {
     '<span class="la-corner" aria-hidden="true"></span>' +
     '<span class="la-col-head">P90</span>' +
     '<span class="la-col-head">P10</span>' + rows +
-    '</div></section>';
+    '</div>' + errorStrip('volume') + '</section>';
 }
 
 // Section 3. The TVDSS input (label is the placeholder, as in the mockup --
@@ -572,14 +586,16 @@ export function volumeSectionMarkup(values) {
 export function structureSectionMarkup(values, formations) {
   var label = tvdssLabel(formations);
   return '<section class="la-card la-card-wide" data-la-section="structure">' +
+    '<div class="la-wide-row">' +
     '<span class="la-num" aria-hidden="true">3</span>' +
     '<div class="la-tvdss">' +
     numberInput('top_formation_tvdss_ft', values.top_formation_tvdss_ft,
                 { label: label, placeholder: label }) +
-    errorSlot('top_formation_tvdss_ft') +
     '</div>' +
     '<label class="check-label la-polygons"><input type="checkbox" data-la-field="polygons_surfaces_loaded"' +
     (truthy(values.polygons_surfaces_loaded) ? ' checked' : '') + '> ' + esc(POLYGONS_LABEL) + '</label>' +
+    '</div>' +
+    errorStrip('structure') +
     '</section>';
 }
 
@@ -701,15 +717,24 @@ export function readFormValues(root) {
   return values;
 }
 
+// Messages go to each card's ONE bottom strip, grouped by section in stable
+// field order; the red border (.la-invalid) on the input is what points at the
+// offending field. The strip sits BELOW the card's grid, so showing or growing
+// it never moves an input row — the twin grids stay aligned.
 function renderErrors(errors) {
   errors = errors || {};
-  all('.la-field-error').forEach(function (slot) {
-    var key = slot.getAttribute('data-error-for');
-    var message = errors[key] || '';
-    slot.textContent = message;
-    slot.classList.toggle('is-shown', !!message);
-    var input = document.querySelector('[data-la-field="' + key + '"]');
-    if (input) input.classList.toggle('la-invalid', !!message);
+  all('.la-card-errors').forEach(function (strip) {
+    var keys = SECTION_FIELDS[strip.getAttribute('data-la-errors')] || [];
+    var messages = keys.map(function (key) { return errors[key] || ''; })
+      .filter(function (message) { return !!message; });
+    strip.textContent = messages.join(' ');
+    strip.hidden = !messages.length;
+  });
+  Object.keys(SECTION_FIELDS).forEach(function (section) {
+    SECTION_FIELDS[section].forEach(function (key) {
+      var input = document.querySelector('[data-la-field="' + key + '"]');
+      if (input) input.classList.toggle('la-invalid', !!errors[key]);
+    });
   });
 }
 

@@ -21,7 +21,7 @@
    visibleRows() pattern): no request per filter change, no per-lead or
    per-user request, users fetched once by main.js's boot.
 
-   Combination rule: AND across the four categories, OR inside Assignee.
+   Combination rule: AND across the three categories, OR inside Assignee.
    ========================================================================= */
 import { byId, all, esc } from '../dom.js';
 import { ICONS } from '../icons.js';
@@ -44,18 +44,17 @@ var STATUS_OPTIONS = [
   { value: 'In Progress', icon: 'circle', slug: 'in-progress' }
 ];
 
-var PRIORITY_OPTIONS = ['High', 'Medium', 'Low'];
-
-// The four controls, left to right. `multi` picks checkbox semantics (Assignee)
-// over radio semantics (everything else).
+// The three controls, left to right (the Card 1B band: Assignee / Field /
+// Status — priority stays visible as the lead cards' border color and the
+// board's sort order, not as a filter). `multi` picks checkbox semantics
+// (Assignee) over radio semantics (everything else).
 var FILTERS = [
   { key: 'assignee', multi: true, caption: 'Assignee', allLabel: 'All Assignees' },
   { key: 'field', multi: false, caption: 'Field', allLabel: 'All Fields' },
-  { key: 'status', multi: false, caption: 'Status', allLabel: 'All Statuses' },
-  { key: 'priority', multi: false, caption: 'Priority', allLabel: 'All Priorities' }
+  { key: 'status', multi: false, caption: 'Status', allLabel: 'All Statuses' }
 ];
 
-// Module state. `filters.assignees` empty = All Assignees; the three
+// Module state. `filters.assignees` empty = All Assignees; the two
 // single-selects use '' for their All option.
 var filters = defaultFilters();
 var rows = [];        // the unfiltered dataset, exactly as GET /api/projects returned it
@@ -66,7 +65,7 @@ var rootId = 'lead-filter-row';
 var openKey = null;   // the filter whose menu is open (one at a time), or null
 
 function defaultFilters() {
-  return { assignees: [], field: '', status: '', priority: '' };
+  return { assignees: [], field: '', status: '' };
 }
 
 /* -------------------------------------------------------------------------
@@ -99,13 +98,6 @@ export function leadStatus(lead) {
   return 'In Progress';
 }
 
-// Unrecognized/absent priority reads Low, matching both the server default and
-// the lead card's own border rule (pipeline.js).
-export function leadPriority(lead) {
-  var value = lead && lead.lead_priority;
-  return PRIORITY_OPTIONS.indexOf(value) >= 0 ? value : 'Low';
-}
-
 // AND across categories, OR inside Assignee. A multi-assignee lead matches if
 // ANY selected member is among its assignees; Unassigned matches leads with no
 // assignee at all.
@@ -125,7 +117,6 @@ export function matchesLeadFilters(lead, selection) {
   }
   if (choice.field && leadField(lead) !== choice.field) return false;
   if (choice.status && leadStatus(lead) !== choice.status) return false;
-  if (choice.priority && leadPriority(lead) !== choice.priority) return false;
   return true;
 }
 
@@ -144,7 +135,7 @@ export function leadRows() { return rows.slice(); }
 // mutate it behind the controls' back.
 export function leadFilterState() {
   return { assignees: filters.assignees.slice(), field: filters.field,
-           status: filters.status, priority: filters.priority };
+           status: filters.status };
 }
 
 export function onLeadsFiltered(handler) {
@@ -221,17 +212,10 @@ function statusOptions() {
   }));
 }
 
-function priorityOptions() {
-  return [{ value: '', label: 'All Priorities' }].concat(PRIORITY_OPTIONS.map(function (value) {
-    return { value: value, label: value };
-  }));
-}
-
 function optionsFor(key) {
   if (key === 'assignee') return assigneeOptions();
   if (key === 'field') return fieldOptions();
-  if (key === 'status') return statusOptions();
-  return priorityOptions();
+  return statusOptions();
 }
 
 // Whether one option reads as chosen right now. The All option of every
@@ -245,7 +229,7 @@ function isChosen(key, value) {
 
 // The CLOSED control's text: the selection itself, so the row reads as a
 // sentence of what the board is showing. At rest it is the bare caption
-// ("Assignee", not "All Assignees") — the four triggers share a band third
+// ("Assignee", not "All Assignees") — the three triggers share a band third
 // and the longer forms truncate there; the "All …" wording still appears as
 // each menu's first option, where it is the clear affordance.
 function triggerLabel(key) {
@@ -350,7 +334,7 @@ function announceOpen() {
 }
 
 // Closing never changes a selection: Escape and an outside click DISMISS, they
-// do not clear (that is what Clear Filters is for).
+// do not clear (that is what the Clear button is for).
 export function closeLeadMenus() {
   openKey = null;
   all('.lf-menu', document).forEach(function (menu) { menu.hidden = true; });
@@ -467,7 +451,7 @@ function renderFilterRow() {
   if (!host) return;
   closeLeadMenus();
   host.innerHTML = FILTERS.map(filterMarkup).join('') +
-    '<button type="button" class="lf-clear ghost">Clear Filters</button>';
+    '<button type="button" class="lf-clear ghost">Clear</button>';
 
   FILTERS.forEach(function (filter) {
     var group = host.querySelector('.lead-filter[data-filter="' + filter.key + '"]');

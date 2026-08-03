@@ -7,7 +7,7 @@
 import { test, assert, fixture } from './harness.js';
 import {
   initLeadFilters, setLeadRows, setLeadUsers, filteredLeads, leadFilterState,
-  clearLeadFilters, matchesLeadFilters, leadStatus, leadPriority, leadField,
+  clearLeadFilters, matchesLeadFilters, leadStatus, leadField,
   onLeadsFiltered, UNASSIGNED
 } from '../js/views/lead-filters.js';
 import { setComponentReferenceMode } from '../js/views/detail-form.js';
@@ -98,26 +98,20 @@ test('lead-filters leadStatus: Completed / Pending Approval / In Progress, nothi
     statuses: { 'Segmentation Slides': 'Pending Approval' } })), 'Completed');
 });
 
-test('lead-filters leadPriority falls back to Low, matching the card border rule', function () {
-  assert.equal(leadPriority(lead('A-1', { lead_priority: 'High' })), 'High');
-  assert.equal(leadPriority(lead('B-1', { lead_priority: null })), 'Low');
-  assert.equal(leadPriority(lead('C-1', { lead_priority: 'Normal' })), 'Low');
-});
-
 test('lead-filters leadField reads the server-derived field, never the name', function () {
   assert.equal(leadField(lead('GALV-2')), 'GALV');
   assert.equal(leadField(lead('SOLO', { field: '' })), '');
 });
 
 test('lead-filters matchesLeadFilters ORs inside Assignee and ANDs across categories', function () {
-  var multi = lead('CROX-2', { assignees: ['N. Saleh', 'S. Ali'], lead_priority: 'High' });
+  var multi = lead('CROX-2', { assignees: ['N. Saleh', 'S. Ali'] });
   // OR within the category: ANY selected member is enough.
   assert.ok(matchesLeadFilters(multi, { assignees: ['S. Ali'] }));
   assert.ok(matchesLeadFilters(multi, { assignees: ['R. Khalid', 'S. Ali'] }));
   assert.ok(!matchesLeadFilters(multi, { assignees: ['R. Khalid'] }));
   // AND across categories.
-  assert.ok(matchesLeadFilters(multi, { assignees: ['S. Ali'], priority: 'High' }));
-  assert.ok(!matchesLeadFilters(multi, { assignees: ['S. Ali'], priority: 'Low' }));
+  assert.ok(matchesLeadFilters(multi, { assignees: ['S. Ali'], field: 'CROX' }));
+  assert.ok(!matchesLeadFilters(multi, { assignees: ['S. Ali'], field: 'GALV' }));
   // Unassigned is the absence of assignees, and never matches a staffed lead.
   assert.ok(!matchesLeadFilters(multi, { assignees: [UNASSIGNED] }));
   assert.ok(matchesLeadFilters(lead('ORYX-2'), { assignees: [UNASSIGNED] }));
@@ -129,16 +123,16 @@ test('lead-filters matchesLeadFilters ORs inside Assignee and ANDs across catego
 // The row itself
 // ---------------------------------------------------------------------------
 
-test('lead-filters renders the four controls left to right, all defaulted', function () {
+test('lead-filters renders the three controls left to right, all defaulted', function () {
   var host = mount([lead('GALV-2')], USERS);
   assert.deepEqual(Array.prototype.map.call(host.querySelectorAll('.lead-filter'),
     function (group) { return group.getAttribute('data-filter'); }),
-    ['assignee', 'field', 'status', 'priority']);
+    ['assignee', 'field', 'status'],
+    'no Priority control — priority stays on the cards as border color and sort');
   assert.equal(label(host, 'assignee'), 'Assignee');
   assert.equal(label(host, 'field'), 'Field');
   assert.equal(label(host, 'status'), 'Status');
-  assert.equal(label(host, 'priority'), 'Priority');
-  assert.ok(host.querySelector('.lf-clear'), 'the row offers Clear Filters');
+  assert.ok(host.querySelector('.lf-clear'), 'the row offers a Clear control');
 });
 
 test('lead-filters assignee options are All / Unassigned / every active user, System excluded', function () {
@@ -275,13 +269,13 @@ test('lead-filters single-selects replace their value and close the menu', funct
   assert.deepEqual(names(), ['GALV-2', 'LUNA-1', 'LUNA-2']);
 });
 
-test('lead-filters combines Assignee AND Status AND Field AND Priority', function () {
+test('lead-filters combines Assignee AND Status AND Field', function () {
   var host = mount([
-    lead('GALV-2', { project_id: 1, assignees: ['R. Khalid'], lead_priority: 'High' }),
-    lead('GALV-3', { project_id: 2, assignees: ['R. Khalid'], lead_priority: 'High',
+    lead('GALV-2', { project_id: 1, assignees: ['R. Khalid'] }),
+    lead('GALV-3', { project_id: 2, assignees: ['R. Khalid'],
                      statuses: { 'Segmentation Slides': 'Pending Approval' } }),
-    lead('LUNA-1', { project_id: 3, assignees: ['R. Khalid'], lead_priority: 'High' }),
-    lead('LUNA-2', { project_id: 4, assignees: ['S. Ali'], lead_priority: 'Low' })
+    lead('LUNA-1', { project_id: 3, assignees: ['R. Khalid'] }),
+    lead('LUNA-2', { project_id: 4, assignees: ['S. Ali'] })
   ], USERS);
   choose(host, 'assignee', 'R. Khalid');
   assert.deepEqual(names(), ['GALV-2', 'GALV-3', 'LUNA-1']);
@@ -293,27 +287,25 @@ test('lead-filters combines Assignee AND Status AND Field AND Priority', functio
   assert.deepEqual(names(), []);
   choose(host, 'status', '');
   assert.deepEqual(names(), ['LUNA-1']);
-  assert.deepEqual(leadFilterState(), { assignees: ['R. Khalid'], field: 'LUNA', status: '', priority: '' });
-  choose(host, 'priority', 'Low');
-  assert.deepEqual(names(), []);
+  assert.deepEqual(leadFilterState(), { assignees: ['R. Khalid'], field: 'LUNA', status: '' });
 });
 
-test('lead-filters Clear Filters restores every default', function () {
+test('lead-filters Clear restores every default', function () {
   var host = mount([
     lead('GALV-2', { project_id: 1, assignees: ['R. Khalid'] }),
     lead('LUNA-1', { project_id: 2 })
   ], USERS);
   choose(host, 'assignee', 'R. Khalid');
   choose(host, 'field', 'GALV');
-  choose(host, 'priority', 'Medium');
+  choose(host, 'status', 'In Progress');
   assert.deepEqual(names(), ['GALV-2']);
 
   host.querySelector('.lf-clear').click();
-  assert.deepEqual(leadFilterState(), { assignees: [], field: '', status: '', priority: '' });
+  assert.deepEqual(leadFilterState(), { assignees: [], field: '', status: '' });
   assert.deepEqual(names(), ['GALV-2', 'LUNA-1']);
   assert.equal(label(host, 'assignee'), 'Assignee');
   assert.equal(label(host, 'field'), 'Field');
-  assert.equal(label(host, 'priority'), 'Priority');
+  assert.equal(label(host, 'status'), 'Status');
 });
 
 // ---------------------------------------------------------------------------
@@ -395,7 +387,7 @@ test('lead-filters selections survive a data refresh', function () {
     lead('GALV-9', { project_id: 3, assignees: ['R. Khalid'] }),
     lead('LUNA-1', { project_id: 2, assignees: ['S. Ali'] })
   ]);
-  assert.deepEqual(leadFilterState(), { assignees: ['R. Khalid'], field: 'GALV', status: '', priority: '' });
+  assert.deepEqual(leadFilterState(), { assignees: ['R. Khalid'], field: 'GALV', status: '' });
   assert.deepEqual(names(), ['GALV-2', 'GALV-9']);
   assert.equal(label(host, 'assignee'), 'R. Khalid');
   assert.equal(label(host, 'field'), 'GALV');

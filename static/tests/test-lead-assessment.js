@@ -302,14 +302,25 @@ test('lead-assessment: firstError reads the page in layout order', function () {
   assert.equal(firstError(errors), 'Reservoir TWT (ms) must be a number greater than 0.');
 });
 
-test('lead-assessment: errors render inline, under the cell that owns them', function () {
-  var root = fixture(volumeSectionMarkup(goodValues()));
-  var slots = Array.prototype.map.call(root.querySelectorAll('.la-field-error'), function (el) {
-    return el.getAttribute('data-error-for');
-  });
-  assert.deepEqual(slots,
-    ['p90_area_km2', 'p10_area_km2', 'grv_p90_thousand_acre_ft', 'grv_p10_thousand_acre_ft'],
-    'one error slot per input, addressed by field key');
+test('lead-assessment: each card carries ONE error strip at its bottom, hidden while clean', function () {
+  // No per-cell slots anywhere: a message under an input would grow that cell
+  // and knock the twin grids out of line. Messages go to the card-bottom strip.
+  var volume = fixture(volumeSectionMarkup(goodValues()));
+  assert.equal(volume.querySelectorAll('.la-field-error').length, 0, 'per-cell slots are gone');
+  var strip = volume.querySelector('.la-card-errors[data-la-errors="volume"]');
+  assert.ok(strip, 'the volume card owns one strip');
+  assert.equal(strip.getAttribute('role'), 'alert');
+  assert.ok(strip.hidden, 'clean = hidden, no reserved dead space');
+  assert.equal(strip.textContent, '');
+
+  var thickness = fixture(thicknessSectionMarkup(goodValues(), META_PENDING, ''));
+  assert.ok(thickness.querySelector('.la-card-errors[data-la-errors="thickness"]'));
+  assert.equal(thickness.querySelectorAll('.la-field-error').length, 0);
+
+  var structure = fixture(structureSectionMarkup(goodValues(), []));
+  assert.ok(structure.querySelector('.la-card-errors[data-la-errors="structure"]'),
+    'section 3 reports its TVDSS into a strip too, not under the input');
+  assert.equal(structure.querySelectorAll('.la-field-error').length, 0);
 });
 
 /* -------------------------------------------------------------------------
@@ -1039,10 +1050,38 @@ test('lead-assessment: touching the DERIVED cell is refused with the clear-the-s
 
   var derived = mounted.root.querySelector('[data-la-field="reservoir_thickness_ft"]');
   derived.dispatchEvent(new Event('click', { bubbles: true }));
-  var slot = mounted.root.querySelector('.la-field-error[data-error-for="reservoir_thickness_ft"]');
-  assert.equal(slot.textContent,
+  var strip = mounted.root.querySelector('.la-card-errors[data-la-errors="thickness"]');
+  assert.equal(strip.textContent,
     'Clear Reservoir TWT (ms) before entering Reservoir Thickness (ft).');
-  assert.ok(slot.classList.contains('is-shown'));
+  assert.ok(!strip.hidden, 'the thickness card strip shows the refusal');
+  teardownLeadAssessment();
+});
+
+test('lead-assessment: an invalid value lights its card strip and the input; fixing it clears both', function () {
+  var mounted = mountPage({});
+  var input = userEdits(mounted, 'twt_reservoir_ms', '-5');
+  var strip = mounted.root.querySelector('.la-card-errors[data-la-errors="thickness"]');
+  assert.equal(strip.textContent, 'Reservoir TWT (ms) must be a number greater than 0.');
+  assert.ok(!strip.hidden, 'the message shows in the owning card\'s strip');
+  assert.ok(input.classList.contains('la-invalid'), 'the red border points at the field');
+
+  // The OTHER twin errors independently, into its OWN strip, at the same time.
+  var area = userEdits(mounted, 'p90_area_km2', '-2');
+  var volumeStrip = mounted.root.querySelector('.la-card-errors[data-la-errors="volume"]');
+  assert.equal(volumeStrip.textContent, 'Area P90 (km²) must be a number greater than 0.');
+  assert.ok(!volumeStrip.hidden);
+  assert.ok(area.classList.contains('la-invalid'));
+  assert.ok(!strip.hidden, 'the thickness message stays put');
+
+  // Fixing the fields clears message and border, card by card.
+  userEdits(mounted, 'twt_reservoir_ms', '1500');
+  assert.ok(strip.hidden, 'fixed = hidden again');
+  assert.equal(strip.textContent, '');
+  assert.ok(!input.classList.contains('la-invalid'));
+  assert.ok(!volumeStrip.hidden, 'the volume error is still standing');
+  userEdits(mounted, 'p90_area_km2', '12.6');
+  assert.ok(volumeStrip.hidden);
+  assert.ok(!area.classList.contains('la-invalid'));
   teardownLeadAssessment();
 });
 

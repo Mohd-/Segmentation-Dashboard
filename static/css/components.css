@@ -292,9 +292,9 @@
 .pipeline-toolbar select { flex: 0 1 220px; min-width: 150px; }
 
 /* =========================================================================
-   Lead filter row (Card 1C) — Assignee / Field / Status / Priority
+   Lead filter row (Card 1C) — Assignee / Field / Status
 
-   Four dropdown controls plus Clear Filters, above the lead board. The menus
+   Three dropdown controls plus Clear, above the lead board. The menus
    are position: fixed and placed against the viewport by views/lead-filters.js
    (placeMenu): .pipeline-panel and .lead-column both clip their overflow, so
    an absolutely positioned menu would be cut off by the stage container.
@@ -320,21 +320,20 @@
    may wrap to two lines at cell-third field widths, so no message ever spills
    onto the board below. */
 .lead-controls.has-error { padding-bottom: 32px; }
-/* The middle third. The four dropdowns split it evenly (flex: 1 1 0 on
-   .lead-filter); the min-width is a LEGIBILITY floor — below it the four
-   "All …" values would truncate to four identical stubs — and it is what
-   wraps Clear Filters to a second line inside the third at desktop widths
-   (four floors plus the clear button exceed a third on purpose). Wrap is
-   also the safety valve at narrower viewports: contents drop lines inside
-   the third rather than ever overflowing into a neighbor. */
+/* The middle third. A grid, not a wrapping flex row: three equal trigger
+   tracks plus an auto Clear track, so the row is STRUCTURALLY one line at
+   every desktop width — nothing can wrap to a second line, the triggers can
+   only get narrower. The resting captions (Assignee / Field / Status) fit
+   unellipsized down to 1280; a long SELECTED value ellipsizes inside its
+   trigger (.lf-value) instead of growing the row. */
 .lead-filter-row {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
   align-items: center;
   min-width: 0;
-  gap: var(--space-3);
+  gap: var(--space-2);
 }
-.lead-filter { position: relative; flex: 1 1 0; min-width: 104px; }
+.lead-filter { position: relative; min-width: 0; }
 .lf-trigger {
   display: inline-flex;
   align-items: center;
@@ -342,14 +341,14 @@
   gap: var(--space-2);
   width: 100%;
   min-width: 0;
-  padding: 9px 10px;
+  padding: 8px 10px;
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
   color: var(--ink-800);
   font-family: var(--font-display);
-  font-size: var(--text-base);
+  font-size: var(--text-sm);
   font-weight: 700;
   text-align: left;
   cursor: pointer;
@@ -360,7 +359,7 @@
 .lf-trigger.is-active { border-color: var(--brand-600); background: var(--brand-050); color: var(--brand-700); }
 .lf-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lf-caret { display: inline-flex; align-items: center; color: var(--text-muted); flex: none; }
-.lf-caret .lucide { width: 16px; height: 16px; }
+.lf-caret .lucide { width: 14px; height: 14px; }
 
 .lf-menu {
   position: fixed;
@@ -437,8 +436,7 @@
 .lf-option-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .lf-clear {
-  margin-left: auto;
-  padding: 8px var(--space-3);
+  padding: 8px var(--space-2);
   font-size: var(--text-sm);
   font-weight: 700;
 }
@@ -775,9 +773,9 @@
    ========================================================================= */
 /* The Lead Summary is a narrow reference rail (~⅙ of the content width per
    the 2B mockup — its widest section, the four CoS columns, still fits at
-   300px); the freed width goes to the centre workspace, whose side-by-side
+   270px); the freed width goes to the centre workspace, whose side-by-side
    sections need it more. */
-.detail-shell-lead { grid-template-columns: 272px minmax(360px, 1fr) minmax(300px, 320px); }
+.detail-shell-lead { grid-template-columns: 272px minmax(360px, 1fr) minmax(270px, 290px); }
 
 /* The single back control: outlined, up-arrow, top-left of every lead page. */
 .back-to-board {
@@ -1964,12 +1962,12 @@ button.ghost.success-outline:hover { background: var(--success-100); }
      when the narrower editor column can't fit every column. */
 }
 @media (max-width: 640px) {
-  /* The filter row stacks: each control takes the full width instead of
-     wrapping into ragged pairs, and Clear Filters loses its right-hand pin.
-     Above this width the row just wraps, which still reads as a row. */
-  .lead-filter { flex: 1 1 100%; }
-  .lead-filter .lf-trigger { width: 100%; min-width: 0; }
-  .lf-clear { margin-left: 0; width: 100%; }
+  /* The filter row re-grids into a tidy 2×2: Assignee | Field on the first
+     line, Status | Clear on the second. Above this width the band is already
+     stacked (1100px block) and the single-line grid has the whole viewport,
+     so it needs no override there. */
+  .lead-filter-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lf-clear { width: 100%; }
   /* The band is already stacked (1100px block); here the KPI row additionally
      wraps its tiles, and the Add New Lead button takes the full width like
      every other stacked control. Its top-edge separator carries down. */
@@ -2076,12 +2074,12 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: var(--space-4);
+  padding: var(--space-3);
 }
 
 /* Numbered card headers: the step number in a soft square, then the title.
    Section 4 adds its helper sentence on the same line, pushed right. */
-.la-card-head { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); }
+.la-card-head { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-2); }
 .la-num {
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; flex: none;
@@ -2103,14 +2101,16 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .la-grid {
   display: grid;
   grid-template-columns: minmax(96px, auto) minmax(0, 1fr) minmax(0, 1fr);
-  gap: var(--space-2) var(--space-3);
+  gap: var(--space-1) var(--space-2);
   align-items: start;
 }
 .la-col-head, .la-row-head {
   font-size: var(--text-sm); font-weight: 700; color: var(--ink-800);
   align-self: center;
 }
-.la-col-head { text-align: center; }
+/* One line, always — a wrapped column head ("Thickness (ft)") pushes the
+   header row taller than its twin's and breaks the side-by-side alignment. */
+.la-col-head { text-align: center; white-space: nowrap; }
 .la-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .la-cell input { width: 100%; text-align: center; }
 
@@ -2125,21 +2125,32 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   cursor: not-allowed;
 }
 
-.la-field-error {
-  display: none;
+/* The card's ONE error strip, at its bottom — below the grid, so a message
+   appearing (or wrapping) never moves an input row. `hidden` while clean:
+   no reserved dead space. */
+.la-card-errors {
+  width: 100%;
+  margin: var(--space-2) 0 0;
   font-size: var(--text-xs);
-  line-height: 1.3;
+  line-height: 1.35;
   color: var(--danger-600);
 }
-.la-field-error.is-shown { display: block; }
 .la-invalid { border-color: var(--danger-500); }
 
-.la-note { margin: var(--space-3) 0 0; font-size: var(--text-xs); color: var(--text-faint); }
+.la-note { margin: var(--space-2) 0 0; font-size: var(--text-xs); color: var(--text-faint); }
 
-/* ---- Section 3: full-width TVDSS + confirmation -------------------------- */
-.la-card-wide { display: flex; align-items: center; gap: var(--space-4); }
-.la-tvdss { display: flex; flex-direction: column; gap: 2px; flex: 0 1 340px; }
-.la-polygons { margin: 0; font-size: var(--text-sm); }
+/* ---- Section 3: full-width TVDSS + confirmation --------------------------
+   Essentially ONE control row tall: slim vertical padding, one inner flex row
+   (number badge | TVDSS | checkbox) with the card's error strip BELOW it. The
+   checkbox sentence stays on one line — the TVDSS input yields width first
+   (no wrap: the row shrinks its input, it never drops the checkbox). */
+.la-card-wide {
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
+}
+.la-wide-row { display: flex; align-items: center; gap: var(--space-3); }
+.la-tvdss { display: flex; flex-direction: column; gap: 2px; flex: 0 1 340px; min-width: 150px; }
+.la-polygons { margin: 0; font-size: var(--text-sm); white-space: nowrap; }
 
 /* ---- Section 4: PIIP results -------------------------------------------- */
 .la-scenarios { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-2); }
@@ -2223,7 +2234,8 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   .la-twins { grid-template-columns: minmax(0, 1fr); }
   .la-results { grid-template-columns: minmax(0, 1fr); }
   .la-scenarios { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .la-card-wide { flex-direction: column; align-items: stretch; }
+  .la-wide-row { flex-direction: column; align-items: stretch; }
+  .la-polygons { white-space: normal; }
   .la-helper { margin-left: 0; }
   .la-card-head { flex-wrap: wrap; }
 }
