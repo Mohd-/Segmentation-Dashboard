@@ -16,7 +16,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/css/base.css?v=10">
-  <link rel="stylesheet" href="/static/css/components.css?v=38">
+  <link rel="stylesheet" href="/static/css/components.css?v=39">
 </head>
 <body>
   <section id="login-page" class="login-page hidden">
@@ -245,7 +245,14 @@
             <button id="back-to-overview" class="ghost" type="button"><svg aria-hidden="true" focusable="false" class="lucide lucide-arrow-left" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="m12 19-7-7 7-7"/> <path d="M19 12H5"/> </svg> Back to Pipeline</button>
             <button id="switch-pipeline-view" class="ghost rail-switch-pipeline" type="button">View Other Pipeline</button>
           </div>
-          <h3 id="detail-name">Select Lead / Well</h3>
+          <!-- Lead-level priority: ONE chip for the whole record (lead AND BP
+               well shells). views/detail.js renders it from project.priority
+               (Low when unset); supervisors click it to cycle
+               Low → Medium → High → Low, everyone else sees a static chip. -->
+          <div class="detail-title-row">
+            <h3 id="detail-name">Select Lead / Well</h3>
+            <button id="lead-priority-chip" type="button" class="priority priority-low lead-priority-chip hidden" title="Priority: Low">Low</button>
+          </div>
           <p id="detail-subtitle">Choose a pipeline card to open its components.</p>
           <p id="detail-view-note" class="detail-view-note hidden"></p>
           <!-- Lead pages relocate this into the Lead Summary gear as
@@ -263,7 +270,6 @@
             <h2 id="component-title">Component</h2>
           </div>
           <select id="assigned-to" class="editor-assignee" aria-label="Assignee"></select>
-          <button id="component-priority-chip" type="button" class="priority priority-medium editor-priority-chip" title="Priority: Medium — click to change">Medium</button>
           <span id="component-status-chip" class="status not-assigned editor-status-chip">Not Assigned</span>
         </div>
         <form id="component-form" class="component-form">
@@ -409,6 +415,6 @@
     <img id="ra-lightbox-img" alt="">
   </dialog>
 
-  <script type="module" src="/static/js/main.js?v=36"></script>
+  <script type="module" src="/static/js/main.js?v=37"></script>
 </body>
 </html>

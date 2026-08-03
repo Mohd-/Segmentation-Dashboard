@@ -218,10 +218,10 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
             INSERT INTO projects (
                 project_name, start_date, target_date, last_updated,
                 lead_folder_path, lead_x, lead_y, business_plan_enabled, business_plan_year,
-                active_well_enabled, pipeline_type
+                active_well_enabled, pipeline_type, priority
             ) VALUES (:project_name, :start_date, :target_date, :last_updated,
                       :lead_folder_path, :lead_x, :lead_y, :business_plan_enabled, :business_plan_year,
-                      :active_well_enabled, :pipeline_type)
+                      :active_well_enabled, :pipeline_type, :priority)
         """, {
             "project_name": project_name, "start_date": start_date,
             "target_date": target_date, "last_updated": now,
@@ -229,6 +229,11 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
             "lead_x": lead_x or None, "lead_y": lead_y or None,
             "business_plan_enabled": bp_enabled, "business_plan_year": year_val,
             "active_well_enabled": 1 if active_well_enabled else 0, "pipeline_type": pipeline_type,
+            # Card 1D: a brand-new record starts at the LOWEST lead-level
+            # priority, so its board card renders gray until a supervisor
+            # deliberately escalates the lead
+            # (PATCH /api/projects/<id>/priority).
+            "priority": "Low",
         })
         project_id = result.lastrowid  # PG: use RETURNING when on Postgres
         first_task_id = None
@@ -252,12 +257,10 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
                 "stage_group": stage_group, "assigned_to": None,
                 "status": initial_status,
                 "actual_start": None, "actual_finish": None,
-                # Card 1D: a brand-new record starts at the LOWEST priority, so
-                # its board card renders gray until somebody deliberately
-                # raises a step (PATCH /api/tasks/<id>/priority, supervisor
-                # only). _lead_priority derives the card color from these rows,
-                # so 'Low' here is what makes a fresh lead read as un-escalated
-                # instead of borrowing Medium's blue.
+                # Legacy per-TASK priority: kept at 'Low' for server compat
+                # (PATCH /api/tasks/<id>/priority still writes it), but since
+                # v9 the board's card color comes from the LEAD-LEVEL
+                # projects.priority above, not from these rows.
                 "comments": None, "priority": "Low",
                 "business_plan_enabled": bp_enabled, "business_plan_year": year_val,
                 "last_updated": now,
@@ -325,9 +328,16 @@ _TRACKED_ITEM_STEPS = tuple(
        if stage_group not in BP_EXECUTION_STAGES and task_name != "Lead Assessment"]
 )
 
-# Card border / column sort vocabulary. "Normal" (the models.py server default
-# for legacy rows) and anything else unrecognized is treated as ABSENT.
-_PRIORITY_RANK = {"High": 0, "Medium": 1, "Low": 2}
+# Card border / column sort vocabulary. Priority is a LEAD/WELL-LEVEL stored
+# attribute since v9 (projects.priority, supervisor-only via
+# PATCH /api/projects/<id>/priority). NULL (pre-backfill) and anything
+# unrecognized normalize to the un-escalated "Low".
+_PROJECT_PRIORITIES = ("Low", "Medium", "High")
+
+
+def _normalized_project_priority(value):
+    """The stored projects.priority, normalized: Low/Medium/High or 'Low'."""
+    return value if value in _PROJECT_PRIORITIES else "Low"
 
 
 def _tracked_items(status_by_task, lead_assessment_fields=None):
@@ -367,27 +377,6 @@ def _tracked_items(status_by_task, lead_assessment_fields=None):
     return items
 
 
-def _lead_priority(rows):
-    """The lead's priority: the highest priority still riding on OPEN work.
-
-    There is no stored per-project priority column -- priority is a per-TASK
-    field (project_tasks.priority, supervisor-only via
-    PATCH /api/tasks/<id>/priority). The lead-level value the board needs is
-    therefore derived: the most urgent priority among the tasks the lead still
-    has to do. Approved rows are excluded (finished work cannot make a lead
-    urgent), and unrecognized/legacy values ("Normal") are ignored, leaving the
-    documented "Low" default when nothing applies.
-
-    ``rows`` is already narrowed to the project's applicable active tasks.
-    """
-    ranks = [_PRIORITY_RANK[r["priority"]] for r in rows
-             if r["status"] != "Approved" and r.get("priority") in _PRIORITY_RANK]
-    if not ranks:
-        return "Low"
-    best = min(ranks)
-    return next(name for name, rank in _PRIORITY_RANK.items() if rank == best)
-
-
 def _annotate_card_state(project, rows, stages, lead_assessment_fields=None):
     """Attach the Card 1B card fields to one project dict, in place.
 
@@ -401,7 +390,9 @@ def _annotate_card_state(project, rows, stages, lead_assessment_fields=None):
         if name and name not in assignees:
             assignees.append(name)
     project["assignees"] = assignees
-    project["lead_priority"] = _lead_priority(applicable)
+    # Since v9 the lead's priority IS the stored projects.priority (already on
+    # the project dict -- both readers select the full row); NULL reads "Low".
+    project["lead_priority"] = _normalized_project_priority(project.get("priority"))
     # Since v5 the stored stage group IS the board column, so display_stage is
     # the derived current_stage verbatim. The key stays on the payload (the
     # board and its tests read it) rather than making every client fall back to
@@ -514,9 +505,11 @@ def _annotate_derived_state(session, projects):
     that derivation, shared by get_projects (board) and get_project (detail):
 
     - current task  = first active task with status != 'Approved' in the
-      pipeline's applicable stages, ordered by sequence_no. Its stage_group,
-      assigned_to and priority become current_stage / current_owner /
-      current_task_priority; overall_status = 'In Progress'.
+      pipeline's applicable stages, ordered by sequence_no. Its stage_group and
+      assigned_to become current_stage / current_owner;
+      overall_status = 'In Progress'. current_task_priority is NOT per-task any
+      more: since v9 it echoes the stored lead-level projects.priority (the key
+      survives for payload-shape stability).
     - no open task  = 'Completed', anchored on the LAST applicable active task
       (falling back to the last applicable PIPELINE_TEMPLATES entry when no
       active rows survive: "Approval to Stake" for a prospect, "PDA" for a BP
@@ -577,8 +570,7 @@ def _annotate_derived_state(session, projects):
             fallback = next((t for t in reversed(PIPELINE_TEMPLATES) if t[2] in stages), None)
             anchor = next((r for r in reversed(rows) if r["stage_group"] in stages), None) \
                 or {"task_name": fallback[1] if fallback else None,
-                    "stage_group": fallback[2] if fallback else stages[-1],
-                    "priority": "Medium"}
+                    "stage_group": fallback[2] if fallback else stages[-1]}
             current_owner = None
             overall_status = "Completed"
         current_stage = anchor["stage_group"]
@@ -589,7 +581,12 @@ def _annotate_derived_state(session, projects):
         project["current_owner"] = current_owner
         project["overall_status"] = overall_status
         project["current_stage_started_at"] = min(started) if started else project.get("start_date")
-        project["current_task_priority"] = anchor.get("priority") or "Medium"
+        # Priority is a LEAD/WELL-LEVEL stored attribute since v9. The stored
+        # value is normalized in place (NULL/unrecognized -> 'Low') and the
+        # legacy per-task payload key is kept for contract stability, sourced
+        # from the SAME stored value.
+        project["priority"] = _normalized_project_priority(project.get("priority"))
+        project["current_task_priority"] = project["priority"]
         # The field a record belongs to. There is NO stored field column: the
         # field is the first segment of the record name ("GALV-2" -> "GALV"),
         # exactly as folders.parse_field_and_well derives it for the share
@@ -639,16 +636,11 @@ def get_projects(session, search_text="", stage_filter="All", status_filter="All
     where_clause = " AND ".join(conditions)
     rows = db.fetch_all(session, f"""
         SELECT p.*,
-               COALESCE(priority_flags.has_high_priority_tasks, 0) AS has_high_priority_tasks,
+               -- Priority is lead-level since v9: the legacy per-lead flag key
+               -- survives on the payload but reads the stored projects.priority.
+               CASE WHEN p.priority = 'High' THEN 1 ELSE 0 END AS has_high_priority_tasks,
                COALESCE(active_drilling.is_drilling, 0) AS is_drilling
         FROM projects p
-        LEFT JOIN (
-            SELECT project_id,
-                   MAX(CASE WHEN priority = 'High' THEN 1 ELSE 0 END) AS has_high_priority_tasks
-            FROM project_tasks
-            WHERE is_active = 1
-            GROUP BY project_id
-        ) priority_flags ON priority_flags.project_id = p.project_id
         LEFT JOIN (
             -- Aggregated per project so multiple Quicklook rows (legacy +
             -- canonical) never multiply the outer projects row.
@@ -718,6 +710,54 @@ def get_project(session, project_id):
         project["lead_folder_path"] = folders.default_lead_folder_path(project.get("project_name") or "")
     _annotate_derived_state(session, [project])
     return project
+
+
+def set_project_priority(session, project_id, priority_value, changed_by="Admin"):
+    """Set the LEAD/WELL-LEVEL priority (Low/Medium/High) and log the change.
+
+    Priority is a lead-level attribute (projects.priority, supervisor-only via
+    PATCH /api/projects/<id>/priority). An unrecognized value is REJECTED
+    (ValueError), never silently defaulted -- unlike the legacy per-task
+    set_task_priority, this write states intent explicitly. An unchanged value
+    writes nothing (no history noise). The one history event anchors on the
+    project's first active task, the same anchor "Lead Created" uses.
+
+    Returns the stored priority after the call (normalized).
+    """
+    project = db.fetch_one(session,
+                           "SELECT project_id, priority FROM projects WHERE project_id = :project_id",
+                           {"project_id": project_id})
+    if not project:
+        raise ValueError("Lead / well not found.")
+    new_priority = str(priority_value or "").strip().title()
+    if new_priority not in _PROJECT_PRIORITIES:
+        raise ValueError("Priority must be Low, Medium or High.")
+    old_priority = _normalized_project_priority(project.get("priority"))
+    if new_priority == old_priority:
+        return old_priority
+    with db.write_transaction(session):
+        db.execute(session, """
+            UPDATE projects SET priority = :priority, last_updated = :now
+            WHERE project_id = :project_id
+        """, {"priority": new_priority, "now": utc_now_str(), "project_id": project_id})
+        anchor = db.fetch_one(session, """
+            SELECT task_id, task_name FROM project_tasks
+            WHERE project_id = :project_id AND is_active = 1
+            ORDER BY sequence_no LIMIT 1
+        """, {"project_id": project_id})
+        if anchor:
+            log_task_event(
+                session,
+                task_id=anchor["task_id"],
+                project_id=project_id,
+                task_name=anchor["task_name"],
+                action_type="Priority Changed",
+                old_status=old_priority,
+                new_status=new_priority,
+                changed_by=changed_by,
+                comment=f"Priority set to {new_priority}.",
+            )
+    return new_priority
 
 
 def project_completion_percent(session, project_id):

@@ -51,6 +51,10 @@ export var API = {
   rename: function (id, payload) { return api('/api/projects/' + id + '/rename', jsonOptions('PATCH', payload)); },
   deleteProject: function (id) { return api('/api/projects/' + id, { method: 'DELETE' }); },
   flags: function (id, payload) { return api('/api/projects/' + id + '/flags', jsonOptions('PATCH', payload)); },
+  // Lead-level priority: ONE stored value per record (projects.priority),
+  // supervisor-only server-side. Replaces the retired per-task
+  // PATCH /api/tasks/<id>/priority call.
+  projectPriority: function (id, payload) { return api('/api/projects/' + id + '/priority', jsonOptions('PATCH', payload)); },
   tasks: function (id) { return api('/api/projects/' + id + '/tasks'); },
   projectFields: function (id) { return api('/api/projects/' + id + '/dynamic-fields'); },
   formations: function (id) { return api('/api/projects/' + id + '/formations'); },
@@ -62,7 +66,6 @@ export var API = {
   updateTask: function (id, payload) { return api('/api/tasks/' + id, jsonOptions('PATCH', payload)); },
   assign: function (id, payload) { return api('/api/tasks/' + id + '/assign', jsonOptions('POST', payload)); },
   transition: function (id, payload) { return api('/api/tasks/' + id + '/transition', jsonOptions('POST', payload)); },
-  priority: function (id, payload) { return api('/api/tasks/' + id + '/priority', jsonOptions('PATCH', payload)); },
   // Resource Assessment calculator (views/resource-calculator.js): taskId is
   // the Resource Assessment component's own task_id.
   resourceAssessment: function (taskId, payload) { return api('/api/tasks/' + taskId + '/resource-assessment', jsonOptions('POST', payload)); },

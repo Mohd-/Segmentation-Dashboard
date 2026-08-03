@@ -1,7 +1,7 @@
 import { byId, all, esc, isFilled, truthy, msg, fmtNum } from '../dom.js';
 import { ICONS } from '../icons.js';
 import { API } from '../api.js';
-import { currentUserName, currentProjectPipeline, isCurrentPipelineView, Store, resetSelection } from '../state.js';
+import { currentUserName, currentRole, currentProjectPipeline, isCurrentPipelineView, Store, resetSelection } from '../state.js';
 import { activateTab } from '../navigation.js';
 import { BP_STAGES, PROSPECT_STAGES, STATUSES, DONE, SEISMIC_BLOCKS, FLOWBACK_RATE_FIELDS } from '../schema.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
@@ -44,6 +44,51 @@ var LEAD_STAGE_ICONS = {
   'Risk Analysis': 'gauge',
   'Pre-Well Delivery': 'rig'
 };
+
+/* -------------------------------------------------------------------------
+   Lead-level priority — ONE chip for the whole record
+
+   Priority is a stored lead/well attribute (projects.priority), not a per-step
+   value: the chip sits next to the record name in the shell header for BOTH
+   shells (lead and BP well), renders from Store.project.priority (Low when
+   unset — the creation default), and only a supervisor can cycle it
+   Low → Medium → High → Low (anonymous dev mode acts as supervisor, matching
+   the backend's current_role()). Everyone else sees a static, disabled chip.
+   ------------------------------------------------------------------------- */
+
+var LEAD_PRIORITY_CYCLE = { Low: 'Medium', Medium: 'High', High: 'Low' };
+
+// Exported so the cycle order is pinned by a test, not just by the handler.
+export function nextLeadPriority(current) {
+  return LEAD_PRIORITY_CYCLE[current || 'Low'] || 'Low';
+}
+
+function canSetLeadPriority() {
+  return currentRole() === 'supervisor';
+}
+
+export function renderLeadPriorityChip() {
+  var chip = byId('lead-priority-chip');
+  if (!chip) return;
+  var value = (Store.project && Store.project.priority) || 'Low';
+  var editable = canSetLeadPriority();
+  chip.disabled = !editable;
+  chip.textContent = value;
+  chip.className = 'priority lead-priority-chip priority-' + String(value).toLowerCase() +
+    (editable ? '' : ' lead-priority-chip-static');
+  chip.title = 'Priority: ' + value + (editable ? ' — click to change' : ' — set by a supervisor');
+}
+
+// PATCH the record's stored priority, then run the standard record refresh so
+// the chip, sidebar, summary and every board re-render from the new payload.
+// Wired once in main.js (the chip is static markup in index.html).
+export function cycleLeadPriorityChip() {
+  if (!Store.projectId || !Store.project || !canSetLeadPriority()) return Promise.resolve();
+  var next = nextLeadPriority(Store.project.priority);
+  return API.projectPriority(Store.projectId, { priority: next, changed_by: currentUserName() })
+    .then(function () { return refreshAfterRecordChange('Priority set to ' + next + '.'); })
+    .catch(function (error) { msg(error.message, 'error'); });
+}
 
 export function tasksForPipeline(pipeline) {
   // Prefer the authoritative stage lists from /api/meta (Store.meta); the
@@ -366,6 +411,9 @@ export function renderDetail() {
   var isReference = !isCurrentPipelineView();
   var leadView = isLeadView();
   byId('detail-name').textContent = Store.project.project_name || 'Lead / Well';
+  // The chip ships hidden in index.html (no record selected yet); the render
+  // rewrites its className wholesale, which is also what reveals it.
+  renderLeadPriorityChip();
   byId('detail-subtitle').textContent = viewLabel + (isReference ? ' · Reference view' : ' · Current phase');
   byId('back-to-overview').textContent = '← Back to ' + currentLabel;
   /* Card 2A shell swap. The LEAD page shows one outlined back control and an

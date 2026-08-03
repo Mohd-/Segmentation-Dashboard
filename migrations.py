@@ -42,7 +42,7 @@ import db
 from helpers import utc_now_str
 from models import Base
 
-LATEST_SCHEMA_VERSION = 7
+LATEST_SCHEMA_VERSION = 9
 
 
 # ---------------------------------------------------------------------------
@@ -635,10 +635,17 @@ _V7_RESEQUENCE = {
     "Pre-Drilling GeoX Assessment": 9,
 }
 _V7_MIGRATION_ACTOR = "System (migration v7)"
+_V7_MIGRATION_COMMENT = "Merged from 4 Lead Assessment steps (migration v7)"
 
 
-def _v7_log(session, task_id, project_id, status):
-    """Write the one immutable migration event on the v7 survivor."""
+def _v7_log(session, task_id, project_id, status,
+            actor=_V7_MIGRATION_ACTOR, comment=_V7_MIGRATION_COMMENT):
+    """Write the one immutable migration event on the v7 survivor.
+
+    ``actor``/``comment`` default to the frozen v7 values so a v7 replay stays
+    byte-identical; v8's repair fold passes its own so the audit trail says
+    which migration actually performed the merge.
+    """
     db.execute(session, """
         INSERT INTO task_history (task_id, project_id, task_name, action_type,
                                   old_status, new_status, changed_at, changed_by, comment)
@@ -646,8 +653,8 @@ def _v7_log(session, task_id, project_id, status):
                 NULL, :status, :changed_at, :changed_by, :comment)
     """, {"task_id": task_id, "project_id": project_id,
           "task_name": _V7_LEAD_ASSESSMENT, "status": status,
-          "changed_at": utc_now_str(), "changed_by": _V7_MIGRATION_ACTOR,
-          "comment": "Merged from 4 Lead Assessment steps (migration v7)"})
+          "changed_at": utc_now_str(), "changed_by": actor,
+          "comment": comment})
 
 
 def _v7_assert_disjoint_field_keys(session, project_id, source_rows):
@@ -696,13 +703,17 @@ def _v7_merged_comments(source_rows):
     return "\n\n".join(f"{name}: {comment}" for name, comment in comments)
 
 
-def _v7_merge_lead_assessment_rows(session, now) -> None:
+def _v7_merge_lead_assessment_rows(session, now, actor=_V7_MIGRATION_ACTOR,
+                                   comment=_V7_MIGRATION_COMMENT) -> None:
     """Create a single v7 Lead Assessment row and move its EAV values.
 
     The insert is guarded by the survivor name.  A successfully migrated
     project has that row forever, so replay is a true no-op.  The old rows are
     not deleted: history stays attached to their original task ids while their
     EAV inputs move to the sole active owner and the old rows are retired.
+
+    ``actor``/``comment`` default to the frozen v7 history values (v7 replay is
+    byte-identical); the v8 repair fold runs the same merge under its own name.
     """
     rows = db.fetch_all(session, """
         SELECT pt.task_id, pt.project_id, pt.task_name, pt.status, pt.assigned_to, pt.comments,
@@ -770,7 +781,7 @@ def _v7_merge_lead_assessment_rows(session, now) -> None:
             WHERE task_id IN :source_task_ids
         """, {"merged_task_id": merged_task_id, "now": now,
               "source_task_ids": [row["task_id"] for row in source_rows]})
-        _v7_log(session, merged_task_id, project_id, status)
+        _v7_log(session, merged_task_id, project_id, status, actor=actor, comment=comment)
         db.execute(session, """
             UPDATE project_tasks
             SET is_active = 0
@@ -795,6 +806,72 @@ def _migrate_v7_lead_assessment_single_step(session, engine) -> None:
     _v7_resequence(session)
 
 
+# v8: history vocabulary for the repair replay of the v7 fold.  Frozen here for
+# the same reason as the v7 constants above.
+_V8_MIGRATION_ACTOR = "System (migration v8)"
+_V8_MIGRATION_COMMENT = "Merged from 4 Lead Assessment steps (migration v8 repair)"
+
+
+def _migrate_v8_repair_lead_assessment_fold(session, engine) -> None:
+    """v8: repair projects the v7 fold missed because a stale server made them.
+
+    A pre-v7 server process that kept running after the database was already
+    stamped v7 created NEW prospect projects carrying the old four-row Lead
+    Assessment template (observed on dev projects 29/30).  Those projects are
+    broken under v7+ code, and v7 itself never runs again on a v7-stamped
+    database.  This step re-runs the SAME frozen merge (guarded per project by
+    the absence of a "Lead Assessment" row, so it is a no-op on every healthy
+    project) under the v8 actor/comment, then re-freezes the sequence slots.
+    """
+    _v7_merge_lead_assessment_rows(session, utc_now_str(),
+                                   actor=_V8_MIGRATION_ACTOR,
+                                   comment=_V8_MIGRATION_COMMENT)
+    _v7_resequence(session)
+
+
+# v9: priority becomes a LEAD/WELL-LEVEL attribute (projects.priority).  The
+# backfill vocabulary is frozen here rather than imported from
+# workflow.constants: a shipped migration must not change behavior when the
+# runtime vocabulary later changes.
+_V9_PRIORITY_RANK = {"High": 0, "Medium": 1, "Low": 2}
+
+
+def _migrate_v9_project_priority(session, engine) -> None:
+    """v9: add nullable ``projects.priority`` TEXT and backfill it once.
+
+    Column add is guarded on existence (the v6 ground_elevation pattern).  The
+    backfill writes the most urgent value among the project's OPEN work -- its
+    active, not-yet-Approved task rows carrying a recognized High/Medium/Low --
+    defaulting to 'Low' when none apply, which reproduces what the board's old
+    derived ``_lead_priority`` reported.  Only rows still NULL are written, so
+    a replay (or a hand-populated column) changes nothing.
+    """
+    columns = {column["name"] for column in inspect(engine).get_columns("projects")}
+    if "priority" not in columns:
+        db.execute(session, "ALTER TABLE projects ADD COLUMN priority TEXT")
+    rows = db.fetch_all(session, """
+        SELECT p.project_id, pt.priority
+        FROM projects p
+        LEFT JOIN project_tasks pt
+          ON pt.project_id = p.project_id
+         AND pt.is_active = 1
+         AND pt.status != 'Approved'
+         AND pt.priority IN ('High', 'Medium', 'Low')
+        WHERE p.priority IS NULL
+    """)
+    best_by_project = {}
+    for row in rows:
+        rank = _V9_PRIORITY_RANK.get(row["priority"], _V9_PRIORITY_RANK["Low"])
+        current = best_by_project.get(row["project_id"], _V9_PRIORITY_RANK["Low"])
+        best_by_project[row["project_id"]] = min(rank, current)
+    for project_id, rank in best_by_project.items():
+        value = next(name for name, r in _V9_PRIORITY_RANK.items() if r == rank)
+        db.execute(session, """
+            UPDATE projects SET priority = :priority
+            WHERE project_id = :project_id AND priority IS NULL
+        """, {"priority": value, "project_id": project_id})
+
+
 # List of (version, fn) dispatched by run() in ascending order against the
 # stored schema_version. Append new steps with the next integer version and
 # bump LATEST_SCHEMA_VERSION to match; never edit or remove a shipped step.
@@ -805,6 +882,8 @@ MIGRATIONS = [
     (5, _migrate_v5_prospect_template_restructure),
     (6, _migrate_v6_ground_elevation),
     (7, _migrate_v7_lead_assessment_single_step),
+    (8, _migrate_v8_repair_lead_assessment_fold),
+    (9, _migrate_v9_project_priority),
 ]
 
 

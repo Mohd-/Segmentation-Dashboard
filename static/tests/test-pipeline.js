@@ -254,7 +254,7 @@ test('pipeline.renderPipeline still renders the BP board exactly as before', fun
     project_id: 7, project_name: 'BP-WELL-1', pipeline_type: 'bp',
     current_stage: 'Post-Drilling', current_task: 'Quicklook Logs',
     current_owner: 'Employee', overall_status: 'In Progress',
-    current_task_priority: 'High'
+    lead_priority: 'High'
   }], ['Well Delivery', 'Post-Drilling', 'Post-Testing'], 'bp');
 
   assert.equal(element.querySelectorAll('.pipeline-column').length, 3);
@@ -268,4 +268,29 @@ test('pipeline.renderPipeline still renders the BP board exactly as before', fun
   assert.equal(card.querySelector('.pipeline-card-component').textContent, 'Quicklook Logs');
   assert.equal(card.querySelector('.pipeline-card-assignee').textContent, 'Employee');
   assert.equal(card.querySelector('.priority').textContent, 'High');
+});
+
+test('pipeline BP card chip reads the LEAD-LEVEL priority, not the per-step one', function () {
+  var root = fixture('<div id="bp2" class="pipeline-board"></div>');
+  var element = root.querySelector('#bp2');
+  renderPipeline(element, [{
+    project_id: 8, project_name: 'BP-WELL-2', pipeline_type: 'bp',
+    current_stage: 'Post-Drilling', current_task: 'Quicklook Logs',
+    current_owner: 'Employee', overall_status: 'In Progress',
+    // A stale per-step value must be ignored in favor of the record's own.
+    current_task_priority: 'Low',
+    lead_priority: 'High'
+  }, {
+    project_id: 9, project_name: 'BP-WELL-3', pipeline_type: 'bp',
+    current_stage: 'Post-Drilling', current_task: 'Quicklook Logs',
+    current_owner: 'Employee', overall_status: 'In Progress',
+    current_task_priority: 'High',
+    lead_priority: 'Low'
+  }], ['Well Delivery', 'Post-Drilling', 'Post-Testing'], 'bp');
+
+  var cards = element.querySelectorAll('.pipeline-card');
+  assert.equal(cards[0].querySelector('.priority').textContent, 'High',
+    'the record-level High renders even when the step said Low');
+  assert.equal(cards[1].querySelector('.priority'), null,
+    'a resting (Low) record carries no chip even when the step said High');
 });

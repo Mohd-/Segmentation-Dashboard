@@ -1314,6 +1314,172 @@ def test_migration_v7_refuses_a_cross_step_eav_key_collision(client, app_modules
         session.close()
 
 
+# ---------------------------------------------------------------------------
+# v8: repair fold for projects a stale pre-v7 server created in a v7+ database
+# ---------------------------------------------------------------------------
+
+def _insert_stale_pre_v7_project(db_path, name):
+    """Insert a prospect project carrying the OLD four-row Lead Assessment
+    template, raw -- exactly what a stale pre-v7 server process created inside
+    an already-v7-stamped database (dev projects 29/30). Dynamic fields sit on
+    the Resource Assessment row, matching the observed corruption."""
+    conn = raw_sqlite_connect(db_path)
+    try:
+        cursor = conn.execute("""
+            INSERT INTO projects (project_name, start_date, last_updated, pipeline_type)
+            VALUES (?, '2026-07-01', datetime('now'), 'prospect')
+        """, (name,))
+        pid = cursor.lastrowid
+        for sequence, task_name in enumerate(
+                ("Area Definition", "Thickness Estimation", "GRV Inputs",
+                 "Resource Assessment"), start=1):
+            conn.execute("""
+                INSERT INTO project_tasks (project_id, sequence_no, task_name, stage_group,
+                                           status, priority, is_active, last_updated)
+                VALUES (?, ?, ?, 'Lead Assessment', 'In Progress', 'Medium', 1, datetime('now'))
+            """, (pid, sequence, task_name))
+        # One later step from the old template, to prove v8 re-freezes the
+        # sequence slots; the merge itself only needs the four rows above.
+        conn.execute("""
+            INSERT INTO project_tasks (project_id, sequence_no, task_name, stage_group,
+                                       status, priority, is_active, last_updated)
+            VALUES (?, 5, 'Reservoir CoS', 'Risk Analysis', 'Not Assigned', 'Low', 1, datetime('now'))
+        """, (pid,))
+        task_id = conn.execute(
+            "SELECT task_id FROM project_tasks WHERE project_id = ? AND task_name = 'Resource Assessment'",
+            (pid,)).fetchone()["task_id"]
+        for key, value in (("grv_p90_thousand_acre_ft", "40"), ("lead_piip_gas_mean", "12.5")):
+            conn.execute("""
+                INSERT INTO task_dynamic_fields (task_id, field_key, field_value, updated_at)
+                VALUES (?, ?, ?, datetime('now'))
+            """, (task_id, key, value))
+        conn.commit()
+        return pid
+    finally:
+        conn.close()
+
+
+def _stamp_schema_version(db_path, version):
+    conn = raw_sqlite_connect(db_path)
+    with conn:
+        conn.execute("UPDATE app_settings SET value = ? WHERE key = 'schema_version'",
+                     (str(version),))
+    conn.close()
+
+
+def test_migration_v8_repairs_a_stale_server_lead_assessment_fold(client, app_modules):
+    """v8 re-runs the frozen v7 merge under its own audit name: a project the
+    v7 fold never saw (created by a stale pre-v7 server AFTER the database was
+    stamped v7) is folded to one Lead Assessment row, its EAV values move, the
+    survivors are resequenced, healthy projects are untouched, and a replay
+    changes nothing."""
+    _, dbmod = app_modules
+    import migrations
+
+    healthy = create_project(client, "V8-HEALTHY-1")
+    pid = _insert_stale_pre_v7_project(client.db_path, "V8-STALE-1")
+    _stamp_schema_version(client.db_path, 7)
+
+    _rebootstrap(dbmod, client.db_path)
+    rows, fields, history, version = _v7_lead_assessment_shape(client.db_path, pid)
+    merged = next(row for row in rows if row[1] == "Lead Assessment")
+    # (sequence_no, name, status, assigned_to, start, finish, comments, is_active)
+    assert merged == (1, "Lead Assessment", "In Progress", None, None, None, None, 1)
+    assert {row[1] for row in rows if row[7] == 0} == \
+        {name for name, _seq in _V7_LEGACY_LEAD_STEPS}
+    # v8 re-froze the sequence slots: Reservoir CoS moved from the old 5 to 2.
+    assert next(row for row in rows if row[1] == "Reservoir CoS")[0] == 2
+    # The EAV values left the corrupted Resource Assessment row wholesale.
+    assert set(fields) == {("Lead Assessment", "grv_p90_thousand_acre_ft", "40"),
+                           ("Lead Assessment", "lead_piip_gas_mean", "12.5")}
+    assert version == str(migrations.LATEST_SCHEMA_VERSION)
+    # The one migration event carries the v8 actor and repair comment.
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        events = [tuple(row) for row in conn.execute("""
+            SELECT task_name, action_type, new_status, changed_by, comment
+            FROM task_history WHERE project_id = ? ORDER BY history_id
+        """, (pid,))]
+    finally:
+        conn.close()
+    assert events == [("Lead Assessment", "Migration-Merged", "In Progress",
+                       "System (migration v8)",
+                       "Merged from 4 Lead Assessment steps (migration v8 repair)")]
+    # The healthy project kept its single row and gained no migration event.
+    healthy_rows, _hf, healthy_history, _hv = _v7_lead_assessment_shape(client.db_path, healthy)
+    assert [row[1] for row in healthy_rows if row[7] == 1].count("Lead Assessment") == 1
+    assert not any(event[1] == "Migration-Merged" for event in healthy_history)
+
+    # Replay: force v8 to run again against the repaired file -- the per-project
+    # "Lead Assessment row exists" guard makes it a true no-op.
+    before = _v7_lead_assessment_shape(client.db_path, pid)
+    _stamp_schema_version(client.db_path, 7)
+    _rebootstrap(dbmod, client.db_path)
+    assert _v7_lead_assessment_shape(client.db_path, pid) == before
+
+
+# ---------------------------------------------------------------------------
+# v9: priority becomes a stored LEAD-LEVEL attribute (projects.priority)
+# ---------------------------------------------------------------------------
+
+def _stored_project_priority(db_path, project_id):
+    conn = raw_sqlite_connect(db_path)
+    try:
+        return conn.execute("SELECT priority FROM projects WHERE project_id = ?",
+                            (project_id,)).fetchone()["priority"]
+    finally:
+        conn.close()
+
+
+def test_migration_v9_adds_and_backfills_lead_level_priority(client, app_modules):
+    """Upgrade-and-replay for step 9: a v8-shaped database (projects table
+    WITHOUT the priority column) gets the column, backfilled per project with
+    the most urgent priority among its OPEN active tasks -- reproducing what
+    the board's old derived lead_priority reported -- and 'Low' when none."""
+    _, dbmod = app_modules
+    import migrations
+
+    high = create_project(client, "V9-HIGH-1")
+    done_high = create_project(client, "V9-DONE-HIGH-1")
+    task = get_task_by_name(client, high, "Moving Tolerance")
+    assert client.patch(f"/api/tasks/{task['task_id']}/priority",
+                        json={"priority": "High"}).status_code == 200
+
+    conn = raw_sqlite_connect(client.db_path)
+    with conn:
+        # An Approved High task must NOT escalate the lead: finished work is
+        # excluded from the backfill, leaving the 'Low' default.
+        conn.execute("UPDATE project_tasks SET priority = 'High', status = 'Approved' "
+                     "WHERE project_id = ? AND task_name = 'Lead Assessment'", (done_high,))
+        conn.execute("ALTER TABLE projects DROP COLUMN priority")
+        conn.execute("UPDATE app_settings SET value = '8' WHERE key = 'schema_version'")
+    conn.close()
+
+    _rebootstrap(dbmod, client.db_path)
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
+        version = conn.execute(
+            "SELECT value FROM app_settings WHERE key = 'schema_version'").fetchone()["value"]
+    finally:
+        conn.close()
+    assert "priority" in columns
+    assert version == str(migrations.LATEST_SCHEMA_VERSION)
+    assert _stored_project_priority(client.db_path, high) == "High"
+    assert _stored_project_priority(client.db_path, done_high) == "Low"
+
+    # Replay safety: the backfill only writes rows still NULL, so a value set
+    # after the upgrade survives the step running again.
+    conn = raw_sqlite_connect(client.db_path)
+    with conn:
+        conn.execute("UPDATE projects SET priority = 'Medium' WHERE project_id = ?", (high,))
+    conn.close()
+    _stamp_schema_version(client.db_path, 8)
+    _rebootstrap(dbmod, client.db_path)
+    assert _stored_project_priority(client.db_path, high) == "Medium"
+    assert _stored_project_priority(client.db_path, done_high) == "Low"
+
+
 def test_segmentation_slides_ready_still_reads_pending_approval(client):
     """The one display rule that survived the restructure verbatim."""
     task = None

@@ -12,7 +12,8 @@ import { initPortfolioAnalysis } from './views/portfolio-analysis.js';
 import { refreshAudit } from './views/audit.js';
 import { refreshMap } from './views/map-view.js';
 import { initCalculators } from './views/calculators.js';
-import { saveComponent, assignComponent, transitionComponent, cyclePriorityChip, ensureUsers } from './views/detail-form.js';
+import { saveComponent, assignComponent, transitionComponent, ensureUsers } from './views/detail-form.js';
+import { cycleLeadPriorityChip } from './views/detail.js';
 import { openProjectEditor } from './views/project-editor.js';
 import { performLogin, fetchUserOptions } from './auth.js';
 
@@ -107,7 +108,9 @@ export function wire() {
   // disclosure state for main.js to own any more.
   initLeadCreate();
   safeOn('component-form', 'submit', saveComponent);
-  safeOn('component-priority-chip', 'click', cyclePriorityChip);
+  // The record-level priority chip in the detail shell header (lead-level
+  // attribute — see views/detail.js renderLeadPriorityChip).
+  safeOn('lead-priority-chip', 'click', cycleLeadPriorityChip);
   safeOn('assigned-to', 'change', assignComponent);
   safeOn('submit-component', 'click', function () { transitionComponent('submit'); });
   safeOn('approve-component', 'click', function () { transitionComponent('approve'); });

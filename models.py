@@ -72,6 +72,12 @@ class Project(Base):
     # recomputed/overwritten on save and by scripts/backfill_surfaces.py; NULL
     # when the record has no coordinates or the surface has no value there.
     ground_elevation = Column(REAL)
+    # LEAD/WELL-LEVEL priority (Low/Medium/High), set by a supervisor via
+    # PATCH /api/projects/<id>/priority (workflow.set_project_priority).
+    # Nullable: pre-v9 rows arrive NULL and are backfilled by migration v9;
+    # reads normalize NULL to 'Low'. Distinct from the legacy per-task
+    # project_tasks.priority, which remains for server compatibility.
+    priority = Column(Text)
     revision = Column(Integer, nullable=False, server_default=text("0"))
     # Set by workflow._sync_completed_at exactly when the applicable task set
     # becomes fully approved; cleared (NULL) when the project reopens. Kept

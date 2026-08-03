@@ -1,12 +1,14 @@
 """Card 1B: the derived lead-card fields on the project read payloads.
 
-`assignees`, `tracked_items`, `display_stage` and `lead_priority` are a READ-TIME
-projection over the stored workflow (workflow/projects.py). Since v7 the first
+`assignees`, `tracked_items` and `display_stage` are a READ-TIME projection
+over the stored workflow (workflow/projects.py). Since v7 the first
 four tracked items are field-derived checkpoints of one Lead Assessment row;
-the remaining eight map 1:1 to stored prospect rows. The payload shape remains
-deliberately unchanged. Nothing here
-may change what is stored, so every test drives the normal API (assign / submit
-/ approve / priority) and only asserts on what the read payloads report back.
+the remaining eight map 1:1 to stored prospect rows. Since v9 `lead_priority`
+is the STORED lead-level projects.priority (supervisor-set via
+PATCH /api/projects/<id>/priority), normalized to Low when absent. The payload
+shape remains deliberately unchanged. Every test drives the normal API
+(assign / submit / approve / priority) and asserts on what the read payloads
+report back.
 """
 from __future__ import annotations
 
@@ -242,41 +244,50 @@ def test_assignees_ignore_tasks_outside_the_operating_pipeline(client):
 
 
 # ---------------------------------------------------------------------------
-# lead_priority
+# lead_priority -- the STORED lead-level projects.priority since v9
 # ---------------------------------------------------------------------------
 
-def test_lead_priority_takes_the_most_urgent_open_task(client):
+def test_lead_priority_is_the_stored_lead_level_priority(client):
     pid = create_project(client, "PRIORITY-1")
-    # Card 1D: every step is created Low, so a fresh lead reads Low (gray card)
-    # until somebody escalates a step.
+    # Card 1D: a lead is created Low, so a fresh lead reads Low (gray card)
+    # until a supervisor escalates the LEAD itself.
     assert _board_row(client, pid)["lead_priority"] == "Low"
 
+    assert client.patch(f"/api/projects/{pid}/priority",
+                        json={"priority": "High"}).status_code == 200
+    assert _board_row(client, pid)["lead_priority"] == "High"
+
+    # The legacy per-TASK chip endpoint still works (server compat) but no
+    # longer moves the card: priority is a lead-level attribute now.
     task = get_task_by_name(client, pid, "Moving Tolerance")
-    assert client.patch(f"/api/tasks/{task['task_id']}/priority", json={"priority": "High"}).status_code == 200
+    assert client.patch(f"/api/tasks/{task['task_id']}/priority",
+                        json={"priority": "Medium"}).status_code == 200
     assert _board_row(client, pid)["lead_priority"] == "High"
 
 
-def test_lead_priority_ignores_approved_work(client):
-    """Finished work cannot keep a lead urgent."""
+def test_lead_priority_survives_approving_work(client):
+    """Priority belongs to the LEAD, not to its steps: approving the workflow
+    no longer resets an escalated lead back to Low (the pre-v9 derived
+    behavior). It stays what the supervisor set until somebody changes it."""
     pid = create_project(client, "PRIORITY-2")
-    task = get_task_by_name(client, pid, "Lead Assessment")
-    assert client.patch(f"/api/tasks/{task['task_id']}/priority", json={"priority": "High"}).status_code == 200
+    assert client.patch(f"/api/projects/{pid}/priority",
+                        json={"priority": "High"}).status_code == 200
     assert _board_row(client, pid)["lead_priority"] == "High"
 
     _approve(client, pid, "Lead Assessment")
-    # Back to the creation default once the escalated step is approved.
-    assert _board_row(client, pid)["lead_priority"] == "Low"
+    assert _board_row(client, pid)["lead_priority"] == "High"
 
 
 def test_lead_priority_defaults_to_low_when_no_value_is_recognized(client):
-    """Legacy rows can carry the models.py server default 'Normal', which is not
-    a board priority -- an unrecognized value is treated as absent."""
+    """Pre-v9 rows can carry NULL (or a hand-edited junk value) in the stored
+    projects.priority -- an unrecognized value reads as the un-escalated Low."""
     pid = create_project(client, "PRIORITY-3")
-    conn = raw_sqlite_connect(client.db_path)
-    with conn:
-        conn.execute("UPDATE project_tasks SET priority = 'Normal' WHERE project_id = ?", (pid,))
-    conn.close()
-    assert _board_row(client, pid)["lead_priority"] == "Low"
+    for junk in (None, "Normal"):
+        conn = raw_sqlite_connect(client.db_path)
+        with conn:
+            conn.execute("UPDATE projects SET priority = ? WHERE project_id = ?", (junk, pid))
+        conn.close()
+        assert _board_row(client, pid)["lead_priority"] == "Low"
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +338,7 @@ def test_bp_wells_carry_no_tracked_items_and_keep_their_stored_stage(client):
     assert row["tracked_items"] == []
     # display_stage is the stored stage group, on either pipeline.
     assert row["display_stage"] == row["current_stage"] == "Well Delivery"
-    # assignees / lead_priority are pipeline-agnostic and still derived.
+    # assignees stay derived; lead_priority is the stored lead-level value,
+    # pipeline-agnostic on either board.
     assert row["assignees"] == ["Employee"]
     assert row["lead_priority"] == "Low"

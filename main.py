@@ -242,7 +242,8 @@ def require_role(*roles: str) -> None:
     Consumers: POST /api/tasks/<id>/assign (supervisor, staff), the
     approve actions of POST /api/tasks/<id>/transition (supervisor),
     business_plan_enabled changes via PATCH /api/projects/<id>/flags
-    (supervisor), and PATCH /api/tasks/<id>/priority (supervisor). Priority is
+    (supervisor), PATCH /api/tasks/<id>/priority (supervisor), and
+    PATCH /api/projects/<id>/priority (supervisor). Priority is
     also guarded on the Save path: PATCH /api/tasks/<id> passes
     allow_priority_change so a non-supervisor's save keeps the stored value.
     """
@@ -567,6 +568,23 @@ def project_flags(project_id):
         payload.get("business_plan_year"), actor(payload),
     )
     return json_response({"ok": True})
+
+
+@app.patch("/api/projects/<int:project_id>/priority")
+def project_priority(project_id):
+    """Set the lead/well-level priority (supervisor only).
+
+    Body: {"priority": "Low"|"Medium"|"High", "changed_by": ...}. An
+    unrecognized priority is a ValueError -> 400 via the centralized handler;
+    a missing project is 404 (the single-project route pattern).
+    """
+    require_role("supervisor")
+    session = db.get_session()
+    if not workflow.get_project(session, project_id):
+        return error_response("Lead / well not found", 404)
+    payload = request.get_json(silent=True) or {}
+    value = workflow.set_project_priority(session, project_id, payload.get("priority"), actor(payload))
+    return json_response({"ok": True, "priority": value})
 
 
 @app.get("/api/projects/<int:project_id>/tasks")

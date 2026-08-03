@@ -739,6 +739,15 @@
 .rail-nav button { flex: 1 1 120px; padding: 6px 8px; font-size: var(--text-xs); }
 .rail-switch-pipeline { border-color: var(--brand-500); color: var(--brand-700); }
 .rail-head h3 { margin: var(--space-3) 0 4px; font-size: var(--text-base); color: var(--ink-800); }
+/* Record name + the lead-level priority chip on one line. The chip is small
+   and the rail column is narrow (272px on lead pages), so the row may wrap
+   the chip under a long name instead of squeezing either — holds at 1366px
+   and 1600px alike. */
+.detail-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+.detail-title-row h3 { min-width: 0; overflow-wrap: anywhere; }
+.lead-priority-chip { box-shadow: none; cursor: pointer; flex: 0 0 auto; }
+/* Non-supervisors see the value, but it is not a toggle for them. */
+.lead-priority-chip-static { cursor: default; }
 .rail-head p { color: var(--text-faint); font-size: var(--text-sm); }
 .rail-head .detail-view-note {
   margin-top: var(--space-2);
@@ -938,17 +947,16 @@
   font-size: var(--text-sm);
 }
 .editor-head h2 { font-family: var(--font-display); letter-spacing: .02em; font-size: var(--text-lg); color: var(--ink-900); }
-/* Right-aligned control cluster: the assignee select leads, then the priority
-   chip and status chip, all sitting at the end of the editor head. margin-left:
-   auto on the first item (assignee) pushes the whole group right so it reads
-   assignee | priority | status. */
-.editor-priority-chip { box-shadow: none; cursor: pointer; }
-/* Non-supervisors see the value, but it is not a toggle for them. */
-.editor-priority-chip-static { cursor: default; }
-/* The supervisor priority toggle is the only .priority chip that is a <button>
-   (plain-span .priority chips never fire the button hover). Re-assert each
-   variant's resting tint on hover so it doesn't fill teal from button:hover.
-   Scoped to button.priority so the non-button chips elsewhere are untouched. */
+/* Right-aligned control cluster: the assignee select leads, then the status
+   chip, sitting at the end of the editor head. margin-left: auto on the first
+   item (assignee) pushes the group right so it reads assignee | status. (The
+   per-step priority chip is gone — priority is lead-level now, one chip beside
+   the record name in the rail head; see .lead-priority-chip below.) */
+/* The supervisor priority toggle (#lead-priority-chip) is the only .priority
+   chip that is a <button> (plain-span .priority chips never fire the button
+   hover). Re-assert each variant's resting tint on hover so it doesn't fill
+   teal from button:hover. Scoped to button.priority so the non-button chips
+   elsewhere are untouched. */
 button.priority:hover { background: var(--gray-050); }
 button.priority.priority-medium:hover { background: var(--warning-100); }
 button.priority.priority-high:hover { background: var(--danger-100); }

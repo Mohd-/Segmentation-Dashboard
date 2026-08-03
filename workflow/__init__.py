@@ -115,6 +115,7 @@ from .projects import (
     get_projects,
     project_completion_percent,
     restore_project,
+    set_project_priority,
     update_project_name,
 )
 from .promotion import (
@@ -158,7 +159,7 @@ __all__ = [
     # projects
     "add_project", "archive_project", "delete_project", "get_project",
     "get_projects", "project_completion_percent", "restore_project",
-    "update_project_name",
+    "set_project_priority", "update_project_name",
     # lifecycle
     "apply_checkbox_submission", "apply_field_completion", "assign_task",
     "ensure_task_approved",

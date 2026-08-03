@@ -202,6 +202,23 @@ def test_only_supervisor_can_set_priority(client):
     assert get_tasks(client, pid)[0]["priority"] == "High"
 
 
+def test_only_supervisor_can_set_lead_priority(client):
+    """The lead-level PATCH /api/projects/<id>/priority carries the same
+    supervisor gate as the legacy per-task endpoint."""
+    pid = create_project(client, "ROLES-LEAD-PRIORITY-1")
+
+    for name in ("Employee", "Staff Member"):
+        _login(client, name)
+        resp = client.patch(f"/api/projects/{pid}/priority", json={"priority": "High"})
+        assert resp.status_code == 403
+
+    _login(client, "Supervisor")
+    resp = client.patch(f"/api/projects/{pid}/priority", json={"priority": "High"})
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True, "priority": "High"}
+    assert client.get(f"/api/projects/{pid}").get_json()["priority"] == "High"
+
+
 def test_save_cannot_bypass_the_priority_gate(client):
     """A non-supervisor's Save keeps the stored priority, whatever it sends."""
     pid = create_project(client, "ROLES-PRIORITY-2")

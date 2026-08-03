@@ -13,7 +13,7 @@ import openpyxl
 import pytest
 
 import portfolio_export
-from conftest import create_project, get_task_by_name, get_tasks
+from conftest import create_project, get_task_by_name, get_tasks, raw_sqlite_connect
 
 
 # ---------------------------------------------------------------------------
@@ -644,6 +644,78 @@ def test_set_task_priority_unknown_falls_back_to_medium(client):
     assert resp.status_code == 200
     got = client.get(f"/api/tasks/{task['task_id']}").get_json()
     assert got["priority"] == "Medium"
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/projects/<id>/priority -- the LEAD-LEVEL priority (v9)
+# ---------------------------------------------------------------------------
+
+def _priority_history(client, project_id):
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        return [tuple(row) for row in conn.execute("""
+            SELECT task_name, old_status, new_status, changed_by, comment
+            FROM task_history
+            WHERE project_id = ? AND action_type = 'Priority Changed'
+            ORDER BY history_id
+        """, (project_id,))]
+    finally:
+        conn.close()
+
+
+def test_set_project_priority_updates_stored_value_and_logs_one_event(client):
+    pid = create_project(client, "LEADPRIO-1")
+    resp = client.patch(f"/api/projects/{pid}/priority",
+                        json={"priority": "high", "changed_by": "Supervisor"})
+    assert resp.status_code == 200
+    # Input is normalized (title-cased) and echoed back.
+    assert resp.get_json() == {"ok": True, "priority": "High"}
+    # The detail payload's project dict carries the stored priority, and both
+    # legacy derived keys now read the SAME stored value.
+    project = client.get(f"/api/projects/{pid}/detail").get_json()["project"]
+    assert project["priority"] == "High"
+    assert project["lead_priority"] == "High"
+    assert project["current_task_priority"] == "High"
+    # Exactly ONE history event, anchored on the first active task (the same
+    # anchor "Lead Created" uses), with the old and new values.
+    assert _priority_history(client, pid) == [
+        ("Lead Assessment", "Low", "High", "Supervisor", "Priority set to High.")]
+
+
+def test_set_project_priority_rejects_invalid_values(client):
+    import db as dbmod
+    import workflow
+
+    pid = create_project(client, "LEADPRIO-2")
+    # Route: unlike the legacy per-task endpoint, an unknown value is REJECTED
+    # (400), never silently defaulted.
+    resp = client.patch(f"/api/projects/{pid}/priority", json={"priority": "Urgent"})
+    assert resp.status_code == 400
+    assert client.get(f"/api/projects/{pid}").get_json()["priority"] == "Low"
+    assert _priority_history(client, pid) == []
+    # Domain: the same rejection is a ValueError at the function boundary.
+    session = dbmod.get_session()
+    with pytest.raises(ValueError, match="Priority must be Low, Medium or High."):
+        workflow.set_project_priority(session, pid, "bogus")
+    with pytest.raises(ValueError, match="Priority must be Low, Medium or High."):
+        workflow.set_project_priority(session, pid, None)
+
+
+def test_set_project_priority_unchanged_value_writes_nothing(client):
+    pid = create_project(client, "LEADPRIO-3")
+    before = client.get(f"/api/projects/{pid}").get_json()["last_updated"]
+    resp = client.patch(f"/api/projects/{pid}/priority", json={"priority": "Low"})
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True, "priority": "Low"}
+    after = client.get(f"/api/projects/{pid}").get_json()
+    assert after["priority"] == "Low"
+    assert after["last_updated"] == before   # the no-op touched nothing
+    assert _priority_history(client, pid) == []
+
+
+def test_set_project_priority_missing_project_is_404(client):
+    resp = client.patch("/api/projects/424242/priority", json={"priority": "High"})
+    assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------

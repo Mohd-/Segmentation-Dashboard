@@ -34,7 +34,7 @@ function renderStatusChip(status) {
   var value = status || 'Not Assigned';
   chip.textContent = value;
   // Card 2A: a LEAD detail page carries no separate status badge beside the
-  // step title -- its header is the assignee select and the priority chip, and
+  // step title -- its header is the assignee select, and
   // a fresh lead's badge only ever read "NOT ASSIGNED". The BP well page keeps
   // it. The class is rewritten wholesale on every render, so the visibility has
   // to be re-decided here rather than toggled once elsewhere.
@@ -44,39 +44,10 @@ function renderStatusChip(status) {
     (leadPage ? ' hidden' : '');
 }
 
-var PRIORITY_CYCLE = { Low: 'Medium', Medium: 'High', High: 'Low' };
-
-// Only supervisors set priority (anonymous dev mode acts as supervisor,
-// matching the backend's current_role()); everyone else sees a read-only chip.
-function canSetPriority() {
-  return currentRole() === 'supervisor';
-}
-
-function renderPriorityChip(task) {
-  var chip = byId('component-priority-chip');
-  if (!chip) return;
-  var value = task.priority || 'Medium';
-  var currentView = isCurrentPipelineView();
-  var editable = canSetPriority() && currentView;
-  chip.disabled = !editable;
-  chip.textContent = value;
-  chip.className = 'priority editor-priority-chip priority-' + String(value).toLowerCase() +
-    (editable ? '' : ' editor-priority-chip-static');
-  chip.title = 'Priority: ' + value + (editable
-    ? ' — click to change'
-    : (currentView ? ' — set by a supervisor' : ' — reference view'));
-}
-
-// Cycles Low -> Medium -> High -> Low via the dedicated priority endpoint
-// (PATCH /api/tasks/<id>/priority; no revision check server-side), then
-// refreshes so the chip and boards adopt the new value + task revision.
-export function cyclePriorityChip() {
-  if (!Store.task || !canSetPriority() || !isCurrentPipelineView()) return;
-  var next = PRIORITY_CYCLE[Store.task.priority || 'Medium'] || 'Medium';
-  API.priority(Store.task.task_id, { priority: next, changed_by: currentUserName() })
-    .then(function () { return refreshAfterRecordChange('Priority set to ' + next + '.'); })
-    .catch(function (error) { msg(error.message, 'error'); });
-}
+// Priority is a LEAD/WELL-LEVEL attribute since the ASAS redesign: the ONE
+// chip lives in the detail shell header (views/detail.js renderLeadPriorityChip
+// / cycleLeadPriorityChip), so the step editor header carries no per-step
+// priority control any more.
 
 // KI-002: whether the assignee control is interactive is a ROLE decision
 // (plus "am I looking at this record's own pipeline"), never a side effect of
@@ -366,7 +337,6 @@ export function loadComponent(task) {
   renderStatusChip(task.status);
   renderAssigneeSelect(task, load);
   renderActionButtons(task);
-  renderPriorityChip(task);
   byId('comments').placeholder = commentPlaceholder(task.task_name);
   byId('comments').value = task.comments || '';
   var consolidated = consolidatedPageFor(task);

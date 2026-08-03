@@ -56,7 +56,6 @@ var DETAIL_SHELL =
   '<div id="detail-shell" class="detail-shell-lead">' +
   '<span id="component-number"></span><h2 id="component-title"></h2>' +
   '<span id="component-status-chip"></span><select id="assigned-to"></select>' +
-  '<button id="component-priority-chip"></button>' +
   '<form id="component-form"><div id="dynamic-fields"></div>' +
   '<div id="comments-field"><textarea id="comments"></textarea></div>' +
   '<div class="action-row">' +

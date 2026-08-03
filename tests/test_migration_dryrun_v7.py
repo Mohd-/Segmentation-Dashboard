@@ -29,12 +29,17 @@ def test_v7_dryrun_copy_devolve_and_remerge_preserve_projection(client, tmp_path
     }})
     assert response.status_code == 200
 
+    import migrations
+
     source = client.db_path
     before_digest = _digest(source)
     copy = tmp_path / "rehearsal.db"
     migration_dryrun_v7.copy_database(source, copy)
     assert _digest(source) == before_digest
-    assert migration_dryrun_v7.stored_version(copy) == 7
+    # A fresh database is stamped LATEST (v9 as of the lead-level priority
+    # work); devolve accepts any v7-or-newer copy since the later steps never
+    # change the merged Lead Assessment shape this tool inverts.
+    assert migration_dryrun_v7.stored_version(copy) == migrations.LATEST_SCHEMA_VERSION
     assert migration_dryrun_v7.devolve_to_v6(copy) == 2
 
     # Exercise the real minimum-advanced merge rule, not merely the synthetic

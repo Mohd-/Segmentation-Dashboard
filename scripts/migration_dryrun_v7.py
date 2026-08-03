@@ -131,9 +131,12 @@ def devolve_to_v6(db_path: Path) -> int:
     synthetic source rows inherit the merged row's lifecycle metadata. Both
     shapes retain every EAV row and are sufficient to rehearse the real merge.
     Partial legacy shapes are refused rather than guessed.
+
+    Any v7-OR-NEWER stamp qualifies: later steps (v8 repair fold, v9 lead-level
+    priority) never change the merged Lead Assessment shape this tool inverts.
     """
-    if stored_version(db_path) != 7:
-        raise RuntimeError("--devolve requires a schema-v7 database copy")
+    if (stored_version(db_path) or 0) < 7:
+        raise RuntimeError("--devolve requires a schema-v7-or-newer database copy")
 
     conn = _connect(Path(db_path))
     try:
@@ -389,8 +392,8 @@ def main(argv=None):
         except Exception as exc:  # noqa: BLE001
             print(f"Migration refused the backup: {exc}", file=sys.stderr)
             return 2
-        if stored_version(copy) != 7:
-            print("Migration did not stamp schema version 7.", file=sys.stderr)
+        if (stored_version(copy) or 0) < 7:
+            print("Migration did not reach schema version 7.", file=sys.stderr)
             return 2
         after = snapshot(copy, pre=False)
         return render(before, after)

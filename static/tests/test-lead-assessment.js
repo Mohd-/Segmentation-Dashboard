@@ -570,6 +570,57 @@ test('lead-assessment: the plan writes one whole merged-task payload', function 
   assert.equal(sparse[0].fields.p10_area_km2, '');
 });
 
+test('lead-assessment: a roster carrying Lead Assessment keeps the single-entry plan', function () {
+  // The normal (post-v7) record: the merged row is present, so the roster
+  // argument changes nothing about the plan's shape.
+  var roster = ['Lead Assessment', 'Reservoir CoS', 'Trap and Seal CoS'];
+  var plan = buildSavePlan(Object.assign(goodValues({ polygons_surfaces_loaded: '1' }),
+                                         { thickness_source_mode: 'twt' }), {}, roster);
+  assert.deepEqual(plan.map(function (entry) { return entry.taskName; }), ['Lead Assessment']);
+  assert.deepEqual(Object.keys(plan[0].fields).sort(), Object.keys(KEY_OWNER).sort());
+  assert.deepEqual(buildSavePlan(goodValues({ thickness_source_mode: '' }),
+    { 'Lead Assessment': goodValues({ thickness_source_mode: '' }) }, roster), [],
+    'an untouched page still writes nothing');
+});
+
+test('lead-assessment: without a Lead Assessment row the plan groups per LEGACY owner', function () {
+  // A pre-v7-shaped record served during a stale-server window: writes must
+  // land on the SAME legacy rows readStoredValues hydrates from, not on the
+  // taskNamed fallback row.
+  var roster = LEGACY_LEAD_ASSESSMENT_STEPS.slice();
+  var saved = {
+    'Area Definition': { p90_area_km2: '12.60', p10_area_km2: '17.30', top_formation_tvdss_ft: '-6500' },
+    'Thickness Estimation': { twt_reservoir_ms: '1500', twt_formation_ms: '1800',
+                              reservoir_thickness_ft: '200', formation_thickness_ft: '500',
+                              thickness_source_mode: '' },
+    'GRV Inputs': { grv_p90_thousand_acre_ft: '12.60', grv_p10_thousand_acre_ft: '17.30' },
+    'Resource Assessment': { polygons_surfaces_loaded: '' }
+  };
+  var untouched = goodValues({ thickness_source_mode: '' });
+  assert.deepEqual(buildSavePlan(untouched, saved, roster), [],
+    'hydrated values re-submitted verbatim are not dirty');
+
+  // Change one Area key and one GRV key: exactly those two legacy tasks move,
+  // each carrying ALL of (and only) its own keys.
+  var edited = goodValues({ thickness_source_mode: '', p90_area_km2: '13.00',
+                            grv_p90_thousand_acre_ft: '14.00' });
+  var plan = buildSavePlan(edited, saved, roster);
+  assert.deepEqual(plan.map(function (entry) { return entry.taskName; }),
+    ['Area Definition', 'GRV Inputs'], 'one entry per legacy task owning a changed key');
+  assert.deepEqual(Object.keys(plan[0].fields).sort(),
+    ['p10_area_km2', 'p90_area_km2', 'top_formation_tvdss_ft']);
+  assert.equal(plan[0].fields.p90_area_km2, '13.00');
+  assert.deepEqual(Object.keys(plan[1].fields).sort(),
+    ['grv_p10_thousand_acre_ft', 'grv_p90_thousand_acre_ft']);
+
+  // The polygons tick belongs to Resource Assessment — the legacy comments/
+  // PIIP owner — in the legacy grouping.
+  var ticked = buildSavePlan(goodValues({ thickness_source_mode: '', polygons_surfaces_loaded: '1' }),
+                             saved, roster);
+  assert.deepEqual(ticked.map(function (entry) { return entry.taskName; }), ['Resource Assessment']);
+  assert.deepEqual(Object.keys(ticked[0].fields), ['polygons_surfaces_loaded']);
+});
+
 /* -------------------------------------------------------------------------
    Comments provenance
    ------------------------------------------------------------------------- */

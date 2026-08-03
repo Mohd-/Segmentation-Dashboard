@@ -96,7 +96,7 @@ function editorFixture() {
       '<button id="open-project-editor"></button>' +
       '<div id="summary-card-head"></div><h3 id="summary-title"></h3><div id="lead-summary"></div>' +
       '<span id="component-number"></span><h2 id="component-title"></h2>' +
-      '<select id="assigned-to"></select><button id="component-priority-chip"></button>' +
+      '<select id="assigned-to"></select>' +
       '<span id="component-status-chip"></span><form id="component-form">' +
       '<div id="dynamic-fields"></div><textarea id="comments"></textarea></form>' +
     '</section>' +

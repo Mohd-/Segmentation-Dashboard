@@ -455,30 +455,44 @@ export function tvdssLabel(formations) {
 // ---------------------------------------------------------------------------
 
 // The page's values -> [{ taskName, fields }] for the tasks whose stored values
-// actually CHANGED, in LEAD_ASSESSMENT_STEPS order. One PATCH per dirty task
-// (each carries its own revision and optimistic lock), never a blanket
-// four-task write: an untouched step must not collect a history entry, and must
-// not 409 on a revision somebody else legitimately moved.
+// actually CHANGED. One PATCH per dirty task (each carries its own revision and
+// optimistic lock), never a blanket write: an untouched step must not collect a
+// history entry, and must not 409 on a revision somebody else legitimately
+// moved.
 //
 // `saved` is the {taskName: {key: value}} map of what the server currently
 // holds (Store.allFields). A task appears in the plan when ANY of its keys
 // differs, and then carries ALL of its keys -- a partial field payload is fine
 // for the server (it upserts what it is given) but a whole-task payload is what
 // makes the write idempotent and readable in the audit trail.
-export function buildSavePlan(values, saved) {
+//
+// `taskNames` is the roster of task names actually ON the record (the caller
+// derives it from Store.tasks; omitted means the normal merged shape). It
+// decides where writes LAND: when the merged 'Lead Assessment' row is present,
+// the whole page is ONE plan entry against it. When a pre-v7 payload lacks it
+// (a stale-server window), dirty keys group per LEGACY_KEY_OWNER instead --
+// one entry per legacy task that owns changed keys, in
+// LEGACY_LEAD_ASSESSMENT_STEPS order -- so saves land on exactly the rows
+// readStoredValues hydrates from, never on taskNamed's single-row fallback.
+export function buildSavePlan(values, saved, taskNames) {
   values = values || {};
   saved = saved || {};
+  var merged = !taskNames || taskNames.indexOf(PRIMARY_STEP) >= 0;
+  var order = merged ? LEAD_ASSESSMENT_STEPS : LEGACY_LEAD_ASSESSMENT_STEPS;
   var byTask = {};
   Object.keys(KEY_OWNER).forEach(function (key) {
-    var taskName = KEY_OWNER[key];
+    var taskName = merged ? KEY_OWNER[key] : LEGACY_KEY_OWNER[key];
     if (!byTask[taskName]) byTask[taskName] = {};
     byTask[taskName][key] = values[key] == null ? '' : String(values[key]);
   });
-  return LEAD_ASSESSMENT_STEPS.filter(function (taskName) {
+  return order.filter(function (taskName) {
     var fields = byTask[taskName] || {};
     var stored = saved[taskName] || {};
     return Object.keys(fields).some(function (key) {
+      // The dirty check reads exactly what hydration showed the user: the
+      // merged bucket first, the legacy owner's bucket as the fallback.
       var storedValue = stored[key];
+      if (storedValue == null) storedValue = (saved[KEY_OWNER[key]] || {})[key];
       if (storedValue == null) storedValue = (saved[LEGACY_KEY_OWNER[key]] || {})[key];
       return String(storedValue == null ? '' : storedValue) !== fields[key];
     });
@@ -1206,12 +1220,24 @@ export function saveLeadAssessment() {
   var blocking = firstError(errors);
   if (blocking) { msg(blocking, 'error'); return Promise.resolve(false); }
 
-  var plan = buildSavePlan(values, Store.allFields || {});
+  // The roster of rows actually on the record decides the plan's shape: the
+  // merged row when present, else the legacy rows hydration reads from.
+  var availableNames = (Store.tasks || []).map(function (task) { return task.task_name; });
+  var plan = buildSavePlan(values, Store.allFields || {}, availableNames);
   var comments = byId('comments');
   var commentsValue = comments ? comments.value : '';
   var primaryTask = taskNamed(PRIMARY_STEP);
   var commentsChanged = !!primaryTask && String(primaryTask.comments || '') !== String(commentsValue);
-  if (commentsChanged && !plan.some(function (entry) { return entry.taskName === PRIMARY_STEP; })) {
+  // Comments ride on the primary (comments/PIIP-owning) task. Dedupe by the
+  // RESOLVED task id, not the plan name: in the legacy shape taskNamed's
+  // PRIMARY_STEP fallback is the 'Resource Assessment' row, which may already
+  // be in the plan under its own name -- a second entry for the same row would
+  // 409 on the revision the first write just moved.
+  function ownsPrimaryRow(entry) {
+    var task = taskNamed(entry.taskName);
+    return !!primaryTask && !!task && task.task_id === primaryTask.task_id;
+  }
+  if (commentsChanged && !plan.some(ownsPrimaryRow)) {
     plan.push({ taskName: PRIMARY_STEP, fields: {} });
   }
   if (!plan.length) { msg('No changes to save.', 'success'); return Promise.resolve(true); }
@@ -1228,7 +1254,7 @@ export function saveLeadAssessment() {
       // write that omitted them would quietly wipe three steps' notes.
       return API.updateTask(task.task_id, {
         fields: entry.fields,
-        comments: entry.taskName === PRIMARY_STEP ? commentsValue : (task.comments || ''),
+        comments: (primaryTask && task.task_id === primaryTask.task_id) ? commentsValue : (task.comments || ''),
         priority: task.priority || 'Medium',
         revision: task.revision,
         changed_by: currentUserName()

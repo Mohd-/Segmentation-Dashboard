@@ -32,8 +32,10 @@ export function renderPipeline(element, projects, stages, pipeline) {
       // The chip flags an ESCALATION, so the resting priorities carry none.
       // 'Medium' was the creation default before Card 1D and 'Low' is it now,
       // which is why both are silent here — otherwise every newly created BP
-      // well would wear a permanent LOW badge that means nothing.
-      var priorityValue = project.current_task_priority || 'Medium';
+      // well would wear a permanent LOW badge that means nothing. Priority is
+      // a LEAD/WELL-LEVEL attribute (stored projects.priority, delivered as
+      // lead_priority), so the card reads the record's own value.
+      var priorityValue = project.lead_priority || 'Medium';
       var isDefaultPriority = priorityValue === 'Medium' || priorityValue === 'Low';
       return '<button type="button" class="pipeline-card status-' + statusSlug(statusValue) + '" data-project-id="' + project.project_id + '" data-pipeline="' + pipeline + '">' +
         '<strong>' + esc(project.project_name) + '</strong>' +
