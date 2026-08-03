@@ -281,7 +281,7 @@ test('lead sidebar has ZERO dimmed rows: every tracked item is a real step', fun
     group.rows.forEach(function (row) { rows += 1; if (!row.task) future.push(row.label); });
   });
   assert.deepEqual(future, [], 'v5 gave GRV Inputs and Well Site Location real steps');
-  assert.equal(rows, 12, 'twelve items, twelve openable rows');
+  assert.equal(rows, 11, 'twelve items, eleven openable rows: Card 4B merges the two staking rows into one');
 });
 
 test('lead sidebar dims a step the record does not actually carry', function () {
@@ -300,7 +300,11 @@ test('lead sidebar never loses a real step no tracked item references', function
   var groups = leadStageGroups(ITEMS, TASKS);
   var rendered = [];
   groups.forEach(function (group) {
-    group.rows.forEach(function (row) { if (row.task) rendered.push(row.task.task_name); });
+    group.rows.forEach(function (row) {
+      // A merged row (Card 4B) answers for every task in row.tasks; a plain
+      // row for its one task.
+      (row.tasks || (row.task ? [row.task] : [])).forEach(function (task) { rendered.push(task.task_name); });
+    });
   });
   TASKS.forEach(function (task) {
     assert.ok(rendered.indexOf(task.task_name) >= 0, task.task_name + ' is reachable from the sidebar');
@@ -311,6 +315,64 @@ test('lead sidebar never loses a real step no tracked item references', function
                               status: 'Not Assigned', stage_group: 'Pre-Well Delivery' }]);
   var preWell = leadStageGroups(ITEMS, extra)[2].rows.map(function (row) { return row.label; });
   assert.ok(preWell.indexOf('Legacy Step') >= 0, preWell.join(','));
+});
+
+/* Card 4B: the sidebar shows ONE "Staking Letters" entry for the two staking
+   task rows -- both already open the same consolidated page, so two rows were
+   two doors to one room. The x/4 counter (and the board card) still count the
+   two tracked items separately. */
+
+test('lead sidebar merges the two staking rows into ONE Staking Letters entry', function () {
+  var preWell = leadStageGroups(ITEMS, TASKS)[2];
+  assert.deepEqual(preWell.rows.map(function (row) { return row.label; }),
+    ['Moving Tolerance', 'Staking Letters', 'Pre-Drilling GeoX Assessment'],
+    'three entries, the merged one in Approval to Stake\'s slot');
+  var merged = preWell.rows[1];
+  assert.equal(merged.task.task_name, 'Approval to Stake',
+    'clicking opens exactly what clicking Approval to Stake opened');
+  assert.deepEqual(merged.tasks.map(function (task) { return task.task_name; }),
+    ['Approval to Stake', 'Well Site Location'],
+    'the entry answers for BOTH underlying rows (active highlight)');
+  assert.equal(preWell.total, 4, 'the x/4 counter still tracks the two letters as two items');
+});
+
+test('lead sidebar numbers the merged entry as one slot, later rows sliding down', function () {
+  var groups = leadStageGroups(ITEMS, TASKS);
+  var preWell = groups[2];
+  assert.deepEqual(preWell.rows.map(function (row) { return row.num != null ? row.num : row.task.sequence_no; }),
+    [9, 10, 11], 'Pre-Well Delivery reads consecutively across the merged slot');
+  groups.slice(0, 2).forEach(function (group) {
+    group.rows.forEach(function (row) {
+      assert.equal(row.num, undefined, row.label + ' keeps its own sequence number');
+    });
+  });
+});
+
+test('lead sidebar staking entry wears the LEAST-advanced of its two statuses', function () {
+  function tasksWith(approvalStatus, wellsiteStatus) {
+    return TASKS.map(function (task) {
+      if (task.task_name === 'Approval to Stake') return Object.assign({}, task, { status: approvalStatus });
+      if (task.task_name === 'Well Site Location') return Object.assign({}, task, { status: wellsiteStatus });
+      return task;
+    });
+  }
+  var merged = leadStageGroups(ITEMS, tasksWith('Approved', 'In Progress'))[2].rows[1];
+  assert.equal(merged.status, 'In Progress', 'one letter approved is still an open package');
+  merged = leadStageGroups(ITEMS, tasksWith('Ready', 'Approved'))[2].rows[1];
+  assert.equal(merged.status, 'Ready', 'least-advanced in either order');
+  merged = leadStageGroups(ITEMS, tasksWith('Approved', 'Approved'))[2].rows[1];
+  assert.equal(merged.status, 'Approved', 'completed styling only when BOTH letters are complete');
+});
+
+test('lead sidebar does NOT merge when either staking row is missing or dimmed', function () {
+  // Defensive path: a legacy record a migration could not reach keeps its
+  // surviving row un-merged rather than presenting a package half of which
+  // cannot open.
+  var thin = TASKS.filter(function (task) { return task.task_name !== 'Well Site Location'; });
+  var preWell = leadStageGroups(ITEMS, thin)[2];
+  var labels = preWell.rows.map(function (row) { return row.label; });
+  assert.ok(labels.indexOf('Approval to Stake') >= 0, labels.join(','));
+  assert.equal(labels.indexOf('Staking Letters'), -1, 'no merged entry without both rows');
 });
 
 test('lead sidebar tolerates a lead with no tracked items at all', function () {

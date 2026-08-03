@@ -3,12 +3,19 @@ import { ICONS } from '../icons.js';
 import { API } from '../api.js';
 import { currentUserName, currentProjectPipeline, isCurrentPipelineView, Store, resetSelection } from '../state.js';
 import { activateTab } from '../navigation.js';
-import { BP_STAGES, PROSPECT_STAGES, DONE, SEISMIC_BLOCKS, FLOWBACK_RATE_FIELDS } from '../schema.js';
+import { BP_STAGES, PROSPECT_STAGES, STATUSES, DONE, SEISMIC_BLOCKS, FLOWBACK_RATE_FIELDS } from '../schema.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { canTransitionPhase, promoteProject, recallProject } from './transitions.js';
 import { loadComponent, LATEST_PIIP_SOURCES, POST_DRILL_PIIP_SOURCES, LEAD_PIIP_SOURCES, copyText } from './detail-form.js';
 import { refreshAllBoards } from './pipeline.js';
 import { refreshAudit } from './audit.js';
+// Card 4B: the two task rows the consolidated Staking Letters page claims.
+// Imported (not restated) so the sidebar's merged entry and the page that
+// opens for it can never disagree about which steps are the package. The
+// import is circular with staking-letters.js (it imports
+// refreshAfterRecordChange from here), which is safe: both sides touch the
+// other's bindings only inside functions called long after module evaluation.
+import { STAKING_LETTER_STEPS } from './staking-letters.js';
 // Card 2A: the shared Lead Summary block. It is PURE -- this module resolves
 // every value out of Store and hands it one plain object (see leadSummaryData).
 import { leadSummaryHtml, wireLeadSummary, closeLeadSummaryMenu } from './lead-summary.js';
@@ -77,18 +84,19 @@ export function openDetail(projectId, pipeline) {
     Store.pipeline = currentProjectPipeline();
     activateTab(Store.pipeline);
     renderDetail();
-    // The detail shell is the page's last visible section, so aligning its
-    // TOP under the sticky header is often unreachable (not enough document
-    // below it) and the scroll stalls partway. Scroll to the document bottom
-    // instead: the shell fills the viewport from below. loadComponent fills
-    // the form fields ASYNCHRONOUSLY (fetches fields + folder info), which
-    // grows the document after the scroll target would otherwise be computed
-    // -- so wait for that render to settle (Promise.resolve tolerates
-    // loadComponent returning undefined when there's no task) and scroll on
-    // the next frame, once the grown document's height is final.
+    // Land the detail shell's TOP just under the sticky chrome: the shell
+    // scrolls into view block-start, and .detail-shell's scroll-margin-top
+    // (components.css) is sized to clear the sticky header + tabs, so the
+    // page opens reading the shell from its head. loadComponent fills the
+    // form fields ASYNCHRONOUSLY (fetches fields + folder info), which grows
+    // the document after the scroll target would otherwise be computed -- so
+    // wait for that render to settle (Promise.resolve tolerates loadComponent
+    // returning undefined when there's no task) and scroll on the next frame,
+    // once the grown document's height is final. Same variant
+    // switchPipelineView uses, so opening and switching land identically.
     Promise.resolve(loadComponent(chooseInitialTask(tasksForPipeline(Store.pipeline)))).then(function () {
       requestAnimationFrame(function () {
-        window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
+        byId('detail-shell').scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
     });
   }).catch(function (error) { msg(error.message, 'error'); });
@@ -138,6 +146,20 @@ export function revealTaskStage(task) {
   openStageProjectId = Store.projectId;
   syncStageOpenState();
   syncActiveStage();
+  syncMergedRowActive(task);
+}
+
+// A merged rail row (Card 4B's "Staking Letters") stands for several task
+// rows and lists their ids in data-task-ids. detail-form's own active toggle
+// matches only the button's primary data-task-id, so when the loaded task is
+// one of the OTHER rows the entry answers for (e.g. Well Site Location is the
+// project's current task), re-assert the highlight here -- this runs right
+// after that toggle inside loadComponent.
+function syncMergedRowActive(task) {
+  all('.component-item[data-task-ids]').forEach(function (button) {
+    var ids = (button.getAttribute('data-task-ids') || '').split(',').map(Number);
+    if (ids.indexOf(task.task_id) >= 0) button.classList.add('active');
+  });
 }
 
 // The lead sidebar marks its OPEN stage as the active one (navy accent +
@@ -168,6 +190,16 @@ function syncActiveStage() {
        of vanishing from the workflow.
    Any prospect task row no tracked item names (there is none today) is
    appended to its own stage, so the sidebar can never hide a real step.
+
+   Card 4B EXCEPTION: "Approval to Stake" and "Well Site Location" are two
+   letters in ONE staking package, and both already open the same consolidated
+   Staking Letters page. So the sidebar shows them as ONE entry -- "Staking
+   Letters", in Approval to Stake's slot, clicking through to exactly what
+   clicking Approval to Stake opened -- while the stage's x/4 counter (and the
+   board card) keep counting the two tracked items separately. The merged
+   entry wears the LEAST-advanced of the two statuses, so it reads completed
+   only when BOTH letters are, consistent with the counter. See
+   mergeStakingRows below.
    ------------------------------------------------------------------------- */
 
 // [{ stage, done, total, rows: [{ task | label }] }] in board order, built from
@@ -198,7 +230,55 @@ export function leadStageGroups(trackedItems, tasks) {
     if (!byStage[stage]) { byStage[stage] = { stage: stage, done: 0, total: 0, rows: [] }; order.push(stage); }
     byStage[stage].rows.push({ label: task.task_name, task: task });
   });
-  return order.map(function (stage) { return byStage[stage]; });
+  return order.map(function (stage) { return mergeStakingRows(byStage[stage]); });
+}
+
+// A task status's position on the 4-state ladder (Not Assigned -> In Progress
+// -> Ready -> Approved). Unknown statuses rank least-advanced, so a merged
+// entry can never read further along than its data supports.
+function statusRank(status) {
+  var order = (Store.meta && Store.meta.statuses) || STATUSES;
+  var rank = order.indexOf(String(status || 'Not Assigned'));
+  return rank < 0 ? 0 : rank;
+}
+
+// Card 4B: collapse the two staking task rows into ONE "Staking Letters"
+// entry, in place, in Approval to Stake's slot. The merged row's `task` is
+// the Approval to Stake task -- clicking it does exactly what clicking that
+// row did (loadComponent -> the consolidated page) -- and `tasks` carries
+// both underlying rows so the active highlight can answer for either (see
+// syncMergedRowActive). Its status is the LEAST-advanced of the two, so the
+// glyph reads completed only when BOTH letters are, the same way the stage
+// counter treats them as two items. Rows numbered after the absorbed slot in
+// THIS stage slide down by one so the stage reads consecutively; no other
+// stage is renumbered. Defensive: if either row is missing or dimmed (a
+// legacy record a migration could not reach), nothing merges and both rows
+// render as they are.
+function mergeStakingRows(group) {
+  var first = -1;
+  var second = -1;
+  group.rows.forEach(function (row, index) {
+    if (!row.task) return;
+    if (row.task.task_name === STAKING_LETTER_STEPS[0]) first = index;
+    else if (row.task.task_name === STAKING_LETTER_STEPS[1]) second = index;
+  });
+  if (first < 0 || second < 0) return group;
+  var primary = group.rows[first].task;
+  var partner = group.rows[second].task;
+  var laggard = statusRank(partner.status) < statusRank(primary.status) ? partner : primary;
+  group.rows[first] = {
+    label: 'Staking Letters',
+    task: primary,
+    tasks: [primary, partner],
+    status: laggard.status,
+    num: Math.min(Number(primary.sequence_no), Number(partner.sequence_no))
+  };
+  group.rows.splice(second, 1);
+  var absorbed = Math.max(Number(primary.sequence_no), Number(partner.sequence_no));
+  group.rows.forEach(function (row) {
+    if (row.task && Number(row.task.sequence_no) > absorbed) row.num = Number(row.task.sequence_no) - 1;
+  });
+  return group;
 }
 
 function leadRailRowHtml(row) {
@@ -210,9 +290,17 @@ function leadRailRowHtml(row) {
       ' title="This step is not on this record." aria-disabled="true">' +
       '<span class="component-num" aria-hidden="true">·</span><b>' + esc(row.label) + '</b></div>';
   }
-  var slug = String(row.task.status || 'Not Assigned').toLowerCase().replace(/\s+/g, '-');
-  return '<button type="button" class="component-item status-' + slug + '" data-task-id="' + row.task.task_id + '">' +
-    '<span class="component-num">' + esc(row.task.sequence_no) + '</span><b>' + esc(row.label) + '</b></button>';
+  // A merged row (Card 4B) overrides the status and slot number it renders
+  // under; a plain row reads both straight off its task. `data-task-ids`
+  // lists every task a merged row answers for, so the active highlight can
+  // match whichever of them is actually loaded (syncMergedRowActive).
+  var slug = String((row.status || row.task.status) || 'Not Assigned').toLowerCase().replace(/\s+/g, '-');
+  var num = row.num != null ? row.num : row.task.sequence_no;
+  var idsAttr = row.tasks
+    ? ' data-task-ids="' + esc(row.tasks.map(function (task) { return task.task_id; }).join(',')) + '"'
+    : '';
+  return '<button type="button" class="component-item status-' + slug + '" data-task-id="' + row.task.task_id + '"' + idsAttr + '>' +
+    '<span class="component-num">' + esc(num) + '</span><b>' + esc(row.label) + '</b></button>';
 }
 
 function renderLeadRail(tasks) {
