@@ -2563,3 +2563,110 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   .map-panel { --map-chrome: 158px; grid-template-columns: minmax(0, 1fr); grid-template-rows: 180px minmax(0, 1fr); }
   .map-sidebar { border-right: 0; border-bottom: 1px solid var(--border); }
 }
+
+/* =========================================================================
+   Calculator tab — project-free subsurface workbench
+
+   Five instruments share one disclosure rack. The square abbreviations echo
+   a well-log track index; the rest stays deliberately quiet so units, inputs,
+   and governed outputs remain the visual hierarchy. All selectors are scoped
+   to this tab's calculator classes.
+   ========================================================================= */
+.calculator-shell { max-width: 1180px; margin: 0 auto; }
+.calculator-intro {
+  padding: var(--space-6) var(--space-6) var(--space-5);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom: 3px solid var(--asas-navy);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+.calculator-eyebrow {
+  margin-bottom: var(--space-1);
+  color: var(--asas-blue);
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.calculator-intro h2 { color: var(--ink-900); font-family: var(--font-display); font-size: var(--text-xl); letter-spacing: .02em; }
+.calculator-intro > p:last-child { margin-top: var(--space-2); color: var(--text-muted); }
+.calculator-workbench { background: var(--surface); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius-lg) var(--radius-lg); box-shadow: var(--shadow-sm); }
+.calculator-card { border-bottom: 1px solid var(--border); }
+.calculator-card:last-child { border-bottom: 0; }
+.calculator-card > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
+  color: var(--text);
+  cursor: pointer;
+  list-style: none;
+  transition: background var(--transition);
+}
+.calculator-card > summary::-webkit-details-marker { display: none; }
+.calculator-card > summary:hover { background: var(--surface-sunken); }
+.calculator-card > summary:focus-visible { outline: 2px solid var(--brand-500); outline-offset: -2px; }
+.calculator-mark {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 42px;
+  height: 32px;
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--asas-blue);
+  background: var(--surface-sunken);
+  color: var(--asas-navy);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 800;
+  letter-spacing: .04em;
+}
+.calculator-summary-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.calculator-summary-copy strong { color: var(--ink-900); font-family: var(--font-display); font-size: var(--text-md); letter-spacing: .02em; }
+.calculator-summary-copy small { color: var(--text-muted); font-size: var(--text-sm); font-weight: 400; }
+.calculator-chevron { width: 9px; height: 9px; margin-left: auto; border-right: 2px solid var(--text-faint); border-bottom: 2px solid var(--text-faint); transform: rotate(45deg); transition: transform var(--transition); }
+.calculator-card[open] .calculator-chevron { transform: rotate(225deg); }
+.calculator-body { padding: var(--space-5) var(--space-6) var(--space-6); background: var(--surface-sunken); border-top: 1px solid var(--border); }
+.calc-guidance { margin-bottom: var(--space-4); color: var(--text-muted); font-size: var(--text-sm); }
+.calc-notice { margin-bottom: var(--space-4); padding: var(--space-3); border-left: 3px solid var(--warning-500); background: var(--warning-100); color: var(--warning-700); font-size: var(--text-sm); font-weight: 700; }
+.calc-conversion-grid { display: grid; gap: var(--space-3); }
+.calc-conversion-row { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(170px, 1fr) 28px minmax(170px, 1fr); align-items: end; gap: var(--space-3); padding: var(--space-3); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.calc-row-label { align-self: center; display: flex; flex-direction: column; gap: 2px; }
+.calc-row-label strong { color: var(--ink-800); font-family: var(--font-display); }
+.calc-row-label small { color: var(--text-faint); font-family: var(--font-mono); font-size: var(--text-xs); }
+.calc-swap { align-self: end; display: grid; place-items: center; height: 39px; color: var(--asas-blue); font-size: var(--text-lg); }
+.calc-input-wrap { position: relative; display: block; }
+.calculator-body .calc-input-wrap input { padding-right: 82px; font-variant-numeric: tabular-nums; }
+.calc-unit { position: absolute; top: 50%; right: var(--space-3); transform: translateY(-50%); color: var(--text-faint); font-family: var(--font-mono); font-size: var(--text-xs); pointer-events: none; }
+.calc-two-pane { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(250px, 1fr); gap: var(--space-5); align-items: stretch; }
+.calc-controls, .calc-results { padding: var(--space-4); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.calc-controls { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-4); }
+.calc-field-grid { display: grid; gap: var(--space-3); width: 100%; }
+.calc-field-grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.calc-field-grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.calc-results { display: flex; flex-direction: column; justify-content: center; min-width: 0; }
+.calc-results-title { margin-bottom: var(--space-3); color: var(--ink-800); font-family: var(--font-display); font-size: var(--text-sm); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.calc-empty { color: var(--text-faint); font-size: var(--text-sm); }
+.calc-readout { display: grid; grid-template-columns: 1fr auto; align-items: baseline; column-gap: var(--space-2); }
+.calc-readout > span { grid-column: 1 / -1; color: var(--text-muted); font-size: var(--text-sm); font-weight: 700; }
+.calc-readout output { color: var(--asas-navy); font-family: var(--font-display); font-size: 44px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.calc-readout small { color: var(--text-faint); font-family: var(--font-mono); font-size: var(--text-sm); }
+.calc-error { width: 100%; padding: var(--space-2) var(--space-3); background: var(--danger-100); border-left: 3px solid var(--danger-500); color: var(--danger-700); font-size: var(--text-sm); font-weight: 700; }
+.calc-resource-plots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); margin-top: var(--space-3); }
+.calc-resource-plots:empty { display: none; }
+.calc-resource-plots img { display: block; width: 100%; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.calculator-body .ra-results-panel .field-row { margin-bottom: var(--space-2); }
+
+@media (max-width: 840px) {
+  .calc-two-pane { grid-template-columns: minmax(0, 1fr); }
+  .calc-conversion-row { grid-template-columns: minmax(0, 1fr) 28px minmax(0, 1fr); }
+  .calc-row-label { grid-column: 1 / -1; }
+  .calc-field-grid.cols-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .calculator-intro, .calculator-card > summary, .calculator-body { padding-left: var(--space-3); padding-right: var(--space-3); }
+  .calculator-summary-copy small { display: none; }
+  .calc-conversion-row, .calc-field-grid.cols-2, .calc-field-grid.cols-3 { grid-template-columns: minmax(0, 1fr); }
+  .calc-swap { display: none; }
+  .calc-resource-plots { grid-template-columns: minmax(0, 1fr); }
+}

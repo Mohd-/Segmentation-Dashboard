@@ -66,6 +66,8 @@ export var API = {
   // Resource Assessment calculator (views/resource-calculator.js): taskId is
   // the Resource Assessment component's own task_id.
   resourceAssessment: function (taskId, payload) { return api('/api/tasks/' + taskId + '/resource-assessment', jsonOptions('POST', payload)); },
+  calculatorResources: function (payload) { return api('/api/calculators/resources', jsonOptions('POST', payload)); },
+  calculatorReservoirCos: function (payload) { return api('/api/calculators/reservoir-cos', jsonOptions('POST', payload)); },
   // Header bell (views/header-menus.js). All three answer with the CURRENT
   // unread_count alongside their own payload, so the red dot and the menu are
   // updated from one round trip and can never disagree. Every route is scoped

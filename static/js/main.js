@@ -11,6 +11,7 @@ import { refreshPortfolio } from './views/portfolio.js';
 import { initPortfolioAnalysis } from './views/portfolio-analysis.js';
 import { refreshAudit } from './views/audit.js';
 import { refreshMap } from './views/map-view.js';
+import { initCalculators } from './views/calculators.js';
 import { saveComponent, assignComponent, transitionComponent, cyclePriorityChip, ensureUsers } from './views/detail-form.js';
 import { openProjectEditor } from './views/project-editor.js';
 import { performLogin, fetchUserOptions } from './auth.js';
@@ -124,6 +125,7 @@ export function wire() {
   // Portfolio Analysis: cross plot dialog trigger, close, and filter selects.
   // (The portfolio table itself filters via its column menus -- portfolio.js.)
   initPortfolioAnalysis();
+  initCalculators();
 }
 
 // The BP board's assignee select: value '' = All assignees (pipeline.js maps

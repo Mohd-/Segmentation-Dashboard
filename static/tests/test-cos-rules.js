@@ -44,6 +44,8 @@ test('cos-rules: numeric coercion matches helpers.to_float_or_none for commas an
     'Python and the client both accept decimal exponent notation');
   assert.equal(calculateTrapCos('0x64', '130'), null,
     'JavaScript-only hex syntax must not compute when Python float() would return None');
+  assert.equal(calculateTrapCos('1e309', '1e309'), null,
+    'overflowing exponent notation is not a finite calculator input');
 });
 
 // --- Seal: the two-branch formula -------------------------------------------
@@ -85,6 +87,15 @@ test('cos-rules: a PARTIAL Seal form yields null -- not computable, leave the fi
     seal_recent_activity_age: '0.5', seal_fracture_permeability: '0.5',
     seal_dip: '0.3', seal_azimuth_vs_shmax: '0.6'
     // fault confidence missing on the average branch
+  }), null);
+});
+
+test('cos-rules: non-finite Seal inputs are not computable', function () {
+  assert.equal(calculateSealCos({
+    seal_recent_activity_age: '1e309', seal_fracture_permeability: '0.5'
+  }), null);
+  assert.equal(calculateSealCos({
+    seal_recent_activity_age: '0.95', seal_fracture_permeability: '1e309'
   }), null);
 });
 

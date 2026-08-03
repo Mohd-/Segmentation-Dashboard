@@ -44,6 +44,7 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash
 
 import config
+import cos
 import db
 import export_excel
 import folders
@@ -652,6 +653,25 @@ def resource_assessment(task_id):
         return error_response("Task not found", 404)
     payload = request.get_json(silent=True) or {}
     return json_response(resource_calc.run(payload))
+
+
+@app.post("/api/calculators/resources")
+def calculator_resources():
+    """Run the Monte Carlo resource calculator without a project or task."""
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        raise ValueError("Request body must be a JSON object.")
+    return json_response(resource_calc.run(payload))
+
+
+@app.post("/api/calculators/reservoir-cos")
+def calculator_reservoir_cos():
+    """Score one standalone Reservoir CoS row with the approved RF model."""
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        raise ValueError("Request body must be a JSON object.")
+    rows_json = cos.calculate_reservoir_cos_rows([payload])
+    return app.response_class(rows_json, mimetype="application/json")
 
 
 @app.get("/api/tasks/<int:task_id>/dynamic-fields")

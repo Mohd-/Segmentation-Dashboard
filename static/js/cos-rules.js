@@ -33,7 +33,7 @@ function toNumberOrNull(value) {
   if (!text || text === '-') return null;
   if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(text)) return null;
   var numeric = Number(text);
-  return isNaN(numeric) ? null : numeric;
+  return isFinite(numeric) ? numeric : null;
 }
 
 // Python's int(round(x)) rounds half to EVEN (banker's rounding), JS's

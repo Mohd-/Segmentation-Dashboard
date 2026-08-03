@@ -117,6 +117,22 @@ test('API.resourceAssessment POSTs the payload verbatim to /api/tasks/<id>/resou
   });
 });
 
+test('API calculator methods use project-free endpoints', function () {
+  var calls = [];
+  mockFetch(function (url, opts) {
+    calls.push({ url: String(url), body: JSON.parse(opts.body) });
+    return jsonResponse(200, {});
+  });
+  return API.calculatorResources({ method: 'GRV' }).then(function () {
+    return API.calculatorReservoirCos({ pull_up: 'Yes' });
+  }).then(function () {
+    assert.match(calls[0].url, /^\/api\/calculators\/resources\?/);
+    assert.deepEqual(calls[0].body, { method: 'GRV' });
+    assert.match(calls[1].url, /^\/api\/calculators\/reservoir-cos\?/);
+    assert.deepEqual(calls[1].body, { pull_up: 'Yes' });
+  });
+});
+
 // --- 401 → login dialog ----------------------------------------------------
 
 test('api() on 401 opens the login dialog; dismissal surfaces the original 401', function () {

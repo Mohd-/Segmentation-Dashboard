@@ -16,7 +16,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/css/base.css?v=10">
-  <link rel="stylesheet" href="/static/css/components.css?v=36">
+  <link rel="stylesheet" href="/static/css/components.css?v=37">
 </head>
 <body>
   <section id="login-page" class="login-page hidden">
@@ -309,9 +309,13 @@
     </section>
 
     <section id="tab-calculator" class="tab" role="tabpanel">
-      <div class="panel placeholder-panel">
-        <h3>Calculator</h3>
-        <p>Calculator functionality will be implemented in a future update.</p>
+      <div class="calculator-shell">
+        <header class="calculator-intro">
+          <p class="calculator-eyebrow">Subsurface workbench</p>
+          <h2>Technical calculators</h2>
+          <p>Run quick, project-free checks using the same governed calculations as the lead workflow.</p>
+        </header>
+        <div id="calculator-workbench" class="calculator-workbench" aria-label="Technical calculators"></div>
       </div>
     </section>
   </main>
@@ -405,6 +409,6 @@
     <img id="ra-lightbox-img" alt="">
   </dialog>
 
-  <script type="module" src="/static/js/main.js?v=32"></script>
+  <script type="module" src="/static/js/main.js?v=33"></script>
 </body>
 </html>
