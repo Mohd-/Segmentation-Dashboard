@@ -989,6 +989,123 @@ def test_new_project_materializes_the_v5_template(client):
         [t["task_name"] for t in prospect]
 
 
+# ---------------------------------------------------------------------------
+# v6: the machine-derived projects.ground_elevation column
+# ---------------------------------------------------------------------------
+
+# The v5 projects shape, column-for-column (models.py before ground_elevation).
+_V5_PROJECTS_TABLE = """
+    CREATE TABLE projects_v5 (
+        project_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_name TEXT NOT NULL UNIQUE,
+        start_date TEXT,
+        target_date TEXT,
+        business_plan_enabled INTEGER NOT NULL DEFAULT 0,
+        business_plan_year INTEGER,
+        active_well_enabled INTEGER NOT NULL DEFAULT 0,
+        pipeline_type TEXT NOT NULL DEFAULT 'prospect',
+        last_updated TEXT,
+        archived INTEGER NOT NULL DEFAULT 0,
+        lead_folder_path TEXT,
+        lead_x REAL,
+        lead_y REAL,
+        revision INTEGER NOT NULL DEFAULT 0,
+        completed_at TEXT
+    );
+"""
+_V5_PROJECTS_COLUMNS = (
+    "project_id, project_name, start_date, target_date, business_plan_enabled, "
+    "business_plan_year, active_well_enabled, pipeline_type, last_updated, archived, "
+    "lead_folder_path, lead_x, lead_y, revision, completed_at"
+)
+
+
+def _projects_shape_and_version(db_path):
+    """(projects column set, stamped schema_version, {name: (lead_x, lead_y,
+    ground_elevation-or-'absent')}) read raw -- the assertion tuple for the v6
+    upgrade-and-replay tests."""
+    conn = raw_sqlite_connect(db_path)
+    try:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
+        version = conn.execute(
+            "SELECT value FROM app_settings WHERE key = 'schema_version'").fetchone()["value"]
+        select = "project_name, lead_x, lead_y" + (
+            ", ground_elevation" if "ground_elevation" in columns else "")
+        projects = {row["project_name"]:
+                    (row["lead_x"], row["lead_y"],
+                     row["ground_elevation"] if "ground_elevation" in columns else "absent")
+                    for row in conn.execute(f"SELECT {select} FROM projects")}
+    finally:
+        conn.close()
+    return columns, version, projects
+
+
+def test_migration_v6_adds_ground_elevation_to_a_v5_database_in_place(client, app_modules):
+    """Upgrade-and-replay for step 6 (projects.ground_elevation): reshape a
+    fresh DB to the v5 form with raw sqlite3 (projects table WITHOUT the
+    column, stamped schema_version 5, carrying a real project with
+    coordinates), re-bootstrap, and assert the column was added NULL, the
+    version stamped current and every row preserved. Then bootstrap once more
+    and assert nothing changes."""
+    _, dbmod = app_modules
+    import migrations
+
+    create_project(client, "MIGRATE-V6-KEEP-1", lead_x="512000.5", lead_y="2903000.25")
+
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        conn.executescript(f"""
+            {_V5_PROJECTS_TABLE}
+            INSERT INTO projects_v5 ({_V5_PROJECTS_COLUMNS})
+                SELECT {_V5_PROJECTS_COLUMNS} FROM projects;
+            DROP TABLE projects;
+            ALTER TABLE projects_v5 RENAME TO projects;
+            UPDATE app_settings SET value = '5' WHERE key = 'schema_version';
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+    _rebootstrap(dbmod, client.db_path)
+    columns, version, projects = _projects_shape_and_version(client.db_path)
+    assert "ground_elevation" in columns
+    assert version == str(migrations.LATEST_SCHEMA_VERSION)
+    # The row survived, coordinates intact, and the new column is honestly NULL
+    # (machine-derived -- the migration itself never invents a value; the
+    # backfill script / save-time fill populate it later).
+    assert projects["MIGRATE-V6-KEEP-1"] == (512000.5, 2903000.25, None)
+
+    # Replay: a second bootstrap against the upgraded file changes nothing.
+    _rebootstrap(dbmod, client.db_path)
+    assert _projects_shape_and_version(client.db_path) == (columns, version, projects)
+
+
+def test_migration_v6_tolerates_a_hand_altered_database(client, app_modules):
+    """A database stamped v5 whose projects table ALREADY has ground_elevation
+    (a manual ALTER) must upgrade cleanly: step 6's column-existence guard
+    makes it a no-op instead of a duplicate-column error -- and a value already
+    stored there is left alone."""
+    _, dbmod = app_modules
+    import migrations
+
+    pid = create_project(client, "MIGRATE-V6-HAND-1", lead_x="400000", lead_y="2800000")
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        # Fresh DBs already carry the column; re-stamping v5 simulates a v5
+        # database that was hand-ALTERed before this code ran.
+        conn.execute("UPDATE projects SET ground_elevation = 321.5 WHERE project_id = ?", (pid,))
+        conn.execute("UPDATE app_settings SET value = '5' WHERE key = 'schema_version'")
+        conn.commit()
+    finally:
+        conn.close()
+
+    _rebootstrap(dbmod, client.db_path)
+    columns, version, projects = _projects_shape_and_version(client.db_path)
+    assert "ground_elevation" in columns
+    assert version == str(migrations.LATEST_SCHEMA_VERSION)
+    assert projects["MIGRATE-V6-HAND-1"] == (400000.0, 2800000.0, 321.5)
+
+
 def test_segmentation_slides_ready_still_reads_pending_approval(client):
     """The one display rule that survived the restructure verbatim."""
     task = None

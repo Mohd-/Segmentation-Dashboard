@@ -12,6 +12,7 @@ from typing import Any, Dict, List
 
 from sqlalchemy.exc import IntegrityError
 
+import cos
 import config
 import db
 import folders
@@ -61,6 +62,84 @@ def _validated_coordinate(value, label):
     if number != number or number in (float("inf"), float("-inf")):
         raise ValueError(f"Enter a valid Lead {label} Coordinate.")
     return value
+
+
+def _fill_project_surfaces(session, project_id):
+    """Apply every coordinate-derived surface value after a completed save.
+
+    ``workflow.surfaces_fill`` deliberately leaves transaction ownership to
+    its caller.  Keep each fill in its own fresh transaction so this helper is
+    safe only at the post-commit boundaries used by project/task saves.  The
+    local import avoids the projects -> surfaces_fill -> mapdata -> projects
+    module cycle.
+
+    A newly filled TSQ thickness also gets the same Trap CoS calculation as an
+    input-only form save, provided the percentage is still empty.  An explicit
+    manual percentage always wins.
+    """
+    from . import surfaces_fill
+
+    # Match each fill's cheap first gate BEFORE opening a transaction.  With
+    # the default/unconfigured files absent, ordinary saves must remain a true
+    # zero-transaction no-op (important both for batch-writer commit ordering
+    # and for avoiding pointless production write locks).
+    if config.tsq_surface_file().is_file():
+        with db.write_transaction(session):
+            filled_tsq = surfaces_fill.fill_tsq(session, project_id)
+            if filled_tsq is not None:
+                trap_task = db.fetch_one(session, """
+                    SELECT pt.task_id,
+                           tsq.field_value AS sarah_quwarah_thickness_ft,
+                           trap.field_value AS trap_cos_pct
+                    FROM project_tasks pt
+                    LEFT JOIN task_dynamic_fields tsq
+                      ON tsq.task_id = pt.task_id
+                     AND tsq.field_key = 'sarah_quwarah_thickness_ft'
+                    LEFT JOIN task_dynamic_fields trap
+                      ON trap.task_id = pt.task_id
+                     AND trap.field_key = 'trap_cos_pct'
+                    WHERE pt.project_id = :project_id
+                      AND pt.task_name = 'Trap and Seal CoS'
+                      AND pt.is_active = 1
+                    ORDER BY pt.task_id DESC
+                    LIMIT 1
+                """, {"project_id": project_id})
+                explicit_pct = (trap_task or {}).get("trap_cos_pct")
+                if trap_task and not str(explicit_pct or "").strip():
+                    sarah = db.fetch_one(session, """
+                        SELECT tdf.field_value
+                        FROM project_tasks pt
+                        JOIN task_dynamic_fields tdf ON tdf.task_id = pt.task_id
+                        WHERE pt.project_id = :project_id
+                          AND pt.task_name = 'Thickness Estimation'
+                          AND pt.is_active = 1
+                          AND tdf.field_key = 'formation_thickness_ft'
+                        ORDER BY pt.task_id DESC
+                        LIMIT 1
+                    """, {"project_id": project_id})
+                    computed = cos.calculate_trap_cos(
+                        (sarah or {}).get("field_value"),
+                        trap_task.get("sarah_quwarah_thickness_ft"),
+                    )
+                    if computed is not None:
+                        now = utc_now_str()
+                        db.execute(session, """
+                            INSERT INTO task_dynamic_fields
+                                (task_id, field_key, field_value, updated_at)
+                            VALUES (:task_id, 'trap_cos_pct', :field_value, :now)
+                            ON CONFLICT(task_id, field_key) DO UPDATE
+                            SET field_value = excluded.field_value,
+                                updated_at = excluded.updated_at
+                        """, {"task_id": trap_task["task_id"],
+                              "field_value": computed, "now": now})
+                        db.execute(session, """
+                            UPDATE project_tasks SET last_updated = :now
+                            WHERE task_id = :task_id
+                        """, {"now": now, "task_id": trap_task["task_id"]})
+
+    if config.ground_elevation_surface_file().is_file():
+        with db.write_transaction(session):
+            surfaces_fill.fill_ground_elevation(session, project_id)
 
 
 def add_project(session, project_name, start_date=None, target_date=None, changed_by="System", lead_x=None, lead_y=None,
@@ -115,9 +194,11 @@ def add_project(session, project_name, start_date=None, target_date=None, change
                       if pipeline_type == "bp" else PIPELINE_TEMPLATES[0])
 
     try:
-        return _insert_project_with_tasks(session, project_name, start_date, target_date, changed_by,
-                                          lead_x, lead_y, year_val, bp_enabled, active_well_enabled,
-                                          pipeline_type, first_template, now)
+        project_id = _insert_project_with_tasks(session, project_name, start_date, target_date, changed_by,
+                                                lead_x, lead_y, year_val, bp_enabled, active_well_enabled,
+                                                pipeline_type, first_template, now)
+        _fill_project_surfaces(session, project_id)
+        return project_id
     except IntegrityError as exc:
         # UNIQUE(project_name) race lost to a concurrent insert.
         if "unique" in str(getattr(exc, "orig", None) or exc).lower():
@@ -715,6 +796,7 @@ def update_project_name(session, project_id, new_name, changed_by="Admin", lead_
         if "unique" in str(getattr(exc, "orig", None) or exc).lower():
             raise ValueError("A lead / well with this name already exists.") from exc
         raise
+    _fill_project_surfaces(session, project_id)
 
 
 def _rename_project(session, project_id, old, new_name, assignments, updates, changed_by):

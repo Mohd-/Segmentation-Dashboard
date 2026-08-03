@@ -40,7 +40,7 @@ from .constants import (
 )
 from .history import log_task_event
 from .notifications import notify_transition
-from .projects import _sync_completed_at, get_project
+from .projects import _fill_project_surfaces, _sync_completed_at, get_project
 from .summary import _task_field_value, first_reservoir_cos_row_value
 from .users import ensure_system_user, find_active_user
 
@@ -351,6 +351,7 @@ def save_task_dynamic_fields(session, task_id, fields, changed_by="Web User", re
         _apply_dynamic_fields(session, task, fields, changed_by, now)
         db.execute(session, "UPDATE project_tasks SET last_updated = :now WHERE task_id = :task_id",
                    {"now": now, "task_id": task_id})
+    _fill_project_surfaces(session, task["project_id"])
     if reconcile:
         apply_field_completion(session, task_id, changed_by)
 
@@ -477,6 +478,8 @@ def save_task(session, task_id, payload, changed_by="Web User", allow_priority_c
                    "UPDATE projects SET last_updated = :now, revision = revision + 1 WHERE project_id = :project_id",
                    {"now": now, "project_id": task["project_id"]})
         result = get_task(session, task_id) or {}
+
+    _fill_project_surfaces(session, task["project_id"])
 
     # POST-COMMIT field-driven completion (see apply_field_completion). Outside
     # the transaction above because every leg of its walk opens its own

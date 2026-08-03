@@ -42,7 +42,7 @@ import db
 from helpers import utc_now_str
 from models import Base
 
-LATEST_SCHEMA_VERSION = 5
+LATEST_SCHEMA_VERSION = 6
 
 
 # ---------------------------------------------------------------------------
@@ -587,6 +587,24 @@ def _migrate_v5_prospect_template_restructure(session, engine) -> None:
     _v5_resequence(session)
 
 
+def _migrate_v6_ground_elevation(session, engine) -> None:
+    """v6: add the nullable ``projects.ground_elevation`` REAL column.
+
+    Machine-derived (the DEM surface sampled at the project's coordinates by
+    workflow/surfaces_fill.fill_ground_elevation), so there is nothing to
+    backfill here: the column arrives NULL everywhere and is populated by the
+    save-time fill / scripts/backfill_surfaces.py, both of which may run any
+    number of times.
+
+    Guarded on column existence (the ``_migrate_v2_users_password_hash``
+    pattern): a database already ALTERed by hand passes through unchanged
+    instead of hitting a duplicate-column error.
+    """
+    columns = {column["name"] for column in inspect(engine).get_columns("projects")}
+    if "ground_elevation" not in columns:
+        db.execute(session, "ALTER TABLE projects ADD COLUMN ground_elevation REAL")
+
+
 # List of (version, fn) dispatched by run() in ascending order against the
 # stored schema_version. Append new steps with the next integer version and
 # bump LATEST_SCHEMA_VERSION to match; never edit or remove a shipped step.
@@ -595,6 +613,7 @@ MIGRATIONS = [
     (3, _migrate_v3_rename_quicklook_logs),
     (4, _migrate_v4_bp_step_merges),
     (5, _migrate_v5_prospect_template_restructure),
+    (6, _migrate_v6_ground_elevation),
 ]
 
 

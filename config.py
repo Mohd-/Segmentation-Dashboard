@@ -126,6 +126,43 @@ def map_borders_file() -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Grid surfaces (ZMAP+ ASCII grids, read by surfaces.py and sampled at a
+# project's coordinates by workflow/surfaces_fill.py)
+# ---------------------------------------------------------------------------
+# Surfaces live INSIDE the map data tree (they are map-plane data: every grid
+# must already be in UTM Zone 37N metres, like the shapefile layers), so a
+# deployment that re-points SEGMENT_TRACKER_MAP_DATA_DIR carries its surfaces
+# along for free. Deployment data (dropped on the share), so the directory is
+# NOT versioned -- see .gitignore, same block as data/map/layers/. A missing
+# directory or file is not an error: sampling simply returns no value.
+
+def map_surfaces_dir() -> Path:
+    """Directory holding the ZMAP+ grid surface files (``.dat``)."""
+    raw = os.environ.get("SEGMENT_TRACKER_SURFACES_DIR", str(map_data_dir() / "surfaces"))
+    return Path(raw).expanduser().resolve()
+
+
+# !!! PLACEHOLDER FILENAMES -- EDIT BEFORE DEPLOYING !!!
+# The two defaults below are stand-in names; swap them for the real delivered
+# grid filenames (or set the env override) when the surfaces land on the share.
+
+def tsq_surface_file() -> Path:
+    """The SARH-QWRH thickness ("TSQ") grid: sampled at a lead's coordinates to
+    auto-fill the Trap and Seal CoS step's SARH-QWRH thickness when empty."""
+    raw = os.environ.get("SEGMENT_TRACKER_TSQ_SURFACE_FILE",
+                         str(map_surfaces_dir() / "tsq_sarh_qwrh.dat"))
+    return Path(raw).expanduser().resolve()
+
+
+def ground_elevation_surface_file() -> Path:
+    """The digital-elevation grid: sampled at a project's coordinates to keep
+    the machine-derived ``projects.ground_elevation`` column current."""
+    raw = os.environ.get("SEGMENT_TRACKER_GROUND_ELEVATION_SURFACE_FILE",
+                         str(map_surfaces_dir() / "ground_elevation.dat"))
+    return Path(raw).expanduser().resolve()
+
+
+# ---------------------------------------------------------------------------
 # Security / auth
 # ---------------------------------------------------------------------------
 

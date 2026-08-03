@@ -66,6 +66,12 @@ class Project(Base):
     lead_folder_path = Column(Text)
     lead_x = Column(REAL)
     lead_y = Column(REAL)
+    # MACHINE-DERIVED, never user-entered: the digital-elevation surface
+    # (config.ground_elevation_surface_file) sampled at the record's resolved
+    # coordinates by workflow/surfaces_fill.fill_ground_elevation. Freely
+    # recomputed/overwritten on save and by scripts/backfill_surfaces.py; NULL
+    # when the record has no coordinates or the surface has no value there.
+    ground_elevation = Column(REAL)
     revision = Column(Integer, nullable=False, server_default=text("0"))
     # Set by workflow._sync_completed_at exactly when the applicable task set
     # becomes fully approved; cleared (NULL) when the project reopens. Kept
