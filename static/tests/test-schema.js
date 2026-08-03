@@ -396,31 +396,28 @@ test('schema.SCHEMA: Well Site Location reveals the staked coordinates behind it
 });
 
 /* --- Card 4C: Pre-Drilling GeoX Assessment ---------------------------------
-   The step HOSTS the resource calculator, which reads and writes the
-   pre_drill_piip_* trio itself. The piip() grid it used to declare named THE
-   SAME KEYS as editable inputs, so the two rendered side by side and the
-   generic Save harvested the grid over whatever Apply had just written. */
+   GeoX is external software. This step records its delivered percentiles as a
+   manual results grid; it must never inherit Lead Assessment's calculator. */
 
-test('schema.SCHEMA: the GeoX assessment declares NO duplicate of the calculator\'s keys', function () {
-  assert.deepEqual(stepKeys('Pre-Drilling GeoX Assessment'), [],
-    'the calculator is the step\'s entire body');
-  // Mirrors Resource Assessment, which met the identical clash first: its only
-  // field is the confirmation, never a piip() trio.
-  assert.ok(stepKeys('Resource Assessment').every(function (key) {
-    return key.indexOf('lead_piip') < 0;
-  }), 'and the lead assessment never re-declares its calculator keys either');
+test('schema.SCHEMA: GeoX restores the manual pre-drill PIIP results grid', function () {
+  assert.deepEqual(stepKeys('Pre-Drilling GeoX Assessment'), [
+    'pre_drill_piip_gas_p90', 'pre_drill_piip_gas_mean', 'pre_drill_piip_gas_p10',
+    'pre_drill_piip_has_liquid',
+    'pre_drill_piip_liquid_p90', 'pre_drill_piip_liquid_mean', 'pre_drill_piip_liquid_p10'
+  ]);
+  var fields = SCHEMA['Pre-Drilling GeoX Assessment'];
+  assert.ok(fields.slice(0, 3).every(function (field) { return field.type === 'number'; }));
+  assert.equal(fields[3].type, 'checkbox');
+  assert.ok(fields.slice(4).every(function (field) {
+    return field.type === 'number' && field.showIf === 'pre_drill_piip_has_liquid';
+  }), 'the optional liquid results reveal as one group');
 });
 
-test('schema.SCHEMA: no step declares an editable input for a calculator-written key', function () {
-  // The general rule the two cards above are instances of: a key the resource
-  // calculator writes (prefix + _piip_*) must not ALSO be a typed SCHEMA field
-  // on the step that hosts the calculator.
-  ['lead', 'pre_drill'].forEach(function (prefix) {
-    Object.keys(SCHEMA).forEach(function (step) {
-      (SCHEMA[step] || []).forEach(function (field) {
-        assert.ok(String(field.key).indexOf(prefix + '_piip_') !== 0,
-          step + ' must not declare ' + field.key + ' (the calculator owns it)');
-      });
+test('schema.SCHEMA: the Lead Assessment calculator remains the sole owner of lead_piip outputs', function () {
+  Object.keys(SCHEMA).forEach(function (step) {
+    (SCHEMA[step] || []).forEach(function (field) {
+      assert.ok(String(field.key).indexOf('lead_piip_') !== 0,
+        step + ' must not declare ' + field.key + ' (the calculator owns it)');
     });
   });
 });

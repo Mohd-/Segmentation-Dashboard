@@ -314,14 +314,14 @@ def run(out_dir: Path, headed: bool) -> int:
         # ================= Card 4C -- Pre-Drilling GeoX ====================
         print("\nCard 4C -- Pre-Drilling GeoX Assessment")
         open_step(page, "Pre-Drilling GeoX Assessment")
-        page.wait_for_selector("#resource-calculator-panel")
+        page.wait_for_selector('[data-field="pre_drill_piip_gas_p90"]')
         check(page.locator(".sl-workspace").count() == 0 and page.locator(".la-workspace").count() == 0,
               "the step keeps its own page (no consolidated workspace)")
-        duplicates = page.locator('#dynamic-fields [data-field^="pre_drill_piip_"]').count()
-        check(duplicates == 0,
-              f"no duplicate PIIP grid fighting the calculator (found {duplicates})")
-        check(page.locator("#dynamic-fields").inner_html().strip() == "",
-              "the calculator is the step's entire body")
+        check(page.locator("#resource-calculator-panel").count() == 0,
+              "GeoX records external software results and has no in-app calculator")
+        manual_results = page.locator('#dynamic-fields [data-field^="pre_drill_piip_"]').count()
+        check(manual_results == 7,
+              f"the original seven-field manual PIIP grid is restored (found {manual_results})")
         page.locator("#detail-shell").screenshot(path=str(out_dir / "06-geox-assessment.png"))
 
         check(not errors, f"no uncaught page errors ({errors})")

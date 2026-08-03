@@ -274,22 +274,12 @@ export var SCHEMA = {
   ],
   // v18: 'Presence CoS Evaluation' removed as a step -- the derived value is
   // surfaced as "Total Chance of Success" from /detail's overview.derisking.
-  // Card 4C. NO editable dynamic fields: the step HOSTS the resource
-  // calculator (views/resource-calculator.js, prefix 'pre_drill' -- see
-  // FIELD_PREFIX_BY_STEP there), and the calculator both reads and writes the
-  // pre_drill_piip_* trio itself. The piip() grid this entry used to carry
-  // declared THE SAME EIGHT KEYS as editable inputs, so the two rendered side
-  // by side on one page and the generic Save harvested the grid straight over
-  // whatever the calculator's Apply had just written.
-  //
-  // The fix MIRRORS 'Resource Assessment' above, which met the identical clash
-  // when it started hosting the calculator: the grid goes, the calculator's own
-  // read-only results panel is the step's display of those numbers, and the EAV
-  // keys are untouched (nothing is renamed, nothing is orphaned -- every reader
-  // in _OVERVIEW_READ_SOURCES / LATEST_PIIP_SOURCES keeps resolving). The
-  // project-editor.js all-fields card for this step is therefore comments-only
-  // now, exactly like Resource Assessment's.
-  'Pre-Drilling GeoX Assessment': [],
+  // Card 4C. GeoX is an EXTERNAL software workflow: this step records the
+  // results delivered by GeoX; it never runs the in-app Monte Carlo resource
+  // calculator. Restore the original manual gas/liquid PIIP result grid. The
+  // permanent pre_drill_piip_* keys are unchanged, so existing results and all
+  // portfolio/summary readers continue to resolve without migration.
+  'Pre-Drilling GeoX Assessment': piip('pre_drill_piip'),
   // Card 4A. Old moving_* values remain in the DB untouched; the step captures
   // the LEAD's coordinates (prefilled from the project's lead X/Y) plus three
   // max-distance/azimuth option pairs -- eight fields in four 2-column rows,

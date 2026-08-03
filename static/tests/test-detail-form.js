@@ -5,8 +5,11 @@
 // (SPECIAL_ACTION_ROWS), and the promise that matters is negative: an employee
 // must never be shown a control the backend will refuse. So these render the
 // real row against the real markup and look at what is on screen.
-import { test, assert, fixture } from './harness.js';
-import { renderActionButtons, savedMessage, renderFields, getFields } from '../js/views/detail-form.js';
+import { test, assert, fixture, mockFetch } from './harness.js';
+import {
+  renderActionButtons, savedMessage, renderFields, getFields, loadComponent,
+  stepHostsResourceCalculator
+} from '../js/views/detail-form.js';
 import { Store } from '../js/state.js';
 
 // The action row copied verbatim from static/index.html (classes included --
@@ -45,6 +48,147 @@ function withStore(fn) {
     Store.pipeline = saved.pipeline;
   }
 }
+
+// The shared detail shell's minimum real contract for loadComponent. These ids
+// are intentionally the production ids: a navigation regression should fail
+// here if step-owned DOM can outlive the step that owns it.
+var DETAIL_SHELL =
+  '<div id="detail-shell" class="detail-shell-lead">' +
+  '<span id="component-number"></span><h2 id="component-title"></h2>' +
+  '<span id="component-status-chip"></span><select id="assigned-to"></select>' +
+  '<button id="component-priority-chip"></button>' +
+  '<form id="component-form"><div id="dynamic-fields"></div>' +
+  '<div id="comments-field"><textarea id="comments"></textarea></div>' +
+  '<div class="action-row">' +
+  '<button id="return-component" type="button" class="ghost hidden">Return for Update</button>' +
+  '<button id="submit-component" type="button" class="hidden">Submit for Approval</button>' +
+  '<button id="approve-component" type="button" class="hidden">Approve</button>' +
+  '<button id="save-component" type="submit">Save Updates</button>' +
+  '</div></form><div id="summary-card-head"></div><div id="lead-summary"></div></div>';
+
+function response(body) {
+  return new Response(JSON.stringify(body), {
+    status: 200, headers: { 'Content-Type': 'application/json' }
+  });
+}
+
+async function withDetailStore(fn) {
+  var saved = {
+    user: Store.user, users: Store.users, projectId: Store.projectId,
+    project: Store.project, tasks: Store.tasks, task: Store.task,
+    allFields: Store.allFields, leadSummary: Store.leadSummary,
+    overview: Store.overview, formations: Store.formations, pipeline: Store.pipeline
+  };
+  try {
+    Store.user = { name: 'Supervisor', role: 'supervisor' };
+    Store.users = [];
+    Store.projectId = 44;
+    Store.project = { project_id: 44, project_name: 'Navigation Guard', pipeline_type: 'prospect' };
+    Store.tasks = [];
+    Store.task = null;
+    Store.allFields = {};
+    Store.leadSummary = null;
+    Store.overview = {};
+    Store.formations = [];
+    Store.pipeline = 'prospect';
+    await fn();
+  } finally {
+    Object.keys(saved).forEach(function (key) { Store[key] = saved[key]; });
+  }
+}
+
+test('detail-form ownership: GeoX can never host the Resource Assessment calculator', function () {
+  assert.equal(stepHostsResourceCalculator('Resource Assessment'), true);
+  assert.equal(stepHostsResourceCalculator('Pre-Drilling GeoX Assessment'), false);
+  assert.equal(stepHostsResourceCalculator('Well Site Location'), false);
+});
+
+test('detail-form GeoX: loadComponent renders the seven manual external-result controls', async function () {
+  await withDetailStore(async function () {
+    fixture(DETAIL_SHELL);
+    var geox = {
+      task_id: 91, task_name: 'Pre-Drilling GeoX Assessment', sequence_no: 12,
+      stage_group: 'Pre-Well Delivery', status: 'In Progress', priority: 'Medium'
+    };
+    Store.tasks = [geox];
+    mockFetch(function (url) {
+      var path = String(url);
+      if (path.indexOf('/api/tasks/91/dynamic-fields') >= 0) {
+        return response({ pre_drill_piip_gas_p90: '80', pre_drill_piip_gas_mean: '100',
+                          pre_drill_piip_gas_p10: '130' });
+      }
+      if (path.indexOf('/api/projects/44/component-folder/91') >= 0) {
+        return response({ requires_folder: 0 });
+      }
+      throw new Error('Unexpected request: ' + path);
+    });
+
+    await loadComponent(geox);
+    assert.equal(document.getElementById('resource-calculator-panel'), null);
+    assert.equal(document.querySelectorAll('#dynamic-fields [data-field^="pre_drill_piip_"]').length, 7);
+    assert.equal(document.querySelector('[data-field="pre_drill_piip_gas_p90"]').value, '80');
+  });
+});
+
+test('detail-form navigation: stale step responses cannot remount over Staking Letters', async function () {
+  await withDetailStore(async function () {
+    fixture(DETAIL_SHELL);
+    var staleFieldsResolve;
+    var staleFolderResolve;
+    var staleTask = {
+      task_id: 90, task_name: 'Pre-Drilling GeoX Assessment', sequence_no: 12,
+      stage_group: 'Pre-Well Delivery', status: 'In Progress', priority: 'Medium'
+    };
+    var approval = {
+      task_id: 92, task_name: 'Approval to Stake', sequence_no: 10,
+      stage_group: 'Pre-Well Delivery', status: 'In Progress', priority: 'Medium'
+    };
+    var wellsite = {
+      task_id: 93, task_name: 'Well Site Location', sequence_no: 11,
+      stage_group: 'Pre-Well Delivery', status: 'In Progress', priority: 'Medium'
+    };
+    Store.tasks = [staleTask, approval, wellsite];
+    Store.allFields = { 'Approval to Stake': {}, 'Well Site Location': {} };
+    mockFetch(function (url) {
+      var path = String(url);
+      if (path.indexOf('/api/tasks/90/dynamic-fields') >= 0) {
+        return new Promise(function (resolve) { staleFieldsResolve = resolve; });
+      }
+      if (path.indexOf('/api/projects/44/component-folder/90') >= 0) {
+        return new Promise(function (resolve) { staleFolderResolve = resolve; });
+      }
+      if (path.indexOf('/api/projects/44/component-folder/92') >= 0) {
+        return response({ requires_folder: 0 });
+      }
+      throw new Error('Unexpected request: ' + path);
+    });
+
+    var staleLoad = loadComponent(staleTask);
+    var leaked = document.createElement('div');
+    leaked.id = 'resource-calculator-panel';
+    leaked.textContent = 'old calculator';
+    document.getElementById('dynamic-fields').appendChild(leaked);
+
+    await loadComponent(wellsite);
+    assert.equal(document.getElementById('resource-calculator-panel'), null,
+      'navigation tears down all previous step-owned UI synchronously');
+    assert.ok(document.querySelector('.sl-workspace'), 'the destination workspace owns the shell');
+    assert.ok(document.querySelector('[data-sl-field="staked_x"]'), 'Card 4B X exists in the DOM');
+    assert.ok(document.querySelector('[data-sl-field="staked_y"]'), 'Card 4B Y exists in the DOM');
+    var reveal = document.querySelector('[data-sl-field="wellsite_letter_loaded"]');
+    reveal.checked = true;
+    reveal.dispatchEvent(new Event('change', { bubbles: true }));
+    assert.equal(document.querySelector('[data-sl-section="location"]').classList.contains('hidden'), false,
+      'checking the Wellsite letter reveals Staking Location X/Y');
+
+    staleFieldsResolve(response({ pre_drill_piip_gas_p90: '999' }));
+    staleFolderResolve(response({ requires_folder: 1, unc_path: 'stale' }));
+    await staleLoad;
+    assert.ok(document.querySelector('.sl-workspace'), 'the stale completion cannot replace the new step');
+    assert.equal(document.querySelector('[data-field="pre_drill_piip_gas_p90"]'), null);
+    assert.equal(document.getElementById('resource-calculator-panel'), null);
+  });
+});
 
 // --- the generic row is untouched -------------------------------------------
 

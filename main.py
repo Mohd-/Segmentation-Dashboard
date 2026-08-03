@@ -641,7 +641,7 @@ def transition_task(task_id):
 
 @app.post("/api/tasks/<int:task_id>/resource-assessment")
 def resource_assessment(task_id):
-    """Run the Resource Assessment pop-up calculator for a task.
+    """Run the Lead Assessment resource calculator for its owning task.
 
     The task must exist (404 otherwise). The JSON body carries the pop-up's
     scenario/method/inputs; resource_calc.run drives the Monte Carlo engine and
@@ -651,8 +651,16 @@ def resource_assessment(task_id):
     flow through the normal dynamic-fields path.
     """
     session = db.get_session()
-    if not workflow.get_task(session, task_id):
+    task = workflow.get_task(session, task_id)
+    if not task:
         return error_response("Task not found", 404)
+    # GeoX records results produced by the external GeoX application. Keeping
+    # the task-scoped calculator boundary narrow prevents a future UI wiring
+    # regression from silently turning that results-entry step back into a
+    # Monte Carlo calculator. Resource Assessment is the inactive pre-v7 name
+    # retained for rolling-upgrade compatibility.
+    if task.get("task_name") not in {"Lead Assessment", "Resource Assessment"}:
+        raise ValueError("Resource calculator is only available for Lead Assessment.")
     payload = request.get_json(silent=True) or {}
     return json_response(resource_calc.run(payload))
 

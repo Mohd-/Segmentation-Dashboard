@@ -200,3 +200,18 @@ def test_api_resource_assessment_nonexistent_task_404(client):
     })
     assert resp.status_code == 404
     assert resp.get_json()["detail"] == "Task not found"
+
+
+def test_api_resource_assessment_rejects_geox_before_running_engine(client, monkeypatch):
+    pid = create_project(client, "RESCALC-API-GEOX")
+    task = get_task_by_name(client, pid, "Pre-Drilling GeoX Assessment")
+
+    def engine_must_not_run(_payload):
+        pytest.fail("GeoX must never invoke the in-app resource engine")
+
+    monkeypatch.setattr(rc, "run", engine_must_not_run)
+    resp = client.post(f"/api/tasks/{task['task_id']}/resource-assessment", json={})
+    assert resp.status_code == 400
+    assert resp.get_json()["detail"] == (
+        "Resource calculator is only available for Lead Assessment."
+    )

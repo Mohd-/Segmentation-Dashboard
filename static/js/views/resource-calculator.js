@@ -127,16 +127,13 @@ export function buildCalculatePayload(state) {
   return payload;
 }
 
-// Which EAV key family the calculator reads and writes, per hosting step.
-// The calculator LOGIC is identical on both -- only the key prefix moves, so
-// each assessment lands in the bucket its own step (and every reader of it:
-// SCHEMA's piip() grid, _OVERVIEW_READ_SOURCES, LATEST_PIIP_SOURCES) already
-// addresses. 'lead' is the default, so every existing caller and test is
-// unaffected.
+// Which EAV key family the calculator reads and writes. GeoX is intentionally
+// absent: it records results produced by external GeoX software and must never
+// mount or invoke this calculator. 'lead' remains the default for the one
+// supported task family and legacy callers.
 export var DEFAULT_FIELD_PREFIX = 'lead';
 export var FIELD_PREFIX_BY_STEP = {
-  'Resource Assessment': 'lead',
-  'Pre-Drilling GeoX Assessment': 'pre_drill'
+  'Resource Assessment': 'lead'
 };
 export function fieldPrefixForStep(taskName) {
   return FIELD_PREFIX_BY_STEP[taskName] || DEFAULT_FIELD_PREFIX;
@@ -562,7 +559,7 @@ export function teardownResourceCalculator() {
 }
 
 // Entry point: called by detail-form.js's renderResourceCalculatorSection
-// (on either assessment component -- see FIELD_PREFIX_BY_STEP) with a freshly
+// (on the resource-assessment component) with a freshly
 // created container to render into. `fields` is that task's current dynamic fields (the same
 // object passed to renderFields); area/thickness prefill from the sibling
 // tasks via Store.allFields/Store.tasks -- the same mechanism detail-form.js/

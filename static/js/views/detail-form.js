@@ -92,10 +92,13 @@ function syncAssigneeGate(referenceOnly) {
   select.disabled = !canManageAssignments() || reference;
 }
 
-function renderAssigneeSelect(task) {
+function renderAssigneeSelect(task, load) {
   var select = byId('assigned-to');
   if (!select) return;
   ensureUsers().then(function (users) {
+    // Component loads are asynchronous. Never let a users response for the
+    // previous component repaint the shared assignee control after navigation.
+    if (!componentLoadIsCurrent(load)) return;
     var current = task.assigned_to || '';
     var names = users.map(function (user) { return user.name; });
     // Keep a legacy/deactivated assignee visible even if no longer selectable
@@ -319,8 +322,41 @@ function teardownOtherConsolidatedPages(page) {
   if (!page || page.render !== renderStakingLetters) teardownStakingLetters();
 }
 
+// One shared detail shell hosts every component. Navigation therefore begins
+// by invalidating the previous load and removing ALL step-owned transient DOM,
+// before deciding what the next component renders. This is the invariant that
+// prevents a calculator/folder/workspace from leaking into the next step.
+// The generation token also makes late fields/folder responses harmless.
+var componentLoadGeneration = 0;
+
+function teardownResourceCalculatorSection() {
+  teardownResourceCalculator();
+  var panel = byId('resource-calculator-panel');
+  if (panel) panel.remove();
+}
+
+function beginComponentLoad(task) {
+  componentLoadGeneration += 1;
+  teardownResourceCalculatorSection();
+  var folder = byId('component-folder-card');
+  if (folder) folder.remove();
+  var root = byId('dynamic-fields');
+  if (root) root.innerHTML = '';
+  return {
+    generation: componentLoadGeneration,
+    projectId: Store.projectId,
+    taskId: task.task_id
+  };
+}
+
+export function componentLoadIsCurrent(load) {
+  return !!load && load.generation === componentLoadGeneration &&
+    Store.projectId === load.projectId && !!Store.task && Store.task.task_id === load.taskId;
+}
+
 export function loadComponent(task) {
   if (!task) return;
+  var load = beginComponentLoad(task);
   Store.task = task;
   setComponentReferenceMode(!isCurrentPipelineView());
   all('.component-item').forEach(function (button) { button.classList.toggle('active', Number(button.getAttribute('data-task-id')) === task.task_id); });
@@ -328,7 +364,7 @@ export function loadComponent(task) {
   byId('component-number').textContent = String(task.sequence_no || '');
   byId('component-title').textContent = task.task_name;
   renderStatusChip(task.status);
-  renderAssigneeSelect(task);
+  renderAssigneeSelect(task, load);
   renderActionButtons(task);
   renderPriorityChip(task);
   byId('comments').placeholder = commentPlaceholder(task.task_name);
@@ -342,9 +378,6 @@ export function loadComponent(task) {
     // folder row. Lead Assessment keeps the single merged row's normal
     // lifecycle controls; Staking Letters still hides them because its two
     // underlying task rows retain independent lifecycles.
-    teardownResourceCalculator();
-    var previousFolder = byId('component-folder-card');
-    if (previousFolder) previousFolder.remove();
     if (!consolidated.keepsLifecycle) resetActionButtons(actionButtons());
     consolidated.render(byId('dynamic-fields'), { onCopy: copyText });
     setComponentReferenceMode(!isCurrentPipelineView());
@@ -352,12 +385,15 @@ export function loadComponent(task) {
     return Promise.resolve();
   }
   return Promise.all([API.fields(task.task_id), API.componentFolder(Store.projectId, task.task_id)]).then(function (results) {
+    if (!componentLoadIsCurrent(load)) return;
     renderFields(task.task_name, results[0] || {});
     renderResourceCalculatorSection(task, results[0] || {});
     renderComponentFolder(results[1] || {});
     setComponentReferenceMode(!isCurrentPipelineView());
     renderRightPanel(tasksForPipeline(Store.pipeline));
-  }).catch(function (error) { msg(error.message, 'error'); });
+  }).catch(function (error) {
+    if (componentLoadIsCurrent(load)) msg(error.message, 'error');
+  });
 }
 
 // Assignment posts immediately on select change (not deferred to Save): the
@@ -1080,26 +1116,23 @@ export var LEAD_PIIP_SOURCES = [
 ];
 export var LATEST_PIIP_SOURCES = POST_DRILL_PIIP_SOURCES.concat(LEAD_PIIP_SOURCES);
 
-// The full Resource Assessment calculator (views/resource-calculator.js)
-// rendered inline, above the (now field-less -- see SCHEMA) dynamic-fields
-// grid, on the two steps that carry a PIIP assessment: the lead's own
-// 'Resource Assessment' and the pre-drill re-assessment
-// 'Pre-Drilling GeoX Assessment'. The calculator itself is unchanged -- it
-// reads/writes whichever step's task it is handed. Same remove-and-reinsert-on-every-load
-// idiom as renderComponentFolder below, so switching to any other component
-// cleanly drops the panel; switching AWAY also tears down the calculator's
-// own render-generation state (teardownResourceCalculator) so a stray async
-// Calculate/Apply response that resolves after the panel is gone is a no-op.
+// The legacy Resource Assessment calculator host. Current v7 Lead Assessment
+// renders its calculator inside its dedicated workspace; GeoX is deliberately
+// excluded because it only records external-software results. The centralized
+// beginComponentLoad teardown above removes both this DOM and its async state
+// on EVERY navigation before the next view can mount.
 // Reference-mode disabling is handled by renderResourceCalculator itself
 // (it disables Calculate directly; every plain input is caught by the
 // generic setComponentReferenceMode sweep detail-form.js runs again right
 // after loadComponent's fields fetch resolves) -- see that function's own
 // comment for why Apply/View-plots need no special-casing there.
-var RESOURCE_CALCULATOR_STEPS = ['Resource Assessment', 'Pre-Drilling GeoX Assessment'];
+var RESOURCE_CALCULATOR_STEPS = ['Resource Assessment'];
+export function stepHostsResourceCalculator(taskName) {
+  return RESOURCE_CALCULATOR_STEPS.indexOf(taskName) >= 0;
+}
 function renderResourceCalculatorSection(task, fields) {
-  var previous = byId('resource-calculator-panel');
-  if (previous) previous.remove();
-  if (RESOURCE_CALCULATOR_STEPS.indexOf(task.task_name) < 0) { teardownResourceCalculator(); return; }
+  teardownResourceCalculatorSection();
+  if (!stepHostsResourceCalculator(task.task_name)) return;
   var panel = document.createElement('div');
   panel.id = 'resource-calculator-panel';
   panel.className = 'resource-calculator-panel';
