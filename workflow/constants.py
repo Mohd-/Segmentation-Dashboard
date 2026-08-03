@@ -72,7 +72,7 @@ def applicable_stages(pipeline_type):
 
     Applicability is a PURE FUNCTION of pipeline_type -- never stored per row: a
     prospect operates over PROSPECT_STAGES, a BP well over BP_EXECUTION_STAGES.
-    All 27 active task rows always exist regardless of pipeline; the rows
+    All active task rows always exist regardless of pipeline; the rows
     outside the operating pipeline are simply excluded wherever it matters
     (completion, flow reconciliation, assignment cascade, state refresh) by
     filtering on ``stage_group IN applicable_stages(...)``.
@@ -112,7 +112,7 @@ PAY_INTERVAL_NUMERIC_FIELDS = [f for f in PAY_INTERVAL_VALUE_FIELDS if f != "flu
 # legacy/imported descriptions keep round-tripping unchanged.
 FORMATION_FLUID_TYPES = ["", "Dry", "Gas", "Water", "Condensate", "Liquid", "Gas over Water"]
 
-# The 27-step pipeline definition: (sequence_no, task_name, stage_group).
+# The 24-step pipeline definition: (sequence_no, task_name, stage_group).
 # This list is the SINGLE SOURCE OF TRUTH for the workflow -- there is no
 # task_templates table; project creation materializes project_tasks rows
 # straight from these tuples.
@@ -138,8 +138,8 @@ FORMATION_FLUID_TYPES = ["", "Dry", "Gas", "Water", "Condensate", "Liquid", "Gas
 #
 # v5 restructured the PROSPECT half into the permanent 12 tracked items the
 # board and the detail sidebar had been faking through a read-time adapter.
-# Still 12 prospect steps (so still 27 in total, and the BP numbers 13-27 did
-# not move), but they are now the tracked items themselves:
+# Still 12 prospect steps at v5 (so then 27 in total, and the BP numbers 13-27
+# did not move), and at that version they were the tracked items themselves:
 #   renamed  "Reservoir Area Definition"        -> "Area Definition"
 #            "Lead Resource Assessment"         -> "Resource Assessment"
 #            "Prospect Evaluation Presentation" -> "Segmentation Slides"
@@ -152,27 +152,32 @@ FORMATION_FLUID_TYPES = ["", "Dry", "Gas", "Water", "Condensate", "Liquid", "Gas
 # The rename is a task_name rewrite IN PLACE, so a renamed row keeps its
 # task_id, EAV, history and folder card; the merge and the retirement follow
 # the v4 pattern (is_active = 0, nothing deleted, same EAV keys).
+#
+# v7 consolidated the four Lead Assessment task rows into one lifecycle row.
+# Their inputs moved with it, while the four former names remain ordered,
+# field-derived checkpoints so board and summary progress stay out of twelve.
 PIPELINE_TEMPLATES = [
-    (1, "Area Definition", "Lead Assessment"),
-    (2, "Thickness Estimation", "Lead Assessment"),
-    (3, "GRV Inputs", "Lead Assessment"),
-    (4, "Resource Assessment", "Lead Assessment"),
-    (5, "Reservoir CoS", "Risk Analysis"),
+    # v7 folds the four former Lead Assessment rows into this single lifecycle
+    # row.  Their field-state predicates remain visible as the four derived
+    # checkpoints in LEAD_ASSESSMENT_CHECKPOINTS below, so the board still
+    # communicates x/4 and n/12 without manufacturing four task rows.
+    (1, "Lead Assessment", "Lead Assessment"),
+    (2, "Reservoir CoS", "Risk Analysis"),
     # v5: "Trap CoS" + "Seal CoS" merged here. It keeps BOTH steps' EAV keys
     # verbatim (sarah_quwarah_thickness_ft / trap_cos_pct and the five seal_*
     # inputs / seal_cos_pct), which is what lets the recompute hooks and the
     # Total CoS read carry straight over.
-    (6, "Trap and Seal CoS", "Risk Analysis"),
-    (7, "Seismic Signature Validation", "Risk Analysis"),
+    (3, "Trap and Seal CoS", "Risk Analysis"),
+    (4, "Seismic Signature Validation", "Risk Analysis"),
     # v18: "Presence CoS Evaluation" was removed as a visible step -- its value
     # is derived (Reservoir x Trap x Seal), computed at read time
     # (calculate_total_cos) and surfaced as ``derisking`` in the /detail
     # payload's computed overview.
-    (8, "Segmentation Slides", "Risk Analysis"),
-    (9, "Moving Tolerance", "Pre-Well Delivery"),
-    (10, "Approval to Stake", "Pre-Well Delivery"),
-    (11, "Well Site Location", "Pre-Well Delivery"),
-    (12, "Pre-Drilling GeoX Assessment", "Pre-Well Delivery"),
+    (5, "Segmentation Slides", "Risk Analysis"),
+    (6, "Moving Tolerance", "Pre-Well Delivery"),
+    (7, "Approval to Stake", "Pre-Well Delivery"),
+    (8, "Well Site Location", "Pre-Well Delivery"),
+    (9, "Pre-Drilling GeoX Assessment", "Pre-Well Delivery"),
     (13, "BP Execution Gate", "Well Delivery"),
     (14, "Well Proposal", "Well Delivery"),
     (15, "Site Preparation", "Well Delivery"),
@@ -216,6 +221,13 @@ RETIRED_TASK_NAMES = (
     "Trap CoS",
     "Seal CoS",
     "Well Creation",
+    # v7 (prospect): the four field-owning rows became derived checkpoints on
+    # the one Lead Assessment row.  Their history remains under these ids;
+    # their EAV values are moved to the survivor by migration v7.
+    "Area Definition",
+    "Thickness Estimation",
+    "GRV Inputs",
+    "Resource Assessment",
 )
 
 # v5 renames: CURRENT name -> the pre-v5 name the same row used to carry.
@@ -305,7 +317,8 @@ AUTO_COMPLETE_COMMENT = (
 # listed first and the pre-v5 spelling second, covering a project the rename's
 # both-names guard skipped (and keeping the ladder readable as history).
 _OVERVIEW_READ_SOURCES = {
-    "lead_ogip": [("Resource Assessment", "lead_piip_gas_mean"),
+    "lead_ogip": [("Lead Assessment", "lead_piip_gas_mean"),
+                  ("Resource Assessment", "lead_piip_gas_mean"),
                   ("Lead Resource Assessment", "lead_piip_gas_mean")],
     "pre_drill_estimation": [("Pre-Drilling GeoX Assessment", "pre_drill_piip_gas_mean"),
                              ("Pre-Drilling Resource Assessment", "pre_drill_piip_gas_mean")],
@@ -361,7 +374,7 @@ LATEST_MEAN_GAS_SOURCES = tuple(
     )
 )
 
-# Overview keys with no feeding step in the current 27-step pipeline; kept as
+# Overview keys with no feeding step in the current 24-step pipeline; kept as
 # blanks so the /detail ``overview`` shape stays stable for the frontend.
 _OVERVIEW_LEGACY_KEYS = [
     "ogip", "preliminary_resource_estimation", "reservoir_pressure",
@@ -581,6 +594,44 @@ FIELD_COMPLETION = {
     },
 }
 
+# Card 2B remains a four-checkpoint communication model even though v7 gives
+# it one canonical task row and lifecycle.  The labels deliberately retain the
+# former step names: they are stable board vocabulary, not runnable tasks.
+# Keep this list ordered; it is both the x/4 counter order and the migration's
+# source order for status/assignee selection.
+LEAD_ASSESSMENT_CHECKPOINTS = (
+    "Area Definition",
+    "Thickness Estimation",
+    "GRV Inputs",
+    "Resource Assessment",
+)
+
+# The one real Lead Assessment lifecycle may be submitted and approved as a
+# whole.  Completion of the four checkpoints is derived from its fields, not a
+# second state machine.  This aggregate predicate is intentionally available
+# to callers that need to ask whether all four checkpoints are complete, but
+# is excluded from the automatic field-completion engine below: filling the
+# form must not bypass the supervisor's approval of the consolidated stage.
+FIELD_COMPLETION["Lead Assessment"] = {
+    "required_checked": tuple(
+        key for checkpoint in LEAD_ASSESSMENT_CHECKPOINTS
+        for key in FIELD_COMPLETION[checkpoint].get("required_checked", ())
+    ),
+    "required_present": tuple(
+        key for checkpoint in LEAD_ASSESSMENT_CHECKPOINTS
+        for key in FIELD_COMPLETION[checkpoint].get("required_present", ())
+    ),
+    "required_greater": tuple(
+        pair for checkpoint in LEAD_ASSESSMENT_CHECKPOINTS
+        for pair in FIELD_COMPLETION[checkpoint].get("required_greater", ())
+    ),
+}
+
+# Named independently so lifecycle can keep the established automatic behavior
+# for all field-driven cards while leaving Lead Assessment's submit/approve
+# lifecycle under human control.
+FIELD_COMPLETION_AUTOMATED_STEPS = frozenset(FIELD_COMPLETION) - {"Lead Assessment"}
+
 # Keys whose "has a valid value" means a POSITIVE NUMBER, not merely a non-blank
 # string. Read by the engine's value validator (lifecycle._field_present) and
 # by the ordering check below, so both halves of a card 2B predicate agree on
@@ -643,6 +694,27 @@ def is_number(value):
     "-6500" and "532100.5" are present.
     """
     return _number_or_none(value) is not None
+
+
+def lead_assessment_checkpoint_met(checkpoint, fields):
+    """Return the field-derived state of one v7 Lead Assessment checkpoint.
+
+    The ordinary lifecycle engine needs one richer presence rule for the
+    Reservoir CoS JSON sheet.  Lead Assessment never carries that field, so
+    its checkpoint helper can remain dependency-free while exactly preserving
+    the positive-number and generic-number semantics used by the engine.
+    """
+    if checkpoint not in LEAD_ASSESSMENT_CHECKPOINTS:
+        return False
+
+    def present(field_key, value):
+        if field_key in POSITIVE_NUMBER_FIELDS:
+            return positive_number(value)
+        if field_key in NUMERIC_FIELDS:
+            return is_number(value)
+        return str(value or "").strip() != ""
+
+    return field_completion_met(checkpoint, fields, present)
 
 # Steps whose completion is a HUMAN APPROVAL and must never become field-driven.
 # "Segmentation Slides" is the one tracked item the board still shows as

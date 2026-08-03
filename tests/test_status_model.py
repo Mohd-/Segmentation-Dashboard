@@ -83,7 +83,7 @@ def test_submit_approve_flow_advances_project(client):
     assert approved["actual_start"] is not None
 
     project = client.get(f"/api/projects/{pid}").get_json()
-    assert project["current_task"] == "Thickness Estimation"
+    assert project["current_task"] == "Reservoir CoS"
 
 
 def test_return_sends_ready_back_to_in_progress(client):
@@ -273,8 +273,7 @@ def test_assign_cascade_covers_subsequent_not_assigned_prospect_steps_only(clien
     assert resp.status_code == 200
     _assign(client, by_seq[6]["task_id"], "Employee", by_seq[6]["revision"])
 
-    # Assign step 3 with cascade: steps 3..12 (the prospect pipeline since the
-    # v18 renumbering) that are still Not Assigned all go In Progress with the
+    # Assign step 3 with cascade: steps 3..9 that are still Not Assigned all go In Progress with the
     # same assignee.
     _assign(client, by_seq[3]["task_id"], "Staff Member", by_seq[3]["revision"], cascade=True)
 
@@ -284,7 +283,7 @@ def test_assign_cascade_covers_subsequent_not_assigned_prospect_steps_only(clien
         assert after[seq]["status"] == "Not Assigned"
         assert after[seq]["assigned_to"] is None
     # Target + subsequent Not Assigned prospect steps cascade.
-    for seq in (3, 4, 7, 8, 9, 10, 11, 12):
+    for seq in (3, 4, 7, 8, 9):
         assert after[seq]["status"] == "In Progress", seq
         assert after[seq]["assigned_to"] == "Staff Member", seq
         assert after[seq]["revision"] == by_seq[seq]["revision"] + 1, seq
@@ -315,7 +314,7 @@ def test_assign_cascade_for_bp_project_stays_in_bp_stages(client):
         business_plan_enabled=True, business_plan_year=2028,
     )
     tasks = get_tasks(client, pid)
-    # All 31 rows seed Not Assigned; the BP pipeline scopes the cascade to
+    # All 24 rows seed Not Assigned; the BP pipeline scopes the cascade to
     # BP-stage tasks. Anchor on the first BP-stage task explicitly.
     first_bp = next(t for t in tasks if t["stage_group"] not in PROSPECT_STAGES)
     _assign(client, first_bp["task_id"], "Employee", first_bp["revision"], cascade=True)

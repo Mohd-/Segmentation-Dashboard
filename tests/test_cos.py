@@ -481,12 +481,12 @@ def test_trap_cos_threshold_table_examples(client, a, b, expected):
 def test_trap_cos_input_only_save_still_computes_from_thickness_task(client):
     """A payload carrying the Trap INPUT without a trap_cos_pct (an older
     client, the Excel importer's input-only rows) still gets the server
-    recompute, sourced cross-task from Thickness Estimation -- both through
+    recompute, sourced cross-task from Lead Assessment -- both through
     the dynamic-fields PATCH and the full save."""
     import cos
 
     pid = create_project(client, "TRAP-CALC-1")
-    thickness = get_task_by_name(client, pid, "Thickness Estimation")
+    thickness = get_task_by_name(client, pid, "Lead Assessment")
     resp = client.patch(f"/api/tasks/{thickness['task_id']}/dynamic-fields",
                         json={"fields": {"formation_thickness_ft": "100"}})
     assert resp.status_code == 200
@@ -522,7 +522,7 @@ def test_explicit_trap_cos_value_skips_the_server_recompute(client):
     import cos
 
     pid = create_project(client, "TRAP-EXPLICIT-1")
-    thickness = get_task_by_name(client, pid, "Thickness Estimation")
+    thickness = get_task_by_name(client, pid, "Lead Assessment")
     client.patch(f"/api/tasks/{thickness['task_id']}/dynamic-fields",
                  json={"fields": {"formation_thickness_ft": "100"}})
     trap = get_task_by_name(client, pid, "Trap and Seal CoS")
@@ -676,14 +676,14 @@ def test_lead_resource_assessment_save_never_overwrites_piip(client):
     calculator's explicit Apply flow (POST .../resource-assessment) -- there is
     no auto-compute on save, so saved values are never silently overwritten."""
     pid = create_project(client, "LEADRA-STUB-1")
-    areas = get_task_by_name(client, pid, "Area Definition")
+    areas = get_task_by_name(client, pid, "Lead Assessment")
     client.patch(f"/api/tasks/{areas['task_id']}/dynamic-fields",
                  json={"fields": {"p90_area_km2": "5", "p10_area_km2": "12"}})
-    thickness = get_task_by_name(client, pid, "Thickness Estimation")
+    thickness = get_task_by_name(client, pid, "Lead Assessment")
     client.patch(f"/api/tasks/{thickness['task_id']}/dynamic-fields",
                  json={"fields": {"formation_thickness_ft": "110"}})
 
-    lead_ra = get_task_by_name(client, pid, "Resource Assessment")
+    lead_ra = get_task_by_name(client, pid, "Lead Assessment")
     resp = client.patch(f"/api/tasks/{lead_ra['task_id']}/dynamic-fields", json={"fields": {
         "lead_calculation_method": "GRV",
         "lead_piip_gas_p90": "2.5",

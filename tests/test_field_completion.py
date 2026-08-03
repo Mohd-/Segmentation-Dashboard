@@ -115,11 +115,19 @@ def test_segmentation_slides_is_never_field_driven():
 
 
 def test_field_completion_only_claims_real_pipeline_steps():
-    """Every key is a live step name -- a typo would be a rule that never fires."""
+    """Rules name live steps, except the four deliberate checkpoint labels."""
     import workflow
+    from workflow.constants import (FIELD_COMPLETION_AUTOMATED_STEPS,
+                                    LEAD_ASSESSMENT_CHECKPOINTS)
 
     active = {name for _seq, name, _stage in workflow.PIPELINE_TEMPLATES}
-    assert set(workflow.FIELD_COMPLETION) <= active
+    checkpoints = set(LEAD_ASSESSMENT_CHECKPOINTS)
+    assert set(workflow.FIELD_COMPLETION) <= active | checkpoints
+    assert checkpoints.isdisjoint(active)
+    assert "Lead Assessment" not in FIELD_COMPLETION_AUTOMATED_STEPS
+    assert FIELD_COMPLETION_AUTOMATED_STEPS <= active | checkpoints
+    assert FIELD_COMPLETION_AUTOMATED_STEPS & active == (
+        set(workflow.FIELD_COMPLETION) & active) - {"Lead Assessment"}
 
 
 def test_reopen_is_not_a_public_transition():
@@ -323,7 +331,7 @@ COS_STEP = "Trap and Seal CoS"
 
 def _thickness(client, pid, value="100"):
     """Save the cross-task input the Trap recompute reads (Sarah prognosis)."""
-    save(client, get_task_by_name(client, pid, "Thickness Estimation"),
+    save(client, get_task_by_name(client, pid, "Lead Assessment"),
          {"formation_thickness_ft": value})
 
 
@@ -489,7 +497,7 @@ def test_legacy_approved_step_survives_saves_of_other_tasks(client):
     assert client.get(f"/api/tasks/{legacy['task_id']}/dynamic-fields").get_json() == {}
 
     # Save a DIFFERENT step -- including the other field-driven one.
-    other = get_task_by_name(client, pid, "Thickness Estimation")
+    other = get_task_by_name(client, pid, "Lead Assessment")
     save(client, other, {"formation_thickness_ft": "120"})
     reservoir = get_task_by_name(client, pid, "Reservoir CoS")
     save(client, reservoir, {"reservoir_cos_rows": json.dumps(RESERVOIR_ROWS),
@@ -601,12 +609,11 @@ def test_a_manual_submit_still_notifies_supervisors(client):
 # ---------------------------------------------------------------------------
 # Card 2B -- the four tracked items of the consolidated Lead Assessment page
 # ---------------------------------------------------------------------------
-# The page is ONE workspace with ONE Save, but the STATUSES are still four
-# independent tracked items: the Save PATCHes each owning task in turn, and the
-# engine decides each item from the fields that item owns. These tests drive
-# exactly that -- one PATCH per task, the real endpoint -- and assert on the
-# board's own dots (tracked_item), not on internals.
+# The page is one workspace, one Save and one lifecycle row. The four stable
+# labels below are CHECKPOINTS derived independently from fields on that row;
+# filling or clearing them must never auto-approve or reopen its lifecycle.
 
+LEAD_STEP = "Lead Assessment"
 AREA_STEP = "Area Definition"
 THICKNESS_STEP = "Thickness Estimation"
 GRV_STEP = "GRV Inputs"
@@ -619,17 +626,26 @@ THICKNESS_OK = {"reservoir_thickness_ft": "200", "formation_thickness_ft": "500"
 
 
 def _save_step(client, pid, step, fields, expect=200):
-    return save(client, get_task_by_name(client, pid, step), fields, expect=expect)
+    task_name = LEAD_STEP if step in (AREA_STEP, THICKNESS_STEP, GRV_STEP, RA_STEP) else step
+    return save(client, get_task_by_name(client, pid, task_name), fields, expect=expect)
 
 
-def test_card_2b_registers_all_four_lead_assessment_items(client):
-    """The four steps are field-driven, and each names the keys it owns.
+def _assert_lead_lifecycle_not_field_driven(client, pid, expected="Not Assigned"):
+    task = get_task_by_name(client, pid, LEAD_STEP)
+    assert task["status"] == expected
+    assert not [row for row in history(client, task["task_id"])
+                if row["action_type"] in ("Field Completion", "Field Reopen")]
+
+
+def test_card_2b_registers_four_checkpoints_and_one_manual_lifecycle(client):
+    """Four checkpoint predicates feed one aggregate, non-automated task rule.
 
     The whole point of the consolidated page is that four items still complete
     independently -- so the table has to claim all four, and no two of them may
     key on the same field (that would make one item's Save move another's dot).
     """
     import workflow
+    from workflow.constants import FIELD_COMPLETION_AUTOMATED_STEPS
 
     specs = {step: workflow.FIELD_COMPLETION[step]
              for step in (AREA_STEP, THICKNESS_STEP, GRV_STEP, RA_STEP)}
@@ -646,6 +662,37 @@ def test_card_2b_registers_all_four_lead_assessment_items(client):
         ("grv_p10_thousand_acre_ft", "grv_p90_thousand_acre_ft"),)
     assert specs[THICKNESS_STEP]["required_greater"] == (
         ("formation_thickness_ft", "reservoir_thickness_ft"),)
+    aggregate = workflow.FIELD_COMPLETION[LEAD_STEP]
+    assert set(aggregate["required_present"]) == {
+        key for spec in specs.values() for key in spec.get("required_present", ())}
+    assert LEAD_STEP not in FIELD_COMPLETION_AUTOMATED_STEPS
+
+
+def test_inactive_legacy_assessment_fields_remain_readable_but_do_not_drive_v7_checkpoints(client):
+    """Retired buckets stay in /detail for audit/back-compat; v7 state is canonical."""
+    pid = create_project(client, "FC-2B-LEGACY-READ")
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        cur = conn.execute(
+            "INSERT INTO project_tasks (project_id, sequence_no, task_name, stage_group, "
+            "status, priority, is_active) VALUES (?, 1, ?, 'Lead Assessment', "
+            "'Approved', 'Low', 0)", (pid, AREA_STEP))
+        legacy_id = cur.lastrowid
+        for key, value in AREA_OK.items():
+            conn.execute(
+                "INSERT INTO task_dynamic_fields (task_id, field_key, field_value) VALUES (?, ?, ?)",
+                (legacy_id, key, value))
+        conn.commit()
+    finally:
+        conn.close()
+
+    detail = client.get(f"/api/projects/{pid}/detail").get_json()
+    assert detail["fields"][AREA_STEP] == AREA_OK
+    assert tracked_item(client, pid, AREA_STEP) == "Not Started"
+
+    _save_step(client, pid, AREA_STEP, AREA_OK)
+    assert tracked_item(client, pid, AREA_STEP) == "Completed"
+    assert client.get(f"/api/projects/{pid}/detail").get_json()["fields"][AREA_STEP] == AREA_OK
 
 
 def test_area_definition_completes_on_a_valid_p90_p10_pair(client):
@@ -654,7 +701,7 @@ def test_area_definition_completes_on_a_valid_p90_p10_pair(client):
     assert tracked_item(client, pid, AREA_STEP) != "Completed"
 
     task = _save_step(client, pid, AREA_STEP, AREA_OK)
-    assert task["status"] == "Approved"
+    assert task["status"] == "Not Assigned"
     assert tracked_item(client, pid, AREA_STEP) == "Completed"
     # And ONLY that item -- its three page-mates are untouched by this save.
     for other in (THICKNESS_STEP, GRV_STEP, RA_STEP):
@@ -665,7 +712,7 @@ def test_area_definition_needs_BOTH_percentiles(client):
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-2B-AREA-HALF")
     task = _save_step(client, pid, AREA_STEP, {"p90_area_km2": "12.60"})
-    assert task["status"] != "Approved"
+    assert task["status"] == "Not Assigned"
     assert tracked_item(client, pid, AREA_STEP) != "Completed"
 
 
@@ -690,18 +737,19 @@ def test_area_definition_rejects_an_equal_or_inverted_pair(client):
     assert task["status"] != "Approved", "and the server never reorders it for the user"
     assert tracked_item(client, pid, AREA_STEP) != "Completed"
     # Fix the order and it closes.
-    assert _save_step(client, pid, AREA_STEP, AREA_OK)["status"] == "Approved"
+    assert _save_step(client, pid, AREA_STEP, AREA_OK)["status"] == "Not Assigned"
+    assert tracked_item(client, pid, AREA_STEP) == "Completed"
 
 
-def test_a_completed_area_definition_reopens_when_a_value_is_cleared(client):
+def test_a_completed_area_checkpoint_reopens_without_reopening_the_lifecycle(client):
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-2B-AREA-REOPEN")
     task = _save_step(client, pid, AREA_STEP, AREA_OK)
-    assert task["status"] == "Approved"
+    assert task["status"] == "Not Assigned"
     task = _save_step(client, pid, AREA_STEP, {"p10_area_km2": ""})
-    assert task["status"] == "In Progress"
+    assert task["status"] == "Not Assigned"
     assert tracked_item(client, pid, AREA_STEP) != "Completed"
-    assert [row["action_type"] for row in history(client, task["task_id"])][-1] == "Field Reopen"
+    _assert_lead_lifecycle_not_field_driven(client, pid)
 
 
 def test_the_tvdss_neither_completes_nor_reopens_area_definition(client):
@@ -717,18 +765,18 @@ def test_the_tvdss_neither_completes_nor_reopens_area_definition(client):
     pid = create_project(client, "FC-2B-TVDSS")
     # (a) TVDSS alone completes nothing.
     task = _save_step(client, pid, AREA_STEP, {"top_formation_tvdss_ft": "-6500"})
-    assert task["status"] != "Approved"
+    assert task["status"] == "Not Assigned"
     # (b) a complete area pair completes the item WITHOUT any TVDSS...
     task = _save_step(client, pid, AREA_STEP, AREA_OK)
-    assert task["status"] == "Approved"
+    assert task["status"] == "Not Assigned"
     # (c) ...and changing the TVDSS afterwards does not reopen it. The negative
     # depth is stored verbatim -- never coerced, never rejected by the
     # positivity rule that guards this task's other two keys.
-    assert _save_step(client, pid, AREA_STEP, {"top_formation_tvdss_ft": "-7100"})["status"] == "Approved"
-    area_id = get_task_by_name(client, pid, AREA_STEP)["task_id"]
+    assert _save_step(client, pid, AREA_STEP, {"top_formation_tvdss_ft": "-7100"})["status"] == "Not Assigned"
+    area_id = get_task_by_name(client, pid, LEAD_STEP)["task_id"]
     assert _stored(client, area_id)["top_formation_tvdss_ft"] == "-7100"
     # (d) nor does clearing it.
-    assert _save_step(client, pid, AREA_STEP, {"top_formation_tvdss_ft": ""})["status"] == "Approved"
+    assert _save_step(client, pid, AREA_STEP, {"top_formation_tvdss_ft": ""})["status"] == "Not Assigned"
     assert tracked_item(client, pid, AREA_STEP) == "Completed"
 
 
@@ -736,10 +784,10 @@ def test_grv_inputs_completes_on_a_valid_pair_and_reopens_on_an_inverted_one(cli
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-2B-GRV")
     assert _save_step(client, pid, GRV_STEP, {"grv_p90_thousand_acre_ft": "12.60"})["status"] != "Approved"
-    assert _save_step(client, pid, GRV_STEP, GRV_OK)["status"] == "Approved"
+    assert _save_step(client, pid, GRV_STEP, GRV_OK)["status"] == "Not Assigned"
     assert tracked_item(client, pid, GRV_STEP) == "Completed"
     inverted = _save_step(client, pid, GRV_STEP, {"grv_p10_thousand_acre_ft": "1.0"})
-    assert inverted["status"] == "In Progress"
+    assert inverted["status"] == "Not Assigned"
     assert tracked_item(client, pid, GRV_STEP) != "Completed"
 
 
@@ -755,7 +803,7 @@ def test_thickness_estimation_completes_on_both_rows_in_the_right_order(client):
     # One row only.
     assert _save_step(client, pid, THICKNESS_STEP, {"reservoir_thickness_ft": "200"})["status"] != "Approved"
     # Both rows, correctly ordered.
-    assert _save_step(client, pid, THICKNESS_STEP, THICKNESS_OK)["status"] == "Approved"
+    assert _save_step(client, pid, THICKNESS_STEP, THICKNESS_OK)["status"] == "Not Assigned"
     assert tracked_item(client, pid, THICKNESS_STEP) == "Completed"
 
 
@@ -769,7 +817,8 @@ def test_thickness_estimation_rejects_an_equal_or_inverted_pair(client):
     task = _save_step(client, pid, THICKNESS_STEP, {"formation_thickness_ft": "150"})
     assert task["status"] != "Approved"
     assert tracked_item(client, pid, THICKNESS_STEP) != "Completed"
-    assert _save_step(client, pid, THICKNESS_STEP, THICKNESS_OK)["status"] == "Approved"
+    assert _save_step(client, pid, THICKNESS_STEP, THICKNESS_OK)["status"] == "Not Assigned"
+    assert tracked_item(client, pid, THICKNESS_STEP) == "Completed"
 
 
 def test_the_twt_columns_and_source_marker_never_affect_completion(client):
@@ -784,11 +833,11 @@ def test_the_twt_columns_and_source_marker_never_affect_completion(client):
     """
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-2B-TWT")
-    assert _save_step(client, pid, THICKNESS_STEP, THICKNESS_OK)["status"] == "Approved"
+    assert _save_step(client, pid, THICKNESS_STEP, THICKNESS_OK)["status"] == "Not Assigned"
     for fields in ({"twt_reservoir_ms": "1500"}, {"twt_formation_ms": "1800"},
                    {"thickness_source_mode": "twt"}, {"twt_reservoir_ms": ""},
                    {"thickness_source_mode": ""}):
-        assert _save_step(client, pid, THICKNESS_STEP, fields)["status"] == "Approved", fields
+        assert _save_step(client, pid, THICKNESS_STEP, fields)["status"] == "Not Assigned", fields
     assert tracked_item(client, pid, THICKNESS_STEP) == "Completed"
 
 
@@ -802,11 +851,11 @@ def test_resource_assessment_needs_the_checkbox_AND_a_stored_piip_mean(client):
     """
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-2B-RA")
-    task = get_task_by_name(client, pid, RA_STEP)
+    task = get_task_by_name(client, pid, LEAD_STEP)
 
     # (a) The confirmation alone: no volume to carry into the portfolio.
     task = save(client, task, {"polygons_surfaces_loaded": "1"})
-    assert task["status"] != "Approved"
+    assert task["status"] == "Not Assigned"
     assert tracked_item(client, pid, RA_STEP) != "Completed"
 
     # (b) The auto-run's write lands through the FIELDS-ONLY endpoint, and the
@@ -820,14 +869,15 @@ def test_resource_assessment_needs_the_checkbox_AND_a_stored_piip_mean(client):
 def test_resource_assessment_piip_alone_is_not_completion(client):
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-2B-RA-PIIP")
-    task = get_task_by_name(client, pid, RA_STEP)
+    task = get_task_by_name(client, pid, LEAD_STEP)
     task = save(client, task, {"lead_piip_gas_mean": "19.4"})
-    assert task["status"] != "Approved", "a volume whose surfaces were never filed is not reviewable"
+    assert task["status"] == "Not Assigned", "field writes do not advance the lifecycle"
     task = save(client, task, {"polygons_surfaces_loaded": "1"})
-    assert task["status"] == "Approved"
-    # Unticking reopens it, exactly like every other confirmation.
+    assert task["status"] == "Not Assigned"
+    assert tracked_item(client, pid, RA_STEP) == "Completed"
+    # Unticking clears the checkpoint but does not reopen the lifecycle.
     task = save(client, task, {"polygons_surfaces_loaded": ""})
-    assert task["status"] == "In Progress"
+    assert task["status"] == "Not Assigned"
     assert tracked_item(client, pid, RA_STEP) != "Completed"
 
 
@@ -835,11 +885,12 @@ def test_a_blank_or_zero_piip_mean_does_not_complete_resource_assessment(client)
     """"0" BCF is what a failed run or a cleared field leaves behind."""
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-2B-RA-ZERO")
-    task = get_task_by_name(client, pid, RA_STEP)
+    task = get_task_by_name(client, pid, LEAD_STEP)
     task = save(client, task, {"polygons_surfaces_loaded": "1", "lead_piip_gas_mean": "0"})
-    assert task["status"] != "Approved"
+    assert task["status"] == "Not Assigned"
     task = save(client, task, {"lead_piip_gas_mean": "19.4"})
-    assert task["status"] == "Approved"
+    assert task["status"] == "Not Assigned"
+    assert tracked_item(client, pid, RA_STEP) == "Completed"
 
 
 def _stage_counter(client, pid, stage):
@@ -875,12 +926,12 @@ def test_a_box_model_lead_shows_piip_but_lead_assessment_stays_three_of_four(cli
     _save_step(client, pid, AREA_STEP, AREA_OK)
     _save_step(client, pid, THICKNESS_STEP, THICKNESS_OK)
     # The box-model auto-run: a PIIP mean with NO GRV percentiles anywhere.
-    ra = get_task_by_name(client, pid, RA_STEP)
+    ra = get_task_by_name(client, pid, LEAD_STEP)
     resp = client.patch(f"/api/tasks/{ra['task_id']}/dynamic-fields",
                         json={"fields": {"lead_piip_gas_mean": "19.4",
                                          "lead_calculation_method": "Box Model"}})
     assert resp.status_code == 200, resp.get_json()
-    save(client, get_task_by_name(client, pid, RA_STEP), {"polygons_surfaces_loaded": "1"})
+    save(client, get_task_by_name(client, pid, LEAD_STEP), {"polygons_surfaces_loaded": "1"})
 
     # The lead really does carry a volume, readable where the portfolio reads it.
     assert client.get(f"/api/projects/{pid}/detail").get_json()["overview"]["lead_ogip"] == "19.4"
@@ -889,9 +940,11 @@ def test_a_box_model_lead_shows_piip_but_lead_assessment_stays_three_of_four(cli
         assert tracked_item(client, pid, step) == "Completed", step
     # ...and GRV Inputs is emphatically NOT one of them.
     assert tracked_item(client, pid, GRV_STEP) != "Completed"
-    grv = get_task_by_name(client, pid, GRV_STEP)
-    assert grv["status"] != "Approved"
-    assert client.get(f"/api/tasks/{grv['task_id']}/dynamic-fields").get_json() == {}
+    merged = get_task_by_name(client, pid, LEAD_STEP)
+    assert merged["status"] == "Not Assigned"
+    merged_fields = client.get(f"/api/tasks/{merged['task_id']}/dynamic-fields").get_json()
+    assert not merged_fields.get("grv_p90_thousand_acre_ft")
+    assert not merged_fields.get("grv_p10_thousand_acre_ft")
 
     # The counter the user actually reads: 3/4, not 4/4.
     assert _stage_counter(client, pid, "Lead Assessment") == (3, 4)
@@ -903,30 +956,40 @@ def test_a_box_model_lead_shows_piip_but_lead_assessment_stays_three_of_four(cli
     assert _stage_counter(client, pid, "Lead Assessment") == (4, 4)
 
 
-def test_the_whole_page_saved_step_by_step_turns_all_four_dots_green(client):
+def test_the_whole_page_one_save_turns_all_four_dots_green(client):
     """The end-to-end shape of one Save Updates press.
 
-    The consolidated page groups its values by owning task and PATCHes each
-    dirty one in turn; the auto-run has already written the PIIP mean. Four
-    writes, four completed tracked items, one lead.
+    The consolidated page PATCHes one task; the auto-run writes the PIIP mean
+    through the fields-only endpoint. Four completed checkpoints, one lifecycle.
     """
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-2B-PAGE")
-    _save_step(client, pid, AREA_STEP, dict(AREA_OK, top_formation_tvdss_ft="-6500"))
-    _save_step(client, pid, THICKNESS_STEP,
-               dict(THICKNESS_OK, twt_reservoir_ms="1500", twt_formation_ms="1800",
-                    thickness_source_mode=""))
-    _save_step(client, pid, GRV_STEP, GRV_OK)
-    ra = get_task_by_name(client, pid, RA_STEP)
+    captured = dict(AREA_OK, **THICKNESS_OK, **GRV_OK,
+                    top_formation_tvdss_ft="-6500", twt_reservoir_ms="1500",
+                    twt_formation_ms="1800", thickness_source_mode="",
+                    polygons_surfaces_loaded="1")
+    _save_step(client, pid, LEAD_STEP, captured)
+    ra = get_task_by_name(client, pid, LEAD_STEP)
     client.patch(f"/api/tasks/{ra['task_id']}/dynamic-fields",
                  json={"fields": {"lead_piip_gas_mean": "19.4"}})
-    save(client, get_task_by_name(client, pid, RA_STEP), {"polygons_surfaces_loaded": "1"})
 
     for step in (AREA_STEP, THICKNESS_STEP, GRV_STEP, RA_STEP):
         assert tracked_item(client, pid, step) == "Completed", step
     # And the lead's headline volume is readable exactly where it always was.
     detail = client.get(f"/api/projects/{pid}/detail").get_json()
     assert detail["overview"]["lead_ogip"] == "19.4"
+    _assert_lead_lifecycle_not_field_driven(client, pid)
+
+
+def test_approved_lead_assessment_lifecycle_never_reopens_from_checkpoint_edits(client):
+    login(client, SUPERVISOR)
+    pid = create_project(client, "FC-2B-LIFECYCLE")
+    approved = drive_to_approved(client, pid, LEAD_STEP)
+    assert approved["status"] == "Approved"
+    save(client, approved, AREA_OK)
+    current = get_task_by_name(client, pid, LEAD_STEP)
+    save(client, current, {"p10_area_km2": ""})
+    _assert_lead_lifecycle_not_field_driven(client, pid, expected="Approved")
 
 
 # ---------------------------------------------------------------------------
@@ -1001,13 +1064,13 @@ def test_a_bulk_write_does_not_reopen_an_approved_step(client):
     """reconcile=False leaves an Approved step alone, predicate or no predicate."""
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-BULK-NOREOPEN")
-    task = _save_step(client, pid, AREA_STEP, AREA_OK)
+    task = _save_step(client, pid, "Seismic Signature Validation", {"seismic_slides_loaded": "1"})
     assert task["status"] == "Approved"
 
     # A partial bulk write that BREAKS the predicate outright.
-    _direct_save(client, task["task_id"], {"p10_area_km2": ""}, reconcile=False)
-    assert get_task_by_name(client, pid, AREA_STEP)["status"] == "Approved"
-    assert tracked_item(client, pid, AREA_STEP) == "Completed"
+    _direct_save(client, task["task_id"], {"seismic_slides_loaded": ""}, reconcile=False)
+    assert get_task_by_name(client, pid, "Seismic Signature Validation")["status"] == "Approved"
+    assert tracked_item(client, pid, "Seismic Validation") == "Completed"
     # ...and no engine event was logged either -- the hook never ran.
     assert "Field Reopen" not in [row["action_type"] for row in history(client, task["task_id"])]
 
@@ -1021,41 +1084,40 @@ def test_a_bulk_write_does_not_complete_an_open_step_either(client):
     """
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-BULK-NOCLOSE")
-    task = get_task_by_name(client, pid, AREA_STEP)
-    _direct_save(client, task["task_id"], AREA_OK, reconcile=False)
-    assert get_task_by_name(client, pid, AREA_STEP)["status"] != "Approved"
-    assert tracked_item(client, pid, AREA_STEP) != "Completed"
+    task = get_task_by_name(client, pid, "Seismic Signature Validation")
+    _direct_save(client, task["task_id"], {"seismic_slides_loaded": "1"}, reconcile=False)
+    assert get_task_by_name(client, pid, "Seismic Signature Validation")["status"] != "Approved"
+    assert tracked_item(client, pid, "Seismic Validation") != "Completed"
 
 
 def test_the_default_still_reconciles_on_the_same_write(client):
     """The paired control: the SAME two writes, with the default reconcile.
 
-    This is the card 2B path (the auto-run's PATCH /dynamic-fields), so the
-    difference between the two tests above and this one is exactly the keyword.
+    The difference between the two tests above and this one is exactly the keyword.
     """
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-BULK-CONTROL")
-    task = get_task_by_name(client, pid, AREA_STEP)
+    task = get_task_by_name(client, pid, "Seismic Signature Validation")
     # Closes...
-    _direct_save(client, task["task_id"], AREA_OK)
-    assert get_task_by_name(client, pid, AREA_STEP)["status"] == "Approved"
-    assert tracked_item(client, pid, AREA_STEP) == "Completed"
+    _direct_save(client, task["task_id"], {"seismic_slides_loaded": "1"})
+    assert get_task_by_name(client, pid, "Seismic Signature Validation")["status"] == "Approved"
+    assert tracked_item(client, pid, "Seismic Validation") == "Completed"
     # ...and reopens.
-    _direct_save(client, task["task_id"], {"p10_area_km2": ""})
-    assert get_task_by_name(client, pid, AREA_STEP)["status"] == "In Progress"
+    _direct_save(client, task["task_id"], {"seismic_slides_loaded": ""})
+    assert get_task_by_name(client, pid, "Seismic Signature Validation")["status"] == "In Progress"
     assert "Field Reopen" in [row["action_type"] for row in history(client, task["task_id"])]
 
 
-def test_the_http_fields_endpoint_keeps_the_reconciling_default(client):
-    """The route must not have been switched to the bulk behaviour by accident."""
+def test_the_http_fields_endpoint_updates_the_resource_checkpoint_without_lifecycle_reconciliation(client):
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-BULK-ROUTE")
-    task = get_task_by_name(client, pid, RA_STEP)
+    task = get_task_by_name(client, pid, LEAD_STEP)
     save(client, task, {"polygons_surfaces_loaded": "1"})
     resp = client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
                         json={"fields": {"lead_piip_gas_mean": "19.4"}})
     assert resp.status_code == 200, resp.get_json()
     assert tracked_item(client, pid, RA_STEP) == "Completed"
+    _assert_lead_lifecycle_not_field_driven(client, pid)
 
 
 def test_the_submit_gate_tick_inside_the_approval_walk_does_not_reconcile(client):
@@ -1417,10 +1479,11 @@ def test_pre_well_delivery_four_of_four_matures_the_whole_lead(client):
     _save_step(client, pid, AREA_STEP, AREA_OK)
     _save_step(client, pid, THICKNESS_STEP, THICKNESS_OK)
     _save_step(client, pid, GRV_STEP, GRV_OK)
-    ra = get_task_by_name(client, pid, RA_STEP)
+    ra = get_task_by_name(client, pid, LEAD_STEP)
     client.patch(f"/api/tasks/{ra['task_id']}/dynamic-fields",
                  json={"fields": {"lead_piip_gas_mean": "19.4"}})
     _save_step(client, pid, RA_STEP, {"polygons_surfaces_loaded": "1"})
+    drive_to_approved(client, pid, LEAD_STEP)
 
     # --- Risk Analysis (cards 3A / 3B / 3C / 3D) --------------------------
     _save_step(client, pid, "Reservoir CoS",

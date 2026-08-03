@@ -13,7 +13,7 @@ import { Store } from '../js/state.js';
 import { SCHEMA } from '../js/schema.js';
 import { renderFields, getFields } from '../js/views/detail-form.js';
 import {
-  LEAD_ASSESSMENT_STEPS, PRIMARY_STEP, KEY_OWNER, FOLDER_SECTION_KEY,
+  LEAD_ASSESSMENT_STEPS, LEGACY_LEAD_ASSESSMENT_STEPS, PRIMARY_STEP, KEY_OWNER, FOLDER_SECTION_KEY,
   MESSAGES, HELPER_TEXT, PIIP_HEADING, POLYGONS_LABEL, LABELS, DEFAULT_SCENARIO,
   numberError, tvdssError, validateThicknessSection, validateVolumeSection,
   validateLeadAssessment, firstError,
@@ -67,11 +67,13 @@ function goodValues(overrides) {
    The storage contract — which task owns which key
    ------------------------------------------------------------------------- */
 
-test('lead-assessment: the four consolidated steps, in rail order', function () {
-  assert.deepEqual(LEAD_ASSESSMENT_STEPS,
-    ['Area Definition', 'Thickness Estimation', 'GRV Inputs', 'Resource Assessment']);
+test('lead-assessment: one current task plus legacy rolling-deploy claims', function () {
+  assert.deepEqual(LEAD_ASSESSMENT_STEPS, ['Lead Assessment']);
   LEAD_ASSESSMENT_STEPS.forEach(function (name) {
     assert.ok(isLeadAssessmentStep(name), name + ' opens the consolidated page');
+  });
+  LEGACY_LEAD_ASSESSMENT_STEPS.forEach(function (name) {
+    assert.ok(isLeadAssessmentStep(name), name + ' remains a safe legacy claim');
   });
   ['Reservoir CoS', 'Segmentation Slides', 'SAD Model', 'Well Site Location'].forEach(function (name) {
     assert.ok(!isLeadAssessmentStep(name), name + ' keeps the generic per-step form');
@@ -79,27 +81,12 @@ test('lead-assessment: the four consolidated steps, in rail order', function () 
 });
 
 test('lead-assessment: every edited key names its owning task', function () {
-  // The page is one workspace; the STORAGE is still four tracked items, each
-  // completing on the keys it owns.
-  assert.deepEqual(KEY_OWNER, {
-    twt_reservoir_ms: 'Thickness Estimation',
-    twt_formation_ms: 'Thickness Estimation',
-    reservoir_thickness_ft: 'Thickness Estimation',
-    formation_thickness_ft: 'Thickness Estimation',
-    thickness_source_mode: 'Thickness Estimation',
-    p90_area_km2: 'Area Definition',
-    p10_area_km2: 'Area Definition',
-    top_formation_tvdss_ft: 'Area Definition',
-    grv_p90_thousand_acre_ft: 'GRV Inputs',
-    grv_p10_thousand_acre_ft: 'GRV Inputs',
-    polygons_surfaces_loaded: 'Resource Assessment'
+  Object.keys(KEY_OWNER).forEach(function (key) {
+    assert.equal(KEY_OWNER[key], 'Lead Assessment', key + ' belongs to the merged row');
   });
-  // Two placements the card is explicit about, pinned separately because they
-  // are the two a refactor would most plausibly "tidy" into the wrong step.
-  assert.equal(KEY_OWNER.top_formation_tvdss_ft, 'Area Definition',
-    'Section 3 TVDSS stores on Area Definition (and gates nothing)');
+  assert.equal(PRIMARY_STEP, 'Lead Assessment');
   assert.equal(KEY_OWNER.polygons_surfaces_loaded, PRIMARY_STEP,
-    'the polygons confirmation stores on Resource Assessment, whose completion it gates');
+    'the polygons confirmation stores on the one lifecycle row');
   assert.equal(FOLDER_SECTION_KEY, 'polygons');
 });
 
@@ -560,37 +547,24 @@ test('lead-assessment: scenario radios come from meta, falling back to schema.js
 
 test('lead-assessment: only the tasks whose values CHANGED are in the plan', function () {
   var saved = {
-    'Area Definition': { p90_area_km2: '12.60', p10_area_km2: '17.30', top_formation_tvdss_ft: '-6500' },
-    'Thickness Estimation': { twt_reservoir_ms: '1500', twt_formation_ms: '1800',
-                              reservoir_thickness_ft: '200', formation_thickness_ft: '500',
-                              thickness_source_mode: '' },
-    'GRV Inputs': { grv_p90_thousand_acre_ft: '12.60', grv_p10_thousand_acre_ft: '17.30' },
-    'Resource Assessment': { polygons_surfaces_loaded: '' }
+    'Lead Assessment': Object.assign(goodValues(), { thickness_source_mode: '' })
   };
   var values = Object.assign(goodValues(), { thickness_source_mode: '' });
   assert.deepEqual(buildSavePlan(values, saved), [], 'an untouched page writes nothing at all');
 
-  // Tick the confirmation: exactly one task moves.
+  // Tick the confirmation: exactly the merged task moves.
   var ticked = Object.assign({}, values, { polygons_surfaces_loaded: '1' });
   var plan = buildSavePlan(ticked, saved);
   assert.equal(plan.length, 1);
-  assert.equal(plan[0].taskName, 'Resource Assessment');
+  assert.equal(plan[0].taskName, 'Lead Assessment');
   assert.equal(plan[0].fields.polygons_surfaces_loaded, '1');
 });
 
-test('lead-assessment: the plan groups by owning task, in rail order, whole-task payloads', function () {
+test('lead-assessment: the plan writes one whole merged-task payload', function () {
   var plan = buildSavePlan(Object.assign(goodValues({ polygons_surfaces_loaded: '1' }),
                                          { thickness_source_mode: 'twt' }), {});
-  assert.deepEqual(plan.map(function (entry) { return entry.taskName; }),
-    ['Area Definition', 'Thickness Estimation', 'GRV Inputs', 'Resource Assessment']);
-  assert.deepEqual(Object.keys(plan[0].fields).sort(),
-    ['p10_area_km2', 'p90_area_km2', 'top_formation_tvdss_ft']);
-  assert.deepEqual(Object.keys(plan[1].fields).sort(),
-    ['formation_thickness_ft', 'reservoir_thickness_ft', 'thickness_source_mode',
-     'twt_formation_ms', 'twt_reservoir_ms']);
-  assert.deepEqual(Object.keys(plan[2].fields).sort(),
-    ['grv_p10_thousand_acre_ft', 'grv_p90_thousand_acre_ft']);
-  assert.deepEqual(Object.keys(plan[3].fields), ['polygons_surfaces_loaded']);
+  assert.deepEqual(plan.map(function (entry) { return entry.taskName; }), ['Lead Assessment']);
+  assert.deepEqual(Object.keys(plan[0].fields).sort(), Object.keys(KEY_OWNER).sort());
   // Every value is a string, and a missing one is '' rather than undefined.
   var sparse = buildSavePlan({ p90_area_km2: '3' }, {});
   assert.equal(sparse[0].fields.p10_area_km2, '');
@@ -705,8 +679,8 @@ function userEdits(mounted, key, value) {
 // A complete, already-assessed lead: valid stored inputs AND the stored PIIP
 // results a previous run wrote. This is the shape KI-005's page view rewrote.
 var ASSESSED_LEAD = {
-  'GRV Inputs': { grv_p90_thousand_acre_ft: '12.6', grv_p10_thousand_acre_ft: '17.3' },
-  'Resource Assessment': {
+  'Lead Assessment': {
+    grv_p90_thousand_acre_ft: '12.6', grv_p10_thousand_acre_ft: '17.3',
     lead_piip_gas_p90: '9.02', lead_piip_gas_mean: '13.52', lead_piip_gas_p10: '18.1',
     lead_resource_scenario: DEFAULT_SCENARIO, lead_calculation_method: 'GRV',
     polygons_surfaces_loaded: '1'
@@ -769,8 +743,8 @@ test('lead-assessment: the user\'s first edit arms the auto-run — exactly one 
     return waitFor(function () { return resourceCalls(mounted.calls).length > 0; }, 5000);
   }).then(function () {
     var call = resourceCalls(mounted.calls)[0];
-    assert.match(call.url, /\/api\/tasks\/103\/resource-assessment/,
-      'addressed to the Resource Assessment task');
+    assert.match(call.url, /\/api\/tasks\/100\/resource-assessment/,
+      'addressed to the Lead Assessment task');
     assert.deepEqual(call.body, {
       scenario: DEFAULT_SCENARIO, method: 'GRV', grv_p90: 12.6, grv_p10: 19.4
     });
@@ -849,7 +823,7 @@ test('lead-assessment: a successful run PERSISTS the lead_piip_* keys the old Ap
     var write = mounted.calls.filter(function (call) {
       return call.url.indexOf('/dynamic-fields') >= 0;
     })[0];
-    assert.match(write.url, /\/api\/tasks\/103\/dynamic-fields/, 'onto the Resource Assessment task');
+    assert.match(write.url, /\/api\/tasks\/100\/dynamic-fields/, 'onto the Lead Assessment task');
     var fields = write.body.fields;
     // The EXACT permanent EAV contract every downstream reader resolves,
     // through the calculator's own formatStored rounding (1 decimal from 10 up,
@@ -878,7 +852,7 @@ test('lead-assessment: the polygons checkbox is stored, and pairs with the PIIP 
   box.dispatchEvent(new Event('change', { bubbles: true }));
   var plan = buildSavePlan(readFormValues(mounted.root.querySelector('#dynamic-fields')),
                            Store.allFields);
-  assert.deepEqual(plan.map(function (entry) { return entry.taskName; }), ['Resource Assessment']);
+  assert.deepEqual(plan.map(function (entry) { return entry.taskName; }), ['Lead Assessment']);
   assert.equal(plan[0].fields.polygons_surfaces_loaded, '');
   teardownLeadAssessment();
 });
@@ -947,14 +921,10 @@ test('lead-assessment: every new key is registered in SCHEMA on its owning step'
   });
 });
 
-test('lead-assessment: the generic field renderer handles all four steps harmlessly', function () {
+test('lead-assessment: the generic field renderer handles the merged step harmlessly', function () {
   var stored = {
-    'Area Definition': { p90_area_km2: '12.60', p10_area_km2: '17.30', top_formation_tvdss_ft: '-6500' },
-    'Thickness Estimation': { reservoir_thickness_ft: '200', formation_thickness_ft: '500',
-                              twt_reservoir_ms: '1500', twt_formation_ms: '1800',
-                              thickness_source_mode: 'twt' },
-    'GRV Inputs': { grv_p90_thousand_acre_ft: '12.60', grv_p10_thousand_acre_ft: '17.30' },
-    'Resource Assessment': { polygons_surfaces_loaded: '1' }
+    'Lead Assessment': Object.assign(goodValues({ polygons_surfaces_loaded: '1' }),
+                                     { thickness_source_mode: 'twt' })
   };
   LEAD_ASSESSMENT_STEPS.forEach(function (step) {
     var host = fixture('<div id="pe-fields-' + step.replace(/\W/g, '') + '"></div>');
@@ -975,7 +945,7 @@ test('lead-assessment: the generic field renderer handles all four steps harmles
 });
 
 test('lead-assessment: the source marker is a bounded select, not free text', function () {
-  var field = SCHEMA['Thickness Estimation'].find(function (item) {
+  var field = SCHEMA['Lead Assessment'].find(function (item) {
     return item.key === 'thickness_source_mode';
   });
   assert.equal(field.type, 'select');
@@ -987,13 +957,13 @@ test('lead-assessment: the depth-ish keys are exempt from the generic 9999 cap',
   // A TVDSS and a two-way time both run past four digits in real data; the
   // generic numeric scan would otherwise reject them as "too large".
   ['top_formation_tvdss_ft'].forEach(function (key) {
-    assert.equal(SCHEMA['Area Definition'].find(function (f) { return f.key === key; }).bigOk, true);
+    assert.equal(SCHEMA['Lead Assessment'].find(function (f) { return f.key === key; }).bigOk, true);
   });
   ['twt_reservoir_ms', 'twt_formation_ms'].forEach(function (key) {
-    assert.equal(SCHEMA['Thickness Estimation'].find(function (f) { return f.key === key; }).bigOk, true);
+    assert.equal(SCHEMA['Lead Assessment'].find(function (f) { return f.key === key; }).bigOk, true);
   });
   ['grv_p90_thousand_acre_ft', 'grv_p10_thousand_acre_ft'].forEach(function (key) {
-    assert.equal(SCHEMA['GRV Inputs'].find(function (f) { return f.key === key; }).bigOk, true);
+    assert.equal(SCHEMA['Lead Assessment'].find(function (f) { return f.key === key; }).bigOk, true);
   });
 });
 
@@ -1122,7 +1092,7 @@ test('lead-assessment: the source mode saved is the one the section is actually 
   assert.equal(values.thickness_source_mode, undefined);
   values.thickness_source_mode = 'twt';
   var plan = buildSavePlan(values, {});
-  var thicknessEntry = plan.filter(function (e) { return e.taskName === 'Thickness Estimation'; })[0];
+  var thicknessEntry = plan.filter(function (e) { return e.taskName === 'Lead Assessment'; })[0];
   assert.equal(thicknessEntry.fields.thickness_source_mode, 'twt');
   assert.equal(thicknessEntry.fields.formation_thickness_ft, '180', 'the derived feet are saved too');
   teardownLeadAssessment();

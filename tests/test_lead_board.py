@@ -1,10 +1,10 @@
 """Card 1B: the derived lead-card fields on the project read payloads.
 
 `assignees`, `tracked_items`, `display_stage` and `lead_priority` are a READ-TIME
-projection over the stored workflow (workflow/projects.py). Since v5 the twelve
-tracked items ARE the twelve stored prospect steps, 1:1, and the three board
-columns ARE their stored stage groups -- the presentation adapter that used to
-fake both is gone, and the PAYLOAD SHAPE is deliberately unchanged. Nothing here
+projection over the stored workflow (workflow/projects.py). Since v7 the first
+four tracked items are field-derived checkpoints of one Lead Assessment row;
+the remaining eight map 1:1 to stored prospect rows. The payload shape remains
+deliberately unchanged. Nothing here
 may change what is stored, so every test drives the normal API (assign / submit
 / approve / priority) and only asserts on what the read payloads report back.
 """
@@ -16,10 +16,9 @@ LEAD_ASSESSMENT_LABELS = ["Area Definition", "Thickness Estimation", "GRV Inputs
 RISK_ANALYSIS_LABELS = ["Reservoir", "Trap and Seal", "Seismic Validation", "Segmentation Slides"]
 PRE_WELL_LABELS = ["Moving Tolerance", "Approval to Stake", "Well Site Location", "GeoX Assessment"]
 
-# The stored prospect steps, in sequence order (workflow.PIPELINE_TEMPLATES 1-12).
+# The nine stored prospect steps, in sequence order.
 PROSPECT_STEPS = [
-    "Area Definition", "Thickness Estimation", "GRV Inputs", "Resource Assessment",
-    "Reservoir CoS", "Trap and Seal CoS", "Seismic Signature Validation",
+    "Lead Assessment", "Reservoir CoS", "Trap and Seal CoS", "Seismic Signature Validation",
     "Segmentation Slides", "Moving Tolerance", "Approval to Stake",
     "Well Site Location", "Pre-Drilling GeoX Assessment",
 ]
@@ -52,6 +51,17 @@ def _set_ready(client, pid, step_name, assignee="Employee"):
 def _approve(client, pid, step_name, assignee="Employee"):
     """Drive one step all the way to Approved."""
     return _transition(client, _set_ready(client, pid, step_name, assignee), "approve")
+
+
+def _fill_assessment_checkpoints(client, pid):
+    task = get_task_by_name(client, pid, "Lead Assessment")
+    resp = client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields", json={"fields": {
+        "p90_area_km2": "1", "p10_area_km2": "2",
+        "reservoir_thickness_ft": "1", "formation_thickness_ft": "2",
+        "grv_p90_thousand_acre_ft": "1", "grv_p10_thousand_acre_ft": "2",
+        "polygons_surfaces_loaded": "1", "lead_piip_gas_mean": "1",
+    }})
+    assert resp.status_code == 200, resp.get_json()
 
 
 def _board_row(client, pid, pipeline="prospect"):
@@ -95,33 +105,36 @@ def test_tracked_items_shape_order_and_stages(client):
     for item in items:
         assert set(item) == {"stage", "label", "status", "steps"}
     by_label = {item["label"]: item["steps"] for item in items}
-    # Every item is now backed by exactly ONE real step -- nothing sourceless,
-    # nothing multi-sourced.
+    # Every item is backed by exactly one real step. The four assessment labels
+    # all open the one canonical lifecycle row.
     assert [steps for steps in by_label.values() if len(steps) != 1] == []
-    assert by_label["GRV Inputs"] == ["GRV Inputs"]
+    assert by_label["GRV Inputs"] == ["Lead Assessment"]
     assert by_label["Well Site Location"] == ["Well Site Location"]
     assert by_label["Trap and Seal"] == ["Trap and Seal CoS"]
-    assert by_label["Thickness Estimation"] == ["Thickness Estimation"]
-    # ... and the item order IS the stored sequence order.
-    assert [steps[0] for steps in by_label.values()] == PROSPECT_STEPS
+    assert by_label["Thickness Estimation"] == ["Lead Assessment"]
+    assert [steps[0] for steps in by_label.values()] == ["Lead Assessment"] * 4 + PROSPECT_STEPS[1:]
 
 
-def test_a_fresh_lead_reads_entirely_in_progress(client):
-    """Not Assigned is NOT a display status: untouched work reads In Progress."""
+def test_a_fresh_lead_reads_unstarted_checkpoints_and_open_work(client):
     pid = create_project(client, "TRACKED-FRESH-1")
     row = _board_row(client, pid)
     assert all(task["status"] == "Not Assigned" for task in get_tasks(client, pid))
-    assert set(_items(row).values()) == {"In Progress"}
+    assert list(_items(row).values())[:4] == ["Not Started"] * 4
+    assert list(_items(row).values())[4:] == ["In Progress"] * 8
     assert row["display_stage"] == "Lead Assessment"
     assert row["assignees"] == []
 
 
-def test_an_approved_step_completes_its_item_only(client):
+def test_filling_one_checkpoint_completes_that_item_only(client):
     pid = create_project(client, "TRACKED-ONE-1")
-    _approve(client, pid, "Area Definition")
+    task = get_task_by_name(client, pid, "Lead Assessment")
+    resp = client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields", json={"fields": {
+        "p90_area_km2": "1", "p10_area_km2": "2",
+    }})
+    assert resp.status_code == 200
     items = _items(_board_row(client, pid))
     assert items["Area Definition"] == "Completed"
-    assert items["Thickness Estimation"] == "In Progress"
+    assert items["Thickness Estimation"] == "Not Started"
     assert list(items.values()).count("Completed") == 1
 
 
@@ -147,7 +160,7 @@ def test_pending_approval_is_only_for_segmentation_slides(client):
     a returned/reopened submission drops back to In Progress, and the card must
     not distinguish "never submitted" from "submitted then returned"."""
     pid = create_project(client, "TRACKED-READY-1")
-    for step in ("Thickness Estimation", "Reservoir CoS", "Moving Tolerance",
+    for step in ("Lead Assessment", "Reservoir CoS", "Moving Tolerance",
                  "Pre-Drilling GeoX Assessment", "Segmentation Slides"):
         _set_ready(client, pid, step)
     items = _items(_board_row(client, pid))
@@ -169,11 +182,9 @@ def test_returning_a_segmentation_slides_submission_drops_it_back_to_in_progress
     assert _items(_board_row(client, pid))["Segmentation Slides"] == "In Progress"
 
 
-def test_every_item_completes_once_its_step_is_approved(client):
-    """v5 gave GRV Inputs and Well Site Location real steps: approving all
-    twelve now leaves ZERO items open, where the pre-v5 adapter pinned those two
-    at In Progress for ever."""
+def test_every_item_completes_from_checkpoints_and_approved_rows(client):
     pid = create_project(client, "TRACKED-ALL-1")
+    _fill_assessment_checkpoints(client, pid)
     for step in PROSPECT_STEPS:
         _approve(client, pid, step)
 
@@ -191,13 +202,12 @@ def test_display_stage_follows_the_derived_stage_through_the_pipeline(client):
     pid = create_project(client, "DISPLAY-STAGE-1")
     assert _board_row(client, pid)["display_stage"] == "Lead Assessment"
 
-    for step in PROSPECT_STEPS[:4]:                       # Lead Assessment done
-        _approve(client, pid, step)
+    _approve(client, pid, "Lead Assessment")              # single stage lifecycle done
     row = _board_row(client, pid)
     assert row["current_stage"] == "Risk Analysis"
     assert row["display_stage"] == "Risk Analysis"
 
-    for step in PROSPECT_STEPS[4:8]:                      # Risk Analysis done
+    for step in PROSPECT_STEPS[1:5]:                      # Risk Analysis done
         _approve(client, pid, step)
     row = _board_row(client, pid)
     # Since v5 display_stage IS the stored stage group -- no mapping left.
@@ -211,8 +221,8 @@ def test_display_stage_follows_the_derived_stage_through_the_pipeline(client):
 
 def test_assignees_are_distinct_ordered_and_blank_free(client):
     pid = create_project(client, "ASSIGNEES-1")
-    _assign(client, get_task_by_name(client, pid, "Thickness Estimation"), "Staff Member")
-    _assign(client, get_task_by_name(client, pid, "Reservoir CoS"), "Employee")
+    _assign(client, get_task_by_name(client, pid, "Reservoir CoS"), "Staff Member")
+    _assign(client, get_task_by_name(client, pid, "Trap and Seal CoS"), "Employee")
     # The same person on a later step must not appear twice.
     _assign(client, get_task_by_name(client, pid, "Approval to Stake"), "Staff Member")
 
@@ -249,11 +259,11 @@ def test_lead_priority_takes_the_most_urgent_open_task(client):
 def test_lead_priority_ignores_approved_work(client):
     """Finished work cannot keep a lead urgent."""
     pid = create_project(client, "PRIORITY-2")
-    task = get_task_by_name(client, pid, "Area Definition")
+    task = get_task_by_name(client, pid, "Lead Assessment")
     assert client.patch(f"/api/tasks/{task['task_id']}/priority", json={"priority": "High"}).status_code == 200
     assert _board_row(client, pid)["lead_priority"] == "High"
 
-    _approve(client, pid, "Area Definition")
+    _approve(client, pid, "Lead Assessment")
     # Back to the creation default once the escalated step is approved.
     assert _board_row(client, pid)["lead_priority"] == "Low"
 
@@ -275,8 +285,8 @@ def test_lead_priority_defaults_to_low_when_no_value_is_recognized(client):
 
 def test_new_lead_board_defaults(client):
     """One assertion block for every default Card 1D specifies for a fresh lead:
-    Lead Assessment column, all twelve tracked items In Progress (nothing
-    auto-completed), no assignees ("Unassigned" on the card), Low priority
+    Lead Assessment column, four Not Started checkpoints plus eight open items,
+    no assignees ("Unassigned" on the card), Low priority
     (gray border), and the name-derived field."""
     pid = create_project(client, "NEWDEF-3", lead_x="123.5", lead_y="-456.25")
     row = _board_row(client, pid)
@@ -285,7 +295,8 @@ def test_new_lead_board_defaults(client):
     assert row["assignees"] == []
     assert row["lead_priority"] == "Low"
     assert len(row["tracked_items"]) == 12
-    assert {item["status"] for item in row["tracked_items"]} == {"In Progress"}
+    assert [item["status"] for item in row["tracked_items"][:4]] == ["Not Started"] * 4
+    assert [item["status"] for item in row["tracked_items"][4:]] == ["In Progress"] * 8
     # A lead ALWAYS has a field: it is DERIVED from the name prefix
     # (folders.parse_field_and_well), never selected at creation.
     assert row["field"] == "NEWDEF"

@@ -198,10 +198,10 @@ test('lead-summary carries no collapse affordance at all', function () {
 
 // The server's twelve tracked items, abbreviated to what the sidebar reads.
 var ITEMS = [
-  { stage: 'Lead Assessment', label: 'Area Definition', status: 'Completed', steps: ['Area Definition'] },
-  { stage: 'Lead Assessment', label: 'Thickness Estimation', status: 'Completed', steps: ['Thickness Estimation'] },
-  { stage: 'Lead Assessment', label: 'GRV Inputs', status: 'In Progress', steps: ['GRV Inputs'] },
-  { stage: 'Lead Assessment', label: 'Resource Assessment', status: 'In Progress', steps: ['Resource Assessment'] },
+  { stage: 'Lead Assessment', label: 'Area Definition', status: 'Completed', steps: ['Lead Assessment'] },
+  { stage: 'Lead Assessment', label: 'Thickness Estimation', status: 'Completed', steps: ['Lead Assessment'] },
+  { stage: 'Lead Assessment', label: 'GRV Inputs', status: 'In Progress', steps: ['Lead Assessment'] },
+  { stage: 'Lead Assessment', label: 'Resource Assessment', status: 'In Progress', steps: ['Lead Assessment'] },
   { stage: 'Risk Analysis', label: 'Reservoir', status: 'In Progress', steps: ['Reservoir CoS'] },
   { stage: 'Risk Analysis', label: 'Trap and Seal', status: 'In Progress', steps: ['Trap and Seal CoS'] },
   { stage: 'Risk Analysis', label: 'Seismic Validation', status: 'In Progress', steps: ['Seismic Signature Validation'] },
@@ -211,17 +211,17 @@ var ITEMS = [
   { stage: 'Pre-Well Delivery', label: 'Well Site Location', status: 'In Progress', steps: ['Well Site Location'] },
   { stage: 'Pre-Well Delivery', label: 'GeoX Assessment', status: 'In Progress', steps: ['Pre-Drilling GeoX Assessment'] }
 ];
-// The stored 12-step prospect pipeline (v5), in sequence order. The stage
+// The stored 9-step prospect pipeline (v7), in sequence order. The stage
 // group IS the sidebar heading now -- no display mapping.
 var TASKS = [
-  'Area Definition', 'Thickness Estimation', 'GRV Inputs', 'Resource Assessment',
+  'Lead Assessment',
   'Reservoir CoS', 'Trap and Seal CoS', 'Seismic Signature Validation',
   'Segmentation Slides', 'Moving Tolerance', 'Approval to Stake',
   'Well Site Location', 'Pre-Drilling GeoX Assessment'
 ].map(function (name, index) {
   return { task_id: index + 1, task_name: name, sequence_no: index + 1, status: 'Not Assigned',
-           stage_group: index < 4 ? 'Lead Assessment'
-             : index < 8 ? 'Risk Analysis' : 'Pre-Well Delivery' };
+           stage_group: index < 1 ? 'Lead Assessment'
+             : index < 5 ? 'Risk Analysis' : 'Pre-Well Delivery' };
 });
 
 test('lead sidebar groups into exactly the three display stages, four items each', function () {
@@ -273,33 +273,29 @@ test('lead sidebar renders Trap and Seal as the ONE merged step, clickable', fun
   });
 });
 
-test('lead sidebar has ZERO dimmed rows: every tracked item is a real step', function () {
+test('lead sidebar has one stage-level assessment target and no assessment subrows', function () {
   var groups = leadStageGroups(ITEMS, TASKS);
   var future = [];
   var rows = 0;
   groups.forEach(function (group) {
     group.rows.forEach(function (row) { rows += 1; if (!row.task) future.push(row.label); });
   });
-  assert.deepEqual(future, [], 'v5 gave GRV Inputs and Well Site Location real steps');
-  assert.equal(rows, 11, 'twelve items, eleven openable rows: Card 4B merges the two staking rows into one');
+  assert.deepEqual(future, []);
+  assert.equal(groups[0].task.task_name, 'Lead Assessment');
+  assert.equal(groups[0].rows.length, 0, 'the four checkpoints never become four sidebar rows');
+  assert.equal(rows, 7, 'four risk rows and three pre-well rows after the staking merge');
 });
 
-test('lead sidebar dims a step the record does not actually carry', function () {
-  // Defensive path only: a legacy row a migration could not reach. The item
-  // still shows its name instead of vanishing from the workflow.
-  var thinTasks = TASKS.filter(function (task) { return task.task_name !== 'GRV Inputs'; });
-  var groups = leadStageGroups(ITEMS, thinTasks);
-  var future = [];
-  groups.forEach(function (group) {
-    group.rows.forEach(function (row) { if (!row.task) future.push(row.label); });
-  });
-  assert.deepEqual(future, ['GRV Inputs']);
+test('lead sidebar disables the stage target when the merged row is absent', function () {
+  var thinTasks = TASKS.filter(function (task) { return task.task_name !== 'Lead Assessment'; });
+  assert.equal(leadStageGroups(ITEMS, thinTasks)[0].task, null);
 });
 
 test('lead sidebar never loses a real step no tracked item references', function () {
   var groups = leadStageGroups(ITEMS, TASKS);
   var rendered = [];
   groups.forEach(function (group) {
+    if (group.task) rendered.push(group.task.task_name);
     group.rows.forEach(function (row) {
       // A merged row (Card 4B) answers for every task in row.tasks; a plain
       // row for its one task.
@@ -309,7 +305,7 @@ test('lead sidebar never loses a real step no tracked item references', function
   TASKS.forEach(function (task) {
     assert.ok(rendered.indexOf(task.task_name) >= 0, task.task_name + ' is reachable from the sidebar');
   });
-  // A stray extra row (none in the v5 template) still lands in its own stage
+  // A stray extra row (none in the v7 template) still lands in its own stage
   // group rather than being dropped.
   var extra = TASKS.concat([{ task_id: 99, task_name: 'Legacy Step', sequence_no: 99,
                               status: 'Not Assigned', stage_group: 'Pre-Well Delivery' }]);
@@ -340,7 +336,7 @@ test('lead sidebar numbers the merged entry as one slot, later rows sliding down
   var groups = leadStageGroups(ITEMS, TASKS);
   var preWell = groups[2];
   assert.deepEqual(preWell.rows.map(function (row) { return row.num != null ? row.num : row.task.sequence_no; }),
-    [9, 10, 11], 'Pre-Well Delivery reads consecutively across the merged slot');
+    [6, 7, 8], 'Pre-Well Delivery reads consecutively across the merged slot');
   groups.slice(0, 2).forEach(function (group) {
     group.rows.forEach(function (row) {
       assert.equal(row.num, undefined, row.label + ' keeps its own sequence number');

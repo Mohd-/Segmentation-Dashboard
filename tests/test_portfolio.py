@@ -23,7 +23,17 @@ BP_STAGES = {"Well Delivery", "Post-Drilling", "Post-Testing"}
 
 
 def _approve_all_prospect_tasks(client, pid):
-    """Approve every prospect-stage task so the lead matures (overall Completed)."""
+    """Complete all checkpoints and approve every prospect lifecycle task."""
+    lead_assessment = get_task_by_name(client, pid, "Lead Assessment")
+    resp = client.patch(f"/api/tasks/{lead_assessment['task_id']}/dynamic-fields", json={
+        "fields": {
+            "p90_area_km2": "1", "p10_area_km2": "2",
+            "reservoir_thickness_ft": "1", "formation_thickness_ft": "2",
+            "grv_p90_thousand_acre_ft": "1", "grv_p10_thousand_acre_ft": "2",
+            "polygons_surfaces_loaded": "1", "lead_piip_gas_mean": "1",
+        }
+    })
+    assert resp.status_code == 200, resp.get_json()
     for task in get_tasks(client, pid):
         if task["stage_group"] in PROSPECT_STAGES and task["status"] != "Approved":
             resp = client.patch(f"/api/tasks/{task['task_id']}", json={
@@ -351,7 +361,7 @@ def test_sarh_quicklook_fluid_beats_legacy_quicklook_eav(client):
 
 def test_mean_ogip_precedence_post_beats_pre_beats_lead(client):
     pid = create_project(client, "OGIP-1", **BP_KWARGS)
-    _save_fields(client, pid, "Resource Assessment", {"lead_piip_gas_mean": "5.0"})
+    _save_fields(client, pid, "Lead Assessment", {"lead_piip_gas_mean": "5.0"})
     assert _row_for(client, pid)["mean_ogip"] == "5.0"
 
     _save_fields(client, pid, "Pre-Drilling GeoX Assessment", {"pre_drill_piip_gas_mean": "7.5"})
@@ -364,7 +374,7 @@ def test_mean_ogip_precedence_post_beats_pre_beats_lead(client):
 def test_summary_cumulative_ogip_sums_mean_ogip(client):
     pid_a = create_project(client, "SUM-A", **BP_KWARGS)
     pid_b = create_project(client, "SUM-B", **BP_KWARGS)
-    _save_fields(client, pid_a, "Resource Assessment", {"lead_piip_gas_mean": "4.0"})
+    _save_fields(client, pid_a, "Lead Assessment", {"lead_piip_gas_mean": "4.0"})
     _save_fields(client, pid_b, "SAD Model", {"post_drill_piip_gas_mean": "6.5"})
 
     payload = _rows(client)

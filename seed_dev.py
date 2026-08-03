@@ -467,8 +467,8 @@ def _phase_formation_rows(names, sarh_fluid):
 
 def _prospect_step_fields(task_name, force_ar_one=False, force_pore_pressure=False):
     """Coherent dynamic-field payload for one data-entry prospect step, or
-    None for the steps that carry no inputs (GRV Inputs, Seismic Signature
-    Validation, Segmentation Slides, Approval to Stake, Well Site Location).
+    None for the steps that carry no inputs (Seismic Signature Validation,
+    Segmentation Slides, Approval to Stake, Well Site Location).
 
     The SINGLE source of prospect-step seed data, shared by the proposed-lead,
     mature-lead and BP-well seeders, so a step that has been progressed
@@ -482,14 +482,21 @@ def _prospect_step_fields(task_name, force_ar_one=False, force_pore_pressure=Fal
     - Pre-Well Delivery: pre-drill PIIP gas trio, staking location + the 3
       distance/azimuth option pairs.
     """
-    if task_name == "Area Definition":
+    if task_name == "Lead Assessment":
         p90 = round(random.uniform(2, 25), 2)
-        return {"p90_area_km2": p90, "p10_area_km2": round(p90 * random.uniform(1.5, 3.5), 2)}
-    if task_name == "Thickness Estimation":
-        return {"formation_thickness_ft": round(random.uniform(40, 180), 1),
-                "reservoir_thickness_ft": round(random.uniform(30, 150), 1)}
-    if task_name == "Resource Assessment":
-        return _piip_fields("lead_piip", include_liquid=random.random() < 0.35)
+        reservoir_thickness = round(random.uniform(30, 150), 1)
+        grv_p90 = round(random.uniform(20, 300), 2)
+        fields = {
+            "p90_area_km2": p90,
+            "p10_area_km2": round(p90 * random.uniform(1.5, 3.5), 2),
+            "reservoir_thickness_ft": reservoir_thickness,
+            "formation_thickness_ft": round(reservoir_thickness * random.uniform(1.2, 2.5), 1),
+            "grv_p90_thousand_acre_ft": grv_p90,
+            "grv_p10_thousand_acre_ft": round(grv_p90 * random.uniform(1.5, 3.5), 2),
+            "polygons_surfaces_loaded": "1",
+        }
+        fields.update(_piip_fields("lead_piip", include_liquid=random.random() < 0.35))
+        return fields
     if task_name == "Reservoir CoS":
         return {"reservoir_cos_rows": _reservoir_cos_rows(force_ar_one=force_ar_one)}
     if task_name == workflow.MERGED_COS_TASK_NAME:
@@ -529,7 +536,7 @@ def _fill_prospect_step_data(session, tasks, force_ar_one=False, force_pore_pres
 # ---------------------------------------------------------------------------
 
 def _seed_prospect_leads(session, users, role_by_name, supervisors):
-    """~16 prospect leads, 4 spread across each of the 4 PROSPECT_STAGES, plus
+    """12 prospect leads, 4 spread across each of the 3 PROSPECT_STAGES, plus
     3 fully-mature leads (every prospect-phase task Approved, incl. 'Approval
     to Stake').
 
@@ -604,7 +611,7 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
     _capture_lead_summary_snapshot) -- never created as BP directly. The order
     matters: the promotion snapshot freezes the prospect-stage fields into
     lead_summary_snapshots, which feeds /detail's ``lead_summary`` and the
-    Well card's Prediction-vs-Actual rows (snapshot Thickness Estimation /
+    Well card's Prediction-vs-Actual rows (snapshot Lead Assessment /
     Pre-Drilling RA values vs the live post-drill actuals). BP-stage data is
     saved only AFTER promotion, matching real usage.
     """

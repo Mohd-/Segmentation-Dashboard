@@ -401,8 +401,10 @@ _PROJECT_LIST_FIELDS = (
     # Card 1B lead-card fields: all derived at read time from the task rows the
     # board query already loads (workflow.projects._annotate_card_state) -- no
     # stored column, no extra query. Since migration v5 there is no presentation
-    # adapter left: tracked_items ARE the twelve stored prospect steps and
-    # display_stage is the derived current_stage verbatim. assignees and
+    # adapter left for the other eight items; v7 projects the first four from
+    # fields on the single Lead Assessment row, keeping twelve communicated
+    # items while the stored prospect workflow has nine rows. display_stage is
+    # the derived current_stage verbatim. assignees and
     # lead_priority are the board's own per-lead values.
     "assignees", "tracked_items", "display_stage", "lead_priority",
     # Card 1C: the record's field, DERIVED from the record name by the same

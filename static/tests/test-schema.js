@@ -293,9 +293,8 @@ test('schema.SCHEMA: Trap and Seal CoS is the two old forms concatenated, keys v
   assert.equal(fields[1].row, 'trap_cos');
 });
 
-test('schema.SCHEMA: every v5 prospect step has an entry', function () {
-  ['Area Definition', 'Thickness Estimation', 'GRV Inputs', 'Resource Assessment',
-   'Reservoir CoS', 'Trap and Seal CoS', 'Seismic Signature Validation',
+test('schema.SCHEMA: every v7 prospect step has an entry', function () {
+  ['Lead Assessment', 'Reservoir CoS', 'Trap and Seal CoS', 'Seismic Signature Validation',
    'Segmentation Slides', 'Moving Tolerance', 'Approval to Stake',
    'Well Site Location', 'Pre-Drilling GeoX Assessment'].forEach(function (name) {
     assert.ok(name in SCHEMA, name + ' has a SCHEMA entry (even if field-less)');
@@ -583,33 +582,37 @@ test('schema formations vocabulary', function () {
 // saveComponentCard (project-editor.js) ahead of the save API call.
 
 test('validateStepFields: a wholly blank step always passes (every field is optional)', function () {
-  assert.equal(validateStepFields('Area Definition', {}), null);
+  assert.equal(validateStepFields('Lead Assessment', {}), null);
   assert.equal(validateStepFields('Seal CoS', {}), null);
-  assert.equal(validateStepFields('Area Definition', undefined), null, 'missing fields object defaults to {}');
+  assert.equal(validateStepFields('Lead Assessment', undefined), null, 'missing fields object defaults to {}');
 });
 
 test('validateStepFields: (a) non-numeric value is rejected by field label', function () {
-  assert.equal(validateStepFields('Area Definition', { p90_area_km2: 'abc' }),
+  assert.equal(validateStepFields('Lead Assessment', { p90_area_km2: 'abc' }),
     'P90 Area (km²) must be numeric.');
 });
 
 test('validateStepFields: (b) a negative value is rejected', function () {
-  assert.equal(validateStepFields('Area Definition', { p90_area_km2: '-5' }),
+  assert.equal(validateStepFields('Lead Assessment', { p90_area_km2: '-5' }),
     'P90 Area (km²) must not be negative.');
 });
 
 test('validateStepFields: (c) a value over the 9999 cap is rejected on a plain (non-bigOk) field', function () {
-  assert.equal(validateStepFields('Area Definition', { p90_area_km2: '10000' }),
+  assert.equal(validateStepFields('Lead Assessment', { p90_area_km2: '10000' }),
     'P90 Area (km²) looks too large (max 9999).');
   // 9999 itself is still in range (p10 left blank so the ordering rule
   // below doesn't also fire).
-  assert.equal(validateStepFields('Area Definition', { p90_area_km2: '9999' }), null);
+  assert.equal(validateStepFields('Lead Assessment', { p90_area_km2: '9999' }), null);
 });
 
 test('validateStepFields: bigOk-flagged fields are exempt from the 9999 cap', function () {
   // staking_well_x is a UTM coordinate (bigOk: true in schema.js); every
   // other field on the step is left blank so only this field is exercised.
   assert.equal(validateStepFields('Moving Tolerance', { staking_well_x: '650000' }), null);
+});
+
+test('validateStepFields: Lead Assessment TVDSS accepts a negative subsea depth', function () {
+  assert.equal(validateStepFields('Lead Assessment', { top_formation_tvdss_ft: '-6500' }), null);
 });
 
 test('validateStepFields: (d) numericFieldError rejects an out-of-range percentage', function () {
@@ -648,21 +651,21 @@ test('validateStepFields: repeatable numeric columns are checked (cheap parse-ba
   assert.equal(validateStepFields('Reservoir CoS', { reservoir_cos_rows: readonlyRow }), null);
 });
 
-test('validateStepFields: cross-field -- Area Definition P90 must be lower than P10', function () {
-  assert.equal(validateStepFields('Area Definition', { p90_area_km2: '2', p10_area_km2: '1' }),
+test('validateStepFields: cross-field -- Lead Assessment area P90 must be lower than P10', function () {
+  assert.equal(validateStepFields('Lead Assessment', { p90_area_km2: '2', p10_area_km2: '1' }),
     'Area P90 must be lower than Area P10.');
-  assert.equal(validateStepFields('Area Definition', { p90_area_km2: '2', p10_area_km2: '2' }),
+  assert.equal(validateStepFields('Lead Assessment', { p90_area_km2: '2', p10_area_km2: '2' }),
     'Area P90 must be lower than Area P10.', 'equal values still fail -- strictly lower, matching the popup');
-  assert.equal(validateStepFields('Area Definition', { p90_area_km2: '1', p10_area_km2: '2' }), null);
-  assert.equal(validateStepFields('Area Definition', { p90_area_km2: '2' }), null, 'only one side filled: no comparison');
+  assert.equal(validateStepFields('Lead Assessment', { p90_area_km2: '1', p10_area_km2: '2' }), null);
+  assert.equal(validateStepFields('Lead Assessment', { p90_area_km2: '2' }), null, 'only one side filled: no comparison');
 });
 
-test('validateStepFields: cross-field -- Thickness Estimation reservoir must not exceed Sarah formation thickness', function () {
-  assert.equal(validateStepFields('Thickness Estimation', { reservoir_thickness_ft: '60', formation_thickness_ft: '50' }),
+test('validateStepFields: cross-field -- Lead Assessment reservoir must not exceed Sarah formation thickness', function () {
+  assert.equal(validateStepFields('Lead Assessment', { reservoir_thickness_ft: '60', formation_thickness_ft: '50' }),
     'Reservoir Thickness must not exceed Sarah Formation Thickness.');
   // Equal is allowed ("<=" is the valid condition) -- permissive on purpose.
-  assert.equal(validateStepFields('Thickness Estimation', { reservoir_thickness_ft: '50', formation_thickness_ft: '50' }), null);
-  assert.equal(validateStepFields('Thickness Estimation', { reservoir_thickness_ft: '40', formation_thickness_ft: '50' }), null);
+  assert.equal(validateStepFields('Lead Assessment', { reservoir_thickness_ft: '50', formation_thickness_ft: '50' }), null);
+  assert.equal(validateStepFields('Lead Assessment', { reservoir_thickness_ft: '40', formation_thickness_ft: '50' }), null);
 });
 
 test('validateStepFields: piip trio ordering -- P90 must not exceed Mean, Mean must not exceed P10', function () {
@@ -693,12 +696,10 @@ test('validateStepFields: piip trio -- the liquid trio is checked too, independe
 // rule can never fire through it. The rule itself is left in PIIP_PREFIXES
 // (schema.js) regardless -- proven still correct here by constructing the
 // fields object directly, independent of any form.
-test('validateStepFields: Resource Assessment has only the confirmation checkbox; the lead_piip rule still holds if ever exercised directly', function () {
-  assert.deepEqual(SCHEMA['Resource Assessment'].map(function (field) { return field.key; }),
-    ['polygons_surfaces_loaded']);
-  assert.equal(SCHEMA['Resource Assessment'][0].type, 'checkbox',
-    'nothing numeric, so the generic numeric scan has nothing to check here');
-  assert.equal(validateStepFields('Resource Assessment', {}), null);
-  assert.equal(validateStepFields('Resource Assessment', { lead_piip_gas_p90: '10', lead_piip_gas_mean: '5' }),
+test('validateStepFields: merged Lead Assessment registers the confirmation; direct PIIP output ordering remains guarded', function () {
+  var confirmation = SCHEMA['Lead Assessment'].find(function (field) { return field.key === 'polygons_surfaces_loaded'; });
+  assert.equal(confirmation.type, 'checkbox');
+  assert.equal(validateStepFields('Lead Assessment', {}), null);
+  assert.equal(validateStepFields('Lead Assessment', { lead_piip_gas_p90: '10', lead_piip_gas_mean: '5' }),
     'Gas P90 must not exceed Mean.');
 });

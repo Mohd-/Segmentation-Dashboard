@@ -4,7 +4,7 @@ A package split along the old module's section seams; ``import workflow``
 exposes the full public API exactly as the single-file module did:
 
 - constants.py  -- statuses, stages, PIPELINE_TEMPLATES (the single source of
-  truth for the 27-step workflow), formation vocabulary, StaleRevisionError.
+  truth for the 24-step workflow), formation vocabulary, StaleRevisionError.
 - users.py      -- login identity lookups (seeded from config.SEED_USERS).
 - projects.py   -- project CRUD + the derived board state.
 - lifecycle.py  -- task reads/saves, assignment, submit/approve/return.

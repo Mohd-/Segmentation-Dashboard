@@ -79,7 +79,7 @@ def test_component_folder_uses_leads_for_prospect_steps_and_wells_for_bp_steps(c
     pipeline, so historical prospect steps remain under Leads after promotion."""
     pid = create_project(client, "PATH-1", pipeline_type="bp",
                          business_plan_enabled=True, business_plan_year=2030)
-    prospect_task = get_task_by_name(client, pid, "Area Definition")
+    prospect_task = get_task_by_name(client, pid, "Lead Assessment")
     bp_task = get_task_by_name(client, pid, "Well Proposal")
 
     prospect = client.get(
@@ -92,7 +92,7 @@ def test_component_folder_uses_leads_for_prospect_steps_and_wells_for_bp_steps(c
     assert prospect["unc_path"].startswith("\\\\aramco.com\\ecc\\data\\NAUGAD\\Leads\\")
     assert prospect["server_path"].startswith("/mnt/leads/")
     assert prospect["unc_path"].endswith(
-        r"PATH\PATH-1\Component Files\Area Definition"
+        r"PATH\PATH-1\Component Files\Lead Assessment"
     )
     assert bp["unc_path"].startswith("\\\\aramco.com\\ecc\\data\\NAUGAD\\Wells\\")
     assert bp["server_path"].startswith("/mnt/wells/")
@@ -947,17 +947,17 @@ def test_export_includes_proposed_leads_with_latest_estimates(client):
     membership, so neither lead may show there."""
     bare_pid = create_project(client, "EXPORT-LEAD-BARE")
     lead_pid = create_project(client, "EXPORT-LEAD-1")
-    lead_ra_task = get_task_by_name(client, lead_pid, "Resource Assessment")
+    lead_ra_task = get_task_by_name(client, lead_pid, "Lead Assessment")
     resp = client.patch(f"/api/tasks/{lead_ra_task['task_id']}/dynamic-fields",
                          json={"fields": {"lead_piip_gas_p90": "3.1",
                                           "lead_piip_gas_mean": "7.5",
                                           "lead_piip_gas_p10": "15.2"}})
     assert resp.status_code == 200
-    area_task = get_task_by_name(client, lead_pid, "Area Definition")
+    area_task = lead_ra_task
     resp = client.patch(f"/api/tasks/{area_task['task_id']}/dynamic-fields",
                          json={"fields": {"p90_area_km2": "2.4", "p10_area_km2": "9.8"}})
     assert resp.status_code == 200
-    thickness_task = get_task_by_name(client, lead_pid, "Thickness Estimation")
+    thickness_task = lead_ra_task
     resp = client.patch(f"/api/tasks/{thickness_task['task_id']}/dynamic-fields",
                          json={"fields": {"reservoir_thickness_ft": "88"}})
     assert resp.status_code == 200

@@ -353,9 +353,9 @@ def test_map_reporting_attributes_match_portfolio_semantics(client):
     ])})
     _save_fields(client, pid, "Trap and Seal CoS",
                  {"trap_cos_pct": "80", "seal_cos_pct": "50"})
-    _save_fields(client, pid, "Area Definition",
+    _save_fields(client, pid, "Lead Assessment",
                  {"p90_area_km2": " 2.4 ", "p10_area_km2": "9.8"})
-    _save_fields(client, pid, "Resource Assessment", {"lead_piip_gas_mean": "12.5"})
+    _save_fields(client, pid, "Lead Assessment", {"lead_piip_gas_mean": "12.5"})
 
     stake = get_task_by_name(client, pid, "Approval to Stake")
     resp = client.patch(f"/api/tasks/{stake['task_id']}", json={
@@ -385,9 +385,9 @@ def test_map_area_fold_keeps_retired_fallback_but_active_nonblank_wins(client, a
     """The reporting fold's retired-row precedence applies to both area keys."""
     _main, db = app_modules
     pid = create_project(client, "AREA-LEGACY-1", lead_x="500000", lead_y="2800000")
-    active = get_task_by_name(client, pid, "Area Definition")
+    active = get_task_by_name(client, pid, "Lead Assessment")
     # Active P90 should win; active blank P10 must not erase the legacy value.
-    _save_fields(client, pid, "Area Definition",
+    _save_fields(client, pid, "Lead Assessment",
                  {"p90_area_km2": "2.4", "p10_area_km2": ""})
 
     session = db.new_session()

@@ -102,7 +102,7 @@ def test_four_record_types_placed_correctly(client, app_modules, tmp_path):
         prospect_names = {p["project_name"] for p in workflow.get_projects(session, pipeline_filter="prospect")}
         assert "PROP-4" in prospect_names
         prop_tasks = _tasks_by_name(session, "PROP-4")
-        assert prop_tasks["Area Definition"]["status"] == "Approved"
+        assert prop_tasks["Lead Assessment"]["status"] == "Approved"
         assert prop_tasks["Reservoir CoS"]["status"] == "Approved"
         # A step with no imported data stays open (not fully matured).
         assert prop_tasks["Trap and Seal CoS"]["status"] != "Approved"
@@ -124,6 +124,103 @@ def test_four_record_types_placed_correctly(client, app_modules, tmp_path):
         assert "HIST-1" not in bp_names
     finally:
         session.close()
+
+
+def test_lead_columns_share_the_consolidated_assessment_task_and_export(client, app_modules, tmp_path):
+    """Area, thickness and lead PIIP keys now have one active EAV owner.
+
+    The export is intentionally field-key based and retired-inclusive, so the
+    task merge changes no column names or values on the round trip.
+    """
+    import import_excel
+    import workflow
+
+    row = {
+        "Well Name": "ONE-LA-1", "Status": "Proposed",
+        "P90 Area (km2)": 4, "P10 Area (km2)": 12,
+        "SARH Formation Thickness (ft)": 85,
+        "OGIP P90 (BCF)": 6, "OGIP Mean (BCF)": 10, "OGIP P10 (BCF)": 18,
+    }
+    _write_sheet(tmp_path / "one-la.xlsx", [row], header_row=1)
+
+    session = _session(app_modules)
+    try:
+        result = import_excel.import_rows(
+            session, import_excel.parse_workbook(str(tmp_path / "one-la.xlsx"))).results[0]
+        assert result.outcome == "created", result.reason
+
+        tasks = _tasks_by_name(session, "ONE-LA-1")
+        assert "Lead Assessment" in tasks
+        assert not ({"Area Definition", "Thickness Estimation", "GRV Inputs", "Resource Assessment"}
+                    & set(tasks)), "retired checkpoint labels are not runnable tasks"
+        fields = workflow.get_task_dynamic_fields(session, tasks["Lead Assessment"]["task_id"])
+        assert fields["p90_area_km2"] == "4"
+        assert fields["p10_area_km2"] == "12"
+        assert fields["formation_thickness_ft"] == "85"
+        assert fields["lead_piip_gas_mean"] == "10"
+
+        exported = _export_by_name(session)["ONE-LA-1"]
+        assert float(exported["P90 Area (km2)"]) == 4
+        assert float(exported["P10 Area (km2)"]) == 12
+        assert float(exported["SARH Formation Thickness (ft)"]) == 85
+        assert float(exported["OGIP Mean (BCF)"]) == 10
+    finally:
+        session.close()
+
+
+def test_export_folds_v7_retired_lead_rows_then_prefers_active_values(client, app_modules):
+    """Pre-v7 EAV remains export-visible without letting history beat new data."""
+    import db as db_module
+    import workflow
+
+    pid = create_project_for_import_test(client, "V7-EXPORT-LEGACY")
+    session = _session(app_modules)
+    try:
+        with db_module.write_transaction(session):
+            legacy_groups = [
+                (1, "Area Definition", {"p90_area_km2": "4", "p10_area_km2": "12"}),
+                (2, "Thickness Estimation", {"reservoir_thickness_ft": "70"}),
+                (4, "Resource Assessment", {"lead_piip_gas_mean": "10"}),
+            ]
+            for sequence, task_name, fields in legacy_groups:
+                retired = db_module.execute(session, """
+                    INSERT INTO project_tasks
+                        (project_id, sequence_no, task_name, stage_group, status, priority, is_active)
+                    VALUES (:project_id, :sequence, :task_name, 'Lead Assessment',
+                            'Approved', 'Low', 0)
+                """, {"project_id": pid, "sequence": sequence,
+                       "task_name": task_name}).lastrowid
+                db_module.execute_many(session, """
+                    INSERT INTO task_dynamic_fields (task_id, field_key, field_value)
+                    VALUES (:task_id, :field_key, :field_value)
+                """, [
+                    {"task_id": retired, "field_key": key, "field_value": value}
+                    for key, value in fields.items()
+                ])
+
+        row = _export_by_name(session)["V7-EXPORT-LEGACY"]
+        assert row["P90 Area (km2)"] == "4"
+        assert row["P10 Area (km2)"] == "12"
+        assert row["P50 Pay Thickness (ft)"] == "70"
+        assert row["OGIP Mean (BCF)"] == "10"
+
+        active = _tasks_by_name(session, "V7-EXPORT-LEGACY")["Lead Assessment"]
+        workflow.save_task_dynamic_fields(session, active["task_id"], {
+            "p90_area_km2": "6", "p10_area_km2": "", "lead_piip_gas_mean": "15",
+        }, changed_by="Test")
+        row = _export_by_name(session)["V7-EXPORT-LEGACY"]
+        assert row["P90 Area (km2)"] == "6", "active nonblank wins"
+        assert row["P10 Area (km2)"] == "12", "active blank cannot erase history"
+        assert row["P50 Pay Thickness (ft)"] == "70"
+        assert row["OGIP Mean (BCF)"] == "15"
+    finally:
+        session.close()
+
+
+def create_project_for_import_test(client, name):
+    response = client.post("/api/projects", json={"project_name": name})
+    assert response.status_code == 201, response.get_json()
+    return response.get_json()["project_id"]
 
 
 # ---------------------------------------------------------------------------

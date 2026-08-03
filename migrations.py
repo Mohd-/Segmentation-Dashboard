@@ -42,7 +42,7 @@ import db
 from helpers import utc_now_str
 from models import Base
 
-LATEST_SCHEMA_VERSION = 6
+LATEST_SCHEMA_VERSION = 7
 
 
 # ---------------------------------------------------------------------------
@@ -605,6 +605,196 @@ def _migrate_v6_ground_elevation(session, engine) -> None:
         db.execute(session, "ALTER TABLE projects ADD COLUMN ground_elevation REAL")
 
 
+# v7: one Lead Assessment lifecycle row, with these four former rows retained
+# only as historical audit anchors.  Keep this frozen migration vocabulary here
+# rather than importing workflow.constants: a shipped migration must not change
+# behavior when a runtime display label later changes.
+_V7_LEAD_ASSESSMENT = "Lead Assessment"
+_V7_LEGACY_LEAD_STEPS = (
+    "Area Definition",
+    "Thickness Estimation",
+    "GRV Inputs",
+    "Resource Assessment",
+)
+_V7_STATUS_RANK = {
+    "Not Assigned": 0,
+    "In Progress": 1,
+    "Ready": 2,
+    "Approved": 3,
+}
+_V7_PRIORITY_RANK = {"High": 0, "Medium": 1, "Low": 2}
+_V7_RESEQUENCE = {
+    "Lead Assessment": 1,
+    "Reservoir CoS": 2,
+    "Trap and Seal CoS": 3,
+    "Seismic Signature Validation": 4,
+    "Segmentation Slides": 5,
+    "Moving Tolerance": 6,
+    "Approval to Stake": 7,
+    "Well Site Location": 8,
+    "Pre-Drilling GeoX Assessment": 9,
+}
+_V7_MIGRATION_ACTOR = "System (migration v7)"
+
+
+def _v7_log(session, task_id, project_id, status):
+    """Write the one immutable migration event on the v7 survivor."""
+    db.execute(session, """
+        INSERT INTO task_history (task_id, project_id, task_name, action_type,
+                                  old_status, new_status, changed_at, changed_by, comment)
+        VALUES (:task_id, :project_id, :task_name, 'Migration-Merged',
+                NULL, :status, :changed_at, :changed_by, :comment)
+    """, {"task_id": task_id, "project_id": project_id,
+          "task_name": _V7_LEAD_ASSESSMENT, "status": status,
+          "changed_at": utc_now_str(), "changed_by": _V7_MIGRATION_ACTOR,
+          "comment": "Merged from 4 Lead Assessment steps (migration v7)"})
+
+
+def _v7_assert_disjoint_field_keys(session, project_id, source_rows):
+    """Fail closed before moving EAV rows from the four v7 source tasks.
+
+    The consolidated workspace needs one owner for every value.  Moving a
+    duplicate key onto that owner would hit its unique constraint and, worse,
+    would force a silent choice between two historical values.  The four v7
+    key families are designed to be disjoint; prove that against the ACTUAL
+    database before executing any move.  A hand-edited collision is therefore
+    a loud, repairable migration failure rather than data loss.
+    """
+    rows = db.fetch_all(session, """
+        SELECT task_id, field_key
+        FROM task_dynamic_fields
+        WHERE task_id IN :task_ids
+        ORDER BY task_id, field_key
+    """, {"task_ids": [row["task_id"] for row in source_rows]})
+    owner_by_key = {}
+    name_by_id = {row["task_id"]: row["task_name"] for row in source_rows}
+    for row in rows:
+        key = row["field_key"]
+        owner = owner_by_key.setdefault(key, row["task_id"])
+        if owner != row["task_id"]:
+            raise RuntimeError(
+                "Migration v7 refused to merge project "
+                f"{project_id}: dynamic field key {key!r} appears on both "
+                f"{name_by_id[owner]!r} and {name_by_id[row['task_id']]!r}.")
+
+
+def _v7_merged_comments(source_rows):
+    """Preserve v6 task comments on the one v7 lifecycle row.
+
+    A single non-blank comment remains verbatim, so a straightforward legacy
+    note does not gain migration noise.  Multiple notes need their source
+    labels because the four old comment columns carried distinct provenance;
+    source_rows are already in frozen task order, making this output stable on
+    every run and easy to read in the consolidated workspace.
+    """
+    comments = [(row["task_name"], row["comments"])
+                for row in source_rows if str(row.get("comments") or "").strip()]
+    if not comments:
+        return None
+    if len(comments) == 1:
+        return comments[0][1]
+    return "\n\n".join(f"{name}: {comment}" for name, comment in comments)
+
+
+def _v7_merge_lead_assessment_rows(session, now) -> None:
+    """Create a single v7 Lead Assessment row and move its EAV values.
+
+    The insert is guarded by the survivor name.  A successfully migrated
+    project has that row forever, so replay is a true no-op.  The old rows are
+    not deleted: history stays attached to their original task ids while their
+    EAV inputs move to the sole active owner and the old rows are retired.
+    """
+    rows = db.fetch_all(session, """
+        SELECT pt.task_id, pt.project_id, pt.task_name, pt.status, pt.assigned_to, pt.comments,
+               pt.priority, pt.actual_start, pt.actual_finish,
+               pt.business_plan_enabled, pt.business_plan_year
+        FROM project_tasks pt
+        WHERE pt.task_name IN :source_names
+          AND pt.project_id NOT IN (
+              SELECT project_id FROM project_tasks WHERE task_name = :merged_name
+          )
+        ORDER BY pt.project_id,
+                 CASE pt.task_name
+                   WHEN 'Area Definition' THEN 1
+                   WHEN 'Thickness Estimation' THEN 2
+                   WHEN 'GRV Inputs' THEN 3
+                   WHEN 'Resource Assessment' THEN 4
+                 END,
+                 pt.task_id
+    """, {"source_names": list(_V7_LEGACY_LEAD_STEPS),
+          "merged_name": _V7_LEAD_ASSESSMENT})
+    by_project = {}
+    for row in rows:
+        by_project.setdefault(row["project_id"], []).append(row)
+
+    for project_id, source_rows in by_project.items():
+        names = [row["task_name"] for row in source_rows]
+        if names != list(_V7_LEGACY_LEAD_STEPS):
+            raise RuntimeError(
+                f"Migration v7 refused to merge project {project_id}: expected exactly "
+                f"{list(_V7_LEGACY_LEAD_STEPS)!r}, found {names!r}.")
+        _v7_assert_disjoint_field_keys(session, project_id, source_rows)
+        statuses = [row["status"] or "Not Assigned" for row in source_rows]
+        invalid_statuses = sorted({value for value in statuses if value not in _V7_STATUS_RANK})
+        if invalid_statuses:
+            raise RuntimeError(
+                f"Migration v7 refused to merge project {project_id}: unsupported "
+                f"legacy task status(es) {invalid_statuses!r}.")
+        status = min(statuses, key=lambda value: _V7_STATUS_RANK.get(value, -1))
+        assignee = next((row["assigned_to"] for row in source_rows if row["assigned_to"]), None)
+        starts = [row["actual_start"] for row in source_rows if row["actual_start"]]
+        finishes = [row["actual_finish"] for row in source_rows if row["actual_finish"]]
+        priority = min((row["priority"] or "Medium" for row in source_rows),
+                       key=lambda value: _V7_PRIORITY_RANK.get(value, 1))
+        anchor = source_rows[0]
+        result = db.execute(session, """
+            INSERT INTO project_tasks (
+                project_id, sequence_no, task_name, stage_group, assigned_to, status,
+                actual_start, actual_finish, comments, priority, business_plan_enabled,
+                business_plan_year, is_active, last_updated
+            ) VALUES (:project_id, 1, :task_name, 'Lead Assessment', :assigned_to, :status,
+                      :actual_start, :actual_finish, :comments, :priority, :business_plan_enabled,
+                      :business_plan_year, 1, :now)
+        """, {"project_id": project_id, "task_name": _V7_LEAD_ASSESSMENT,
+              "assigned_to": assignee, "status": status,
+              "actual_start": min(starts) if starts else None,
+              "actual_finish": max(finishes) if status == "Approved" and finishes else None,
+              "comments": _v7_merged_comments(source_rows),
+              "priority": priority,
+              "business_plan_enabled": anchor["business_plan_enabled"] or 0,
+              "business_plan_year": anchor["business_plan_year"], "now": now})
+        merged_task_id = result.lastrowid
+        db.execute(session, """
+            UPDATE task_dynamic_fields
+            SET task_id = :merged_task_id, updated_at = :now
+            WHERE task_id IN :source_task_ids
+        """, {"merged_task_id": merged_task_id, "now": now,
+              "source_task_ids": [row["task_id"] for row in source_rows]})
+        _v7_log(session, merged_task_id, project_id, status)
+        db.execute(session, """
+            UPDATE project_tasks
+            SET is_active = 0
+            WHERE task_id IN :source_task_ids AND is_active != 0
+        """, {"source_task_ids": [row["task_id"] for row in source_rows]})
+
+
+def _v7_resequence(session) -> None:
+    """Freeze v7's nine active prospect task slots on every materialized record."""
+    for task_name, sequence_no in _V7_RESEQUENCE.items():
+        db.execute(session, """
+            UPDATE project_tasks
+            SET sequence_no = :sequence_no
+            WHERE task_name = :task_name AND is_active = 1
+              AND sequence_no != :sequence_no
+        """, {"task_name": task_name, "sequence_no": sequence_no})
+
+
+def _migrate_v7_lead_assessment_single_step(session, engine) -> None:
+    """v7: fold four Lead Assessment rows into one guarded lifecycle row."""
+    _v7_merge_lead_assessment_rows(session, utc_now_str())
+    _v7_resequence(session)
+
+
 # List of (version, fn) dispatched by run() in ascending order against the
 # stored schema_version. Append new steps with the next integer version and
 # bump LATEST_SCHEMA_VERSION to match; never edit or remove a shipped step.
@@ -614,6 +804,7 @@ MIGRATIONS = [
     (4, _migrate_v4_bp_step_merges),
     (5, _migrate_v5_prospect_template_restructure),
     (6, _migrate_v6_ground_elevation),
+    (7, _migrate_v7_lead_assessment_single_step),
 ]
 
 

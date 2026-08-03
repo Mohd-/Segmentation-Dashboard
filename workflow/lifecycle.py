@@ -19,6 +19,7 @@ from .constants import (
     CHECKBOX_SUBMIT_STEPS,
     DONE_STATUSES,
     FIELD_COMPLETION,
+    FIELD_COMPLETION_AUTOMATED_STEPS,
     FIELD_COMPLETION_COMMENT,
     FIELD_COMPLETION_EVENT,
     FIELD_REOPEN_COMMENT,
@@ -123,7 +124,7 @@ def _apply_trap_cos_calculation(session, task, fields):
         return fields
     if "sarah_quwarah_thickness_ft" in fields:
         computed = cos.calculate_trap_cos(
-            _task_field_value(session, task["project_id"], "Thickness Estimation", "formation_thickness_ft"),
+            _task_field_value(session, task["project_id"], "Lead Assessment", "formation_thickness_ft"),
             fields.get("sarah_quwarah_thickness_ft"),
         )
         if computed is not None:
@@ -931,7 +932,7 @@ def apply_field_completion(session, task_id, changed_by):
     client the post-walk status and revision), else None.
     """
     task = get_task(session, task_id)
-    if not task or task.get("task_name") not in FIELD_COMPLETION:
+    if not task or task.get("task_name") not in FIELD_COMPLETION_AUTOMATED_STEPS:
         return None
     met = field_completion_met(task["task_name"],
                                get_task_dynamic_fields(session, task_id),

@@ -20,7 +20,7 @@ from conftest import create_project, get_task_by_name, get_tasks
 
 def test_promotion_sets_pipeline_type_and_captures_lead_summary(client):
     pid = create_project(client, "PROMO-1")
-    lra = get_task_by_name(client, pid, "Resource Assessment")
+    lra = get_task_by_name(client, pid, "Lead Assessment")
     client.patch(f"/api/tasks/{lra['task_id']}/dynamic-fields", json={
         "fields": {"lead_piip_gas_mean": "12.5"},
     })
@@ -36,7 +36,7 @@ def test_promotion_sets_pipeline_type_and_captures_lead_summary(client):
     detail = client.get(f"/api/projects/{pid}/detail").get_json()
     lead_summary = detail["lead_summary"]
     assert lead_summary is not None
-    assert lead_summary["fields"]["Resource Assessment"]["lead_piip_gas_mean"] == "12.5"
+    assert lead_summary["fields"]["Lead Assessment"]["lead_piip_gas_mean"] == "12.5"
 
     # v17 lifecycle: promotion opens the BP pipeline but no longer auto-assigns
     # its first step -- assignment (not promotion) moves a step to In Progress.
@@ -58,7 +58,7 @@ def test_promotion_year_validation(client):
 
 def test_demotion_preserves_snapshot_and_bp_task_statuses(client):
     pid = create_project(client, "DEMOTE-1")
-    lra = get_task_by_name(client, pid, "Resource Assessment")
+    lra = get_task_by_name(client, pid, "Lead Assessment")
     client.patch(f"/api/tasks/{lra['task_id']}/dynamic-fields", json={
         "fields": {"lead_piip_gas_mean": "7.0"},
     })
@@ -77,7 +77,7 @@ def test_demotion_preserves_snapshot_and_bp_task_statuses(client):
 
     detail = client.get(f"/api/projects/{pid}/detail").get_json()
     assert detail["lead_summary"] is not None
-    assert detail["lead_summary"]["fields"]["Resource Assessment"]["lead_piip_gas_mean"] == "7.0"
+    assert detail["lead_summary"]["fields"]["Lead Assessment"]["lead_piip_gas_mean"] == "7.0"
 
     gate_after = get_task_by_name(client, pid, "BP Execution Gate")
     assert gate_after["status"] == gate_before["status"]
@@ -141,7 +141,7 @@ def test_recall_of_fully_matured_lead_stays_off_the_board(client):
 
 def test_repromotion_refreshes_snapshot_timestamp(client):
     pid = create_project(client, "REPROMOTE-1")
-    lra = get_task_by_name(client, pid, "Resource Assessment")
+    lra = get_task_by_name(client, pid, "Lead Assessment")
     client.patch(f"/api/tasks/{lra['task_id']}/dynamic-fields", json={
         "fields": {"lead_piip_gas_mean": "3.3"},
     })
@@ -302,7 +302,7 @@ def test_overview_lead_ogip_composed_from_lead_piip_gas_mean_at_read(client):
     # The /detail overview is a read-time composition of task inputs (there is
     # no stored mirror): every save is reflected on the very next read.
     pid = create_project(client, "READ-COMPOSE-1")
-    lra = get_task_by_name(client, pid, "Resource Assessment")
+    lra = get_task_by_name(client, pid, "Lead Assessment")
     client.patch(f"/api/tasks/{lra['task_id']}/dynamic-fields", json={
         "fields": {"lead_piip_gas_mean": "12.5"},
     })

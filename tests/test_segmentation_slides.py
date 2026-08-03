@@ -362,7 +362,7 @@ def test_pending_approval_stays_this_step_alone_under_the_new_flow(client):
     pid = create_project(client, "SS-BOARD-1")
     task = assign(client, slides_task(client, pid), EMPLOYEE)
     # ... and park a sibling in Ready the manual way for contrast.
-    other = assign(client, get_task_by_name(client, pid, "Area Definition"), EMPLOYEE)
+    other = assign(client, get_task_by_name(client, pid, "Lead Assessment"), EMPLOYEE)
     login(client, EMPLOYEE)
     save(client, task, {BOX: "1"})
     transition(client, other, "submit")

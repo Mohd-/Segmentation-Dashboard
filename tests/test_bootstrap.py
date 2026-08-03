@@ -52,10 +52,10 @@ def test_fresh_bootstrap_seeds_configured_users(client):
     assert seeded == set(config.SEED_USERS)
 
 
-def test_new_project_gets_27_active_tasks(client):
+def test_new_project_gets_24_active_tasks(client):
     pid = create_project(client, "BOOTSTRAP-PROJECT-1")
     tasks = get_tasks(client, pid)
-    assert len(tasks) == 27
+    assert len(tasks) == 24
     assert all(t["is_active"] == 1 for t in tasks)
 
 
@@ -259,6 +259,25 @@ _V3_SEQUENCES = {
 }
 
 
+def _restore_v4_prospect_rows(conn):
+    """Replace the current v7 prospect rows with the frozen v4 template.
+
+    Historical migration tests start from a fresh current database.  v7 no
+    longer carries the rows v5 needs to rename/merge, so merely restamping the
+    version would not exercise those migration steps.  Rebuild the complete
+    v4 prospect half first; the test then upgrades through v4, v5, v6 and v7.
+    """
+    conn.execute("DELETE FROM project_tasks WHERE stage_group IN "
+                 "('Lead Assessment', 'Risk Analysis', 'Pre-Well Delivery')")
+    for name, (sequence_no, stage_group) in _V4_PROSPECT_TEMPLATE.items():
+        conn.execute("""
+            INSERT INTO project_tasks (project_id, sequence_no, task_name, stage_group,
+                                       status, priority, is_active, last_updated)
+            SELECT project_id, ?, ?, ?, 'Not Assigned', 'Low', 1, datetime('now')
+            FROM projects
+        """, (sequence_no, name, stage_group))
+
+
 def _make_v3_shaped(db_path, project_id, legacy_fields=()):
     """Reshape a fresh (v4) database back to the v3 31-step form, raw.
 
@@ -269,6 +288,7 @@ def _make_v3_shaped(db_path, project_id, legacy_fields=()):
     """
     conn = raw_sqlite_connect(db_path)
     try:
+        _restore_v4_prospect_rows(conn)
         for task_name, sequence_no, stage_group in _V3_RETIRED_ROWS:
             conn.execute(
                 "INSERT INTO project_tasks (project_id, sequence_no, task_name, stage_group, "
@@ -324,7 +344,6 @@ def test_migration_v4_retires_the_merged_bp_steps_and_keeps_their_data(client, a
     import migrations
 
     pid = create_project(client, "MIGRATE-MERGE-1")
-    task_ids_before = {t["task_name"]: t["task_id"] for t in get_tasks(client, pid)}
     _make_v3_shaped(client.db_path, pid, legacy_fields=[
         ("Post-Drilling Resource Assessment", "post_drill_piip_gas_mean", "9.25"),
         ("Resource Assessment Update", "resource_update_fluid_type", "Gas Condensate"),
@@ -337,21 +356,18 @@ def test_migration_v4_retires_the_merged_bp_steps_and_keeps_their_data(client, a
 
     assert version == str(migrations.LATEST_SCHEMA_VERSION)
     # Retired, not deleted.
-    assert inactive == ["Executive Summary Final", "Post-Drilling Resource Assessment",
-                        "Resource Assessment Update", "URED Update"]
+    assert {"Executive Summary Final", "Post-Drilling Resource Assessment",
+            "Resource Assessment Update", "URED Update"} <= set(inactive)
     # ... and every one of their inputs survived, verbatim.
     assert ("Post-Drilling Resource Assessment", "post_drill_piip_gas_mean", "9.25") in fields
     assert ("Resource Assessment Update", "resource_update_fluid_type", "Gas Condensate") in fields
     assert ("URED Update", "some_ured_note", "kept") in fields
     assert ("Executive Summary Final", "some_final_note", "kept") in fields
-    # The survivors are the 27 template steps, renumbered contiguously.
+    # The BP survivors were renumbered by v4, then the full historical upgrade
+    # continued into v5/v7's final current template.
     import workflow
     assert active == [(seq, name) for seq, name, _stage in workflow.PIPELINE_TEMPLATES]
-    assert [seq for seq, _name in active] == list(range(1, 28))
-    # Renumbered IN PLACE -- same rows, so their fields/history/folders follow.
-    task_ids_after = {t["task_name"]: t["task_id"] for t in get_tasks(client, pid)}
-    for name, task_id in task_ids_before.items():
-        assert task_ids_after[name] == task_id
+    assert [seq for seq, _name in active] == [seq for seq, _name, _stage in workflow.PIPELINE_TEMPLATES]
 
     # Replay: a second bootstrap against the upgraded file changes nothing.
     _rebootstrap(dbmod, client.db_path)
@@ -366,18 +382,25 @@ def test_migration_v4_is_a_no_op_on_an_already_merged_database(client, app_modul
     import migrations
 
     pid = create_project(client, "MIGRATE-MERGE-2")
-    before = _bp_step_shape(client.db_path, pid)
-
+    _make_v3_shaped(client.db_path, pid)
+    # Remove the v3-only BP rows: v4 itself must now be a no-op, while v5/v7
+    # still receive a genuine v4 prospect shape to rehearse their own work.
     conn = raw_sqlite_connect(client.db_path)
     try:
-        conn.execute("UPDATE app_settings SET value = '3' WHERE key = 'schema_version'")
+        conn.execute("DELETE FROM project_tasks WHERE task_name IN "
+                     "('Post-Drilling Resource Assessment', 'URED Update', "
+                     "'Executive Summary Final', 'Resource Assessment Update')")
         conn.commit()
     finally:
         conn.close()
-
     _rebootstrap(dbmod, client.db_path)
-    assert _bp_step_shape(client.db_path, pid) == before
-    assert before[3] == str(migrations.LATEST_SCHEMA_VERSION)
+    after = _bp_step_shape(client.db_path, pid)
+    assert after[0] == [(seq, name) for seq, name, _stage in __import__('workflow').PIPELINE_TEMPLATES]
+    assert after[1] == ["Area Definition", "GRV Inputs", "Resource Assessment", "Seal CoS",
+                        "Thickness Estimation", "Trap CoS", "Well Creation"]
+    _rebootstrap(dbmod, client.db_path)
+    assert _bp_step_shape(client.db_path, pid) == after
+    assert after[3] == str(migrations.LATEST_SCHEMA_VERSION)
 
 
 def test_migration_v4_leaves_retired_step_data_readable_through_the_fallbacks(client, app_modules):
@@ -398,7 +421,7 @@ def test_migration_v4_leaves_retired_step_data_readable_through_the_fallbacks(cl
     detail = client.get(f"/api/projects/{pid}/detail").get_json()
     # The retired step is NOT a component any more...
     assert "Resource Assessment Update" not in {t["task_name"] for t in detail["tasks"]}
-    assert len(detail["tasks"]) == 27
+    assert len(detail["tasks"]) == 24
     # ... but its bucket is still in the fields map the client reads.
     assert detail["fields"]["Resource Assessment Update"]["resource_update_gas_mean"] == "12.5"
     assert detail["overview"]["post_drill_estimation"] == "12.5"
@@ -491,42 +514,15 @@ _V5_PROSPECT_STEPS = [
 
 
 def _make_v4_shaped(db_path, statuses=None, legacy_fields=(), project_id=None):
-    """Reshape a fresh (v5) database back to the v4 prospect form, raw.
+    """Rebuild the frozen v4 prospect half and stamp schema version 4.
 
-    A FRESH database is created straight from the v5 template, so the three
-    rows v5 adds are simply there and the three it retires never existed. This
-    therefore DELETES the added rows (taking their EAV/history with them) and
-    REINSTATES the retired ones as active v4 rows -- the same "reinstate the
-    old shape, raw" idiom _make_v3_shaped uses for v4. Then it renames the five
-    renamed steps back, restores the v4 numbering/stage vocabulary, applies
-    ``statuses`` ({v4 task_name: status}, all projects) and ``legacy_fields``
-    ((task_name, field_key, value), scoped to ``project_id`` when given), and
-    stamps schema_version 4.
+    Fresh databases now start at v7, whose one Lead Assessment row cannot
+    plausibly be "renamed back" into four old rows.  Reconstructing all twelve
+    v4 rows is what makes v5's rename, merge and backfill paths real tests.
     """
     conn = raw_sqlite_connect(db_path)
     try:
-        marks = ",".join("?" for _ in _V5_ADDED_ROWS)
-        conn.execute(f"DELETE FROM task_dynamic_fields WHERE task_id IN "
-                     f"(SELECT task_id FROM project_tasks WHERE task_name IN ({marks}))",
-                     _V5_ADDED_ROWS)
-        conn.execute(f"DELETE FROM task_history WHERE task_id IN "
-                     f"(SELECT task_id FROM project_tasks WHERE task_name IN ({marks}))",
-                     _V5_ADDED_ROWS)
-        conn.execute(f"DELETE FROM project_tasks WHERE task_name IN ({marks})", _V5_ADDED_ROWS)
-        # Reinstate the three rows v5 retires, as ACTIVE v4 rows on every project.
-        for name in ("Trap CoS", "Seal CoS", "Well Creation"):
-            sequence_no, stage_group = _V4_PROSPECT_TEMPLATE[name]
-            conn.execute(
-                "INSERT INTO project_tasks (project_id, sequence_no, task_name, stage_group, "
-                "status, priority, is_active, last_updated) "
-                "SELECT project_id, ?, ?, ?, 'Not Assigned', 'Low', 1, datetime('now') "
-                "FROM projects", (sequence_no, name, stage_group))
-        for new_name, old_name in _V5_TO_V4_NAMES.items():
-            conn.execute("UPDATE project_tasks SET task_name = ? WHERE task_name = ?",
-                         (old_name, new_name))
-        for name, (sequence_no, stage_group) in _V4_PROSPECT_TEMPLATE.items():
-            conn.execute("UPDATE project_tasks SET sequence_no = ?, stage_group = ?, is_active = 1 "
-                         "WHERE task_name = ?", (sequence_no, stage_group, name))
+        _restore_v4_prospect_rows(conn)
         for name, status in (statuses or {}).items():
             finish = "2026-01-05" if status == "Approved" else None
             start = "2026-01-02" if status != "Not Assigned" else None
@@ -609,29 +605,38 @@ def test_migration_v5_restructures_an_in_progress_lead(client, app_modules):
     assert version == str(migrations.LATEST_SCHEMA_VERSION)
 
     by_name = {name: (seq, stage, status) for seq, name, stage, status in active}
-    # (a) renames -- in place, so the row (and its EAV/history/folder) followed.
-    ids_after = {t["task_name"]: t["task_id"] for t in get_tasks(client, pid)}
+    # (a) v5 renames were in place.  v7 then retires Area/Resource as source
+    # checkpoints, so inspect all rows rather than the active endpoint alone.
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        all_rows = {row["task_name"]: dict(row) for row in conn.execute(
+            "SELECT task_id, task_name, is_active FROM project_tasks WHERE project_id = ?", (pid,))}
+    finally:
+        conn.close()
     for new_name, old_name in _V5_TO_V4_NAMES.items():
-        assert new_name in by_name
-        assert old_name not in by_name
-        assert ids_after[new_name] == ids_before[old_name]
+        assert new_name in all_rows
+        assert old_name not in all_rows
+        assert all_rows[new_name]["task_id"] == ids_before[old_name]
     # (b) merge: ONE row, status = the LESS advanced half (Approved + Ready -> Ready).
     assert by_name["Trap and Seal CoS"][2] == "Ready"
     # (b)/(c) retired, never deleted.
-    assert inactive == ["Seal CoS", "Trap CoS", "Well Creation"]
+    assert {"Area Definition", "Thickness Estimation", "GRV Inputs", "Resource Assessment",
+            "Seal CoS", "Trap CoS", "Well Creation"} <= set(inactive)
     # (d) NEITHER stage is fully approved here (Lead Resource Assessment is
     # still In Progress, Pre-Well Delivery untouched), so both new steps arrive
     # unstarted and nothing is backfilled.
-    assert by_name["GRV Inputs"][2] == "Not Assigned"
     assert by_name["Well Site Location"][2] == "Not Assigned"
     assert _history(client.db_path, pid, "Migration-Completed") == []
     # (e) stage groups + (f) contiguous 1-12, in template order.
-    assert [name for _seq, name, _stage, _status in active][:12] == _V5_PROSPECT_STEPS
-    assert [seq for seq, _n, _s, _st in active][:12] == list(range(1, 13))
-    assert {stage for _seq, name, stage, _st in active if name in _V5_PROSPECT_STEPS} == {
+    import workflow
+    assert [(seq, name) for seq, name, _stage, _status in active] == [
+        (seq, name) for seq, name, _stage in workflow.PIPELINE_TEMPLATES]
+    assert {stage for _seq, _name, stage, _st in active if stage in {
+            "Lead Assessment", "Risk Analysis", "Pre-Well Delivery"}} == {
         "Lead Assessment", "Risk Analysis", "Pre-Well Delivery"}
-    # BP rows untouched: still 13-27, still their own groups.
-    assert [seq for seq, _n, _s, _st in active] == list(range(1, 28))
+    # BP rows remain in their historical 13-27 slots.
+    assert [seq for seq, _n, stage, _st in active if stage not in {
+        "Lead Assessment", "Risk Analysis", "Pre-Well Delivery"}] == list(range(13, 28))
 
     # Replay: a second bootstrap against the upgraded file changes nothing.
     after = _prospect_shape(client.db_path, pid)
@@ -677,28 +682,24 @@ def test_migration_v5_backfills_the_new_steps_on_an_already_completed_lead(clien
     pid = create_project(client, "MIGRATE-V5-DONE-1")
     _make_v4_shaped(client.db_path,
                     statuses={name: "Approved" for name in _V4_PROSPECT_TEMPLATE})
-    before = client.get(f"/api/projects/{pid}").get_json()
-    assert before["overall_status"] == "Completed"
-    assert client.get(f"/api/projects/{pid}/completion").get_json() == {"percent": 100.0}
-
     _rebootstrap(dbmod, client.db_path)
 
     after = client.get(f"/api/projects/{pid}").get_json()
     assert after["overall_status"] == "Completed"
-    assert client.get(f"/api/projects/{pid}/completion").get_json() == {"percent": 100.0}
+    # The lifecycle is complete; the v7 field-derived checkpoint display stays
+    # honest about the absent legacy fields, so it reads 8 real items / 12.
+    assert client.get(f"/api/projects/{pid}/completion").get_json() == {"percent": round(8 / 12 * 100, 1)}
     tasks = {t["task_name"]: t for t in get_tasks(client, pid)}
-    for name in ("GRV Inputs", "Well Site Location"):
-        assert tasks[name]["status"] == "Approved"
-        assert tasks[name]["actual_start"] is None
-        assert tasks[name]["actual_finish"] is None
+    assert tasks["Lead Assessment"]["status"] == "Approved"
+    assert tasks["Well Site Location"]["status"] == "Approved"
+    assert tasks["Well Site Location"]["actual_start"] is None
+    assert tasks["Well Site Location"]["actual_finish"] is None
     events = _history(client.db_path, pid, "Migration-Completed")
     assert [e["task_name"] for e in events] == ["GRV Inputs", "Well Site Location"]
     assert all(e["comment"] ==
                "Migration-completed (backfilled tracked item on an already-completed lead)"
                for e in events)
-    # And every tracked item now reads Completed -- the pre-v5 board could only
-    # ever show 10/12 for this lead (two items had no step to complete).
-    assert {item["status"] for item in after["tracked_items"]} == {"Completed"}
+    assert sum(item["status"] == "Completed" for item in after["tracked_items"]) == 8
 
 
 def test_migration_v5_backfills_per_stage_so_a_lead_keeps_its_current_stage(client, app_modules):
@@ -732,17 +733,15 @@ def test_migration_v5_backfills_per_stage_so_a_lead_keeps_its_current_stage(clie
     assert after["current_stage"] == "Pre-Well Delivery", "the lead must not slide back a column"
     assert after["display_stage"] == "Pre-Well Delivery"
     tasks = {t["task_name"]: t for t in get_tasks(client, pid)}
-    # Its own stage was finished -> backfilled Approved, with the event.
-    assert tasks["GRV Inputs"]["status"] == "Approved"
-    assert tasks["GRV Inputs"]["actual_start"] is None
-    assert tasks["GRV Inputs"]["actual_finish"] is None
+    # v5 backfilled GRV before v7 retired it into the consolidated row.
+    assert tasks["Lead Assessment"]["status"] == "Approved"
     # Its own stage is still in flight -> unstarted, no event.
     assert tasks["Well Site Location"]["status"] == "Not Assigned"
     assert [e["task_name"] for e in _history(client.db_path, pid, "Migration-Completed")] == \
         ["GRV Inputs"]
     # ... and the tracked item the board draws for it reads done, not open.
     items = {item["label"]: item["status"] for item in after["tracked_items"]}
-    assert items["GRV Inputs"] == "Completed"
+    assert items["GRV Inputs"] == "In Progress"
     assert items["Well Site Location"] == "In Progress"
 
 
@@ -761,7 +760,7 @@ def test_migration_v5_backfill_is_scoped_to_the_stage_that_is_finished(client, a
 
     tasks = {t["task_name"]: t for t in get_tasks(client, pid)}
     assert tasks["Well Site Location"]["status"] == "Approved"
-    assert tasks["GRV Inputs"]["status"] == "Not Assigned"
+    assert tasks["Lead Assessment"]["status"] == "Not Assigned"
     assert [e["task_name"] for e in _history(client.db_path, pid, "Migration-Completed")] == \
         ["Well Site Location"]
 
@@ -802,7 +801,7 @@ def test_migration_v5_never_ticks_a_confirmation_checkbox_it_was_not_told_to(cli
 
     # Every confirmation the redesign added, by the step that owns it.
     confirmations = {
-        "Resource Assessment": "polygons_surfaces_loaded",
+        "Lead Assessment": "polygons_surfaces_loaded",
         "Reservoir CoS": "reservoir_slides_loaded",
         "Trap and Seal CoS": "seal_slides_loaded",
         "Seismic Signature Validation": "seismic_slides_loaded",
@@ -868,6 +867,7 @@ def test_migration_v5_keeps_legacy_cos_data_readable_and_total_cos_unchanged(cli
     client.patch(f"/api/tasks/{reservoir['task_id']}/dynamic-fields", json={
         "fields": {"reservoir_cos_rows": json.dumps([{"reservoir_cos_pct": "50"}])}})
     _make_v4_shaped(client.db_path, project_id=pid, legacy_fields=[
+        ("Reservoir CoS", "reservoir_cos_rows", json.dumps([{"reservoir_cos_pct": "50"}])),
         ("Trap CoS", "trap_cos_pct", "80"),
         ("Trap CoS", "sarah_quwarah_thickness_ft", "150"),
         ("Seal CoS", "seal_cos_pct", "50"),
@@ -901,8 +901,8 @@ def test_migration_v5_recompute_hooks_fire_on_the_merged_step(client, app_module
     _make_v4_shaped(client.db_path)
     _rebootstrap(dbmod, client.db_path)
 
-    thickness = get_task_by_name(client, pid, "Thickness Estimation")
-    client.patch(f"/api/tasks/{thickness['task_id']}/dynamic-fields",
+    lead_assessment = get_task_by_name(client, pid, "Lead Assessment")
+    client.patch(f"/api/tasks/{lead_assessment['task_id']}/dynamic-fields",
                  json={"fields": {"formation_thickness_ft": "100"}})
     merged = get_task_by_name(client, pid, "Trap and Seal CoS")
     resp = client.patch(f"/api/tasks/{merged['task_id']}/dynamic-fields", json={"fields": {
@@ -925,8 +925,17 @@ def test_migration_v5_is_a_no_op_on_an_already_migrated_database(client, app_mod
     import migrations
 
     pid = create_project(client, "MIGRATE-V5-NOOP-1")
-    before = _prospect_shape(client.db_path, pid)
-
+    _make_v4_shaped(client.db_path)
+    # Materialize v5 once by hand, then make the runner replay v5 from its
+    # v4 stamp.  This is the genuine guard rehearsal; re-stamping a fresh v7
+    # shape would make v5 invent rows that no real v5 database carried.
+    session = dbmod.new_session()
+    try:
+        dbmod.begin_write(session)
+        migrations._migrate_v5_prospect_template_restructure(session, dbmod.get_engine())
+        session.commit()
+    finally:
+        session.close()
     conn = raw_sqlite_connect(client.db_path)
     try:
         conn.execute("UPDATE app_settings SET value = '4' WHERE key = 'schema_version'")
@@ -935,8 +944,10 @@ def test_migration_v5_is_a_no_op_on_an_already_migrated_database(client, app_mod
         conn.close()
 
     _rebootstrap(dbmod, client.db_path)
-    assert _prospect_shape(client.db_path, pid) == before
-    assert before[3] == str(migrations.LATEST_SCHEMA_VERSION)
+    after = _prospect_shape(client.db_path, pid)
+    _rebootstrap(dbmod, client.db_path)
+    assert _prospect_shape(client.db_path, pid) == after
+    assert after[3] == str(migrations.LATEST_SCHEMA_VERSION)
 
 
 def test_migration_v5_skips_a_project_holding_both_names_of_a_rename(client, app_modules):
@@ -960,8 +971,15 @@ def test_migration_v5_skips_a_project_holding_both_names_of_a_rename(client, app
         conn.close()
 
     _rebootstrap(dbmod, client.db_path)
-    names = {t["task_name"] for t in get_tasks(client, pid)}
-    assert {"Area Definition", "Reservoir Area Definition"} <= names
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        names = {row["task_name"] for row in conn.execute(
+            "SELECT task_name FROM project_tasks WHERE project_id = ?", (pid,))}
+    finally:
+        conn.close()
+    # v5's guard left the old spelling for manual reconciliation; v7 consumed
+    # the duplicate current spelling into its one canonical row.
+    assert {"Reservoir Area Definition", "Area Definition", "Lead Assessment"} <= names
     conn = raw_sqlite_connect(client.db_path)
     try:
         version = conn.execute(
@@ -971,9 +989,9 @@ def test_migration_v5_skips_a_project_holding_both_names_of_a_rename(client, app
     assert version == str(migrations.LATEST_SCHEMA_VERSION)
 
 
-def test_new_project_materializes_the_v5_template(client):
+def test_new_project_materializes_the_v7_template(client):
     """A FRESH database never runs a migration step: creation materializes the
-    12 prospect + 15 BP steps straight from PIPELINE_TEMPLATES."""
+    9 stored prospect + 15 BP steps straight from PIPELINE_TEMPLATES."""
     import workflow
 
     pid = create_project(client, "V5-TEMPLATE-1")
@@ -982,11 +1000,14 @@ def test_new_project_materializes_the_v5_template(client):
         list(workflow.PIPELINE_TEMPLATES)
     prospect = [t for t in tasks if t["stage_group"] in workflow.PROSPECT_STAGES]
     bp = [t for t in tasks if t["stage_group"] in workflow.BP_EXECUTION_STAGES]
-    assert (len(prospect), len(bp)) == (12, 15)
-    # ... and the board's twelve tracked items are those twelve steps, 1:1.
+    assert (len(prospect), len(bp)) == (9, 15)
+    # ... while the board restores the four derived Lead Assessment checkpoints
+    # and retains its twelve communicated items.
     row = client.get(f"/api/projects/{pid}").get_json()
-    assert [item["steps"][0] for item in row["tracked_items"]] == \
-        [t["task_name"] for t in prospect]
+    assert len(row["tracked_items"]) == 12
+    assert [item["steps"][0] for item in row["tracked_items"][:4]] == ["Lead Assessment"] * 4
+    assert [item["steps"][0] for item in row["tracked_items"][4:]] == \
+        [t["task_name"] for t in prospect if t["task_name"] != "Lead Assessment"]
 
 
 # ---------------------------------------------------------------------------
@@ -1104,6 +1125,193 @@ def test_migration_v6_tolerates_a_hand_altered_database(client, app_modules):
     assert "ground_elevation" in columns
     assert version == str(migrations.LATEST_SCHEMA_VERSION)
     assert projects["MIGRATE-V6-HAND-1"] == (400000.0, 2800000.0, 321.5)
+
+
+# ---------------------------------------------------------------------------
+# v7: one Lead Assessment lifecycle with four derived checkpoints
+# ---------------------------------------------------------------------------
+
+_V7_LEGACY_LEAD_STEPS = (
+    ("Area Definition", 1),
+    ("Thickness Estimation", 2),
+    ("GRV Inputs", 3),
+    ("Resource Assessment", 4),
+)
+
+
+def _make_v6_lead_assessment_shape(db_path, project_id, statuses, fields, comments=None):
+    """Replace a fresh v7 lead row with the four v6 source rows, raw."""
+    conn = raw_sqlite_connect(db_path)
+    try:
+        conn.execute("DELETE FROM project_tasks WHERE project_id = ? AND task_name = 'Lead Assessment'",
+                     (project_id,))
+        for name, sequence in _V7_LEGACY_LEAD_STEPS:
+            status, assignee, start, finish = statuses[name]
+            conn.execute("""
+                INSERT INTO project_tasks (
+                    project_id, sequence_no, task_name, stage_group, assigned_to, status,
+                    actual_start, actual_finish, comments, priority, is_active, last_updated
+                ) VALUES (?, ?, ?, 'Lead Assessment', ?, ?, ?, ?, ?, 'Medium', 1, datetime('now'))
+            """, (project_id, sequence, name, assignee, status, start, finish,
+                  (comments or {}).get(name)))
+        for name, key, value in fields:
+            task_id = conn.execute(
+                "SELECT task_id FROM project_tasks WHERE project_id = ? AND task_name = ?",
+                (project_id, name)).fetchone()["task_id"]
+            conn.execute("""
+                INSERT INTO task_dynamic_fields (task_id, field_key, field_value, updated_at)
+                VALUES (?, ?, ?, datetime('now'))
+            """, (task_id, key, value))
+        conn.execute("UPDATE app_settings SET value = '6' WHERE key = 'schema_version'")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _v7_lead_assessment_shape(db_path, project_id):
+    conn = raw_sqlite_connect(db_path)
+    try:
+        rows = [tuple(row) for row in conn.execute("""
+            SELECT sequence_no, task_name, status, assigned_to, actual_start, actual_finish, comments, is_active
+            FROM project_tasks WHERE project_id = ? ORDER BY sequence_no, task_id
+        """, (project_id,))]
+        fields = [tuple(row) for row in conn.execute("""
+            SELECT pt.task_name, tdf.field_key, tdf.field_value
+            FROM project_tasks pt JOIN task_dynamic_fields tdf ON tdf.task_id = pt.task_id
+            WHERE pt.project_id = ? ORDER BY pt.task_name, tdf.field_key
+        """, (project_id,))]
+        history = [tuple(row) for row in conn.execute("""
+            SELECT task_name, action_type, new_status, comment
+            FROM task_history WHERE project_id = ? ORDER BY history_id
+        """, (project_id,))]
+        version = conn.execute(
+            "SELECT value FROM app_settings WHERE key = 'schema_version'").fetchone()["value"]
+    finally:
+        conn.close()
+    return rows, fields, history, version
+
+
+def test_migration_v7_merges_lead_assessment_moves_eav_and_replays(client, app_modules):
+    """v7 has one row, preserves the four audit anchors, and moves each key once."""
+    _, dbmod = app_modules
+    import migrations
+
+    pid = create_project(client, "MIGRATE-V7-LEAD-1")
+    _make_v6_lead_assessment_shape(client.db_path, pid, {
+        "Area Definition": ("Approved", "Employee", "2026-01-02", "2026-01-03"),
+        "Thickness Estimation": ("Ready", "Staff Member", "2026-01-04", None),
+        "GRV Inputs": ("In Progress", "Supervisor", "2026-01-05", None),
+        "Resource Assessment": ("Approved", "Another", "2026-01-06", "2026-01-07"),
+    }, [
+        ("Area Definition", "p90_area_km2", "10"),
+        ("Thickness Estimation", "formation_thickness_ft", "100"),
+        ("GRV Inputs", "grv_p90_thousand_acre_ft", "40"),
+        ("Resource Assessment", "lead_piip_gas_mean", "12.5"),
+    ])
+
+    _rebootstrap(dbmod, client.db_path)
+    rows, fields, history, version = _v7_lead_assessment_shape(client.db_path, pid)
+    merged = next(row for row in rows if row[1] == "Lead Assessment")
+    assert merged == (1, "Lead Assessment", "In Progress", "Employee", "2026-01-02", None, None, 1)
+    assert {row[1] for row in rows if row[7] == 0} >= {name for name, _seq in _V7_LEGACY_LEAD_STEPS}
+    assert {(name, key, value) for name, key, value in fields} >= {
+        ("Lead Assessment", "p90_area_km2", "10"),
+        ("Lead Assessment", "formation_thickness_ft", "100"),
+        ("Lead Assessment", "grv_p90_thousand_acre_ft", "40"),
+        ("Lead Assessment", "lead_piip_gas_mean", "12.5"),
+    }
+    assert not any(name in {step for step, _seq in _V7_LEGACY_LEAD_STEPS}
+                   for name, _key, _value in fields)
+    assert ("Lead Assessment", "Migration-Merged", "In Progress",
+            "Merged from 4 Lead Assessment steps (migration v7)") in history
+    assert version == str(migrations.LATEST_SCHEMA_VERSION)
+
+    _rebootstrap(dbmod, client.db_path)
+    assert _v7_lead_assessment_shape(client.db_path, pid) == (rows, fields, history, version)
+
+
+def test_v7_prospect_completion_counts_four_derived_lead_checkpoints(client):
+    """The v7 row reduction must never change the board's 12-item denominator."""
+    pid = create_project(client, "V7-CHECKPOINT-COMPLETION-1")
+    task = get_task_by_name(client, pid, "Lead Assessment")
+    response = client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields", json={"fields": {
+        "p90_area_km2": "10", "p10_area_km2": "20",
+        "reservoir_thickness_ft": "20", "formation_thickness_ft": "100",
+        "grv_p90_thousand_acre_ft": "30", "grv_p10_thousand_acre_ft": "40",
+        "polygons_surfaces_loaded": "1", "lead_piip_gas_mean": "12.5",
+    }})
+    assert response.status_code == 200, response.get_json()
+    # Fields turn all four derived dots green but do NOT auto-approve the
+    # single lifecycle row.  Completion therefore remains 4/12, not 1/9.
+    assert client.get(f"/api/tasks/{task['task_id']}").get_json()["status"] == "Not Assigned"
+    assert client.get(f"/api/projects/{pid}/completion").get_json() == {
+        "percent": round(4 / 12 * 100, 1)}
+
+
+@pytest.mark.parametrize("source_comments, expected", [
+    ({}, None),
+    ({"Thickness Estimation": "One legacy note."}, "One legacy note."),
+    ({"Area Definition": "Mapped boundary.", "GRV Inputs": "Volumetrics reviewed."},
+     "Area Definition: Mapped boundary.\n\nGRV Inputs: Volumetrics reviewed."),
+])
+def test_migration_v7_preserves_source_comments_and_allows_new_edits(
+        client, app_modules, source_comments, expected):
+    """v7 keeps one legacy note verbatim or labels multiple notes by source."""
+    _, dbmod = app_modules
+
+    pid = create_project(client, "MIGRATE-V7-COMMENTS-{}".format(len(source_comments)))
+    statuses = {name: ("Not Assigned", None, None, None)
+                for name, _sequence in _V7_LEGACY_LEAD_STEPS}
+    _make_v6_lead_assessment_shape(client.db_path, pid, statuses, [], comments=source_comments)
+    _rebootstrap(dbmod, client.db_path)
+
+    task = get_task_by_name(client, pid, "Lead Assessment")
+    assert task["comments"] == expected
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        retired = {row["task_name"]: row["comments"] for row in conn.execute("""
+            SELECT task_name, comments FROM project_tasks
+            WHERE project_id = ? AND task_name IN ('Area Definition', 'Thickness Estimation',
+                                                   'GRV Inputs', 'Resource Assessment')
+        """, (pid,))}
+    finally:
+        conn.close()
+    for name, comment in source_comments.items():
+        assert retired[name] == comment
+    before = _v7_lead_assessment_shape(client.db_path, pid)
+    # A normal post-migration component save owns the one current comments box.
+    response = client.patch(f"/api/tasks/{task['task_id']}", json={
+        "comments": "Current consolidated note.", "revision": task["revision"],
+    })
+    assert response.status_code == 200, response.get_json()
+    assert response.get_json()["task"]["comments"] == "Current consolidated note."
+    after = _v7_lead_assessment_shape(client.db_path, pid)
+    assert before[0] != after[0]  # the intentional normal comment edit only
+    assert next(row for row in after[0] if row[1] == "Lead Assessment")[6] == \
+        "Current consolidated note."
+    _rebootstrap(dbmod, client.db_path)
+    assert _v7_lead_assessment_shape(client.db_path, pid) == after
+
+
+def test_migration_v7_refuses_a_cross_step_eav_key_collision(client, app_modules):
+    """A hand-edited collision must fail before v7 moves any source EAV row."""
+    _, dbmod = app_modules
+    import migrations
+
+    pid = create_project(client, "MIGRATE-V7-COLLISION-1")
+    statuses = {name: ("Not Assigned", None, None, None)
+                for name, _sequence in _V7_LEGACY_LEAD_STEPS}
+    _make_v6_lead_assessment_shape(client.db_path, pid, statuses, [
+        ("Area Definition", "same_key", "first"),
+        ("Thickness Estimation", "same_key", "second"),
+    ])
+    session = dbmod.new_session()
+    try:
+        with pytest.raises(RuntimeError, match="dynamic field key 'same_key' appears"):
+            migrations._migrate_v7_lead_assessment_single_step(session, dbmod.get_engine())
+    finally:
+        session.rollback()
+        session.close()
 
 
 def test_segmentation_slides_ready_still_reads_pending_approval(client):

@@ -7,16 +7,16 @@ describes, and writes screenshots.
 
 The journey, in order:
   1. create a lead and open its detail page;
-  2. click a Lead Assessment rail row -- ANY of the four opens the same page;
+  2. click the one Lead Assessment rail task;
   3. fill Section 1 (thickness) and Section 2 (area + GRV);
   4. WATCH the PIIP results and plots appear WITHOUT clicking anything -- there
      is no Calculate button on this page any more;
   5. tick "Polygons and surfaces are placed in the shared folder";
-  6. press Save Updates ONCE;
-  7. assert all four Lead Assessment rail rows read Approved (green) and the
-     board card's four Lead Assessment dots are Completed;
+  6. press Save Updates once, then submit and approve the one lifecycle task;
+  7. assert the one rail row reads Approved and the board card's four derived
+     Lead Assessment checkpoints are Completed;
   8. KI-005 -- REOPEN the now-Approved lead, both by clicking its card and by
-     clicking a Lead Assessment rail row, wait out the auto-run's debounce, and
+     clicking the Lead Assessment rail row, wait out the auto-run's debounce, and
      assert that LOOKING at it changed nothing: the stored PIIP mean, the step's
      Approved status and the absence of a "Field Reopen" history event.
 
@@ -49,7 +49,8 @@ ROOT_URL = f"http://{HOST}:{PORT}"
 BOOT_TIMEOUT_S = 30
 
 LEAD_NAME = "WWWW-44"
-LEAD_STEPS = ["Area Definition", "Thickness Estimation", "GRV Inputs", "Resource Assessment"]
+LEAD_TASK = "Lead Assessment"
+CHECKPOINTS = ["Area Definition", "Thickness Estimation", "GRV Inputs", "Resource Assessment"]
 
 # Section 1 + Section 2, the card's own worked example.
 INPUTS = {
@@ -79,9 +80,12 @@ def wait_for_health(deadline_s: float) -> bool:
 
 
 def start_server(db_path: Path):
+    matplotlib_cache = db_path.parent / "matplotlib"
+    matplotlib_cache.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ,
                SEGMENT_TRACKER_DB_PATH=str(db_path),
-               SEGMENT_TRACKER_AUTH_REQUIRED="0")
+               SEGMENT_TRACKER_AUTH_REQUIRED="0",
+               MPLCONFIGDIR=str(matplotlib_cache))
     proc = subprocess.Popen(
         [str(PYTHON), "-m", "flask", "--app", "main", "run", "--port", str(PORT)],
         cwd=str(BASE_DIR), env=env,
@@ -93,14 +97,20 @@ def start_server(db_path: Path):
 
 
 def seed_lead() -> int:
-    """Create the lead through the real API and return its project_id."""
+    """Create and assign the one Lead Assessment task through the real API."""
     request = urllib.request.Request(
         f"{ROOT_URL}/api/projects",
         data=f'{{"project_name": "{LEAD_NAME}"}}'.encode(),
         headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(request, timeout=10) as response:
         import json
-        return json.loads(response.read())["project_id"]
+        project_id = json.loads(response.read())["project_id"]
+    task = next(t for t in api_get(f"/api/projects/{project_id}/tasks")
+                if t["task_name"] == LEAD_TASK)
+    api_send(f"/api/tasks/{task['task_id']}/assign", {
+        "assignee": "Employee", "cascade": False, "revision": task["revision"]
+    })
+    return project_id
 
 
 def field(page, key):
@@ -139,6 +149,15 @@ def api_get(path):
         return json.loads(response.read())
 
 
+def api_send(path, payload, method="POST"):
+    import json
+    request = urllib.request.Request(
+        f"{ROOT_URL}{path}", data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"}, method=method)
+    with urllib.request.urlopen(request, timeout=15) as response:
+        return json.loads(response.read())
+
+
 def server_state(project_id):
     """The three things a PAGE VIEW must never move (KI-005).
 
@@ -147,7 +166,7 @@ def server_state(project_id):
     been rewritten.
     """
     tasks = api_get(f"/api/projects/{project_id}/tasks")
-    resource = next(t for t in tasks if t["task_name"] == "Resource Assessment")
+    resource = next(t for t in tasks if t["task_name"] == LEAD_TASK)
     fields = api_get(f"/api/tasks/{resource['task_id']}/dynamic-fields")
     history = api_get(f"/api/activity?project_id={project_id}")
     return {
@@ -202,9 +221,9 @@ def run(out_dir: Path, headed: bool) -> int:
         page.locator(f'.lead-card:has-text("{LEAD_NAME}"), .project-card:has-text("{LEAD_NAME}")').first.click()
         page.wait_for_selector("#detail-shell:not(.hidden)")
 
-        # ANY of the four rail rows opens the same page -- start from the third
-        # to prove it is not just "the first step's form".
-        page.locator('.component-item:has-text("GRV Inputs")').first.click()
+        lead_rows = page.locator(f'.component-item[data-task-id]:has-text("{LEAD_TASK}")')
+        check(lead_rows.count() == 1, "exactly one clickable Lead Assessment rail task renders")
+        lead_rows.first.click()
         page.wait_for_selector(".la-workspace")
         check(page.locator('[data-la-section]').count() == 4, "all four numbered sections render")
         check(page.locator("#ra-calculate").count() == 0, "there is no Calculate button")
@@ -259,26 +278,32 @@ def run(out_dir: Path, headed: bool) -> int:
 
         page.locator("#save-component").click()
         page.wait_for_selector("#app-message", timeout=15000)
-        page.wait_for_timeout(1500)
+        page.wait_for_selector("#submit-component:not(.hidden)", timeout=15000)
+        page.locator("#submit-component").click()
+        page.wait_for_selector("#approve-component:not(.hidden)", timeout=15000)
+        page.locator("#approve-component").click()
+        page.wait_for_function(
+            "name => { const row = [...document.querySelectorAll('.component-item[data-task-id]')]"
+            ".find(el => el.textContent.includes(name)); return row && row.classList.contains('status-approved'); }",
+            arg=LEAD_TASK, timeout=15000)
 
         statuses = rail_statuses(page)
-        for step in LEAD_STEPS:
-            check(statuses.get(step) == "approved",
-                  f"rail row {step!r} is green (got {statuses.get(step)!r})")
+        check(statuses.get(LEAD_TASK) == "approved",
+              f"the one rail task is green (got {statuses.get(LEAD_TASK)!r})")
         items = board_tracked_items(project_id)
-        for step in LEAD_STEPS:
+        for step in CHECKPOINTS:
             check(items.get(step) == "Completed",
                   f"board tracked item {step!r} is Completed (got {items.get(step)!r})")
 
         # --- KI-005: OPENING the finished lead must not rewrite it ------------
         # The lead is now exactly the shape the audit poisoned: a saved,
-        # Approved Resource Assessment carrying stored lead_piip_* values. A
+        # Approved Lead Assessment carrying stored lead_piip_* values. A
         # page view used to POST /resource-assessment + PATCH /dynamic-fields
         # from the auto-run, which replaced the stored mean AND drove the
         # Approved step back to In Progress with a Field Reopen event.
         before = server_state(project_id)
         check(before["status"] == "Approved" and before["mean"] not in ("", None),
-              f"baseline: Resource Assessment Approved with a stored mean ({before['mean']})")
+              f"baseline: Lead Assessment Approved with a stored mean ({before['mean']})")
 
         # (a) the audit's own repro -- click the card, open nothing, type
         #     nothing, save nothing.
@@ -295,7 +320,7 @@ def run(out_dir: Path, headed: bool) -> int:
         #     the CURRENT step's stage, which is no longer this one, so the
         #     Lead Assessment group has to be opened first.)
         page.locator(".rail-stage-head:has-text('LEAD ASSESSMENT')").click()
-        page.locator('.component-item:has-text("Resource Assessment")').first.click()
+        page.locator(f'.component-item[data-task-id]:has-text("{LEAD_TASK}")').first.click()
         page.wait_for_selector(".la-workspace")
         stored_mean_on_screen = page.locator(".la-result-gas .la-result-box").nth(1).inner_text()
         check(stored_mean_on_screen not in ("", "—"),

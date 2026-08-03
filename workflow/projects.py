@@ -18,8 +18,10 @@ import db
 import folders
 from helpers import health_from_target, parse_iso_date, today_str, utc_now_str
 
-from .constants import (BP_EXECUTION_STAGES, LATEST_MEAN_GAS_SOURCES, PIPELINE_TEMPLATES,
-                        STAGE_ORDER, applicable_stages)
+from .constants import (BP_EXECUTION_STAGES, LATEST_MEAN_GAS_SOURCES,
+                        LEAD_ASSESSMENT_CHECKPOINTS, PIPELINE_TEMPLATES,
+                        STAGE_ORDER, applicable_stages,
+                        lead_assessment_checkpoint_met)
 from .history import log_task_event
 
 logger = logging.getLogger(__name__)
@@ -111,7 +113,7 @@ def _fill_project_surfaces(session, project_id):
                         FROM project_tasks pt
                         JOIN task_dynamic_fields tdf ON tdf.task_id = pt.task_id
                         WHERE pt.project_id = :project_id
-                          AND pt.task_name = 'Thickness Estimation'
+                          AND pt.task_name = 'Lead Assessment'
                           AND pt.is_active = 1
                           AND tdf.field_key = 'formation_thickness_ft'
                         ORDER BY pt.task_id DESC
@@ -144,7 +146,7 @@ def _fill_project_surfaces(session, project_id):
 
 def add_project(session, project_name, start_date=None, target_date=None, changed_by="System", lead_x=None, lead_y=None,
                 business_plan_year=None, business_plan_enabled=False, active_well_enabled=False, pipeline_type="prospect"):
-    """Create a project and materialize its 27 workflow tasks; return project_id."""
+    """Create a project and materialize its 24 workflow tasks; return project_id."""
     project_name = (project_name or '').strip()
     if not project_name:
         raise ValueError("Lead / well name is required.")
@@ -234,7 +236,7 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
             # Every step starts Not Assigned regardless of pipeline_type;
             # assignment moves it to In Progress. Applicability is derived per
             # pipeline at query time (applicable_stages), never stored per row,
-            # so all 27 rows are materialized identically.
+            # so all 24 rows are materialized identically.
             initial_status = "Not Assigned"
             task_result = db.execute(session, """
                 INSERT INTO project_tasks (
@@ -291,12 +293,10 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
 # status and adds no query: every value is derived from the task rows
 # _annotate_derived_state has already batch-loaded.
 #
-# Since v5 the stored prospect pipeline IS what the board shows -- twelve steps
-# across the three stage groups the columns are named after -- so there is no
-# mapping table any more, only the two cosmetic rules below. (Before v5 this
-# block was a presentation ADAPTER that folded four stage groups into three and
-# invented two items with no stored step; migrations._migrate_v5_prospect_
-# template_restructure made all twelve real and the adapter was deleted whole.)
+# Since v7 the stored prospect pipeline has nine lifecycle rows while the board
+# still communicates twelve items: four field-derived Lead Assessment
+# checkpoints followed by eight ordinary task rows. The projection below is
+# the single adapter that preserves that signed-off user model.
 
 # Board labels that are SHORTER than the step they stand for, because a card dot
 # gets a few characters. Display-only: the stored step name is untouched and is
@@ -314,11 +314,15 @@ _TRACKED_ITEM_LABELS = {
 # In Progress and the card must not distinguish the two.
 _READY_SHOWS_PENDING = frozenset({"Segmentation Slides"})
 
-# The twelve tracked items ARE the prospect steps, in sequence order.
+# The board deliberately keeps twelve tracked items even though v7 reduced the
+# prospect TASK rows to nine.  The first four are derived checkpoints carried
+# by the one Lead Assessment row; the remaining eight are ordinary task rows.
 _TRACKED_ITEM_STEPS = tuple(
-    (stage_group, task_name, _TRACKED_ITEM_LABELS.get(task_name, task_name))
-    for _sequence_no, task_name, stage_group in PIPELINE_TEMPLATES
-    if stage_group not in BP_EXECUTION_STAGES
+    [("Lead Assessment", checkpoint, checkpoint)
+     for checkpoint in LEAD_ASSESSMENT_CHECKPOINTS]
+    + [(stage_group, task_name, _TRACKED_ITEM_LABELS.get(task_name, task_name))
+       for _sequence_no, task_name, stage_group in PIPELINE_TEMPLATES
+       if stage_group not in BP_EXECUTION_STAGES and task_name != "Lead Assessment"]
 )
 
 # Card border / column sort vocabulary. "Normal" (the models.py server default
@@ -326,8 +330,8 @@ _TRACKED_ITEM_STEPS = tuple(
 _PRIORITY_RANK = {"High": 0, "Medium": 1, "Low": 2}
 
 
-def _tracked_items(status_by_task):
-    """The 12-item board model for one prospect (pure), 1:1 with its steps.
+def _tracked_items(status_by_task, lead_assessment_fields=None):
+    """The pure 12-item board model: four checkpoints plus eight task rows.
 
     ``status_by_task`` maps a stored step name to its stored lifecycle status.
     A step the project does not carry is simply not Approved, so it reads
@@ -344,14 +348,22 @@ def _tracked_items(status_by_task):
     items = []
     for stage_group, task_name, label in _TRACKED_ITEM_STEPS:
         status = status_by_task.get(task_name)
-        if status == "Approved":
+        if task_name in LEAD_ASSESSMENT_CHECKPOINTS:
+            complete = lead_assessment_checkpoint_met(task_name, lead_assessment_fields or {})
+            lifecycle = status_by_task.get("Lead Assessment")
+            display = "Completed" if complete else (
+                "In Progress" if lifecycle != "Not Assigned" else "Not Started")
+            # There is only one canonical component to open, while the four
+            # labels remain independent derived checkpoints on the board.
+            steps = ["Lead Assessment"]
+        elif status == "Approved":
             display = "Completed"
         elif status == "Ready" and task_name in _READY_SHOWS_PENDING:
             display = "Pending Approval"
         else:
             display = "In Progress"
         items.append({"stage": stage_group, "label": label, "status": display,
-                      "steps": [task_name]})
+                      "steps": steps if task_name in LEAD_ASSESSMENT_CHECKPOINTS else [task_name]})
     return items
 
 
@@ -376,7 +388,7 @@ def _lead_priority(rows):
     return next(name for name, rank in _PRIORITY_RANK.items() if rank == best)
 
 
-def _annotate_card_state(project, rows, stages):
+def _annotate_card_state(project, rows, stages, lead_assessment_fields=None):
     """Attach the Card 1B card fields to one project dict, in place.
 
     ``rows`` are the project's active task rows (already loaded); ``stages`` its
@@ -399,7 +411,8 @@ def _annotate_card_state(project, rows, stages):
         project["tracked_items"] = []   # the BP board carries no tracked items
         return
     # project_tasks has UNIQUE(project_id, task_name), so one row per step.
-    project["tracked_items"] = _tracked_items({r["task_name"]: r["status"] for r in applicable})
+    project["tracked_items"] = _tracked_items(
+        {r["task_name"]: r["status"] for r in applicable}, lead_assessment_fields)
 
 
 # ---------------------------------------------------------------------------
@@ -526,7 +539,7 @@ def _annotate_derived_state(session, projects):
     if not projects:
         return
     task_rows = db.fetch_all(session, """
-        SELECT project_id, task_name, stage_group, assigned_to, status, priority, actual_start
+        SELECT task_id, project_id, task_name, stage_group, assigned_to, status, priority, actual_start
         FROM project_tasks
         WHERE project_id IN :project_ids AND is_active = 1
         ORDER BY project_id, sequence_no
@@ -534,6 +547,19 @@ def _annotate_derived_state(session, projects):
     by_project: Dict[int, List[Dict[str, Any]]] = {}
     for row in task_rows:
         by_project.setdefault(row["project_id"], []).append(row)
+
+    # v7's four Lead Assessment checkpoints derive from fields that all live on
+    # its one task row.  Batch-load those EAV values once for the entire board;
+    # a per-project fetch here would turn the board into an N+1 query path.
+    lead_task_ids = [r["task_id"] for r in task_rows if r["task_name"] == "Lead Assessment"]
+    lead_fields_by_task = {}
+    if lead_task_ids:
+        for row in db.fetch_all(session, """
+            SELECT task_id, field_key, field_value
+            FROM task_dynamic_fields
+            WHERE task_id IN :task_ids
+        """, {"task_ids": lead_task_ids}):
+            lead_fields_by_task.setdefault(row["task_id"], {})[row["field_key"]] = row["field_value"] or ""
 
     for project in projects:
         rows = by_project.get(project["project_id"], [])
@@ -571,7 +597,9 @@ def _annotate_derived_state(session, projects):
         # board's Field filter and the folder links agreeing by construction.
         project["field"] = folders.parse_field_and_well(project.get("project_name") or "")[0]
         # The board card fields, off the SAME already-loaded rows.
-        _annotate_card_state(project, rows, stages)
+        lead_row = next((row for row in rows if row["task_name"] == "Lead Assessment"), None)
+        _annotate_card_state(project, rows, stages,
+                             lead_fields_by_task.get((lead_row or {}).get("task_id"), {}))
 
     # Card 1E's mean gas is the one derived field the task rows above cannot
     # supply (it lives in task_dynamic_fields), so it gets its own single
@@ -693,16 +721,23 @@ def get_project(session, project_id):
 
 
 def project_completion_percent(session, project_id):
-    """Percent of the current pipeline's applicable tasks that are done.
+    """Percent of the current pipeline's communicated work that is done.
 
     Scoped to the stages of the project's operating pipeline (Prospect
     Maturation stages for prospects, BP Execution stages for BP wells) so the
-    figure agrees with the derived overall_status (_annotate_derived_state): a
-    prospect that has approved every Prospect-stage task reads 100% even though
-    its BP-stage tasks are untouched. The stage filter IS the scope: every task
-    in the operating pipeline counts toward the denominator.
+    figure agrees with the operating pipeline's scope: BP wells count their 15
+    execution task rows.  Prospects are the deliberate v7 exception: their
+    Lead Assessment row communicates FOUR field-derived checkpoints, plus the
+    other eight real rows, so its fixed denominator remains 12 rather than the
+    nine stored task rows.  The consolidated row's approval stays a supervisor
+    judgment; no field-state percentage changes its lifecycle.
     """
     project = get_project(session, project_id) or {}
+    if str(project.get("pipeline_type") or "prospect").lower() != "bp":
+        items = project.get("tracked_items") or []
+        total = len(items)
+        done = sum(1 for item in items if item.get("status") == "Completed")
+        return round((done / total) * 100, 1) if total else 0.0
     stages = applicable_stages(project.get("pipeline_type"))
     row = db.fetch_one(session, """
         SELECT

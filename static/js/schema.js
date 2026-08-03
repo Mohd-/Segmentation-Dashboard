@@ -158,11 +158,11 @@ export var SAD_FORMATION_COLUMNS = [
   { key: 'sad_fluid', label: 'Fluid', type: 'select', options: FLUID_TYPES }
 ];
 // ---------------------------------------------------------------------------
-// Card 2B -- the four Lead Assessment steps
+// Card 2B -- the single Lead Assessment step
 // ---------------------------------------------------------------------------
-// These four entries are the FIELD REGISTRY for the consolidated Lead
-// Assessment workspace (views/lead-assessment.js), which custom-renders every
-// one of them into its four numbered sections. They stay declared here anyway,
+// This entry is the FIELD REGISTRY for the consolidated Lead Assessment
+// workspace (views/lead-assessment.js), which custom-renders its fields into
+// four numbered checkpoint sections. It stays declared here anyway,
 // for three reasons:
 //   * the ALL-FIELDS editor (views/project-editor.js) renders straight from
 //     SCHEMA and knows nothing about the consolidated page -- an unregistered
@@ -176,63 +176,32 @@ export var SAD_FORMATION_COLUMNS = [
 // `section` groups them for the all-fields card only; the consolidated page
 // lays the sections out itself.
 export var SCHEMA = {
-  'Area Definition': [
-    { key: 'p10_area_km2', label: 'P10 Area (km²)', type: 'number' },
-    { key: 'p90_area_km2', label: 'P90 Area (km²)', type: 'number' },
-    // Card 2B Section 3. Reference information, NOT a completion gate (it is
-    // deliberately absent from the server's FIELD_COMPLETION entry for this
-    // step) and NOT positive-only -- a TVDSS below datum is a negative number,
-    // and a structure above it a positive one, so the only rule is "parses as a
-    // number". bigOk: true because depths run well past the generic 9999 cap.
-    { key: 'top_formation_tvdss_ft', label: 'Top Formation TVDSS (ft)', type: 'number', bigOk: true, section: 'Structure' }
-  ],
-  'Thickness Estimation': [
-    { key: 'formation_thickness_ft', label: 'Sarah Formation Thickness (ft)', type: 'number' },
-    { key: 'reservoir_thickness_ft', label: 'Reservoir Thickness (ft)', type: 'number' },
-    // Card 2B Section 1's two-way time inputs. The FEET above stay the
+  'Lead Assessment': [
+    // Card 2B Section 1's two-way time inputs. The FEET below stay the
     // canonical thickness reads every downstream surface resolves (Lead
     // Summary, portfolio, the resource calculator's box model) -- these are the
     // other end of the same measurement, kept so the capture is reproducible.
     // bigOk: true -- a deep target's two-way time runs past 9999 ms.
-    { key: 'twt_reservoir_ms', label: 'Reservoir TWT (ms)', type: 'number', bigOk: true, section: 'Two-way time', row: 'twt' },
+    { key: 'twt_reservoir_ms', label: 'Reservoir TWT (ms)', type: 'number', bigOk: true, section: 'Thickness Estimation', row: 'twt' },
     { key: 'twt_formation_ms', label: 'Formation TWT (ms)', type: 'number', bigOk: true, row: 'twt' },
+    { key: 'reservoir_thickness_ft', label: 'Reservoir Thickness (ft)', type: 'number', row: 'thickness' },
+    { key: 'formation_thickness_ft', label: 'Sarah Formation Thickness (ft)', type: 'number', row: 'thickness' },
     // Which side of a row the user typed, when a conversion is configured
     // (config.TWT_THICKNESS_COEFFICIENTS): '' = both sides entered by hand
     // (the pending-configuration mode), 'twt' = thickness derived from time,
     // 'thickness' = time derived from thickness. A select rather than free text
     // so the all-fields editor offers the three real values and nothing else.
-    { key: 'thickness_source_mode', label: 'Thickness source', type: 'select', options: ['', 'twt', 'thickness'] }
-  ],
-  // No editable dynamic fields: the Resource Assessment calculator
-  // (views/resource-calculator.js) is now the step's entire body -- inline
-  // scenario/method/inputs, read-only PIIP results, Apply to Lead. The
-  // lead_piip_* / lead_calculation_method / lead_resource_scenario /
-  // lead_grv_*_thousand_acre_ft EAV keys are unchanged and still written
-  // (Apply PATCHes them straight via API.saveFields, bypassing this SCHEMA
-  // entry and getFields() entirely) -- LATEST_PIIP_SOURCES and every other
-  // reader of Store.allFields keep working unchanged, they were never
-  // SCHEMA-driven. The project-editor.js "all fields" card for this step is
-  // therefore now comments-only, same as any other schema-less step (e.g.
-  // 'GRV Inputs' below) -- editing/viewing PIIP data lives in the pipeline
-  // detail view's calculator now.
-  // ...and card 2B added ONE typed input to it: the shared-folder confirmation
-  // from Section 3, which is half of this step's FIELD_COMPLETION predicate
-  // (the other half being a stored lead_piip_gas_mean). It lives on THIS task
-  // rather than Area Definition's because it gates THIS item's completion. The
-  // lead_piip_* results themselves are still written by a direct API.saveFields
-  // PATCH (the consolidated page's auto-run, exactly as Apply used to), so they
-  // stay deliberately unregistered here -- they are outputs, never typed.
-  'Resource Assessment': [
-    { key: 'polygons_surfaces_loaded', label: 'Polygons and surfaces are placed in the shared folder', type: 'checkbox' }
-  ],
-  // Card 2B Section 2's right half. NEW keys (nothing stored a lead's own GRV
-  // before -- lead_grv_p90/p10_thousand_acre_ft on the Resource Assessment task
-  // records what the CALCULATOR was last run with, which is a different thing
-  // and stays untouched), named in the same 10^3 acre.ft convention as the SAD
-  // sheets' sad_grv_*. bigOk: true for the same reason those carry it.
-  'GRV Inputs': [
-    { key: 'grv_p90_thousand_acre_ft', label: 'GRV (10³ acre.ft) P90', type: 'number', bigOk: true, row: 'lead_grv' },
-    { key: 'grv_p10_thousand_acre_ft', label: 'GRV (10³ acre.ft) P10', type: 'number', bigOk: true, row: 'lead_grv' }
+    { key: 'thickness_source_mode', label: 'Thickness source', type: 'select', options: ['', 'twt', 'thickness'] },
+    { key: 'p90_area_km2', label: 'P90 Area (km²)', type: 'number', section: 'Area Definition', row: 'lead_area' },
+    { key: 'p10_area_km2', label: 'P10 Area (km²)', type: 'number', row: 'lead_area' },
+    { key: 'grv_p90_thousand_acre_ft', label: 'GRV (10³ acre.ft) P90', type: 'number', bigOk: true, section: 'GRV Inputs', row: 'lead_grv' },
+    { key: 'grv_p10_thousand_acre_ft', label: 'GRV (10³ acre.ft) P10', type: 'number', bigOk: true, row: 'lead_grv' },
+    // Reference information, not a checkpoint completion gate. TVDSS may be
+    // negative; the dedicated Lead Assessment validator applies parse-only.
+    { key: 'top_formation_tvdss_ft', label: 'Top Formation TVDSS (ft)', type: 'number', bigOk: true, allowNegative: true, section: 'Structure' },
+    // PIIP output keys remain intentionally unregistered because the auto-run
+    // writes them directly; this confirmation is the editable checkpoint input.
+    { key: 'polygons_surfaces_loaded', label: 'Polygons and surfaces are placed in the shared folder', type: 'checkbox', section: 'Resource Assessment' }
   ],
   // Card 4B, second half. The Wellsite Location letter's confirmation plus the
   // STAKED LOCATION it names -- the two coordinates the rest of the business
@@ -537,11 +506,11 @@ var MAX_NUMBER = 9999;
 // a real end-to-end path through validateStepFields (it mirrors the server's
 // KI-004-shaped 0-100 guard on explicitly-sent CoS values); the export also
 // lets the rule stay covered in isolation.
-export function numericFieldError(label, raw, bigOk, pct) {
+export function numericFieldError(label, raw, bigOk, pct, allowNegative) {
   if (!isFilled(raw)) return null;
   var value = Number(raw);
   if (isNaN(value)) return label + ' must be numeric.';
-  if (value < 0) return label + ' must not be negative.';
+  if (value < 0 && !allowNegative) return label + ' must not be negative.';
   if (!bigOk && value > MAX_NUMBER) return label + ' looks too large (max ' + MAX_NUMBER + ').';
   if (pct && value > 100) return label + ' must not exceed 100%.';
   return null;
@@ -579,7 +548,7 @@ function genericFieldErrors(taskName, fields) {
   for (var i = 0; i < stepFields.length; i += 1) {
     var field = stepFields[i];
     if (field.type === 'number' && !field.readonly) {
-      var err = numericFieldError(field.label, fields[field.key], !!field.bigOk, /_pct$/.test(field.key));
+      var err = numericFieldError(field.label, fields[field.key], !!field.bigOk, /_pct$/.test(field.key), !!field.allowNegative);
       if (err) return err;
     } else if (field.type === 'repeatable' && Array.isArray(field.columns)) {
       var rows = parseRowsForValidation(fields[field.key]);
@@ -588,7 +557,7 @@ function genericFieldErrors(taskName, fields) {
         for (var c = 0; c < field.columns.length; c += 1) {
           var col = field.columns[c];
           if (col.type !== 'number' || col.readonly) continue;
-          var colErr = numericFieldError(col.label, row[col.key], !!col.bigOk, /_pct$/.test(col.key));
+          var colErr = numericFieldError(col.label, row[col.key], !!col.bigOk, /_pct$/.test(col.key), !!col.allowNegative);
           if (colErr) return colErr;
         }
       }
@@ -602,29 +571,15 @@ function genericFieldErrors(taskName, fields) {
 // number field it reads is guaranteed to already be a valid, in-range
 // number) and returns an error string or null.
 var CROSS_FIELD_RULES = {
-  'Area Definition': function (fields) {
+  'Lead Assessment': function (fields) {
     if (isFilled(fields.p90_area_km2) && isFilled(fields.p10_area_km2) &&
         Number(fields.p90_area_km2) >= Number(fields.p10_area_km2)) {
       return 'Area P90 must be lower than Area P10.'; // same wording as the popup
     }
-    return null;
-  },
-  'Thickness Estimation': function (fields) {
     if (isFilled(fields.reservoir_thickness_ft) && isFilled(fields.formation_thickness_ft) &&
         Number(fields.reservoir_thickness_ft) > Number(fields.formation_thickness_ft)) {
       return 'Reservoir Thickness must not exceed Sarah Formation Thickness.';
     }
-    return null;
-  },
-  // Card 2B. Same shape as Area Definition's rule, over the lead's own GRV
-  // percentiles. Note the ASYMMETRY with the consolidated page's own inline
-  // check (views/lead-assessment.js), which rejects equality too: this generic
-  // rule is the ALL-FIELDS editor's net, where a step is edited key-by-key and
-  // the permissive reading matches every other cross-field rule here; the
-  // consolidated page owns the stricter capture rule for the surface the card
-  // specifies, and the SERVER's FIELD_COMPLETION is stricter still (it simply
-  // will not mark the item complete on an equal pair).
-  'GRV Inputs': function (fields) {
     if (isFilled(fields.grv_p90_thousand_acre_ft) && isFilled(fields.grv_p10_thousand_acre_ft) &&
         Number(fields.grv_p90_thousand_acre_ft) > Number(fields.grv_p10_thousand_acre_ft)) {
       return 'GRV P90 must be lower than GRV P10.';

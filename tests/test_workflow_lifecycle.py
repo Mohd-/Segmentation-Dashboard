@@ -17,29 +17,39 @@ PROSPECT_STAGES = {"Lead Assessment", "Risk Analysis", "Pre-Well Delivery"}
 # Initial seeding
 # ---------------------------------------------------------------------------
 
-def test_new_prospect_project_has_27_tasks_all_not_assigned(client):
+def _fill_assessment_checkpoints(client, pid):
+    task = get_task_by_name(client, pid, "Lead Assessment")
+    resp = client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields", json={"fields": {
+        "p90_area_km2": "1", "p10_area_km2": "2",
+        "reservoir_thickness_ft": "1", "formation_thickness_ft": "2",
+        "grv_p90_thousand_acre_ft": "1", "grv_p10_thousand_acre_ft": "2",
+        "polygons_surfaces_loaded": "1", "lead_piip_gas_mean": "1",
+    }})
+    assert resp.status_code == 200, resp.get_json()
+
+
+def test_new_prospect_project_has_24_tasks_all_not_assigned(client):
     # v17 lifecycle: every step (including the first) starts Not Assigned;
     # assignment is what moves a step to In Progress. current_task still
-    # anchors on the first step. (27 tasks: v18 removed the Presence CoS
-    # Evaluation step, v4 merged four BP steps away.)
+    # anchors on the first step. v7 consolidates four assessment rows into one.
     pid = create_project(client, "SEED-PROSPECT-1")
     tasks = get_tasks(client, pid)
-    assert len(tasks) == 27
+    assert len(tasks) == 24
 
     first = tasks[0]
-    assert first["task_name"] == "Area Definition"
+    assert first["task_name"] == "Lead Assessment"
     assert first["status"] == "Not Assigned"
 
     for task in tasks[1:]:
         assert task["status"] == "Not Assigned"
 
     project = client.get(f"/api/projects/{pid}").get_json()
-    assert project["current_task"] == "Area Definition"
+    assert project["current_task"] == "Lead Assessment"
 
 
-def test_new_bp_project_seeds_all_27_tasks_not_assigned(client):
+def test_new_bp_project_seeds_all_24_tasks_not_assigned(client):
     # Applicability is derived from pipeline_type, not stored per row: a BP
-    # project still materializes all 27 tasks Not Assigned (the prospect-stage
+    # project still materializes all 24 tasks Not Assigned (the prospect-stage
     # rows simply fall outside its operating pipeline). current_task anchors on
     # the first BP step.
     pid = create_project(
@@ -47,12 +57,14 @@ def test_new_bp_project_seeds_all_27_tasks_not_assigned(client):
         business_plan_enabled=True, business_plan_year=2027,
     )
     tasks = get_tasks(client, pid)
-    assert len(tasks) == 27
+    assert len(tasks) == 24
     for task in tasks:
         assert task["status"] == "Not Assigned", task["task_name"]
 
     gate = get_task_by_name(client, pid, "BP Execution Gate")
     assert gate is not None
+    bp_sequences = [task["sequence_no"] for task in tasks if task["stage_group"] not in PROSPECT_STAGES]
+    assert bp_sequences == list(range(13, 28)), "v7 keeps the BP sequence contract stable"
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["current_task"] == "BP Execution Gate"
 
@@ -120,12 +132,12 @@ def test_not_assigned_also_clears_actual_start(client):
 def test_approving_first_task_advances_current_task(client):
     pid = create_project(client, "ADVANCE-1")
     task = get_tasks(client, pid)[0]
-    assert task["task_name"] == "Area Definition"
+    assert task["task_name"] == "Lead Assessment"
     client.patch(f"/api/tasks/{task['task_id']}", json={
         "status": "Approved", "revision": task["revision"],
     })
     project = client.get(f"/api/projects/{pid}").get_json()
-    assert project["current_task"] == "Thickness Estimation"
+    assert project["current_task"] == "Reservoir CoS"
 
 
 # ---------------------------------------------------------------------------
@@ -176,14 +188,15 @@ def test_completion_percent_scoped_to_bp_stages_for_bp_well(client):
 
 def test_completion_percent_known_arithmetic_for_prospect(client):
     # Completion is scoped to the operating pipeline's stages: a prospect is
-    # measured against its 12 Prospect-stage tasks only, not all 27 (the
-    # BP-stage tasks belong to a pipeline it has not entered).
+    # measured against 12 communicated items: four field checkpoints and eight
+    # ordinary task rows, despite having only nine prospect lifecycle rows.
     pid = create_project(client, "COMPLETION-PROSPECT-1")
     tasks = get_tasks(client, pid)
-    assert len(tasks) == 27
+    assert len(tasks) == 24
     prospect_tasks = [t for t in tasks if t["stage_group"] in PROSPECT_STAGES]
-    assert len(prospect_tasks) == 12
-    for task in prospect_tasks[:5]:
+    assert len(prospect_tasks) == 9
+    _fill_assessment_checkpoints(client, pid)  # four completed items
+    for task in prospect_tasks[1:2]:           # plus Reservoir CoS
         client.patch(f"/api/tasks/{task['task_id']}", json={
             "status": "Approved", "revision": task["revision"],
         })
@@ -197,6 +210,7 @@ def test_completion_percent_known_arithmetic_for_prospect(client):
 
 def test_approving_all_prospect_tasks_completes_project(client):
     pid = create_project(client, "COMPLETE-ALL-1")
+    _fill_assessment_checkpoints(client, pid)
     tasks = get_tasks(client, pid)
     for task in tasks:
         if task["stage_group"] in PROSPECT_STAGES and task["status"] != "Approved":
@@ -245,20 +259,19 @@ def test_approving_all_bp_tasks_completes_bp_well_anchored_on_pda(client):
 # Derived board pointers (no stored current_stage/task/owner/overall_status)
 # ---------------------------------------------------------------------------
 
-def test_derived_pointers_track_first_open_task_of_half_approved_prospect(client):
-    # Approve steps 1-4 (all of Lead Assessment) and assign step 5: the derived
-    # pointers must land on step 5 (Reservoir CoS / Risk Analysis) and carry its
+def test_derived_pointers_track_first_open_task_after_assessment(client):
+    # Approve the one Lead Assessment lifecycle and assign Reservoir CoS: the derived
+    # pointers must land on Reservoir CoS / Risk Analysis and carry its
     # assignee, on both the single-project read and the board row.
     pid = create_project(client, "DERIVED-POINTERS-1")
     tasks = get_tasks(client, pid)
-    for task in tasks[:4]:
-        resp = client.patch(f"/api/tasks/{task['task_id']}", json={
-            "status": "Approved", "revision": task["revision"],
-        })
-        assert resp.status_code == 200, resp.get_json()
-    step5 = get_tasks(client, pid)[4]
-    resp = client.post(f"/api/tasks/{step5['task_id']}/assign", json={
-        "assignee": "Employee", "cascade": False, "revision": step5["revision"],
+    resp = client.patch(f"/api/tasks/{tasks[0]['task_id']}", json={
+        "status": "Approved", "revision": tasks[0]["revision"],
+    })
+    assert resp.status_code == 200, resp.get_json()
+    reservoir = get_tasks(client, pid)[1]
+    resp = client.post(f"/api/tasks/{reservoir['task_id']}/assign", json={
+        "assignee": "Employee", "cascade": False, "revision": reservoir["revision"],
     })
     assert resp.status_code == 200, resp.get_json()
 

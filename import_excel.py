@@ -33,7 +33,7 @@ matched headers mapped back to the canonical column names.
 Flagged assumptions (documented, cheap to change)
 -------------------------------------------------
 1. OGIP/Condensate trio destination step, by (record type, fluid presence):
-   - proposed / mature lead            -> 'Resource Assessment' (lead_piip_*)
+   - proposed / mature lead            -> 'Lead Assessment' (lead_piip_*)
    - bp / historical WITHOUT a fluid   -> 'Pre-Drilling GeoX Assessment' (pre_drill_piip_*)
    - any record WITH a fluid status    -> 'SAD Update' (resource_update_*)
      (v4 merged the old 'Resource Assessment Update' step into 'SAD Update',
@@ -122,6 +122,11 @@ _SEAL_INPUT_KEYS = (
 # "Trap CoS" and "Seal CoS", now retired). Named once so the Trap/Seal writes
 # below read as what they are: several saves against one component.
 _COS_STEP = workflow.MERGED_COS_TASK_NAME
+
+# v7 merged Area Definition / Thickness Estimation / GRV Inputs / Resource
+# Assessment into one active row. Their EAV keys stay unchanged and now share
+# this owner, so every lead import writes the consolidated workspace directly.
+_LEAD_ASSESSMENT_STEP = "Lead Assessment"
 
 # The per-stage measurement keys of the flowback_stages_rows mini-sheet
 # (schema.js FLOWBACK_STAGE_COLUMNS); must track portfolio_export's own
@@ -609,7 +614,7 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
     elif record_type in ("bp", "historical"):
         prefix, trio_step = "pre_drill_piip", "Pre-Drilling GeoX Assessment"
     else:
-        prefix, trio_step = "lead_piip", "Resource Assessment"
+        prefix, trio_step = "lead_piip", _LEAD_ASSESSMENT_STEP
 
     # Lead rows have no BP phase, so BP-only cells would vanish silently: name
     # the ignored columns instead. Booked counts only when truthy -- the export
@@ -631,11 +636,11 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
         if value is not None:
             area[key] = value
     if area:
-        _save(session, tid("Area Definition"), area, data_bearing)
+        _save(session, tid(_LEAD_ASSESSMENT_STEP), area, data_bearing)
 
     thickness = _num(row, "SARH Formation Thickness (ft)", warnings)
     if thickness is not None:
-        _save(session, tid("Thickness Estimation"), {"formation_thickness_ft": thickness}, data_bearing)
+        _save(session, tid(_LEAD_ASSESSMENT_STEP), {"formation_thickness_ft": thickness}, data_bearing)
 
     reservoir_contribution = _reservoir_contribution(row, warnings)
     if reservoir_contribution:

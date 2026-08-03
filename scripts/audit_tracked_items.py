@@ -1,33 +1,34 @@
 #!/usr/bin/env python
-"""Audit the permanent 12-tracked-item prospect model against a real database.
+"""Audit v7's 9 stored prospect tasks and 12 projected tracked items.
 
     .venv/bin/python scripts/audit_tracked_items.py pipeline_tracker.db
-    .venv/bin/python scripts/audit_tracked_items.py pipeline_tracker.db --rehearse-v5
+    .venv/bin/python scripts/audit_tracked_items.py pipeline_tracker.db --rehearse-v7
 
-NEVER WRITES THE DATABASE YOU POINT IT AT. Like scripts/migration_dryrun_v5.py
+NEVER WRITES THE DATABASE YOU POINT IT AT. Like scripts/migration_dryrun_v7.py
 it takes a byte-exact copy through the SQLite BACKUP API (so a live -wal/-shm
 pair is captured consistently) and does all of its work -- including the
 optional migration rehearsal -- on that copy.
 
-WHY IT EXISTS: v5 made the twelve tracked items the STORED prospect workflow
-(migrations._migrate_v5_prospect_template_restructure). Everything the board,
-the KPI donut and the detail sidebar render is derived from those rows, so a
-single stray row -- a reactivated legacy step, a duplicate, an orphaned EAV
-row -- is invisible in the UI right up until it changes a number. This script
-is the structural check the UI cannot perform on itself.
+WHY IT EXISTS: v7 stores nine active prospect tasks but intentionally projects
+twelve board items. The four Lead Assessment items are field-derived
+checkpoints on one lifecycle row. This checks both layers so a reactivated
+legacy row, bad sequence or drift in the projection cannot hide in the UI.
 
 WHAT IT CHECKS, per prospect lead unless stated:
 
-  1. EXACTLY 12 tracked items: the active prospect-stage rows are precisely the
-     twelve names in PIPELINE_TEMPLATES -- no missing item, no thirteenth.
-  2. NO LEGACY 13th item: no ACTIVE row carries a retired prospect name
+  1. EXACTLY 9 ACTIVE TASK ROWS: precisely the prospect names in
+     PIPELINE_TEMPLATES, at sequences 1..9. The universal materialized template
+     is also checked on every project: 24 active rows total, including BP
+     records (nine consolidated prospect rows plus fifteen BP execution rows).
+  2. NO LEGACY ACTIVE ITEM: no ACTIVE row carries a retired prospect name
      ("Well Creation", "Trap CoS", "Seal CoS") or a pre-v5 name that v5 renamed
      ("Reservoir Area Definition", "Lead Resource Assessment",
      "Prospect Evaluation Presentation", "Staking Moving Tolerance",
      "Pre-Drilling Resource Assessment"). Retired rows may EXIST -- that is how
      their inputs stay readable -- but only with is_active = 0.
-  3. NO DUPLICATE STEP ROWS: one row per (project_id, task_name), and the twelve
-     active sequence numbers are exactly 1..12 with no repeats.
+     or any of v7's four retired Lead Assessment source names.
+  3. NO DUPLICATE STEP ROWS: one row per (project_id, task_name), and the nine
+     active sequence numbers are exactly 1..9 with no repeats.
   4. NO ORPHANS (whole database): every task_dynamic_fields.task_id and
      task_history.task_id resolves to a live project_tasks row.
   5. TRAP AND SEAL COUNTED ONCE, BOTH VALUES READABLE: exactly one active
@@ -35,16 +36,15 @@ WHAT IT CHECKS, per prospect lead unless stated:
      ever stored (on the merged row OR on a retired half) the surviving-first
      ladder in workflow.constants still resolves it.
   6. STAGE COUNTERS CONSISTENT, in both of their DIFFERENT meanings:
-       - the DETAIL SIDEBAR counter counts COMPLETED ITEMS within one stage:
-         every stage group holds exactly 4 of the twelve, so each reads x/4 with
-         0 <= x <= 4, and the three x values sum to the lead's completed count;
+       - the DETAIL SIDEBAR counter counts PROJECTED ITEMS within one stage:
+         each reads x/4 even though Lead Assessment has one stored task row;
        - the MAIN BOARD BADGE counts LEADS: every board lead lands in exactly
          one stage badge and the three badges sum to the number of leads on the
          board.
   7. THE ONE COMPLETION FORMULA: the server's project_completion_percent equals
      round(completed / 12 * 100, 1) for every lead, and the app's own derived
      ``tracked_items`` payload (what the board and the sidebar actually read)
-     agrees item-for-item with the raw SQL truth above.
+     contains exactly the expected twelve labels and three groups of four.
 
 EXIT CODES
   0  every lead passes
@@ -69,29 +69,32 @@ if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # Reused wholesale rather than re-implemented: the same copy/devolve/bootstrap
-# helpers the v5 dry-run rehearses with, so "audit the rehearsed database" is
+# helpers the v7 dry-run rehearses with, so "audit the rehearsed database" is
 # literally the same upgrade this repo already exercises.
-from migration_dryrun_v5 import (bootstrap, copy_database,  # noqa: E402
-                                 devolve_to_v4, stored_version)
+from migration_dryrun_v7 import (bootstrap, copy_database,  # noqa: E402
+                                 devolve_to_v6, stored_version)
 
 from workflow.constants import (BP_EXECUTION_STAGES, MERGED_COS_LEGACY_NAMES,  # noqa: E402
-                                MERGED_COS_TASK_NAME, PIPELINE_TEMPLATES,
+                                LEAD_ASSESSMENT_CHECKPOINTS, MERGED_COS_TASK_NAME,
+                                PIPELINE_TEMPLATES,
                                 PROSPECT_STAGES, RENAMED_TASK_NAMES,
                                 RETIRED_TASK_NAMES, SEAL_COS_SOURCES,
                                 TRAP_COS_SOURCES)
 
-# The twelve, taken from the ONE canonical source (no second copy of the list
+# The nine stored tasks, taken from the ONE canonical source (no second copy
 # can drift out of step with the template the app materialises from).
 EXPECTED_STEPS = [(seq, name, stage) for seq, name, stage in PIPELINE_TEMPLATES
                   if stage not in BP_EXECUTION_STAGES]
 EXPECTED_NAMES = [name for _seq, name, _stage in EXPECTED_STEPS]
+EXPECTED_ALL_STEPS = list(PIPELINE_TEMPLATES)
+EXPECTED_ALL_NAMES = [name for _seq, name, _stage in EXPECTED_ALL_STEPS]
 EXPECTED_BY_STAGE = defaultdict(list)
 for _seq, _name, _stage in EXPECTED_STEPS:
     EXPECTED_BY_STAGE[_stage].append(_name)
 
 # The names that must never be ACTIVE on a lead again: the prospect steps v5
 # retired, plus the pre-v5 spellings of the five it renamed in place.
-FORBIDDEN_ACTIVE_NAMES = set(RENAMED_TASK_NAMES.values()) | {
+FORBIDDEN_ACTIVE_NAMES = set(RENAMED_TASK_NAMES.values()) | set(LEAD_ASSESSMENT_CHECKPOINTS) | {
     name for name in RETIRED_TASK_NAMES
     if name in set(MERGED_COS_LEGACY_NAMES) | {"Well Creation"}}
 
@@ -172,11 +175,11 @@ def audit_lead(conn, lead, findings):
     active = [r for r in rows if r["is_active"] == 1 and r["stage_group"] in PROSPECT_STAGES]
     active_names = [r["task_name"] for r in active]
 
-    # --- 1. exactly twelve, and exactly the right twelve --------------------
+    # --- 1. exactly nine active task rows -----------------------------------
     if sorted(active_names) != sorted(EXPECTED_NAMES):
         missing = sorted(set(EXPECTED_NAMES) - set(active_names))
         extra = sorted(set(active_names) - set(EXPECTED_NAMES))
-        findings.fail("1-twelve-items",
+        findings.fail("1-nine-active-tasks",
                       f"[{pid}] {name}: {len(active_names)} active prospect steps "
                       f"(missing={missing}, unexpected={extra})")
 
@@ -184,7 +187,7 @@ def audit_lead(conn, lead, findings):
     live_legacy = sorted({r["task_name"] for r in rows
                           if r["is_active"] == 1 and r["task_name"] in FORBIDDEN_ACTIVE_NAMES})
     if live_legacy:
-        findings.fail("2-no-legacy-13th",
+        findings.fail("2-no-legacy-active",
                       f"[{pid}] {name}: ACTIVE legacy step rows {live_legacy}")
 
     # --- 3. no duplicates ---------------------------------------------------
@@ -193,9 +196,9 @@ def audit_lead(conn, lead, findings):
         findings.fail("3-no-duplicates",
                       f"[{pid}] {name}: duplicate task_name rows {sorted(dup_names)}")
     seqs = sorted(r["sequence_no"] for r in active)
-    if len(active) == 12 and seqs != list(range(1, 13)):
+    if len(active) == 9 and seqs != list(range(1, 10)):
         findings.fail("3-no-duplicates",
-                      f"[{pid}] {name}: active sequence numbers are {seqs}, expected 1..12")
+                      f"[{pid}] {name}: active sequence numbers are {seqs}, expected 1..9")
 
     # --- 5. Trap and Seal: one row, both numbers still readable -------------
     merged = [r for r in rows if r["task_name"] == MERGED_COS_TASK_NAME and r["is_active"] == 1]
@@ -221,26 +224,39 @@ def audit_lead(conn, lead, findings):
     if seal_stored and not seal:
         findings.fail("5-trap-seal-once", f"[{pid}] {name}: seal_cos_pct stored but the ladder reads blank")
 
-    # --- 6a. SIDEBAR counter: COMPLETED ITEMS per stage, always out of 4 -----
-    per_stage = {}
-    for stage in PROSPECT_STAGES:
-        in_stage = [r for r in active if r["stage_group"] == stage]
-        done = sum(1 for r in in_stage if r["status"] == "Approved")
-        per_stage[stage] = (done, len(in_stage))
-        if len(in_stage) != 4:
-            findings.fail("6-stage-counters",
-                          f"[{pid}] {name}: stage '{stage}' holds {len(in_stage)} items (expected 4)")
-        if not 0 <= done <= len(in_stage):
-            findings.fail("6-stage-counters",
-                          f"[{pid}] {name}: stage '{stage}' counter {done}/{len(in_stage)} out of range")
-    completed = sum(1 for r in active if r["status"] == "Approved")
-    if sum(d for d, _t in per_stage.values()) != completed:
-        findings.fail("6-stage-counters",
-                      f"[{pid}] {name}: sidebar counters {per_stage} do not sum to {completed}")
-
     return {"project_id": pid, "name": name, "active": len(active),
-            "completed": completed, "per_stage": per_stage,
+            "completed": 0, "per_stage": {},
             "trap": trap, "seal": seal}
+
+
+def audit_universal_shape(conn, findings):
+    """Every record materializes the same 24-row v7 template, including BP."""
+    projects = conn.execute(
+        "SELECT project_id, project_name, COALESCE(pipeline_type, 'prospect') AS pipeline_type "
+        "FROM projects ORDER BY project_id").fetchall()
+    good = 0
+    for project in projects:
+        rows = [row for row in task_rows(conn, project["project_id"]) if row["is_active"] == 1]
+        names = [row["task_name"] for row in rows]
+        if sorted(names) != sorted(EXPECTED_ALL_NAMES):
+            findings.fail(
+                "0-universal-template",
+                f"[{project['project_id']}] {project['project_name']} ({project['pipeline_type']}): "
+                f"{len(rows)} active universal rows; expected {len(EXPECTED_ALL_NAMES)}")
+            continue
+        sequence_by_name = {row["task_name"]: row["sequence_no"] for row in rows}
+        wrong = {name: sequence_by_name.get(name) for sequence, name, _stage in EXPECTED_ALL_STEPS
+                 if sequence_by_name.get(name) != sequence}
+        live_legacy = sorted(set(names) & FORBIDDEN_ACTIVE_NAMES)
+        if wrong or live_legacy:
+            findings.fail(
+                "0-universal-template",
+                f"[{project['project_id']}] {project['project_name']}: "
+                f"wrong sequences={wrong}, active legacy={live_legacy}")
+            continue
+        good += 1
+    return {"projects": len(projects), "good": good,
+            "bp": sum(str(row["pipeline_type"]).lower() == "bp" for row in projects)}
 
 
 def audit_orphans(conn, findings):
@@ -298,7 +314,7 @@ def audit_against_app(db_path, per_lead, findings):
             findings.fail("6-stage-counters",
                           f"board badges sum to {sum(badges.values())} but {len(leads)} leads are on the board")
 
-        # --- 7. one formula: tracked_items agree, percent = completed/12 ----
+        # --- 7. one formula: 9 rows project to 12 items ---------------------
         for summary in per_lead:
             pid = summary["project_id"]
             row = by_id.get(pid)
@@ -309,14 +325,36 @@ def audit_against_app(db_path, per_lead, findings):
             if len(items) != 12:
                 findings.fail("7-completion-formula",
                               f"[{pid}] {summary['name']}: tracked_items has {len(items)} entries, expected 12")
-            done = sum(1 for i in items if i.get("status") == "Completed")
-            if done != summary["completed"]:
+            expected_labels = list(LEAD_ASSESSMENT_CHECKPOINTS)
+            labels = [item.get("label") for item in items]
+            expected_steps = [["Lead Assessment"]] * 4 + [
+                [name] for name in EXPECTED_NAMES if name != "Lead Assessment"
+            ]
+            if labels[:4] != expected_labels or [item.get("steps") for item in items] != expected_steps:
                 findings.fail("7-completion-formula",
-                              f"[{pid}] {summary['name']}: payload says {done} completed, SQL says "
-                              f"{summary['completed']}")
+                              f"[{pid}] {summary['name']}: projected item labels/owners do not "
+                              "match four Lead Assessment checkpoints plus eight task rows")
+            done = sum(1 for i in items if i.get("status") == "Completed")
+            per_stage = {}
+            for stage in PROSPECT_STAGES:
+                stage_items = [item for item in items if item.get("stage") == stage]
+                stage_done = sum(1 for item in stage_items if item.get("status") == "Completed")
+                per_stage[stage] = (stage_done, len(stage_items))
+                if len(stage_items) != 4 or not 0 <= stage_done <= 4:
+                    findings.fail("6-stage-counters",
+                                  f"[{pid}] {summary['name']}: projected stage '{stage}' "
+                                  f"counter is {stage_done}/{len(stage_items)}, expected x/4")
+            if sum(value[0] for value in per_stage.values()) != done:
+                findings.fail("6-stage-counters",
+                              f"[{pid}] {summary['name']}: projected stage counters "
+                              f"{per_stage} do not sum to {done}")
+            summary["completed"] = done
+            summary["per_stage"] = per_stage
             # Nothing waiting on a human may read as done.
             for item in items:
-                if item.get("status") not in {"Completed", "In Progress", "Pending Approval"}:
+                if item.get("status") not in {
+                    "Completed", "In Progress", "Pending Approval", "Not Started"
+                }:
                     findings.fail("7-completion-formula",
                                   f"[{pid}] {summary['name']}: item {item.get('label')!r} has "
                                   f"unknown display status {item.get('status')!r}")
@@ -337,11 +375,11 @@ def audit_against_app(db_path, per_lead, findings):
 # Reporting
 # ---------------------------------------------------------------------------
 
-def render(per_lead, badges, orphans, findings, label):
+def render(per_lead, badges, orphans, universal, findings, label):
     print()
     print(f"PER-LEAD ({label})")
     print("-" * 104)
-    print(f"{'id':>4}  {'lead':<22} {'items':<6} {'done':<6} {'LA':<5} {'RA':<5} {'PWD':<5} "
+    print(f"{'id':>4}  {'lead':<22} {'tasks':<6} {'done':<6} {'LA':<5} {'RA':<5} {'PWD':<5} "
           f"{'trap':<6} {'seal':<6} {'board badge':<18}")
     print("-" * 104)
     for s in per_lead:
@@ -354,8 +392,10 @@ def render(per_lead, badges, orphans, findings, label):
     print("SUMMARY")
     print("-" * 60)
     print(f"  leads audited                        {len(per_lead)}")
-    print(f"  leads with exactly 12 tracked items  "
-          f"{sum(1 for s in per_lead if s['active'] == 12)}")
+    print(f"  projects with 24-row v7 template     {universal['good']} / {universal['projects']}"
+          f" (BP: {universal['bp']})")
+    print(f"  leads with exactly 9 active tasks    "
+          f"{sum(1 for s in per_lead if s['active'] == 9)}")
     print(f"  completed tracked items (total)      {sum(s['completed'] for s in per_lead)}"
           f" / {12 * len(per_lead)}")
     print(f"  orphaned task_dynamic_fields rows    {orphans['orphan_fields']}")
@@ -367,7 +407,8 @@ def render(per_lead, badges, orphans, findings, label):
     print(f"    {'sum':<20} {sum(badges.values())}  (leads on board: {len(per_lead)})")
     print()
     print("  CHECKS")
-    checks = ["1-twelve-items", "2-no-legacy-13th", "3-no-duplicates", "4-no-orphans",
+    checks = ["0-universal-template", "1-nine-active-tasks", "2-no-legacy-active",
+              "3-no-duplicates", "4-no-orphans",
               "5-trap-seal-once", "6-stage-counters", "7-completion-formula"]
     for check in checks:
         bad = findings.failures.get(check) or []
@@ -384,10 +425,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("database", help="database to audit (a COPY is taken; never written)")
-    parser.add_argument("--rehearse-v5", action="store_true",
-                        help="rebuild the pre-v5 shape on the copy and re-run the real "
-                             "migration before auditing, so the audit covers an UPGRADED "
-                             "database rather than one born at v5")
+    parser.add_argument("--rehearse-v7", action="store_true",
+                        help="rebuild the v6 four-row Lead Assessment shape on the copy "
+                             "and re-run the real v7 migration before auditing")
     parser.add_argument("--label", default=None, help="name this run in the output")
     args = parser.parse_args(argv)
 
@@ -405,9 +445,9 @@ def main(argv=None):
         print(f"copy       : {copy}")
         print(f"stamped schema_version: {stored_version(copy)}")
 
-        if args.rehearse_v5:
-            devolved = devolve_to_v4(copy)
-            print(f"--rehearse-v5: rebuilt the pre-v5 shape on the copy ({devolved} projects); "
+        if args.rehearse_v7:
+            devolved = devolve_to_v6(copy)
+            print(f"--rehearse-v7: rebuilt the v6 shape on the copy ({devolved} projects); "
                   f"schema_version now {stored_version(copy)}")
             try:
                 bootstrap(copy)
@@ -415,18 +455,19 @@ def main(argv=None):
                 print(f"\nBootstrap REFUSED this database: {exc}", file=sys.stderr)
                 return 2
             print(f"              re-migrated; schema_version now {stored_version(copy)}")
-            label = f"{label} (devolved to v4, then migrated)"
+            label = f"{label} (devolved to v6, then migrated)"
 
         findings = Findings()
         conn = connect(copy)
         try:
+            universal = audit_universal_shape(conn, findings)
             per_lead = [audit_lead(conn, lead, findings) for lead in leads_of(conn)]
             orphans = audit_orphans(conn, findings)
         finally:
             conn.close()
 
         badges = audit_against_app(copy, per_lead, findings)
-        return render(per_lead, badges, orphans, findings, label)
+        return render(per_lead, badges, orphans, universal, findings, label)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 

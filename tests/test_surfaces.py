@@ -371,9 +371,9 @@ def test_staked_coordinate_save_fills_both_surfaces_cos_and_history(
     import cos
 
     pid = create_project(client, "SURF-WIRED-{}".format(save_path))
-    thickness = get_task_by_name(client, pid, "Thickness Estimation")
+    lead_assessment = get_task_by_name(client, pid, "Lead Assessment")
     response = client.patch(
-        f"/api/tasks/{thickness['task_id']}/dynamic-fields",
+        f"/api/tasks/{lead_assessment['task_id']}/dynamic-fields",
         json={"fields": {"formation_thickness_ft": "20"}},
     )
     assert response.status_code == 200

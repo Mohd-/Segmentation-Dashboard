@@ -52,12 +52,13 @@ REPO_ROOT = Path(__file__).resolve().parent
 REAL_DB = (REPO_ROOT / "pipeline_tracker.db").resolve()
 VENV_PY = REPO_ROOT / ".venv" / "bin" / "python"
 
-# The 27-step pipeline (workflow/constants.py PIPELINE_TEMPLATES); prospect
-# stages cover sequences 1-12, BP execution 13-27. (v4 merged four BP steps
-# away; pre-v4 databases carry those rows as is_active = 0 and the queries
-# below count active rows only.)
-TEMPLATE_TASK_COUNT = 27
-PROSPECT_TASK_COUNT = 12
+# The 24-step pipeline (workflow/constants.py PIPELINE_TEMPLATES); v7 merged
+# the first four Lead Assessment rows into one, so prospect stages cover
+# sequences 1-9. BP rows deliberately retain their stable 13-27 sequence
+# numbers; retired rows remain inactive and every invariant below deliberately
+# counts active rows only.
+TEMPLATE_TASK_COUNT = 24
+PROSPECT_TASK_COUNT = 9
 
 # ---------------------------------------------------------------------------
 # Shared state: stats, findings, phase tallies
@@ -459,8 +460,8 @@ def run_sweep(base_url):
               what="get missing task")
 
     # --- assignment -------------------------------------------------------
-    t1 = task_by_name(c, alpha_id, "Area Definition")
-    t2 = task_by_name(c, alpha_id, "Thickness Estimation")
+    t1 = task_by_name(c, alpha_id, "Lead Assessment")
+    t2 = task_by_name(c, alpha_id, "Reservoir CoS")
     t_cos = task_by_name(c, alpha_id, "Reservoir CoS")
     t_stake = task_by_name(c, alpha_id, "Moving Tolerance")
     t_quick = task_by_name(c, alpha_id, "Quicklook Logs")
@@ -504,7 +505,7 @@ def run_sweep(base_url):
               {"fields": {"active_drilling": "true", "quicklook_pay_thickness_ft": "42"},
                "changed_by": "Stress Harness"},
               label="PATCH /api/tasks/<id>/dynamic-fields", what="save checkbox field")
-    save_task(c, t2["task_id"], alpha_id, fields={"formation_thickness_ft": "85"},
+    save_task(c, t1["task_id"], alpha_id, fields={"formation_thickness_ft": "85"},
               comments="thickness noted via full save")
     # comments + text field via the UI's updateTask shape
     save_task(c, t1["task_id"], alpha_id, fields={"reservoir_area_notes": "sweep text value"},
@@ -730,13 +731,25 @@ def run_sweep(base_url):
     # --- full approval path (for the Phase 3 completion invariant) ---------
     _, created_full = create_project(c, "Full Approval Path")
     full_id = created_full.get("project_id") if isinstance(created_full, dict) else None
-    first = task_by_name(c, full_id, "Area Definition")
+    first = task_by_name(c, full_id, "Lead Assessment")
     status, _b = c.request("POST", f"/api/tasks/{first['task_id']}/assign",
                            {"assignee": "Supervisor", "cascade": True,
                             "revision": first.get("revision"), "changed_by": "Stress Harness"},
                            label="POST /api/tasks/<id>/assign", what="assign full path")
     if status == 200:
         count_mutation(full_id)
+    # Completion still has twelve visible items: four field-derived Lead
+    # Assessment checkpoints plus eight real tasks. Fill every checkpoint so
+    # the later lifecycle approval walk genuinely represents a 100% lead.
+    c.request("PATCH", f"/api/tasks/{first['task_id']}/dynamic-fields", {
+        "fields": {
+            "p90_area_km2": "5", "p10_area_km2": "10",
+            "reservoir_thickness_ft": "50", "formation_thickness_ft": "100",
+            "grv_p90_thousand_acre_ft": "100", "grv_p10_thousand_acre_ft": "200",
+            "polygons_surfaces_loaded": "1", "lead_piip_gas_mean": "25",
+        },
+        "changed_by": "Stress Harness",
+    }, label="PATCH /api/tasks/<id>/dynamic-fields", what="fill Lead Assessment checkpoints")
     for task in get_tasks(c, full_id):
         if task["sequence_no"] > PROSPECT_TASK_COUNT:
             continue
@@ -777,7 +790,7 @@ def run_storm(base_url, writers, readers, duration):
     setup = Client(base_url)
     _, created = create_project(setup, "Storm Target")
     storm_id = created.get("project_id") if isinstance(created, dict) else None
-    target = task_by_name(setup, storm_id, "Area Definition")
+    target = task_by_name(setup, storm_id, "Lead Assessment")
     setup.request("POST", f"/api/tasks/{target['task_id']}/assign",
                   {"assignee": "Staff Member", "cascade": False,
                    "revision": target.get("revision"), "changed_by": "Stress Harness"},

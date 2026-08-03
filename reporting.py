@@ -175,10 +175,11 @@ _BP_TASK_FIELD_KEYS = [
     "lead_piip_gas_mean", "pre_drill_piip_gas_mean",
     "post_drill_piip_gas_mean", "resource_update_gas_mean",
     "bp_gate_classification", "gheer_classification",
-    # Area Definition inputs also feed the map's filtered Total Area summary.
-    # Keeping them in this retired-inclusive batched reader preserves old
-    # values across task migrations and gives Portfolio/map consumers one fold
-    # rule: an active non-blank wins; its blank cannot erase a retired value.
+    # Lead Assessment area inputs also feed the map's filtered Total Area
+    # summary. Keeping them in this retired-inclusive batched reader preserves
+    # values still attached to v7's retired Area Definition row and gives every
+    # Portfolio/map consumer one fold rule: an active non-blank wins; its blank
+    # cannot erase a retired value.
     "p90_area_km2", "p10_area_km2",
 ]
 

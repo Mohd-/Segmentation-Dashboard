@@ -1,10 +1,10 @@
 /* Card 2B -- the CONSOLIDATED LEAD ASSESSMENT workspace.
  *
- * The Lead Assessment stage still has FOUR tracked items (Area Definition,
- * Thickness Estimation, GRV Inputs, Resource Assessment) with four rail rows,
- * four statuses and four dots on the board. What it no longer has is four
- * FORMS: clicking any of those rail rows opens this one page, whose four
- * numbered sections are the four items laid out the way a geologist actually
+ * The Lead Assessment stage has ONE workflow task and four derived checkpoints
+ * (Area Definition, Thickness Estimation, GRV Inputs, Resource Assessment).
+ * The board still shows four checkpoint dots and x/4 progress, while clicking
+ * the single stage row opens this page, whose four numbered sections are laid
+ * out the way a geologist actually
  * fills them -- thickness and volume side by side, structure across the middle,
  * volumetrics computing themselves underneath.
  *
@@ -42,42 +42,52 @@ import { refreshAfterRecordChange, renderDetail } from './detail.js';
 // The contract: steps, keys, and which task owns each key
 // ---------------------------------------------------------------------------
 
-// The four tracked items this page consolidates, in rail order. Any of them
-// opens the page; none of them opens a form of its own any more.
-export var LEAD_ASSESSMENT_STEPS = [
+// One current workflow task. The legacy names remain accepted by the page
+// claim so a pre-v7 payload can still be opened safely during a rolling deploy.
+export var LEAD_ASSESSMENT_STEPS = ['Lead Assessment'];
+export var LEGACY_LEAD_ASSESSMENT_STEPS = [
   'Area Definition', 'Thickness Estimation', 'GRV Inputs', 'Resource Assessment'
 ];
 
 // The step whose task carries the page's ONE comments box and its PIIP results
 // (see the comments note on buildSavePlan below).
-export var PRIMARY_STEP = 'Resource Assessment';
+export var PRIMARY_STEP = 'Lead Assessment';
 
-// field key -> the task that owns it. This is the whole storage map of the
-// page, and the thing the batched Save groups by: the user sees one workspace
-// and presses one button, but every value still lands on the tracked item whose
-// completion rule reads it. Keys are the EAV contract -- never rename one, a
-// rename orphans stored data.
+// Every key now belongs to the single merged task. Keys are the EAV contract --
+// never rename one, because a rename orphans stored data.
 export var KEY_OWNER = {
   // Section 1 -- Thickness Estimation. The two *_thickness_ft keys are the
   // pre-existing canonical reads (Lead Summary, portfolio, the box model);
   // the twt_* pair and the source marker are new alongside them.
-  twt_reservoir_ms: 'Thickness Estimation',
-  twt_formation_ms: 'Thickness Estimation',
-  reservoir_thickness_ft: 'Thickness Estimation',
-  formation_thickness_ft: 'Thickness Estimation',
-  thickness_source_mode: 'Thickness Estimation',
+  twt_reservoir_ms: PRIMARY_STEP,
+  twt_formation_ms: PRIMARY_STEP,
+  reservoir_thickness_ft: PRIMARY_STEP,
+  formation_thickness_ft: PRIMARY_STEP,
+  thickness_source_mode: PRIMARY_STEP,
   // Section 2 left -- Area Definition (existing keys, reused verbatim).
-  p90_area_km2: 'Area Definition',
-  p10_area_km2: 'Area Definition',
+  p90_area_km2: PRIMARY_STEP,
+  p10_area_km2: PRIMARY_STEP,
   // Section 3's TVDSS rides on Area Definition: it is a structural reading of
   // the same mapped surface the areas come off, and it must NOT gate that
   // step's completion (the server's FIELD_COMPLETION entry omits it).
-  top_formation_tvdss_ft: 'Area Definition',
+  top_formation_tvdss_ft: PRIMARY_STEP,
   // Section 2 right -- GRV Inputs (new keys).
-  grv_p90_thousand_acre_ft: 'GRV Inputs',
-  grv_p10_thousand_acre_ft: 'GRV Inputs',
+  grv_p90_thousand_acre_ft: PRIMARY_STEP,
+  grv_p10_thousand_acre_ft: PRIMARY_STEP,
   // Section 3's confirmation lives on Resource Assessment because it gates THAT
   // item's completion, not Area Definition's.
+  polygons_surfaces_loaded: PRIMARY_STEP
+};
+
+// Read-only rolling-deploy fallback. Migration v7 moves these EAV rows onto
+// Lead Assessment, but a frontend served just before migration completes must
+// still hydrate the page without losing values.
+var LEGACY_KEY_OWNER = {
+  twt_reservoir_ms: 'Thickness Estimation', twt_formation_ms: 'Thickness Estimation',
+  reservoir_thickness_ft: 'Thickness Estimation', formation_thickness_ft: 'Thickness Estimation',
+  thickness_source_mode: 'Thickness Estimation', p90_area_km2: 'Area Definition',
+  p10_area_km2: 'Area Definition', top_formation_tvdss_ft: 'Area Definition',
+  grv_p90_thousand_acre_ft: 'GRV Inputs', grv_p10_thousand_acre_ft: 'GRV Inputs',
   polygons_surfaces_loaded: 'Resource Assessment'
 };
 
@@ -468,7 +478,9 @@ export function buildSavePlan(values, saved) {
     var fields = byTask[taskName] || {};
     var stored = saved[taskName] || {};
     return Object.keys(fields).some(function (key) {
-      return String(stored[key] == null ? '' : stored[key]) !== fields[key];
+      var storedValue = stored[key];
+      if (storedValue == null) storedValue = (saved[LEGACY_KEY_OWNER[key]] || {})[key];
+      return String(storedValue == null ? '' : storedValue) !== fields[key];
     });
   }).map(function (taskName) {
     return { taskName: taskName, fields: byTask[taskName] };
@@ -486,10 +498,10 @@ export function buildSavePlan(values, saved) {
 // obvious home instead of four ambiguous ones.
 export function earlierComments(tasks) {
   return (tasks || []).filter(function (task) {
-    return task && task.task_name !== PRIMARY_STEP &&
-      LEAD_ASSESSMENT_STEPS.indexOf(task.task_name) >= 0 && isFilled(task.comments);
+    return task && task.task_name !== PRIMARY_STEP && task.task_name !== 'Resource Assessment' &&
+      LEGACY_LEAD_ASSESSMENT_STEPS.indexOf(task.task_name) >= 0 && isFilled(task.comments);
   }).sort(function (a, b) {
-    return LEAD_ASSESSMENT_STEPS.indexOf(a.task_name) - LEAD_ASSESSMENT_STEPS.indexOf(b.task_name);
+    return LEGACY_LEAD_ASSESSMENT_STEPS.indexOf(a.task_name) - LEGACY_LEAD_ASSESSMENT_STEPS.indexOf(b.task_name);
   }).map(function (task) {
     return { step: task.task_name, comments: String(task.comments) };
   });
@@ -683,7 +695,8 @@ export function teardownLeadAssessment() {
 }
 
 export function isLeadAssessmentStep(taskName) {
-  return LEAD_ASSESSMENT_STEPS.indexOf(taskName) >= 0;
+  return LEAD_ASSESSMENT_STEPS.indexOf(taskName) >= 0 ||
+    LEGACY_LEAD_ASSESSMENT_STEPS.indexOf(taskName) >= 0;
 }
 
 // Is the consolidated page the thing currently mounted? detail-form.js's save
@@ -693,7 +706,14 @@ export function leadAssessmentActive() {
 }
 
 function taskNamed(name) {
-  return (Store.tasks || []).find(function (task) { return task.task_name === name; }) || null;
+  var exact = (Store.tasks || []).find(function (task) { return task.task_name === name; });
+  if (exact || name !== PRIMARY_STEP) return exact || null;
+  // Rolling-deploy fallback: prefer the old output-owning row if v7 has not
+  // run yet, then any legacy row that can at least keep the workspace usable.
+  return (Store.tasks || []).find(function (task) { return task.task_name === 'Resource Assessment'; }) ||
+    (Store.tasks || []).find(function (task) {
+      return LEGACY_LEAD_ASSESSMENT_STEPS.indexOf(task.task_name) >= 0;
+    }) || null;
 }
 
 // Every stored value the page edits, resolved from the per-task field map.
@@ -701,6 +721,7 @@ function readStoredValues(allFields) {
   var values = {};
   Object.keys(KEY_OWNER).forEach(function (key) {
     var stored = (allFields[KEY_OWNER[key]] || {})[key];
+    if (stored == null) stored = (allFields[LEGACY_KEY_OWNER[key]] || {})[key];
     values[key] = stored == null ? '' : String(stored);
   });
   return values;
@@ -814,7 +835,7 @@ function runCalculation() {
   activeState.signature = signature;
   setStatus(MESSAGES.piipRunning, 'running');
   var task = activeState.resourceTask;
-  if (!task) { setStatus('Resource Assessment component not found.', 'error'); return; }
+  if (!task) { setStatus('Lead Assessment component not found.', 'error'); return; }
   API.resourceAssessment(task.task_id, calculationPayload(resolved, activeState.scenario))
     .then(function (result) {
       if (state !== activeState) return null;
@@ -1096,8 +1117,8 @@ export function renderLeadAssessment(root, options) {
   options = options || {};
   var allFields = Store.allFields || {};
   var values = readStoredValues(allFields);
-  var thicknessFields = allFields['Thickness Estimation'] || {};
-  var resourceFields = allFields[PRIMARY_STEP] || {};
+  var thicknessFields = allFields[PRIMARY_STEP] || allFields['Thickness Estimation'] || {};
+  var resourceFields = allFields[PRIMARY_STEP] || allFields['Resource Assessment'] || {};
   var storedScenario = resourceFields.lead_resource_scenario;
   var stored = resultsFromStoredFields(resourceFields, 'lead');
   state = {

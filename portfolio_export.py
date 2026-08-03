@@ -292,8 +292,9 @@ def get_portfolio_export_rows(session) -> List[dict]:
     -table scalar EAV keys quicklook_pay_thickness_ft /
     quicklook_average_porosity_pct / quicklook_average_swt_pct so old wells
     (written before the multi-formation editor existed) still populate. P50 Pay
-    falls back one rung further, to the Thickness Estimation step's
-    reservoir_thickness_ft -- the pre-drill estimate an undrilled lead carries.
+    falls back one rung further to ``reservoir_thickness_ft`` -- now stored on
+    the consolidated Lead Assessment row, with v7's retired Thickness
+    Estimation row remaining a read fallback.
     """
     projects = _export_projects(session)
     project_ids = [item["project_id"] for item in projects]
@@ -352,8 +353,9 @@ def get_portfolio_export_rows(session) -> List[dict]:
             p50_porosity = _first_filled(fields.get("quicklook_average_porosity_pct"))
             water_saturation = _first_filled(fields.get("quicklook_average_swt_pct"))
         # Undrilled leads have no formation row or quicklook read yet: the
-        # Thickness Estimation step's reservoir thickness is their latest
-        # available pay estimate.
+        # Lead Assessment's reservoir thickness is their latest available pay
+        # estimate. The retired-inclusive field fold also preserves a pre-v7
+        # value still attached to Thickness Estimation.
         p50_pay = p50_pay or _first_filled(fields.get("reservoir_thickness_ft"))
 
         # Flowback columns read the primary stage of the stages mini-sheet as

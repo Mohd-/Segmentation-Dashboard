@@ -13,15 +13,14 @@ step immediately followed by the retired step it absorbed.
     Post-Drilling Resource Assessment.post_drill_piip_gas_mean   (v4-retired)
     Pre-Drilling GeoX Assessment.pre_drill_piip_gas_mean
     Pre-Drilling Resource Assessment.pre_drill_piip_gas_mean     (PRE-v5 name)
-    Resource Assessment.lead_piip_gas_mean
-    Lead Resource Assessment.lead_piip_gas_mean                  (PRE-v5 name)
+    Lead Assessment.lead_piip_gas_mean
+    Resource Assessment.lead_piip_gas_mean                       (v7-retired)
+    Lead Resource Assessment.lead_piip_gas_mean                  (pre-v5 name)
 
-The last two pairs are the v5 RENAMES. A rename rewrites project_tasks.task_name
-in place, so a migrated lead answers to the new name and never needs the old one
--- but ``lead_summary_snapshots`` froze old-name buckets at promotion time, and
-the rename skips a project carrying BOTH names (UNIQUE (project_id, task_name)),
-which leaves a stale old-name row behind. Those two read paths are why the old
-spellings stay on the ladder, and why they are pinned here.
+The lead rung now has three names: v7's consolidated active row, the immediately
+retired v5 spelling, and the pre-v5 spelling. ``lead_summary_snapshots`` also
+freeze historical task-name buckets at promotion time. Those read paths are why
+all spellings stay on the ladder, and why they are pinned here.
 
 Nothing here asserts a KPI number: the tiles themselves are pinned by the
 front-end harness (static/tests/test-lead-kpis.js). This module pins the ONE
@@ -95,14 +94,14 @@ def test_mean_gas_is_null_when_nothing_is_recorded(client):
 
 def test_mean_gas_reads_the_lead_assessment_when_it_is_the_only_source(client):
     pid = create_project(client, "MEANGAS-2")
-    _save_fields(client, pid, "Resource Assessment", {"lead_piip_gas_mean": "120.5"})
+    _save_fields(client, pid, "Lead Assessment", {"lead_piip_gas_mean": "120.5"})
     assert _mean_gas(client, pid) == 120.5
 
 
 def test_pre_drill_assessment_beats_the_lead_assessment(client):
     """Newest assessment wins: the pre-drill number supersedes the lead one."""
     pid = create_project(client, "MEANGAS-3")
-    _save_fields(client, pid, "Resource Assessment", {"lead_piip_gas_mean": "120"})
+    _save_fields(client, pid, "Lead Assessment", {"lead_piip_gas_mean": "120"})
     _save_fields(client, pid, "Pre-Drilling GeoX Assessment", {"pre_drill_piip_gas_mean": "310"})
     assert _mean_gas(client, pid) == 310.0
 
@@ -147,8 +146,8 @@ def test_legacy_post_drill_step_resolves_and_loses_to_a_newer_assessment(client)
     assert _mean_gas(client, pid) == 900.0
 
 
-def test_the_ladder_carries_both_pre_v5_spellings(client):
-    """The ladder's MEMBERSHIP, so a rename can never silently drop off it.
+def test_the_ladder_carries_v7_and_pre_v5_lead_spellings(client):
+    """The ladder's MEMBERSHIP, so a merge/rename cannot silently drop data.
 
     v4's merges and v5's renames are two different mechanisms with the same
     read consequence -- a number stored under a name the workflow no longer
@@ -160,19 +159,25 @@ def test_the_ladder_carries_both_pre_v5_spellings(client):
     from workflow.constants import LATEST_MEAN_GAS_SOURCES, RENAMED_TASK_NAMES
 
     ladder = list(LATEST_MEAN_GAS_SOURCES)
-    for current, legacy in (("Resource Assessment", "Lead Resource Assessment"),
-                            ("Pre-Drilling GeoX Assessment", "Pre-Drilling Resource Assessment")):
-        assert RENAMED_TASK_NAMES[current] == legacy, "the rename map is the source of the pair"
-        key = next(k for name, k in ladder if name == current)
-        # The legacy twin sits IMMEDIATELY behind its survivor, on the same key:
-        # surviving-first is what makes a re-saved lead outrank its own history.
-        assert ladder[ladder.index((current, key)) + 1] == (legacy, key)
+    lead_key = "lead_piip_gas_mean"
+    assert [entry for entry in ladder if entry[1] == lead_key] == [
+        ("Lead Assessment", lead_key),
+        ("Resource Assessment", lead_key),
+        ("Lead Resource Assessment", lead_key),
+    ]
+
+    current = "Pre-Drilling GeoX Assessment"
+    legacy = "Pre-Drilling Resource Assessment"
+    assert RENAMED_TASK_NAMES[current] == legacy, "the rename map is the source of this pair"
+    key = next(k for name, k in ladder if name == current)
+    assert ladder[ladder.index((current, key)) + 1] == (legacy, key)
 
 
 def test_a_pre_v5_named_row_still_resolves_the_lead_mean(client):
     """A lead whose only volume sits under the PRE-v5 step name still reports it.
 
-    "Lead Resource Assessment" was renamed to "Resource Assessment" by v5. This
+    "Lead Resource Assessment" was renamed to "Resource Assessment" by v5 and
+    that row was retired into "Lead Assessment" by v7. This
     builds the shape the rename could not reach -- the number under the old
     bucket, with the current step carrying nothing -- and asserts the board
     still shows the lead's OGIP instead of a silent 0.
@@ -182,7 +187,17 @@ def test_a_pre_v5_named_row_still_resolves_the_lead_mean(client):
                       {"lead_piip_gas_mean": "88.5"})
     assert _mean_gas(client, pid) == 88.5
     # ...and the CURRENT name still outranks it the moment the lead is re-saved.
-    _save_fields(client, pid, "Resource Assessment", {"lead_piip_gas_mean": "91.25"})
+    _save_fields(client, pid, "Lead Assessment", {"lead_piip_gas_mean": "91.25"})
+    assert _mean_gas(client, pid) == 91.25
+
+
+def test_v7_retired_resource_assessment_is_a_fallback_to_the_single_step(client):
+    """The immediate pre-v7 row remains readable, but the active row wins."""
+    pid = create_project(client, "MEANGAS-V7-LEGACY")
+    _add_retired_task(client, pid, "Resource Assessment", 4, "Lead Assessment",
+                      {"lead_piip_gas_mean": "88.5"})
+    assert _mean_gas(client, pid) == 88.5
+    _save_fields(client, pid, "Lead Assessment", {"lead_piip_gas_mean": "91.25"})
     assert _mean_gas(client, pid) == 91.25
 
 
@@ -195,7 +210,7 @@ def test_a_pre_v5_named_pre_drill_row_outranks_the_lead_assessment(client):
     the right rung, not merely somewhere on the ladder.
     """
     pid = create_project(client, "MEANGAS-V5-PREDRILL")
-    _save_fields(client, pid, "Resource Assessment", {"lead_piip_gas_mean": "10"})
+    _save_fields(client, pid, "Lead Assessment", {"lead_piip_gas_mean": "10"})
     assert _mean_gas(client, pid) == 10.0
     _add_retired_task(client, pid, "Pre-Drilling Resource Assessment", 12, "Pre-Well Delivery",
                       {"pre_drill_piip_gas_mean": "410"})
@@ -216,7 +231,7 @@ def test_blank_on_a_newer_step_does_not_erase_an_older_number(client):
     """A blank is "not recorded", not "recorded as nothing" -- first NON-BLANK
     source wins, so an empty SAD Update falls through to the lead assessment."""
     pid = create_project(client, "MEANGAS-8")
-    _save_fields(client, pid, "Resource Assessment", {"lead_piip_gas_mean": "120"})
+    _save_fields(client, pid, "Lead Assessment", {"lead_piip_gas_mean": "120"})
     _save_fields(client, pid, "SAD Update", {"resource_update_gas_mean": "   "})
     assert _mean_gas(client, pid) == 120.0
 
@@ -225,7 +240,7 @@ def test_p90_and_p10_are_never_used_to_derive_the_mean(client):
     """The mean is a saved input in its own right; a record that has only the
     low/high cases has NO mean, and the tile must not interpolate one."""
     pid = create_project(client, "MEANGAS-9")
-    _save_fields(client, pid, "Resource Assessment",
+    _save_fields(client, pid, "Lead Assessment",
                  {"lead_piip_gas_p90": "80", "lead_piip_gas_p10": "400"})
     assert _mean_gas(client, pid) is None
 
@@ -234,7 +249,7 @@ def test_non_numeric_stored_value_reads_null_and_is_logged(client, caplog):
     """Garbage in the cell is a data fault: null in the payload (the tile shows
     0 BCF rather than breaking) plus a warning naming the project and step."""
     pid = create_project(client, "MEANGAS-10")
-    _save_fields(client, pid, "Resource Assessment", {"lead_piip_gas_mean": "not a number"})
+    _save_fields(client, pid, "Lead Assessment", {"lead_piip_gas_mean": "not a number"})
     with caplog.at_level(logging.WARNING, logger="workflow.projects"):
         assert _mean_gas(client, pid) is None
     assert any("not a number" in record.getMessage() and str(pid) in record.getMessage()
@@ -245,7 +260,7 @@ def test_non_numeric_latest_does_not_fall_through_to_an_older_assessment(client)
     """A broken LATEST value reports null rather than presenting a superseded
     assessment as if it were current."""
     pid = create_project(client, "MEANGAS-11")
-    _save_fields(client, pid, "Resource Assessment", {"lead_piip_gas_mean": "120"})
+    _save_fields(client, pid, "Lead Assessment", {"lead_piip_gas_mean": "120"})
     _save_fields(client, pid, "SAD Update", {"resource_update_gas_mean": "TBD"})
     assert _mean_gas(client, pid) is None
 
@@ -266,7 +281,7 @@ def test_mean_gas_costs_exactly_one_query_for_the_whole_board(client, app_module
     _main, db = app_modules
     ids = [create_project(client, f"MEANBATCH-{n}") for n in range(4)]
     for index, pid in enumerate(ids):
-        _save_fields(client, pid, "Resource Assessment",
+        _save_fields(client, pid, "Lead Assessment",
                      {"lead_piip_gas_mean": str(100 + index)})
 
     seen = []
@@ -282,9 +297,10 @@ def test_mean_gas_costs_exactly_one_query_for_the_whole_board(client, app_module
     finally:
         event.remove(engine, "before_cursor_execute", _record)
 
-    # The board query itself carries an active_drilling subquery over
-    # task_dynamic_fields; the mean-gas read adds exactly one more.
-    assert len(seen) == 2, seen
+    # The board query itself carries an active_drilling subquery over EAV; the
+    # mean-gas fold and v7's four-checkpoint field fold each add ONE batched
+    # query. The count stays constant as project volume grows.
+    assert len(seen) == 3, seen
     by_id = {row["project_id"]: row["mean_gas_bcf"] for row in rows}
     assert [by_id[pid] for pid in ids] == [100.0, 101.0, 102.0, 103.0]
 
@@ -300,5 +316,5 @@ def test_stored_value_is_reported_in_bcf_exactly_as_stored(client, stored, expec
     precision and rounds ONCE for display. Note 0 is a real recorded value and
     is NOT null."""
     pid = create_project(client, f"MEANUNIT-{stored.strip() or 'blank'}")
-    _save_fields(client, pid, "Resource Assessment", {"lead_piip_gas_mean": stored})
+    _save_fields(client, pid, "Lead Assessment", {"lead_piip_gas_mean": stored})
     assert _mean_gas(client, pid) == expected

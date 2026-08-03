@@ -370,7 +370,9 @@ COMPONENT_FILE_SECTIONS = {
     # in-place task_name rewrites, so the old entries are reachable only through
     # that historical path -- and the retired "Trap CoS" / "Seal CoS" halves
     # only through it too, now that "Trap and Seal CoS" is the live step.
-    "Area Definition", "Thickness Estimation", "Resource Assessment",
+    # v7's live consolidated component, followed by its retired source folders
+    # so links created before the merge remain resolvable.
+    "Lead Assessment", "Area Definition", "Thickness Estimation", "Resource Assessment",
     "Seismic Signature Validation", "Reservoir CoS", "Trap and Seal CoS",
     "Segmentation Slides", "Pre-Drilling GeoX Assessment",
     # Their pre-v5 spellings (legacy on-disk folders).

@@ -128,7 +128,8 @@ function syncStageOpenState() {
   all('.rail-stage-head').forEach(function (head) {
     var isOpen = head.getAttribute('data-stage') === openStage;
     head.classList.toggle('open', isOpen);
-    head.setAttribute('aria-expanded', String(isOpen));
+    if (head.hasAttribute('data-task-id')) head.setAttribute('aria-current', isOpen ? 'step' : 'false');
+    else head.setAttribute('aria-expanded', String(isOpen));
   });
   all('.rail-stage-body').forEach(function (body) {
     body.classList.toggle('collapsed', body.getAttribute('data-stage') !== openStage);
@@ -222,6 +223,23 @@ export function leadStageGroups(trackedItems, tasks) {
       if (task) task._leadRailPlaced = true;
     });
   });
+  // v7 turns Lead Assessment into one real workflow row while retaining four
+  // board checkpoints. Those checkpoint entries only drive done/total here;
+  // the stage heading itself is the one navigation target, with no sub-rows.
+  var assessmentGroup = byStage['Lead Assessment'];
+  if (assessmentGroup) {
+    var preferred = ['Lead Assessment', 'Resource Assessment', 'Area Definition',
+                     'Thickness Estimation', 'GRV Inputs'];
+    assessmentGroup.task = null;
+    for (var p = 0; p < preferred.length && !assessmentGroup.task; p += 1) {
+      assessmentGroup.task = taskByName[preferred[p]] || null;
+    }
+    assessmentGroup.rows = [];
+    assessmentGroup.single = true;
+    (tasks || []).forEach(function (task) {
+      if (task.stage_group === 'Lead Assessment') task._leadRailPlaced = true;
+    });
+  }
   // Task rows no tracked item names keep their place in the workflow: appended
   // to their own stage, so the sidebar never loses a real step.
   (tasks || []).forEach(function (task) {
@@ -230,6 +248,13 @@ export function leadStageGroups(trackedItems, tasks) {
     if (!byStage[stage]) { byStage[stage] = { stage: stage, done: 0, total: 0, rows: [] }; order.push(stage); }
     byStage[stage].rows.push({ label: task.task_name, task: task });
   });
+  if (byStage['Lead Assessment'] && !byStage['Lead Assessment'].single) {
+    assessmentGroup = byStage['Lead Assessment'];
+    assessmentGroup.task = taskByName['Lead Assessment'] || taskByName['Resource Assessment'] ||
+      taskByName['Area Definition'] || taskByName['Thickness Estimation'] || taskByName['GRV Inputs'] || null;
+    assessmentGroup.rows = [];
+    assessmentGroup.single = true;
+  }
   return order.map(function (stage) { return mergeStakingRows(byStage[stage]); });
 }
 
@@ -308,6 +333,17 @@ function renderLeadRail(tasks) {
   byId('component-list').innerHTML = groups.map(function (group) {
     var isOpen = group.stage === openStage;
     var icon = ICONS[LEAD_STAGE_ICONS[group.stage]] || '';
+    if (group.single) {
+      var enabled = !!group.task;
+      return '<div class="rail-stage rail-stage-lead rail-stage-single' + (isOpen ? ' is-active' : '') + '" data-stage="' + esc(group.stage) + '">' +
+        (enabled ? '<button type="button" class="rail-stage-head' + (isOpen ? ' open' : '') + '" data-stage="' + esc(group.stage) +
+          '" data-task-id="' + group.task.task_id + '" aria-current="' + (isOpen ? 'step' : 'false') + '">' :
+          '<div class="rail-stage-head" aria-disabled="true">') +
+        '<span class="stage-icon" aria-hidden="true">' + icon + '</span>' +
+        '<span class="rail-stage-name">' + esc(group.stage) + '</span>' +
+        '<span class="rail-stage-count">' + group.done + '/' + group.total + '</span>' +
+        (enabled ? '</button>' : '</div>') + '</div>';
+    }
     return '<div class="rail-stage rail-stage-lead' + (isOpen ? ' is-active' : '') + '" data-stage="' + esc(group.stage) + '">' +
       '<button type="button" class="rail-stage-head' + (isOpen ? ' open' : '') + '" data-stage="' + esc(group.stage) +
       '" aria-expanded="' + isOpen + '">' +
@@ -398,6 +434,11 @@ export function renderDetail() {
 function wireRailHandlers() {
   all('.rail-stage-head').forEach(function (head) {
     head.addEventListener('click', function () {
+      if (head.hasAttribute('data-task-id')) {
+        var taskId = Number(head.getAttribute('data-task-id'));
+        loadComponent(Store.tasks.find(function (task) { return task.task_id === taskId; }));
+        return;
+      }
       var stage = head.getAttribute('data-stage');
       // Toggle: clicking the open stage collapses it; else open it (and the
       // single-open sync closes whichever was open before).
@@ -461,7 +502,8 @@ function blockForAr(map, ar) {
        ever, and leadFieldSource() merges exactly that map with the live one.
    Surviving name first, legacy second: first non-blank wins, so re-entering a
    value on the current step always supersedes the frozen/retired one. */
-var AREA_STEPS = ['Area Definition', 'Reservoir Area Definition'];
+var AREA_STEPS = ['Lead Assessment', 'Area Definition', 'Reservoir Area Definition'];
+var THICKNESS_STEPS = ['Lead Assessment', 'Thickness Estimation'];
 var TRAP_STEPS = ['Trap and Seal CoS', 'Trap CoS'];
 var SEAL_STEPS = ['Trap and Seal CoS', 'Seal CoS'];
 
@@ -775,7 +817,7 @@ function leadMetricsHtml(fieldMap, gasSources) {
       { label: 'Mean', value: trio.mean },
       { label: 'P10', value: trio.p10 }
     ]) +
-    metricRow('Reservoir Thickness (ft)', (fieldMap['Thickness Estimation'] || {}).reservoir_thickness_ft) +
+    metricRow('Reservoir Thickness (ft)', fieldFrom(fieldMap, THICKNESS_STEPS, 'reservoir_thickness_ft')) +
     statCluster('Chance of Success (%)', [
       { label: 'Res', value: resCos.pct },
       { label: 'Trap', value: fieldFrom(fieldMap, TRAP_STEPS, 'trap_cos_pct') },
@@ -831,7 +873,7 @@ function wireSummarySettings() {
 export function leadSummaryData() {
   var fields = Store.allFields || {};
   var resCos = reservoirCosPrimary(fields);
-  var thickness = fields['Thickness Estimation'] || {};
+  var thickness = fields['Lead Assessment'] || fields['Thickness Estimation'] || {};
   return {
     // The lead's twelve TRACKED ITEMS, derived server-side and already on the
     // /detail payload's project row (get_project runs the same annotation the
@@ -1000,8 +1042,8 @@ export function renderRightPanel(tasks) {
     // Prediction vs Actual: predicted values read the frozen lead snapshot,
     // falling back to live fields where the plan allows.
     var snap = (Store.leadSummary && Store.leadSummary.fields) || {};
-    var predThickness = (snap['Thickness Estimation'] || {}).reservoir_thickness_ft;
-    if (!isFilled(predThickness)) predThickness = (Store.allFields['Thickness Estimation'] || {}).reservoir_thickness_ft;
+    var predThickness = fieldFrom(snap, THICKNESS_STEPS, 'reservoir_thickness_ft');
+    if (!isFilled(predThickness)) predThickness = fieldFrom(Store.allFields, THICKNESS_STEPS, 'reservoir_thickness_ft');
     var predMean = '';
     for (var si = 0; si < LEAD_PIIP_SOURCES.length && !isFilled(predMean); si += 1) predMean = (snap[LEAD_PIIP_SOURCES[si][0]] || {})[LEAD_PIIP_SOURCES[si][1]] || '';
     for (var li = 0; li < LEAD_PIIP_SOURCES.length && !isFilled(predMean); li += 1) predMean = (Store.allFields[LEAD_PIIP_SOURCES[li][0]] || {})[LEAD_PIIP_SOURCES[li][1]] || '';

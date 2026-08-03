@@ -275,7 +275,7 @@ export function setComponentReferenceMode(referenceOnly) {
 // a rendering bug).
 var CONSOLIDATED_PAGES = [
   { claims: isLeadAssessmentStep, render: renderLeadAssessment, title: null,
-    bodyClass: 'lead-assessment-body' },
+    bodyClass: 'lead-assessment-body', keepsLifecycle: true },
   { claims: isStakingLetterStep, render: renderStakingLetters, title: 'Staking Letters',
     bodyClass: 'staking-letters-body' }
 ];
@@ -339,13 +339,13 @@ export function loadComponent(task) {
   if (consolidated) {
     // No per-step field fetch: the workspace reads every step's values out of
     // Store.allFields (already on the /detail payload) and resolves its own
-    // folder row. The lifecycle action row is hidden too -- these items
-    // complete from their field state (workflow/constants.py FIELD_COMPLETION),
-    // so a Submit or Approve button here would offer a walk nobody has to make.
+    // folder row. Lead Assessment keeps the single merged row's normal
+    // lifecycle controls; Staking Letters still hides them because its two
+    // underlying task rows retain independent lifecycles.
     teardownResourceCalculator();
     var previousFolder = byId('component-folder-card');
     if (previousFolder) previousFolder.remove();
-    resetActionButtons(actionButtons());
+    if (!consolidated.keepsLifecycle) resetActionButtons(actionButtons());
     consolidated.render(byId('dynamic-fields'), { onCopy: copyText });
     setComponentReferenceMode(!isCurrentPipelineView());
     renderRightPanel(tasksForPipeline(Store.pipeline));
@@ -988,7 +988,7 @@ function bindLiveCosCalculation(componentName, root) {
     // from the saved field map on the /detail payload -- the same read the
     // server's hook performs against the database.
     writeCos('trap_cos_pct', calculateTrapCos(
-      val('Thickness Estimation', 'formation_thickness_ft'),
+      val('Lead Assessment', 'formation_thickness_ft') || val('Thickness Estimation', 'formation_thickness_ft'),
       (input('sarah_quwarah_thickness_ft') || {}).value
     ));
   });
@@ -1074,6 +1074,7 @@ export var POST_DRILL_PIIP_SOURCES = [
 export var LEAD_PIIP_SOURCES = [
   ['Pre-Drilling GeoX Assessment', 'pre_drill_piip_gas_mean'],
   ['Pre-Drilling Resource Assessment', 'pre_drill_piip_gas_mean'],   // pre-v5 snapshots
+  ['Lead Assessment', 'lead_piip_gas_mean'],
   ['Resource Assessment', 'lead_piip_gas_mean'],
   ['Lead Resource Assessment', 'lead_piip_gas_mean']                 // pre-v5 snapshots
 ];
