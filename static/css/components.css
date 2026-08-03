@@ -986,8 +986,13 @@ button.priority.priority-high:hover { background: var(--danger-100); }
 }
 .check-label input, .radio-option input { width: auto; }
 /* Bottom-align the checkbox card with neighboring inputs so rows mixing
-   checkboxes with label+input columns keep a straight baseline. */
+   checkboxes with label+input columns keep a straight baseline (reachable
+   outside the dynamic grid, e.g. the Lead Assessment card 3 row). */
 .check-label { align-self: end; min-height: 42px; }
+/* In the dynamic form grid a checkbox is a STATEMENT, not a value column: it
+   claims the full row (the .wide-field idiom), so its label never truncates
+   against a 1-of-3 track and consecutive checkboxes read as a checklist. */
+.dynamic-fields > .check-label { grid-column: 1 / -1; }
 
 /* Horizontal radio group (e.g. BP Execution Gate classification): a quiet
    label over a row of option pills that wraps on narrow screens. */
