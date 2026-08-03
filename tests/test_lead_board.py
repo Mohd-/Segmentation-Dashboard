@@ -187,7 +187,11 @@ def test_returning_a_segmentation_slides_submission_drops_it_back_to_in_progress
 def test_every_item_completes_from_checkpoints_and_approved_rows(client):
     pid = create_project(client, "TRACKED-ALL-1")
     _fill_assessment_checkpoints(client, pid)
-    for step in PROSPECT_STEPS:
+    # Filling the four checkpoints auto-approves the one Lead Assessment row
+    # (ASAS owner decision); the other rows are driven by the manual walk here,
+    # which the transition endpoint still honors.
+    assert get_task_by_name(client, pid, "Lead Assessment")["status"] == "Approved"
+    for step in PROSPECT_STEPS[1:]:
         _approve(client, pid, step)
 
     # A fully approved lead leaves the board for the Portfolio, so read the

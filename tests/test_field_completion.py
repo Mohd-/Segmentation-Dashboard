@@ -124,10 +124,45 @@ def test_field_completion_only_claims_real_pipeline_steps():
     checkpoints = set(LEAD_ASSESSMENT_CHECKPOINTS)
     assert set(workflow.FIELD_COMPLETION) <= active | checkpoints
     assert checkpoints.isdisjoint(active)
-    assert "Lead Assessment" not in FIELD_COMPLETION_AUTOMATED_STEPS
+    # ASAS owner decision: the consolidated Lead Assessment row is automated
+    # like every other field-driven card -- its aggregate predicate closes it.
+    assert "Lead Assessment" in FIELD_COMPLETION_AUTOMATED_STEPS
     assert FIELD_COMPLETION_AUTOMATED_STEPS <= active | checkpoints
-    assert FIELD_COMPLETION_AUTOMATED_STEPS & active == (
-        set(workflow.FIELD_COMPLETION) & active) - {"Lead Assessment"}
+    assert FIELD_COMPLETION_AUTOMATED_STEPS & active == set(workflow.FIELD_COMPLETION) & active
+
+
+def test_auto_approve_policy_is_the_prospect_template_minus_segmentation_slides():
+    """THE ASAS OWNER DECISION, pinned as data.
+
+    "No approval is required for all segment maturation steps except
+    segmentation slides." The policy set is DERIVED from PIPELINE_TEMPLATES'
+    prospect stage groups (never a second hand-typed list), Segmentation
+    Slides keeps its human approval, and the BP execution pipeline is
+    untouched. Every policy step carries a FIELD_COMPLETION predicate (the
+    GeoX assessment gained its stored-mean rule with the same decision), so
+    no maturation step is left needing the hidden supervisor walk.
+    """
+    import workflow
+    from workflow.constants import (AUTO_APPROVE_ON_SAVE_STEPS,
+                                    FIELD_COMPLETION_AUTOMATED_STEPS,
+                                    LEAD_ASSESSMENT_CHECKPOINTS)
+
+    prospect = {name for _seq, name, stage in workflow.PIPELINE_TEMPLATES
+                if stage in workflow.PROSPECT_STAGES}
+    bp = {name for _seq, name, stage in workflow.PIPELINE_TEMPLATES
+          if stage in workflow.BP_EXECUTION_STAGES}
+    assert AUTO_APPROVE_ON_SAVE_STEPS == prospect - {"Segmentation Slides"}
+    assert AUTO_APPROVE_ON_SAVE_STEPS.isdisjoint(bp)
+    assert AUTO_APPROVE_ON_SAVE_STEPS.isdisjoint(
+        workflow.FIELD_COMPLETION_MANUAL_APPROVAL_STEPS)
+    # Every policy step has a predicate: no step is left uncompletable now
+    # that the UI hides the manual walk for all of them.
+    assert AUTO_APPROVE_ON_SAVE_STEPS - set(workflow.FIELD_COMPLETION) == set()
+    # Everything the engine automates is either a policy step or a v7
+    # checkpoint label (legacy inactive rows keep reconciling) -- never a BP
+    # step, never a manual-approval step.
+    assert FIELD_COMPLETION_AUTOMATED_STEPS <= (
+        AUTO_APPROVE_ON_SAVE_STEPS | set(LEAD_ASSESSMENT_CHECKPOINTS))
 
 
 def test_reopen_is_not_a_public_transition():
@@ -610,8 +645,10 @@ def test_a_manual_submit_still_notifies_supervisors(client):
 # Card 2B -- the four tracked items of the consolidated Lead Assessment page
 # ---------------------------------------------------------------------------
 # The page is one workspace, one Save and one lifecycle row. The four stable
-# labels below are CHECKPOINTS derived independently from fields on that row;
-# filling or clearing them must never auto-approve or reopen its lifecycle.
+# labels below are CHECKPOINTS derived independently from fields on that row.
+# Since the ASAS owner decision the row itself is engine-automated: it closes
+# when ALL FOUR checkpoints are satisfied (never a save sooner) and reopens
+# when a later save of the page breaks one.
 
 LEAD_STEP = "Lead Assessment"
 AREA_STEP = "Area Definition"
@@ -637,12 +674,14 @@ def _assert_lead_lifecycle_not_field_driven(client, pid, expected="Not Assigned"
                 if row["action_type"] in ("Field Completion", "Field Reopen")]
 
 
-def test_card_2b_registers_four_checkpoints_and_one_manual_lifecycle(client):
-    """Four checkpoint predicates feed one aggregate, non-automated task rule.
+def test_card_2b_registers_four_checkpoints_and_one_automated_aggregate(client):
+    """Four checkpoint predicates feed one automated aggregate task rule.
 
     The whole point of the consolidated page is that four items still complete
     independently -- so the table has to claim all four, and no two of them may
     key on the same field (that would make one item's Save move another's dot).
+    Since the ASAS owner decision the aggregate row is engine-automated too:
+    all four checkpoints complete IS the approval.
     """
     import workflow
     from workflow.constants import FIELD_COMPLETION_AUTOMATED_STEPS
@@ -665,7 +704,7 @@ def test_card_2b_registers_four_checkpoints_and_one_manual_lifecycle(client):
     aggregate = workflow.FIELD_COMPLETION[LEAD_STEP]
     assert set(aggregate["required_present"]) == {
         key for spec in specs.values() for key in spec.get("required_present", ())}
-    assert LEAD_STEP not in FIELD_COMPLETION_AUTOMATED_STEPS
+    assert LEAD_STEP in FIELD_COMPLETION_AUTOMATED_STEPS
 
 
 def test_inactive_legacy_assessment_fields_remain_readable_but_do_not_drive_v7_checkpoints(client):
@@ -956,11 +995,14 @@ def test_a_box_model_lead_shows_piip_but_lead_assessment_stays_three_of_four(cli
     assert _stage_counter(client, pid, "Lead Assessment") == (4, 4)
 
 
-def test_the_whole_page_one_save_turns_all_four_dots_green(client):
+def test_the_whole_page_one_save_turns_all_four_dots_green_and_auto_approves(client):
     """The end-to-end shape of one Save Updates press.
 
     The consolidated page PATCHes one task; the auto-run writes the PIIP mean
-    through the fields-only endpoint. Four completed checkpoints, one lifecycle.
+    through the fields-only endpoint. Four completed checkpoints -- and, since
+    the ASAS owner decision, the write that satisfies the LAST of them closes
+    the one lifecycle row itself: no supervisor click, one engine event,
+    whichever of the two save paths lands it.
     """
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-2B-PAGE")
@@ -969,6 +1011,8 @@ def test_the_whole_page_one_save_turns_all_four_dots_green(client):
                     twt_formation_ms="1800", thickness_source_mode="",
                     polygons_surfaces_loaded="1")
     _save_step(client, pid, LEAD_STEP, captured)
+    # Three of four checkpoints: the aggregate is unmet, so nothing moved yet.
+    _assert_lead_lifecycle_not_field_driven(client, pid)
     ra = get_task_by_name(client, pid, LEAD_STEP)
     client.patch(f"/api/tasks/{ra['task_id']}/dynamic-fields",
                  json={"fields": {"lead_piip_gas_mean": "19.4"}})
@@ -978,18 +1022,64 @@ def test_the_whole_page_one_save_turns_all_four_dots_green(client):
     # And the lead's headline volume is readable exactly where it always was.
     detail = client.get(f"/api/projects/{pid}/detail").get_json()
     assert detail["overview"]["lead_ogip"] == "19.4"
-    _assert_lead_lifecycle_not_field_driven(client, pid)
+    merged = get_task_by_name(client, pid, LEAD_STEP)
+    assert merged["status"] == "Approved"
+    engine = [row for row in history(client, merged["task_id"])
+              if row["action_type"] == "Field Completion"]
+    assert len(engine) == 1
+    assert engine[0]["comment"] == "Completed: required confirmations satisfied"
+    assert engine[0]["changed_by"] == SUPERVISOR
+
+    # IDEMPOTENT: replaying the same page save adds no second approval/event.
+    save(client, merged, captured)
+    assert get_task_by_name(client, pid, LEAD_STEP)["status"] == "Approved"
+    assert len([row for row in history(client, merged["task_id"])
+                if row["action_type"] == "Field Completion"]) == 1
 
 
-def test_approved_lead_assessment_lifecycle_never_reopens_from_checkpoint_edits(client):
+def test_breaking_one_checkpoint_reopens_the_auto_approved_lead_assessment(client):
+    """The reconcile is symmetric: clearing a required field on a later save of
+    the page reopens the auto-approved row, with its own audited event."""
+    login(client, SUPERVISOR)
+    pid = create_project(client, "FC-2B-UNAPPROVE")
+    captured = dict(AREA_OK, **THICKNESS_OK, **GRV_OK,
+                    polygons_surfaces_loaded="1", lead_piip_gas_mean="19.4")
+    approved = _save_step(client, pid, LEAD_STEP, captured)
+    assert approved["status"] == "Approved"
+
+    reopened = save(client, approved, {"p10_area_km2": ""})
+    assert reopened["status"] == "In Progress"
+    assert tracked_item(client, pid, AREA_STEP) != "Completed"
+    events = history(client, approved["task_id"])
+    reopen = [row for row in events if row["action_type"] == "Field Reopen"]
+    assert len(reopen) == 1
+    assert reopen[0]["comment"] == "Reopened: required confirmation removed"
+    # Restoring the field closes it again -- the engine is a reconciliation.
+    assert save(client, reopened, AREA_OK)["status"] == "Approved"
+
+
+def test_approved_lead_assessment_reconciles_only_on_its_own_save(client):
+    """The grandfather rule now covers Lead Assessment like every other step.
+
+    A manually-approved row (the transition endpoint stays functional for old
+    clients) keeps its approval until ITS OWN form is next saved; that save is
+    the user choosing the field state on screen, and the engine reconciles the
+    status to it -- here, to In Progress, because the aggregate is unmet.
+    """
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-2B-LIFECYCLE")
     approved = drive_to_approved(client, pid, LEAD_STEP)
     assert approved["status"] == "Approved"
-    save(client, approved, AREA_OK)
-    current = get_task_by_name(client, pid, LEAD_STEP)
-    save(client, current, {"p10_area_km2": ""})
-    _assert_lead_lifecycle_not_field_driven(client, pid, expected="Approved")
+    # Reads and sibling saves never touch it (the grandfather rule proper).
+    save(client, get_task_by_name(client, pid, "Reservoir CoS"),
+         {"reservoir_slides_loaded": "1"})
+    client.get(f"/api/projects/{pid}/detail").get_json()
+    assert get_task_by_name(client, pid, LEAD_STEP)["status"] == "Approved"
+    # Its own save, aggregate unmet -> reopen.
+    reopened = save(client, get_task_by_name(client, pid, LEAD_STEP), AREA_OK)
+    assert reopened["status"] == "In Progress"
+    assert [row["action_type"] for row in history(client, approved["task_id"])
+            if row["action_type"] in ("Field Completion", "Field Reopen")] == ["Field Reopen"]
 
 
 # ---------------------------------------------------------------------------
@@ -1433,42 +1523,81 @@ def test_one_page_press_produces_TWO_tracked_outcomes(client):
 
 
 # ---------------------------------------------------------------------------
-# Card 4C -- Pre-Drilling GeoX Assessment keeps the MANUAL walk
+# Card 4C -- Pre-Drilling GeoX Assessment completes from its stored results
 # ---------------------------------------------------------------------------
 
-def test_the_geox_assessment_is_deliberately_not_field_driven(client):
-    """Card 4C reuses the CURRENT completion rule, unmodified.
+def test_the_geox_assessment_is_field_driven_by_its_stored_mean(client):
+    """The ASAS owner decision closed card 4C's open question.
 
-    Today that is the manual submit -> approve walk, so the step must have NO
-    FIELD_COMPLETION entry: adding one would change a rule the card explicitly
-    leaves alone. (It is not a manual-APPROVAL step in the card 3D sense either
-    -- it simply has no field rule yet.)
+    "Done" for externally-produced GeoX results is "the results are stored":
+    the pre_drill mean is the one number downstream readers resolve the
+    pre-drill volume from, the same single-key rule Resource Assessment uses.
+    Without a predicate the step would be UNCOMPLETABLE -- the decision also
+    removed its supervisor walk from the UI.
     """
     import workflow
 
-    assert "Pre-Drilling GeoX Assessment" not in workflow.FIELD_COMPLETION
+    assert workflow.FIELD_COMPLETION["Pre-Drilling GeoX Assessment"] == {
+        "required_present": ("pre_drill_piip_gas_mean",)}
     assert "Pre-Drilling GeoX Assessment" not in workflow.CHECKBOX_SUBMIT_STEPS
+    assert "Pre-Drilling GeoX Assessment" in workflow.AUTO_APPROVE_ON_SAVE_STEPS
+    assert "pre_drill_piip_gas_mean" in workflow.POSITIVE_NUMBER_FIELDS
 
 
-def test_the_geox_assessment_still_completes_by_the_manual_walk(client):
+def test_the_geox_assessment_auto_approves_when_its_mean_is_stored(client):
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-4C-WALK")
     step = "Pre-Drilling GeoX Assessment"
-    # A calculator write (the step's only inputs) moves nothing on its own.
+    # The calculator write (the step's only input path) IS the completion.
     task = get_task_by_name(client, pid, step)
     client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
                  json={"fields": {"pre_drill_piip_gas_mean": "22.8"}})
-    assert get_task_by_name(client, pid, step)["status"] != "Approved"
-
-    drive_to_approved(client, pid, step)
+    assert get_task_by_name(client, pid, step)["status"] == "Approved"
     assert tracked_item(client, pid, "GeoX Assessment") == "Completed"
+
+    # Clearing the stored result reopens it (standard reconcile semantics);
+    # a zero is not a volume either (POSITIVE_NUMBER_FIELDS).
+    task = get_task_by_name(client, pid, step)
+    client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
+                 json={"fields": {"pre_drill_piip_gas_mean": ""}})
+    assert get_task_by_name(client, pid, step)["status"] == "In Progress"
+
+
+# ---------------------------------------------------------------------------
+# The BP execution pipeline is OUTSIDE the auto-approve policy
+# ---------------------------------------------------------------------------
+
+def test_bp_steps_never_auto_approve_on_save_and_keep_the_manual_walk(client):
+    """The owner decision names SEGMENT MATURATION steps only.
+
+    Well Delivery / Post-Drilling / Post-Testing keep the supervisor's
+    submit -> approve lifecycle: a field save on a BP step moves nothing, no
+    matter how complete the data looks, and the manual walk still closes it.
+    """
+    login(client, SUPERVISOR)
+    pid = create_project(client, "FC-BP-POLICY", pipeline_type="bp",
+                         business_plan_enabled=True, business_plan_year=2027)
+    task = get_task_by_name(client, pid, "Quicklook Logs")
+    saved = save(client, task, {"quicklook_pay_thickness_ft": "45",
+                                "quicklook_average_porosity_pct": "8",
+                                "quicklook_average_swt_pct": "35"})
+    assert saved["status"] == "Not Assigned"
+    assert not [row for row in history(client, task["task_id"])
+                if row["action_type"] in ("Field Completion", "Field Reopen")]
+    # A ticked sign-off pair on SAD Update is a submit GATE, not a completion.
+    sad = get_task_by_name(client, pid, "SAD Update")
+    saved = save(client, sad, {"sad_update_done": "1", "final_exec_summary_done": "1"})
+    assert saved["status"] == "Not Assigned"
+    # The manual walk is untouched.
+    approved = drive_to_approved(client, pid, "Quicklook Logs")
+    assert approved["status"] == "Approved"
 
 
 def test_pre_well_delivery_four_of_four_matures_the_whole_lead(client):
     """The 12/12 walk: every tracked item Completed -> the lead is Completed.
 
     Cards 4A/4B close three of Pre-Well Delivery's four items from field state;
-    the GeoX assessment closes by its unchanged manual walk. With Lead
+    the GeoX assessment closes from its stored mean. With Lead
     Assessment and Risk Analysis already done, that is 12 of 12 -- and a
     fully-matured lead LEAVES the prospect board and JOINS the Portfolio.
     """
@@ -1483,7 +1612,9 @@ def test_pre_well_delivery_four_of_four_matures_the_whole_lead(client):
     client.patch(f"/api/tasks/{ra['task_id']}/dynamic-fields",
                  json={"fields": {"lead_piip_gas_mean": "19.4"}})
     _save_step(client, pid, RA_STEP, {"polygons_surfaces_loaded": "1"})
-    drive_to_approved(client, pid, LEAD_STEP)
+    # The save that completed the fourth checkpoint auto-approved the row
+    # (ASAS owner decision) -- no manual walk left on this page.
+    assert get_task_by_name(client, pid, LEAD_STEP)["status"] == "Approved"
 
     # --- Risk Analysis (cards 3A / 3B / 3C / 3D) --------------------------
     _save_step(client, pid, "Reservoir CoS",
@@ -1503,7 +1634,9 @@ def test_pre_well_delivery_four_of_four_matures_the_whole_lead(client):
     _save_step(client, pid, TOLERANCE_STEP, TOLERANCE_OK)
     _save_step(client, pid, STAKE_STEP, STAKE_OK)
     _save_step(client, pid, WELLSITE_STEP, WELLSITE_OK)
-    drive_to_approved(client, pid, "Pre-Drilling GeoX Assessment")
+    geox = get_task_by_name(client, pid, "Pre-Drilling GeoX Assessment")
+    client.patch(f"/api/tasks/{geox['task_id']}/dynamic-fields",
+                 json={"fields": {"pre_drill_piip_gas_mean": "17.2"}})
 
     # --- 12 of 12 ---------------------------------------------------------
     project = client.get(f"/api/projects/{pid}").get_json()

@@ -1241,9 +1241,12 @@ def test_v7_prospect_completion_counts_four_derived_lead_checkpoints(client):
         "polygons_surfaces_loaded": "1", "lead_piip_gas_mean": "12.5",
     }})
     assert response.status_code == 200, response.get_json()
-    # Fields turn all four derived dots green but do NOT auto-approve the
-    # single lifecycle row.  Completion therefore remains 4/12, not 1/9.
-    assert client.get(f"/api/tasks/{task['task_id']}").get_json()["status"] == "Not Assigned"
+    # Fields turn all four derived dots green -- and, since the ASAS owner
+    # decision, the save that satisfies the fourth checkpoint auto-approves the
+    # single lifecycle row (workflow.AUTO_APPROVE_ON_SAVE_STEPS). The board's
+    # denominator is still the four derived dots: completion reads 4/12, the
+    # v7 row reduction never turns it into 1/9.
+    assert client.get(f"/api/tasks/{task['task_id']}").get_json()["status"] == "Approved"
     assert client.get(f"/api/projects/{pid}/completion").get_json() == {
         "percent": round(4 / 12 * 100, 1)}
 

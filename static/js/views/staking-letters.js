@@ -59,7 +59,13 @@ export var KEY_OWNER = {
   approval_stake_letter_loaded: 'Approval to Stake',
   wellsite_letter_loaded: 'Well Site Location',
   staked_x: 'Well Site Location',
-  staked_y: 'Well Site Location'
+  staked_y: 'Well Site Location',
+  // Item B: the staked well's name, captured alongside the coordinates and
+  // OWNED BY THE SAME TASK ROW as staked_x/staked_y so the three staking
+  // readings travel together. Free text, and it gates NOTHING: the server's
+  // FIELD_COMPLETION for Well Site Location does not read it, and no client
+  // rule below does either.
+  staked_well_name: 'Well Site Location'
 };
 
 // The three confirmations, IN PROCESS ORDER, with the card's exact wording.
@@ -88,9 +94,15 @@ export var LOCATION_FIELDS = [
   { key: 'staked_y', label: 'Staked Y Coordinate' }
 ];
 
+// Item B: the well-name input rendered alongside the coordinate pair, under
+// the same reveal. Deliberately NOT in LOCATION_FIELDS -- that list feeds the
+// numeric coordinate validator, and a name is free text with no rule at all.
+export var WELL_NAME_FIELD = { key: 'staked_well_name', label: 'Well Name' };
+
 export var LABELS = {
   staked_x: 'Staked X Coordinate',
-  staked_y: 'Staked Y Coordinate'
+  staked_y: 'Staked Y Coordinate',
+  staked_well_name: 'Well Name'
 };
 
 export var MESSAGES = {
@@ -223,16 +235,31 @@ function coordinateMarkup(field, values) {
     '</div>';
 }
 
+// Item B: the free-text Well Name cell. Same self-describing treatment as the
+// coordinates (the label IS the placeholder and the aria-label); no error slot
+// because no rule can reject a name.
+function wellNameMarkup(values) {
+  var value = values[WELL_NAME_FIELD.key];
+  return '<div class="sl-cell">' +
+    '<input type="text" data-sl-field="' + esc(WELL_NAME_FIELD.key) + '"' +
+    ' value="' + esc(value == null ? '' : value) + '"' +
+    ' placeholder="' + esc(WELL_NAME_FIELD.label) + '" aria-label="' + esc(WELL_NAME_FIELD.label) + '"' +
+    ' autocomplete="off" spellcheck="false">' +
+    '</div>';
+}
+
 // The revealed section. Rendered ALWAYS and merely hidden when the box is
 // unticked -- see locationRevealed for why the inputs must survive in the DOM.
 // It is nested inside the checkbox list, indented under the third box, because
-// it is that box's consequence rather than a fourth item.
+// it is that box's consequence rather than a fourth item. Reading order: the
+// well is NAMED, then WHERE it was staked.
 export function locationSectionMarkup(values) {
   var hidden = !locationRevealed(values);
   return '<div class="sl-location' + (hidden ? ' hidden' : '') + '" data-sl-section="location"' +
     ' aria-hidden="' + (hidden ? 'true' : 'false') + '">' +
     '<div class="sl-location-heading">' + esc(LOCATION_HEADING) + '</div>' +
     '<div class="sl-location-row">' +
+    wellNameMarkup(values) +
     LOCATION_FIELDS.map(function (field) { return coordinateMarkup(field, values); }).join('') +
     '</div></div>';
 }
@@ -430,17 +457,26 @@ export function renderStakingLetters(root, options) {
 // Save
 // ---------------------------------------------------------------------------
 
-// ONE navy button for the whole page. It validates the coordinates, groups the
-// values back onto their two owning tasks, and PATCHes only the dirty ones --
-// each with its OWN revision, sequentially, so the existing optimistic lock and
-// its 409 toast keep working per task exactly as they do for a single-step
-// form. TWO tracked outcomes from one press: the server's engine decides each
-// item from the fields that item owns.
-export function saveStakingLetters() {
-  if (!state) return Promise.resolve(false);
+// ONE save routine for the whole page (Item A: no button any more -- the
+// auto-save controller invokes this through saveComponent's dispatch). It
+// validates the coordinates, groups the values back onto their two owning
+// tasks, and PATCHes only the dirty ones -- each with its OWN revision,
+// sequentially, so the existing optimistic lock and its 409 toast keep working
+// per task exactly as they do for a single-step form. TWO tracked outcomes
+// from one save: the server's engine decides each item from the fields that
+// item owns.
+//
+// Resolves the shared outcome shape ({ok, state, message} -- see
+// detail-form.js saveComponent); `options.auto` suppresses every toast (the
+// inline field errors and the save-state indicator speak instead).
+export function saveStakingLetters(options) {
+  options = options || {};
+  var auto = !!options.auto;
+  if (!state) return Promise.resolve({ ok: false, state: 'error', message: 'Staking Letters is not open.' });
   if (!isCurrentPipelineView()) {
-    msg('Switch back to the current pipeline to save changes.', 'error');
-    return Promise.resolve(false);
+    var pipelineMessage = 'Switch back to the current pipeline to save changes.';
+    if (!auto) msg(pipelineMessage, 'error');
+    return Promise.resolve({ ok: false, state: 'error', message: pipelineMessage });
   }
   var root = byId('dynamic-fields');
   var values = readFormValues(root);
@@ -449,7 +485,10 @@ export function saveStakingLetters() {
   state.errors = errors;
   renderErrors(errors);
   var blocking = firstError(errors);
-  if (blocking) { msg(blocking, 'error'); return Promise.resolve(false); }
+  if (blocking) {
+    if (!auto) msg(blocking, 'error');
+    return Promise.resolve({ ok: false, state: 'invalid', message: blocking });
+  }
 
   var plan = buildSavePlan(values, Store.allFields || {});
   var comments = byId('comments');
@@ -459,7 +498,10 @@ export function saveStakingLetters() {
   if (commentsChanged && !plan.some(function (entry) { return entry.taskName === PRIMARY_STEP; })) {
     plan.push({ taskName: PRIMARY_STEP, fields: {} });
   }
-  if (!plan.length) { msg('No changes to save.', 'success'); return Promise.resolve(true); }
+  if (!plan.length) {
+    if (!auto) msg('No changes to save.', 'success');
+    return Promise.resolve({ ok: true, state: 'nochange' });
+  }
 
   var saveButton = byId('save-component');
   if (saveButton) saveButton.disabled = true;
@@ -483,12 +525,13 @@ export function saveStakingLetters() {
     });
   });
   return chain.then(function () {
-    return refreshAfterRecordChange('Staking letters saved.');
+    // Auto saves refresh silently; the indicator says 'Saved'.
+    return refreshAfterRecordChange(auto ? null : 'Staking letters saved.');
   }).then(function () {
-    return true;
+    return { ok: true, state: 'saved' };
   }).catch(function (error) {
-    msg(error.message, 'error');
-    return false;
+    if (!auto) msg(error.message, 'error');
+    return { ok: false, state: 'error', message: error.message };
   }).finally(function () {
     var button = byId('save-component');
     if (button) button.disabled = false;

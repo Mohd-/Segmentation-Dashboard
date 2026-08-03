@@ -592,6 +592,17 @@ FIELD_COMPLETION = {
         "required_checked": ("wellsite_letter_loaded",),
         "required_present": ("staked_x", "staked_y"),
     },
+    # ---- Card 4C + the ASAS owner decision. The step records results produced
+    # by the external GeoX application, so "done" is "the results are stored":
+    # the mean is the ONE number downstream readers resolve the pre-drill
+    # volume from (_OVERVIEW_READ_SOURCES's "pre_drill_estimation"), the same
+    # single-key rule Resource Assessment uses for lead_piip_gas_mean. Without
+    # this entry the step would be uncompletable: the owner decision removed
+    # its supervisor walk from the UI along with every other non-Segmentation
+    # maturation step's.
+    "Pre-Drilling GeoX Assessment": {
+        "required_present": ("pre_drill_piip_gas_mean",),
+    },
 }
 
 # Card 2B remains a four-checkpoint communication model even though v7 gives
@@ -606,12 +617,13 @@ LEAD_ASSESSMENT_CHECKPOINTS = (
     "Resource Assessment",
 )
 
-# The one real Lead Assessment lifecycle may be submitted and approved as a
-# whole.  Completion of the four checkpoints is derived from its fields, not a
-# second state machine.  This aggregate predicate is intentionally available
-# to callers that need to ask whether all four checkpoints are complete, but
-# is excluded from the automatic field-completion engine below: filling the
-# form must not bypass the supervisor's approval of the consolidated stage.
+# The one real Lead Assessment lifecycle row completes from this aggregate
+# predicate -- the union of the four checkpoints' rules -- so the row reads
+# Approved exactly when all four checkpoints are complete, and not a save
+# sooner. Since the ASAS owner decision (see AUTO_APPROVE_ON_SAVE_STEPS
+# below) the aggregate is AUTOMATED like every other field-driven card:
+# filling the consolidated page IS the approval, there is no separate
+# supervisor sign-off on the stage any more.
 FIELD_COMPLETION["Lead Assessment"] = {
     "required_checked": tuple(
         key for checkpoint in LEAD_ASSESSMENT_CHECKPOINTS
@@ -627,10 +639,43 @@ FIELD_COMPLETION["Lead Assessment"] = {
     ),
 }
 
-# Named independently so lifecycle can keep the established automatic behavior
-# for all field-driven cards while leaving Lead Assessment's submit/approve
-# lifecycle under human control.
-FIELD_COMPLETION_AUTOMATED_STEPS = frozenset(FIELD_COMPLETION) - {"Lead Assessment"}
+# Steps whose completion is a HUMAN APPROVAL and must never become field-driven.
+# "Segmentation Slides" is the one tracked item the board still shows as
+# "Pending Approval" (projects._READY_SHOWS_PENDING): its submit -> approve walk
+# IS the deliverable's review gate (card 3D), so putting it in FIELD_COMPLETION
+# would silently delete a supervisor's job. Named here rather than left as a
+# comment so a test can assert the two tables never overlap.
+FIELD_COMPLETION_MANUAL_APPROVAL_STEPS = frozenset({"Segmentation Slides"})
+
+# THE ASAS OWNER DECISION (verbatim): "No approval is required for all segment
+# maturation steps except segmentation slides (no approval or auto approval
+# on-save is now the default)."
+#
+# The policy set, DERIVED from the pipeline definition rather than retyped: every
+# PROSPECT-pipeline step (the Lead Assessment / Risk Analysis / Pre-Well Delivery
+# stage groups) except the manual-approval steps above auto-approves on save --
+# a step becomes Approved the moment a save satisfies its FIELD_COMPLETION
+# predicate, and reopens when a later save of that step breaks it (the engine's
+# reconcile + grandfather semantics, unchanged -- see
+# workflow.lifecycle.apply_field_completion). BP-pipeline steps (Well Delivery /
+# Post-Drilling / Post-Testing) are deliberately outside the policy and keep the
+# manual submit -> approve walk.
+AUTO_APPROVE_ON_SAVE_STEPS = frozenset(
+    task_name for _seq, task_name, stage_group in PIPELINE_TEMPLATES
+    if stage_group in PROSPECT_STAGES
+) - FIELD_COMPLETION_MANUAL_APPROVAL_STEPS
+
+# The engine's operating scope: the auto-approve policy steps that HAVE a
+# completion predicate, plus the four retired v7 checkpoint names (a legacy
+# inactive row saved by task_id still reconciles the way it always did).
+# Every policy step now has a predicate (Pre-Drilling GeoX Assessment gained
+# its stored-mean rule with the same owner decision), so the two sets differ
+# only by the checkpoint labels; the transition endpoint remains fully
+# functional for every step during a rolling deploy.
+FIELD_COMPLETION_AUTOMATED_STEPS = frozenset(
+    step for step in FIELD_COMPLETION
+    if step in AUTO_APPROVE_ON_SAVE_STEPS or step in LEAD_ASSESSMENT_CHECKPOINTS
+)
 
 # Keys whose "has a valid value" means a POSITIVE NUMBER, not merely a non-blank
 # string. Read by the engine's value validator (lifecycle._field_present) and
@@ -645,7 +690,7 @@ POSITIVE_NUMBER_FIELDS = frozenset({
     "p90_area_km2", "p10_area_km2",
     "reservoir_thickness_ft", "formation_thickness_ft",
     "grv_p90_thousand_acre_ft", "grv_p10_thousand_acre_ft",
-    "lead_piip_gas_mean",
+    "lead_piip_gas_mean", "pre_drill_piip_gas_mean",
 })
 
 
@@ -715,14 +760,6 @@ def lead_assessment_checkpoint_met(checkpoint, fields):
         return str(value or "").strip() != ""
 
     return field_completion_met(checkpoint, fields, present)
-
-# Steps whose completion is a HUMAN APPROVAL and must never become field-driven.
-# "Segmentation Slides" is the one tracked item the board still shows as
-# "Pending Approval" (projects._READY_SHOWS_PENDING): its submit -> approve walk
-# IS the deliverable's review gate (card 3D), so putting it in FIELD_COMPLETION
-# would silently delete a supervisor's job. Named here rather than left as a
-# comment so a test can assert the two tables never overlap.
-FIELD_COMPLETION_MANUAL_APPROVAL_STEPS = frozenset({"Segmentation Slides"})
 
 # ---------------------------------------------------------------------------
 # Checkbox-driven SUBMISSION (card 3D)

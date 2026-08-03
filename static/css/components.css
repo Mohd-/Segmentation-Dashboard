@@ -960,6 +960,18 @@
 button.priority:hover { background: var(--gray-050); }
 button.priority.priority-medium:hover { background: var(--warning-100); }
 button.priority.priority-high:hover { background: var(--danger-100); }
+/* Item A — the auto-save state indicator (#save-state), sitting after the
+   step title in the editor head. Muted by design: it is ambient status, not a
+   toast. Every color is a token, so both themes come for free (base.css
+   redefines the tokens under :root[data-theme="dark"]). Empty on BP pages
+   (which keep their Save button) and while idle. Error text may be a whole
+   validation message, so it alone is allowed to wrap, capped so it can never
+   crowd the assignee/status cluster out of the row. */
+.save-state { font-size: var(--text-xs); font-weight: 600; color: var(--text-faint); white-space: nowrap; }
+.save-state.is-saving { color: var(--text-muted); }
+.save-state.is-saved { color: var(--success-700); }
+.save-state.is-error { color: var(--danger-600); white-space: normal; max-width: 42ch; }
+
 .editor-assignee {
   margin-left: auto;
   width: auto;
@@ -2309,7 +2321,10 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   display: flex; flex-direction: column; gap: var(--space-2);
 }
 .sl-location-heading { font-size: var(--text-md); font-weight: 700; color: var(--ink-800); }
-.sl-location-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+/* Item B: three cells — Well Name, Staked X, Staked Y — one row on wide
+   screens, stacking to a single column below 1100px (media query further
+   down). */
+.sl-location-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
 .sl-cell { display: flex; flex-direction: column; gap: 2px; }
 
 .sl-field-error {

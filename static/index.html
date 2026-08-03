@@ -16,7 +16,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/css/base.css?v=10">
-  <link rel="stylesheet" href="/static/css/components.css?v=39">
+  <link rel="stylesheet" href="/static/css/components.css?v=40">
 </head>
 <body>
   <section id="login-page" class="login-page hidden">
@@ -269,6 +269,13 @@
           <div>
             <h2 id="component-title">Component</h2>
           </div>
+          <!-- Item A: the auto-save state indicator ("Saving…" / "Saved" / the
+               blocking message) for prospect step pages, whose Save button is
+               gone. Rendered by views/autosave.js (setSaveState); empty and
+               invisible on BP pages, which keep their explicit button. A
+               role=status live region must exist BEFORE text lands to be
+               announced, hence static markup rather than JS insertion. -->
+          <span id="save-state" class="save-state" role="status" aria-live="polite"></span>
           <select id="assigned-to" class="editor-assignee" aria-label="Assignee"></select>
           <span id="component-status-chip" class="status not-assigned editor-status-chip">Not Assigned</span>
         </div>
@@ -415,6 +422,6 @@
     <img id="ra-lightbox-img" alt="">
   </dialog>
 
-  <script type="module" src="/static/js/main.js?v=37"></script>
+  <script type="module" src="/static/js/main.js?v=38"></script>
 </body>
 </html>

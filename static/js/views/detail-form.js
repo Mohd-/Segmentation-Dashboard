@@ -19,6 +19,11 @@ import {
   isStakingLetterStep, stakingLettersActive, renderStakingLetters,
   saveStakingLetters, teardownStakingLetters
 } from './staking-letters.js';
+// Item A: prospect step pages auto-save. The controller lives in autosave.js;
+// this module only (a) tells it when the mounted task changed and (b) keeps
+// the focused control alive across the post-save re-render. Runtime-only
+// cycle (autosave.js imports saveComponent back), same as detail.js's.
+import { syncAutoSaveContext, captureEditorFocus, restoreEditorFocus } from './autosave.js';
 
 export function ensureUsers() {
   if (Store.users) return Promise.resolve(Store.users);
@@ -192,12 +197,26 @@ export function renderActionButtons(task) {
     String(Store.user.name).toLowerCase() === String(task.assigned_to || '').toLowerCase());
   var buttons = actionButtons();
   resetActionButtons(buttons);
+  // ITEM A: prospect step pages have no Save button -- persistence is the
+  // auto-save controller's job (views/autosave.js). The BP well shell keeps
+  // its explicit button. Gated on the VIEWED pipeline, so a reference view of
+  // prospect steps reads the same as a live one: prospect pages simply carry
+  // no Save button.
+  var prospectView = Store.pipeline === 'prospect';
+  var saveButton = byId('save-component');
+  if (saveButton) saveButton.classList.toggle('hidden', prospectView);
   var special = SPECIAL_ACTION_ROWS[task.task_name];
   if (special) {
     special({ task: task, status: status, role: role, editable: editable,
               isAssignee: isAssignee, buttons: buttons });
     return;
   }
+  // ITEM A3: with the server auto-approving prospect saves, the lifecycle
+  // buttons (Submit / Approve / Return) are furniture on every prospect step
+  // except Segmentation Slides (whose SPECIAL_ACTION_ROWS entry above keeps
+  // its checkbox-submit + supervisor review row). resetActionButtons has
+  // already hidden all three; the assignee control is untouched.
+  if (prospectView) return;
   var submitButton = buttons['submit-component'];
   var approveButton = buttons['approve-component'];
   var returnButton = buttons['return-component'];
@@ -329,6 +348,10 @@ export function loadComponent(task) {
   if (!task) return;
   var load = beginComponentLoad(task);
   Store.task = task;
+  // Item A: navigation to a DIFFERENT task resets the auto-save controller
+  // (stale timers, queued trailing save, indicator); the post-save reload of
+  // the same task keeps all three -- syncAutoSaveContext tells them apart.
+  syncAutoSaveContext();
   setComponentReferenceMode(!isCurrentPipelineView());
   all('.component-item').forEach(function (button) { button.classList.toggle('active', Number(button.getAttribute('data-task-id')) === task.task_id); });
   revealTaskStage(task);
@@ -1202,24 +1225,43 @@ export function savedMessage(savedTask, statusBeforeSave) {
   return 'Component saved.';
 }
 
-export function saveComponent(event) {
-  event.preventDefault();
-  if (!Store.task) return;
+// Every save path resolves the SAME outcome shape so the auto-save controller
+// (views/autosave.js) can drive its indicator without inspecting toasts:
+//   { ok: true,  state: 'saved' | 'nochange' }
+//   { ok: false, state: 'invalid' | 'error', message }
+// `options.auto` marks an auto-save: success / no-change / error toasts are
+// suppressed (the indicator speaks instead; inline errors keep rendering),
+// with ONE exception below -- a save that doubled as a checkbox-submission
+// still announces itself, because a lifecycle change is not a routine save.
+export function saveComponent(event, options) {
+  if (event && event.preventDefault) event.preventDefault();
+  options = options || {};
+  var auto = !!options.auto;
+  if (!Store.task) return Promise.resolve({ ok: false, state: 'error', message: 'No component selected.' });
   // Cards 2B / 4B: a consolidated workspace owns its own batched save (one
-  // button, several owning tasks, one PATCH each). Checked FIRST because
+  // page, several owning tasks, one PATCH each). Checked FIRST because
   // everything below -- getFields, validateStepFields, the single-task PATCH --
   // is written for a one-step form and would harvest nothing from those pages'
   // markup. Only one can ever be mounted (loadComponent tears the other down).
-  if (leadAssessmentActive()) return saveLeadAssessment();
-  if (stakingLettersActive()) return saveStakingLetters();
-  if (!isCurrentPipelineView()) return msg('Switch back to the current pipeline to save changes.', 'error');
+  if (leadAssessmentActive()) return saveLeadAssessment(options);
+  if (stakingLettersActive()) return saveStakingLetters(options);
+  if (!isCurrentPipelineView()) {
+    var pipelineMessage = 'Switch back to the current pipeline to save changes.';
+    if (!auto) msg(pipelineMessage, 'error');
+    return Promise.resolve({ ok: false, state: 'error', message: pipelineMessage });
+  }
   var fields = getFields();
   // Generic input sanity checks (numeric/negative/max/percent, area & thickness
   // ordering, piip trio ordering -- see schema.js) run before anything hits the
   // network; same "surface the message, abort the save" shape as the formations
-  // guard right below.
+  // guard right below. An AUTO save shows the message in the save-state
+  // indicator instead of a toast -- typing through a temporarily-invalid value
+  // must not rain toasts.
   var fieldsError = validateStepFields(Store.task.task_name, fields);
-  if (fieldsError) return msg(fieldsError, 'error');
+  if (fieldsError) {
+    if (!auto) msg(fieldsError, 'error');
+    return Promise.resolve({ ok: false, state: 'invalid', message: fieldsError });
+  }
   // A component with a formations mini-sheet also PUTs the touched phase's
   // well-level rows alongside the dynamic-field save.
   var formationsField = (SCHEMA[Store.task.task_name] || []).find(function (item) { return item.type === 'formations'; });
@@ -1228,9 +1270,12 @@ export function saveComponent(event) {
   // data in the phase-scoped full replacement.
   if (formationsField && formationDirty[formationsField.phase]) {
     var formationError = validateFormationRows(formationsField.phase);
-    if (formationError) return msg(formationError, 'error');
+    if (formationError) {
+      if (!auto) msg(formationError, 'error');
+      return Promise.resolve({ ok: false, state: 'invalid', message: formationError });
+    }
   }
-  var submitButton = event.target.querySelector('button[type="submit"]');
+  var submitButton = byId('save-component');
   if (submitButton) submitButton.disabled = true;
   // Card 3D: on a checkbox-submit step the SAVE may also have asked for a
   // review (the server does both in the one PATCH -- see
@@ -1244,7 +1289,7 @@ export function saveComponent(event) {
   // the keys are absent. Priority now has its own chip/endpoint, but save_task
   // defaults an absent priority to Medium (it does not preserve it), so we echo
   // the current value to avoid clobbering it on save.
-  API.updateTask(Store.task.task_id, {
+  return API.updateTask(Store.task.task_id, {
     comments: byId('comments').value,
     priority: Store.task.priority || 'Medium',
     fields: fields,
@@ -1266,6 +1311,11 @@ export function saveComponent(event) {
   }).then(function () {
     return API.detail(Store.projectId);
   }).then(function (detail) {
+    // The re-render below replaces the form's DOM, which would steal focus and
+    // discard anything typed while the PATCH was in flight. Snapshot the
+    // focused control NOW (its value is the newest typing) and put it back
+    // once the fresh markup is in place -- see autosave.js.
+    var focusSnapshot = captureEditorFocus();
     var selectedTaskId = Store.task.task_id;
     Store.project = detail.project || {};
     Store.tasks = detail.tasks || [];
@@ -1274,10 +1324,21 @@ export function saveComponent(event) {
     Store.overview = detail.overview || null;
     Store.formations = detail.formations || [];
     renderDetail();
-    loadComponent(Store.tasks.find(function (task) { return task.task_id === selectedTaskId; }) || chooseInitialTask(tasksForPipeline(Store.pipeline)));
-    refreshAllBoards();
-    msg(savedMessage(savedTask, statusBeforeSave), 'success');
-  }).catch(function (error) { msg(error.message, 'error'); }).finally(function () {
+    var nextTask = Store.tasks.find(function (task) { return task.task_id === selectedTaskId; }) ||
+      chooseInitialTask(tasksForPipeline(Store.pipeline));
+    return Promise.resolve(loadComponent(nextTask)).then(function () {
+      restoreEditorFocus(focusSnapshot);
+      refreshAllBoards();
+      var savedNote = savedMessage(savedTask, statusBeforeSave);
+      // Auto saves stay quiet -- UNLESS this save also filed a submission
+      // (card 3D): a status change the user caused deserves its toast.
+      if (!auto || savedNote !== 'Component saved.') msg(savedNote, 'success');
+      return { ok: true, state: 'saved' };
+    });
+  }).catch(function (error) {
+    if (!auto) msg(error.message, 'error');
+    return { ok: false, state: 'error', message: error.message };
+  }).finally(function () {
     if (submitButton) submitButton.disabled = false;
   });
 }

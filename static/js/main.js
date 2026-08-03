@@ -13,6 +13,7 @@ import { refreshAudit } from './views/audit.js';
 import { refreshMap } from './views/map-view.js';
 import { initCalculators } from './views/calculators.js';
 import { saveComponent, assignComponent, transitionComponent, ensureUsers } from './views/detail-form.js';
+import { initAutoSave } from './views/autosave.js';
 import { cycleLeadPriorityChip } from './views/detail.js';
 import { openProjectEditor } from './views/project-editor.js';
 import { performLogin, fetchUserOptions } from './auth.js';
@@ -108,6 +109,10 @@ export function wire() {
   // disclosure state for main.js to own any more.
   initLeadCreate();
   safeOn('component-form', 'submit', saveComponent);
+  // Item A: prospect step pages have no Save button -- edits auto-save
+  // (debounced input / immediate Enter). BP pages keep the explicit submit
+  // above; the controller gates itself out of them.
+  initAutoSave();
   // The record-level priority chip in the detail shell header (lead-level
   // attribute — see views/detail.js renderLeadPriorityChip).
   safeOn('lead-priority-chip', 'click', cycleLeadPriorityChip);

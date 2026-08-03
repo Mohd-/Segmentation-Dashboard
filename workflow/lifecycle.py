@@ -900,8 +900,12 @@ def apply_field_completion(session, task_id, changed_by):
     The redesign's detail cards define completion by FIELD STATE -- the ticked
     confirmations and the valid inputs declared in
     ``constants.FIELD_COMPLETION`` -- not by a human walking submit -> approve.
-    This function is the whole engine: it evaluates that declarative predicate
-    for the SAVED TASK ONLY and moves the step to match.
+    Since the ASAS owner decision (constants.AUTO_APPROVE_ON_SAVE_STEPS) that
+    is the DEFAULT for every prospect-pipeline step: only Segmentation Slides
+    keeps a supervisor's approval, and only Pre-Drilling GeoX Assessment (no
+    predicate yet) still needs the manual walk. This function is the whole
+    engine: it evaluates that declarative predicate for the SAVED TASK ONLY
+    and moves the step to match.
 
       - predicate MET, step not yet Approved -> drive it to Approved by WALKING
         the state machine (:func:`ensure_task_approved`) as the SAVING USER, and

@@ -1197,17 +1197,25 @@ function renderMountStatus() {
 // Save
 // ---------------------------------------------------------------------------
 
-// ONE navy button for the whole page. It validates everything, groups the
-// values back onto their four owning tasks, and PATCHes only the dirty ones --
-// each with its OWN revision, sequentially, so the existing optimistic lock and
-// its 409 toast keep working per task exactly as they do for a single-step
-// form. The auto-run's PIIP write is NOT part of this: it has already
-// persisted itself.
-export function saveLeadAssessment() {
-  if (!state) return Promise.resolve(false);
+// ONE save routine for the whole page (Item A: no button any more -- the
+// auto-save controller invokes this through saveComponent's dispatch). It
+// validates everything, groups the values back onto their four owning tasks,
+// and PATCHes only the dirty ones -- each with its OWN revision, sequentially,
+// so the existing optimistic lock and its 409 toast keep working per task
+// exactly as they do for a single-step form. The auto-run's PIIP write is NOT
+// part of this: it has already persisted itself.
+//
+// Resolves the shared outcome shape ({ok, state, message} -- see
+// detail-form.js saveComponent); `options.auto` suppresses every toast (the
+// card-bottom error strips and the save-state indicator speak instead).
+export function saveLeadAssessment(options) {
+  options = options || {};
+  var auto = !!options.auto;
+  if (!state) return Promise.resolve({ ok: false, state: 'error', message: 'Lead Assessment is not open.' });
   if (!isCurrentPipelineView()) {
-    msg('Switch back to the current pipeline to save changes.', 'error');
-    return Promise.resolve(false);
+    var pipelineMessage = 'Switch back to the current pipeline to save changes.';
+    if (!auto) msg(pipelineMessage, 'error');
+    return Promise.resolve({ ok: false, state: 'error', message: pipelineMessage });
   }
   var root = byId('dynamic-fields');
   var values = readFormValues(root);
@@ -1218,7 +1226,10 @@ export function saveLeadAssessment() {
   state.errors = errors;
   renderErrors(errors);
   var blocking = firstError(errors);
-  if (blocking) { msg(blocking, 'error'); return Promise.resolve(false); }
+  if (blocking) {
+    if (!auto) msg(blocking, 'error');
+    return Promise.resolve({ ok: false, state: 'invalid', message: blocking });
+  }
 
   // The roster of rows actually on the record decides the plan's shape: the
   // merged row when present, else the legacy rows hydration reads from.
@@ -1240,7 +1251,10 @@ export function saveLeadAssessment() {
   if (commentsChanged && !plan.some(ownsPrimaryRow)) {
     plan.push({ taskName: PRIMARY_STEP, fields: {} });
   }
-  if (!plan.length) { msg('No changes to save.', 'success'); return Promise.resolve(true); }
+  if (!plan.length) {
+    if (!auto) msg('No changes to save.', 'success');
+    return Promise.resolve({ ok: true, state: 'nochange' });
+  }
 
   var saveButton = byId('save-component');
   if (saveButton) saveButton.disabled = true;
@@ -1264,12 +1278,13 @@ export function saveLeadAssessment() {
     });
   });
   return chain.then(function () {
-    return refreshAfterRecordChange('Lead assessment saved.');
+    // Auto saves refresh silently; the indicator says 'Saved'.
+    return refreshAfterRecordChange(auto ? null : 'Lead assessment saved.');
   }).then(function () {
-    return true;
+    return { ok: true, state: 'saved' };
   }).catch(function (error) {
-    msg(error.message, 'error');
-    return false;
+    if (!auto) msg(error.message, 'error');
+    return { ok: false, state: 'error', message: error.message };
   }).finally(function () {
     var button = byId('save-component');
     if (button) button.disabled = false;

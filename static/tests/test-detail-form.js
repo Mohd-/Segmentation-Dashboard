@@ -23,12 +23,15 @@ var ACTION_ROW =
   '</div></form>';
 
 // One action row per test (harness.fixture removes it afterwards) plus the
-// Store state the row reads: who is looking, and at which pipeline.
-function mount(role, name) {
+// Store state the row reads: who is looking, and at which pipeline. `pipeline`
+// defaults to prospect; the generic-lifecycle tests pass 'bp' because since
+// Item A only BP step pages carry the Submit/Approve/Return row (and the Save
+// button) at all.
+function mount(role, name, pipeline) {
   var host = fixture(ACTION_ROW);
   Store.user = { name: name || 'Employee', role: role };
-  Store.project = { pipeline_type: 'prospect' };
-  Store.pipeline = 'prospect';
+  Store.project = { pipeline_type: pipeline || 'prospect' };
+  Store.pipeline = pipeline || 'prospect';
   return host;
 }
 
@@ -189,12 +192,12 @@ test('detail-form navigation: stale step responses cannot remount over Staking L
   });
 });
 
-// --- the generic row is untouched -------------------------------------------
+// --- the generic row survives on BP step pages -------------------------------
 
-test('detail-form action row: a normal step still shows Submit to its assignee', function () {
+test('detail-form action row: a BP step still shows Submit to its assignee', function () {
   withStore(function () {
-    mount('employee', 'Employee');
-    renderActionButtons(task('Area Definition', 'In Progress'));
+    mount('employee', 'Employee', 'bp');
+    renderActionButtons(task('Flowback Results', 'In Progress'));
     assert.equal(visible('submit-component'), true, 'the assignee may submit');
     assert.equal(visible('approve-component'), false);
     assert.equal(visible('return-component'), false);
@@ -202,10 +205,10 @@ test('detail-form action row: a normal step still shows Submit to its assignee',
   });
 });
 
-test('detail-form action row: a normal Ready step shows Approve to a supervisor', function () {
+test('detail-form action row: a BP Ready step shows Approve to a supervisor', function () {
   withStore(function () {
-    mount('supervisor', 'Supervisor');
-    renderActionButtons(task('Area Definition', 'Ready'));
+    mount('supervisor', 'Supervisor', 'bp');
+    renderActionButtons(task('Flowback Results', 'Ready'));
     assert.equal(visible('approve-component'), true);
     assert.equal(visible('return-component'), true);
     assert.equal(button('approve-component').textContent, 'Approve');
@@ -213,9 +216,45 @@ test('detail-form action row: a normal Ready step shows Approve to a supervisor'
   });
 });
 
+// --- Item A: prospect step pages carry neither Save nor lifecycle buttons ----
+
+test('detail-form action row: prospect steps hide Submit/Approve/Return at every status and for every role', function () {
+  withStore(function () {
+    ['employee', 'staff', 'supervisor'].forEach(function (role) {
+      mount(role, role === 'employee' ? 'Employee' : role);
+      ['Not Assigned', 'In Progress', 'Ready', 'Approved'].forEach(function (status) {
+        renderActionButtons(task('Trap and Seal CoS', status));
+        assert.equal(visible('submit-component'), false,
+          role + '/' + status + ': the server auto-approves prospect saves, so Submit is furniture');
+        assert.equal(visible('approve-component'), false, role + '/' + status);
+        assert.equal(visible('return-component'), false, role + '/' + status);
+      });
+    });
+  });
+});
+
+test('detail-form action row: the Save button is hidden on prospect pages and present on BP', function () {
+  withStore(function () {
+    mount('supervisor', 'Supervisor');
+    renderActionButtons(task('Trap and Seal CoS', 'In Progress'));
+    assert.equal(button('save-component').classList.contains('hidden'), true,
+      'prospect pages auto-save; the button is gone');
+
+    renderActionButtons(task('Segmentation Slides', 'Ready'));
+    assert.equal(button('save-component').classList.contains('hidden'), true,
+      'Segmentation Slides keeps its review row but not the Save button');
+  });
+  withStore(function () {
+    mount('employee', 'Employee', 'bp');
+    renderActionButtons(task('Flowback Results', 'In Progress'));
+    assert.equal(button('save-component').classList.contains('hidden'), false,
+      'BP step pages keep the explicit Save button');
+  });
+});
+
 // --- card 3D: Segmentation Slides -------------------------------------------
 
-test('detail-form action row: an employee on Segmentation Slides sees Save alone', function () {
+test('detail-form action row: an employee on Segmentation Slides sees no buttons at all', function () {
   withStore(function () {
     mount('employee', 'Employee');
     ['Not Assigned', 'In Progress', 'Ready', 'Approved'].forEach(function (status) {
@@ -227,8 +266,10 @@ test('detail-form action row: an employee on Segmentation Slides sees Save alone
       assert.equal(visible('return-component'), false,
         'an employee is never offered Return (' + status + ')');
     });
-    assert.ok(button('save-component'), 'Save Updates is the whole row');
-    assert.equal(button('save-component').classList.contains('hidden'), false);
+    // Item A: the Save button is gone from prospect pages too — auto-save
+    // (views/autosave.js) persists the checkbox tick, and the tick IS the
+    // submission (CHECKBOX_SUBMIT_STEPS).
+    assert.equal(button('save-component').classList.contains('hidden'), true);
   });
 });
 
@@ -289,11 +330,17 @@ test('detail-form action row: reference mode disables the supervisor controls', 
 
 test('detail-form action row: the overridden buttons are restored for the next step', function () {
   withStore(function () {
-    mount('supervisor', 'Supervisor');
+    // BP context: the generic row is the one place the restored defaults are
+    // still VISIBLE (prospect steps hide the whole row since Item A).
+    mount('supervisor', 'Supervisor', 'bp');
+    Store.pipeline = 'prospect';
+    Store.project = { pipeline_type: 'prospect' };
     renderActionButtons(task('Segmentation Slides', 'Ready'));
     assert.equal(button('approve-component').textContent, 'Approved');
 
-    renderActionButtons(task('Area Definition', 'Ready'));
+    Store.pipeline = 'bp';
+    Store.project = { pipeline_type: 'bp' };
+    renderActionButtons(task('Flowback Results', 'Ready'));
 
     assert.equal(button('approve-component').textContent, 'Approve',
       'the shared node carries no trace of the previous step');

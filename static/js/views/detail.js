@@ -7,6 +7,10 @@ import { BP_STAGES, PROSPECT_STAGES, STATUSES, DONE, SEISMIC_BLOCKS, FLOWBACK_RA
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { canTransitionPhase, promoteProject, recallProject } from './transitions.js';
 import { loadComponent, LATEST_PIIP_SOURCES, POST_DRILL_PIIP_SOURCES, LEAD_PIIP_SOURCES, copyText } from './detail-form.js';
+// Item A: keep the focused control (and its as-typed value/caret) alive across
+// the post-save re-render this module's refresh performs. Runtime-only cycle
+// (autosave.js -> detail-form.js -> here), same guarantee as the others above.
+import { captureEditorFocus, restoreEditorFocus } from './autosave.js';
 import { refreshAllBoards } from './pipeline.js';
 import { refreshAudit } from './audit.js';
 // Card 4B: the two task rows the consolidated Staking Letters page claims.
@@ -1205,16 +1209,25 @@ export function refreshAfterRecordChange(message) {
   return API.detail(Store.projectId)
     .then(function (detail) {
       var currentTaskId = Store.task && Store.task.task_id;
+      // Item A: an auto-save lands here mid-typing. Snapshot the focused form
+      // control before the re-render replaces it, restore it after -- a no-op
+      // for every non-form flow (transition, rename, priority) that also
+      // refreshes through here.
+      var focusSnapshot = captureEditorFocus();
       Store.project = detail.project || {};
       Store.tasks = detail.tasks || [];
       Store.allFields = detail.fields || {};
       Store.leadSummary = detail.lead_summary || null;
-    Store.overview = detail.overview || null;
-    Store.formations = detail.formations || [];
+      Store.overview = detail.overview || null;
+      Store.formations = detail.formations || [];
       renderDetail();
-      loadComponent(Store.tasks.find(function (task) { return task.task_id === currentTaskId; }) || chooseInitialTask(tasksForPipeline(Store.pipeline)));
-      refreshAllBoards();
-      if (message) msg(message, 'success');
+      var nextTask = Store.tasks.find(function (task) { return task.task_id === currentTaskId; }) ||
+        chooseInitialTask(tasksForPipeline(Store.pipeline));
+      return Promise.resolve(loadComponent(nextTask)).then(function () {
+        restoreEditorFocus(focusSnapshot);
+        refreshAllBoards();
+        if (message) msg(message, 'success');
+      });
     });
 }
 export async function renameSelectedProject() {

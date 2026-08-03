@@ -33,7 +33,8 @@ function values(overrides) {
     approval_stake_letter_loaded: '',
     wellsite_letter_loaded: '',
     staked_x: '',
-    staked_y: ''
+    staked_y: '',
+    staked_well_name: ''
   }, overrides || {});
 }
 
@@ -69,8 +70,12 @@ test('staking-letters: every edited key names its owning task', function () {
     approval_stake_letter_loaded: 'Approval to Stake',
     wellsite_letter_loaded: 'Well Site Location',
     staked_x: 'Well Site Location',
-    staked_y: 'Well Site Location'
+    staked_y: 'Well Site Location',
+    staked_well_name: 'Well Site Location'
   });
+  // Item B: the well name lives on the SAME task row as staked_x/staked_y, so
+  // the three staking readings always travel in one PATCH.
+  assert.equal(KEY_OWNER.staked_well_name, KEY_OWNER.staked_x);
   assert.equal(PRIMARY_STEP, 'Approval to Stake', 'the comments box binds to the first letter');
   // The v5 backfill key lands on Approval to Stake — that is where the
   // migration wrote it, and moving it would orphan every backfilled lead.
@@ -144,11 +149,12 @@ test('staking-letters: ticking the third box reveals Staked X / Staked Y', funct
   // accessible names — the row carries no captions.
   var inputs = Array.prototype.slice.call(section.querySelectorAll('input'));
   assert.deepEqual(inputs.map(function (input) { return input.getAttribute('data-sl-field'); }),
-    ['staked_x', 'staked_y']);
+    ['staked_well_name', 'staked_x', 'staked_y'],
+    'Item B: the well is NAMED, then WHERE it was staked');
   assert.deepEqual(inputs.map(function (input) { return input.placeholder; }),
-    ['Staked X Coordinate', 'Staked Y Coordinate']);
+    ['Well Name', 'Staked X Coordinate', 'Staked Y Coordinate']);
   assert.deepEqual(inputs.map(function (input) { return input.getAttribute('aria-label'); }),
-    ['Staked X Coordinate', 'Staked Y Coordinate']);
+    ['Well Name', 'Staked X Coordinate', 'Staked Y Coordinate']);
   assert.equal(locationRevealed(values({ wellsite_letter_loaded: '1' })), true);
 });
 
@@ -189,7 +195,8 @@ test('staking-letters: hiding the location NEVER clears the stored coordinates',
   });
   assert.deepEqual(plan.map(function (entry) { return entry.taskName; }), ['Well Site Location']);
   assert.deepEqual(plan[0].fields, {
-    wellsite_letter_loaded: '', staked_x: '532100.5', staked_y: '2895120.1'
+    wellsite_letter_loaded: '', staked_x: '532100.5', staked_y: '2895120.1',
+    staked_well_name: ''
   });
   teardownStakingLetters();
 });
@@ -272,7 +279,8 @@ test('staking-letters: the plan groups by owning task, in rail order, whole-task
   assert.deepEqual(plan[0].fields,
     { staking_well_created: '1', approval_stake_letter_loaded: '1' });
   assert.deepEqual(plan[1].fields,
-    { wellsite_letter_loaded: '1', staked_x: '532100.5', staked_y: '2895120.1' });
+    { wellsite_letter_loaded: '1', staked_x: '532100.5', staked_y: '2895120.1',
+      staked_well_name: '' });
 });
 
 test('staking-letters: boxes 1+2 alone complete ONE item and leave the other alone', function () {
@@ -424,4 +432,66 @@ test('staking-letters: the coordinate boxes are NUMERIC inputs — free text nev
   assert.ok(!input.classList.contains('sl-invalid'));
   assert.equal(readFormValues(mounted.root).staked_x, '532100.5');
   teardownStakingLetters();
+});
+
+/* -------------------------------------------------------------------------
+   Item B — the Well Name input
+   ------------------------------------------------------------------------- */
+
+test('staking-letters well name: a free-TEXT input under the same reveal as the coordinates', function () {
+  var mounted = mountPage({ 'Well Site Location': { wellsite_letter_loaded: '1' } });
+  var input = checkbox(mounted.root, 'staked_well_name');
+  assert.ok(input, 'the Well Name input renders');
+  assert.equal(input.type, 'text', 'free text — well names are not numbers');
+  assert.equal(input.placeholder, 'Well Name');
+  assert.equal(input.getAttribute('aria-label'), 'Well Name');
+  assert.ok(input.closest('[data-sl-section="location"]'),
+    'it lives inside the revealed staking-location section');
+  // Same non-destructive hide as the coordinates: unticking the reveal keeps
+  // the input (and its value) in the DOM.
+  var box = checkbox(mounted.root, 'wellsite_letter_loaded');
+  input.value = 'SARH-101';
+  box.checked = false;
+  box.dispatchEvent(new Event('change', { bubbles: true }));
+  assert.ok(mounted.root.querySelector('[data-sl-section="location"]').classList.contains('hidden'));
+  assert.equal(checkbox(mounted.root, 'staked_well_name').value, 'SARH-101');
+  assert.equal(readFormValues(mounted.root).staked_well_name, 'SARH-101');
+  teardownStakingLetters();
+});
+
+test('staking-letters well name: hydrates from the stored field and round-trips the save plan', function () {
+  var mounted = mountPage({
+    'Well Site Location': { wellsite_letter_loaded: '1', staked_x: '532100.5',
+                            staked_y: '2895120.1', staked_well_name: 'SARH-101' }
+  });
+  assert.equal(checkbox(mounted.root, 'staked_well_name').value, 'SARH-101',
+    'the stored name renders');
+  // Renaming ONLY the well dirties exactly the owning task, and the plan
+  // carries the coordinates back unchanged beside the new name.
+  var live = readFormValues(mounted.root);
+  live.staked_well_name = 'SARH-102';
+  var plan = buildSavePlan(live, {
+    'Well Site Location': { wellsite_letter_loaded: '1', staked_x: '532100.5',
+                            staked_y: '2895120.1', staked_well_name: 'SARH-101' }
+  });
+  assert.deepEqual(plan.map(function (entry) { return entry.taskName; }), ['Well Site Location'],
+    'Approval to Stake is untouched — no spurious PATCH, no spurious history');
+  assert.deepEqual(plan[0].fields, {
+    wellsite_letter_loaded: '1', staked_x: '532100.5', staked_y: '2895120.1',
+    staked_well_name: 'SARH-102'
+  });
+  teardownStakingLetters();
+});
+
+test('staking-letters well name: gates NOTHING — no validation rule, no completion input', function () {
+  // Any text is legal, including something that looks numeric or blank.
+  ['SARH-101', 'TBD', '', '  ', '42'].forEach(function (name) {
+    var errors = validateStakingLetters(values({ wellsite_letter_loaded: '1', staked_well_name: name }));
+    assert.deepEqual(errors, {}, JSON.stringify(name) + ' raises nothing');
+    assert.equal(firstError(errors), null);
+  });
+  // The validated coordinate list stays exactly the coordinate pair: the name
+  // can never join a completion or validation predicate by accident.
+  assert.deepEqual(LOCATION_FIELDS.map(function (field) { return field.key; }),
+    ['staked_x', 'staked_y']);
 });
