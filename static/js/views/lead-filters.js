@@ -244,14 +244,17 @@ function isChosen(key, value) {
 }
 
 // The CLOSED control's text: the selection itself, so the row reads as a
-// sentence of what the board is showing.
+// sentence of what the board is showing. At rest it is the bare caption
+// ("Assignee", not "All Assignees") — the four triggers share a band third
+// and the longer forms truncate there; the "All …" wording still appears as
+// each menu's first option, where it is the clear affordance.
 function triggerLabel(key) {
   if (key !== 'assignee') {
-    var all_ = FILTERS.filter(function (f) { return f.key === key; })[0].allLabel;
-    return filters[key] || all_;
+    var caption = FILTERS.filter(function (f) { return f.key === key; })[0].caption;
+    return filters[key] || caption;
   }
   var selected = filters.assignees;
-  if (!selected.length) return 'All Assignees';
+  if (!selected.length) return 'Assignee';
   if (selected.length === 1) return selected[0] === UNASSIGNED ? 'Unassigned' : selected[0];
   return selected.length + ' Assignees';
 }

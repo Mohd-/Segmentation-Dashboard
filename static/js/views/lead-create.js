@@ -219,10 +219,9 @@ export function openNewLead() {
   button.classList.add('hidden');
   button.setAttribute('aria-expanded', 'true');
   box.classList.remove('hidden');
-  // The control now lives INSIDE the one controls band, so expanding has to
-  // claim the band's full row (three inputs + hint won't share a line with
-  // four filter dropdowns). CSS-only consequence -- see
-  // .new-lead-controls.is-expanded in components.css.
+  // State hook for the band (the control lives in the band's first third and
+  // expands IN PLACE there; .is-expanded carries no geometry today, but the
+  // tests pin it as the expanded/collapsed signal).
   var root = controls();
   if (root) root.classList.add('is-expanded');
   var name = fieldInput('name');

@@ -16,7 +16,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/css/base.css?v=10">
-  <link rel="stylesheet" href="/static/css/components.css?v=33">
+  <link rel="stylesheet" href="/static/css/components.css?v=34">
 </head>
 <body>
   <section id="login-page" class="login-page hidden">
@@ -73,21 +73,22 @@
   <main class="app-chrome">
     <section id="tab-prospect" class="tab active" role="tabpanel">
       <div class="panel pipeline-panel">
-        <!-- ONE controls band (owner-approved consolidation): the Add New Lead
-             control, the filter row and the KPI row on a single horizontal
-             line — button | Assignee | Field | Status | Priority | donut |
-             leads | OGIP. Three containers rather than one because
-             views/lead-filters.js rebuilds #lead-filter-row's innerHTML
-             wholesale (its options are data-driven) and would wipe any sibling
-             markup placed inside it; views/lead-kpis.js does the same to
-             #lead-kpi-row. The 1px separators live on .lead-kpi-row and
-             .kpi-tile-ogip — one border per boundary, never a pair of adjacent
-             edges. Below ~1100px the band wraps to two rows (button + filters,
-             then the KPIs) — see components.css. -->
+        <!-- ONE controls band (owner-approved consolidation), divided in
+             THIRDS that line up with the three board columns underneath: the
+             Add New Lead control over Lead Assessment, the filter row over
+             Risk Analysis, the KPI row over Pre-Well Delivery (grid geometry
+             on .lead-controls in components.css). Three containers rather
+             than one because views/lead-filters.js rebuilds
+             #lead-filter-row's innerHTML wholesale (its options are
+             data-driven) and would wipe any sibling markup placed inside it;
+             views/lead-kpis.js does the same to #lead-kpi-row. The one 1px
+             separator lives on .kpi-tile-ogip; the thirds gutter divides the
+             filter zone from the KPIs. Below ~1100px the band stacks — see
+             components.css. -->
         <div class="lead-controls">
-          <!-- Card 1D — Add New Lead. One control, two states, IN PLACE (now
-               in place WITHIN the band): the navy button, or exactly three
-               inline fields (Lead Name, Lead X, Lead Y). NO <form>, no
+          <!-- Card 1D — Add New Lead. One control, two states, IN PLACE (in
+               the band's first third, both states): the navy button, or
+               exactly three inline fields (Lead Name, Lead X, Lead Y). NO <form>, no
                Create/Cancel buttons and no modal by design: Enter from any
                field creates, Escape or an outside click cancels
                (views/lead-create.js owns every one of those rules). The X/Y
@@ -404,6 +405,6 @@
     <img id="ra-lightbox-img" alt="">
   </dialog>
 
-  <script type="module" src="/static/js/main.js?v=29"></script>
+  <script type="module" src="/static/js/main.js?v=30"></script>
 </body>
 </html>

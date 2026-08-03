@@ -134,10 +134,10 @@ test('lead-filters renders the four controls left to right, all defaulted', func
   assert.deepEqual(Array.prototype.map.call(host.querySelectorAll('.lead-filter'),
     function (group) { return group.getAttribute('data-filter'); }),
     ['assignee', 'field', 'status', 'priority']);
-  assert.equal(label(host, 'assignee'), 'All Assignees');
-  assert.equal(label(host, 'field'), 'All Fields');
-  assert.equal(label(host, 'status'), 'All Statuses');
-  assert.equal(label(host, 'priority'), 'All Priorities');
+  assert.equal(label(host, 'assignee'), 'Assignee');
+  assert.equal(label(host, 'field'), 'Field');
+  assert.equal(label(host, 'status'), 'Status');
+  assert.equal(label(host, 'priority'), 'Priority');
   assert.ok(host.querySelector('.lf-clear'), 'the row offers Clear Filters');
 });
 
@@ -217,10 +217,10 @@ test('lead-filters assignee multi-select ORs members and keeps the menu open', f
   choose(host, 'assignee', 'R. Khalid');
   assert.deepEqual(names(), ['B-1']);
   assert.equal(label(host, 'assignee'), 'S. Ali');
-  // Un-ticking the last selection reverts to All Assignees.
+  // Un-ticking the last selection reverts to the resting caption.
   choose(host, 'assignee', 'S. Ali');
   assert.deepEqual(names(), ['A-1', 'B-1', 'C-1', 'D-1']);
-  assert.equal(label(host, 'assignee'), 'All Assignees');
+  assert.equal(label(host, 'assignee'), 'Assignee');
 });
 
 test('lead-filters Unassigned matches leads with no assignees at all', function () {
@@ -311,9 +311,9 @@ test('lead-filters Clear Filters restores every default', function () {
   host.querySelector('.lf-clear').click();
   assert.deepEqual(leadFilterState(), { assignees: [], field: '', status: '', priority: '' });
   assert.deepEqual(names(), ['GALV-2', 'LUNA-1']);
-  assert.equal(label(host, 'assignee'), 'All Assignees');
-  assert.equal(label(host, 'field'), 'All Fields');
-  assert.equal(label(host, 'priority'), 'All Priorities');
+  assert.equal(label(host, 'assignee'), 'Assignee');
+  assert.equal(label(host, 'field'), 'Field');
+  assert.equal(label(host, 'priority'), 'Priority');
 });
 
 // ---------------------------------------------------------------------------

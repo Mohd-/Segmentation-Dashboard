@@ -578,18 +578,18 @@ test('a successful create refreshes the board through the Card 1C rowset', async
 });
 
 /* -------------------------------------------------------------------------
-   The ONE controls band: Add New Lead now expands IN PLACE inside the band
-   (owner-approved main-page consolidation), so the two band-level classes the
-   layout depends on have to follow the control's state.
+   The ONE controls band: Add New Lead expands IN PLACE inside the band's
+   first third (owner-approved main-page consolidation), so the two band-level
+   classes the layout depends on have to follow the control's state.
    ------------------------------------------------------------------------- */
 
-test('expanding Add New Lead marks the control expanded so it claims the band row', function () {
+test('expanding Add New Lead marks the control expanded within its band third', function () {
   mount();
   var controls = el('new-lead-controls');
   assert.equal(controls.classList.contains('is-expanded'), false, 'collapsed at rest');
   openNewLead();
   assert.ok(controls.classList.contains('is-expanded'),
-    'expanded: CSS gives it flex: 1 1 100% so the filters wrap below instead of being squeezed');
+    'expanded: the band-level state hook follows the control (the fields replace the button in its own third)');
   press('new-lead-name', 'Escape');
   assert.equal(controls.classList.contains('is-expanded'), false, 'cancel restores the collapsed band row');
 });
