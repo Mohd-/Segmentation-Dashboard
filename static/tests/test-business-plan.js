@@ -177,13 +177,43 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   assert.equal(host.querySelectorAll('.bpe-nav-item').length, 14);
   assert.equal(host.querySelectorAll('.bpe-nav-item').length,
     new Set(Array.prototype.map.call(host.querySelectorAll('.bpe-nav-item'), function (button) { return button.textContent; })).size);
+  // The detail page is the maturation detail shell: rail (three stage blocks,
+  // the open step's one marked active) | editor | Well Summary card.
+  assert.equal(host.querySelectorAll('.detail-shell.detail-shell-lead').length, 1);
+  assert.equal(host.querySelectorAll('.component-rail .rail-stage-lead').length, 3);
+  assert.equal(host.querySelectorAll('.rail-stage-lead.is-active').length, 1);
+  assert.equal(host.querySelectorAll('.component-item.active').length, 1);
+  assert.equal(host.querySelector('.component-item.active').getAttribute('data-detail-slug'), 'business-plan-gate');
+  assert.equal(host.querySelectorAll('.component-editor.bpe-detail-form').length, 1);
+  // Form primitives are the house ones (Well Classification is the radio
+  // group; the gate's slides confirmation is the checkbox card).
+  assert.equal(host.querySelectorAll('.bpe-detail-form .radio-group .radio-option').length, 3);
+  assert.ok(host.querySelector('.bpe-detail-form .check-label'));
+  assert.ok(host.querySelector('.folder-card #bpe-copy-folder'));
+  assert.ok(host.querySelector('#bpe-save-feedback').classList.contains('save-state'));
+  // The Well Summary is the Lead Summary card's anatomy, and its progress bar
+  // is progressPercent() over the stage's own items (1 of 6 completed).
+  assert.equal(host.querySelectorAll('.summary-panel .ls-card').length, 1);
+  assert.equal(host.querySelector('.ls-title').textContent, 'Well Summary');
+  assert.equal(host.querySelector('.ls-progress-figures').textContent, '17%1 / 6');
+  assert.deepEqual(Array.prototype.map.call(host.querySelectorAll('.ls-col-value'), function (cell) {
+    return cell.textContent;
+  }), ['MDFT-7', 'MDFT', String(currentYear)]);
+  assert.equal(host.querySelectorAll('.ls-items .lead-dot').length, 6);
   assert.ok(host.querySelector('.bpe-save-line').textContent.indexOf('All changes are saved automatically') >= 0);
   assert.equal(host.textContent.indexOf('Save Updates'), -1);
   assert.deepEqual(Array.prototype.map.call(host.querySelectorAll('.bpe-approval-row button'), function (button) {
     return button.textContent.trim();
   }), ['Return', 'Approve', 'Submit for Approval']);
-  assert.ok(host.querySelector('#bpe-summary-gear'));
-  assert.ok(host.querySelector('#bpe-edit-all'));
+  assert.ok(host.querySelector('#bpe-summary-gear').classList.contains('ls-gear'));
+  assert.ok(host.querySelector('#bpe-summary-menu').classList.contains('ls-menu'));
+  assert.ok(host.querySelector('#bpe-edit-all').classList.contains('ls-menu-item'));
+  // The gear still opens and dismisses its own menu (only the classes moved).
+  assert.equal(host.querySelector('#bpe-summary-menu').classList.contains('hidden'), true);
+  host.querySelector('#bpe-summary-gear').click();
+  assert.equal(host.querySelector('#bpe-summary-menu').classList.contains('hidden'), false);
+  document.body.click();
+  assert.equal(host.querySelector('#bpe-summary-menu').classList.contains('hidden'), true);
 });
 
 function detailPayload(slug, values) {
@@ -211,6 +241,8 @@ function detailPayload(slug, values) {
 test('business-plan serializes auto-saves and a stale response cannot replace newer input', async function () {
   var host = fixture('<div id="bpe-main-view"></div><section id="bpe-detail-view" class="hidden"></section>');
   var base = detailPayload('business-plan-gate', {});
+  // An unrecorded value is a DASH in the Well Summary, never a blank cell.
+  base.project.business_plan_year = null;
   var payloads = [];
   var releases = [];
   var concurrent = 0;
@@ -239,6 +271,8 @@ test('business-plan serializes auto-saves and a stale response cannot replace ne
   });
 
   await openBusinessPlanDetail(7, 'business-plan-gate');
+  assert.equal(host.querySelectorAll('.ls-col-value')[2].textContent, '—',
+    'a missing Business Plan Year reads as a dash, not a blank');
   var program = host.querySelector('[data-bpe-field="bp_gate_logging_program"]');
   program.value = 'Standard A';
   program.dispatchEvent(new Event('change', { bubbles: true }));

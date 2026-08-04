@@ -1,4 +1,4 @@
-import { byId, all, esc, compact, fmtNum, msg, truthy } from '../dom.js';
+import { byId, all, esc, compact, fmtNum, isFilled, msg, truthy } from '../dom.js';
 import { ICONS } from '../icons.js';
 import { API } from '../api.js';
 import { Store, currentRole, currentUserName } from '../state.js';
@@ -7,6 +7,10 @@ import {
   kpiDonutHtml, kpiTileHtml, personChipsHtml, leadItemHtml
 } from './board-widgets.js';
 import { DROPDOWN_OPEN_EVENT } from './lead-filters.js';
+// The Well Summary reuses the Lead Summary card's two exported primitives, so
+// the two panels can never disagree about a percentage or about how "no value
+// recorded" looks.
+import { progressPercent, EM_DASH } from './lead-summary.js';
 
 var FLUIDS = ['Gas', 'Gas over Water', 'Water Bearing', 'Dry Hole', 'Oil', 'Oil over Gas', 'Oil over Water'];
 var STAGE_META = [
@@ -585,11 +589,13 @@ function trackingByKey(key) {
 
 function value(key) { return (state.detail.values || {})[key]; }
 
+// The house checkbox card (components.css .check-label). `is-system` still
+// means "the workflow ticked this, not you" and still reads faint.
 function checkbox(key, label, options) {
   options = options || {};
   var checked = options.checked == null ? truthy(value(key)) : !!options.checked;
   var disabled = options.disabled ? 'disabled' : '';
-  return '<label class="bpe-check ' + (options.system ? 'is-system' : '') + '">' +
+  return '<label class="check-label' + (options.system ? ' is-system' : '') + '">' +
     '<input type="checkbox" data-bpe-field="' + esc(key) + '" ' + (checked ? 'checked' : '') + ' ' + disabled + '>' +
     '<span>' + esc(label) + '</span></label>';
 }
@@ -615,11 +621,20 @@ function selectInput(key, label, options, configOptions) {
     selectOptions(options, value(key), configOptions.placeholder) + '</select></label>';
 }
 
+// The house radio group (components.css .radio-group / .radio-group-label /
+// .radio-options / .radio-option, the same markup detail-form.js emits): a
+// quiet label over a row of option pills. `hideLegend` keeps the label in the
+// accessibility tree and takes it off the screen -- the group's heading is
+// already above it.
 function radioGroup(key, label, options, disabled, hideLegend) {
-  return '<fieldset class="bpe-radio-group"><legend class="' + (hideLegend ? 'visually-hidden' : '') + '">' + esc(label) + '</legend><div>' + options.map(function (option) {
-    return '<label><input type="radio" name="' + esc(key) + '" data-bpe-field="' + esc(key) + '" value="' + esc(option) + '" ' +
-      (String(value(key)) === option ? 'checked' : '') + ' ' + (disabled ? 'disabled' : '') + '><span>' + esc(option) + '</span></label>';
-  }).join('') + '</div></fieldset>';
+  var labelId = 'bpe-radio-label-' + esc(key);
+  return '<div class="radio-group" role="radiogroup" aria-labelledby="' + labelId + '">' +
+    '<span class="radio-group-label' + (hideLegend ? ' visually-hidden' : '') + '" id="' + labelId + '">' +
+    esc(label) + '</span><div class="radio-options">' + options.map(function (option) {
+      return '<label class="radio-option"><input type="radio" name="' + esc(key) + '" data-bpe-field="' + esc(key) +
+        '" value="' + esc(option) + '" ' + (String(value(key)) === option ? 'checked' : '') + ' ' +
+        (disabled ? 'disabled' : '') + '><span>' + esc(option) + '</span></label>';
+    }).join('') + '</div></div>';
 }
 
 function commentsMarkup() {
@@ -628,13 +643,19 @@ function commentsMarkup() {
     esc(value(key) || '') + '</textarea></label>';
 }
 
+// The house file-location card (components.css .folder-card, the same glyph /
+// path / copy-button row detail-form.js renderComponentFolder and the summary
+// panel's folder rows draw). The path stays a LINK here -- the BP share is
+// openable and always was -- wearing the house .folder-path chrome.
 function folderMarkup(omit) {
   if (omit) return '';
   var folder = state.detail.folder || {};
   if (!folder.path) return '';
-  return '<div class="bpe-folder-row"><a href="' + esc(folder.file_url || '#') + '" title="Open shared folder">' +
-    '<span class="bpe-folder-icon">' + icon('folder') + '</span><span>' + esc(folder.path) + '</span></a>' +
-    '<button type="button" id="bpe-copy-folder" class="bpe-copy-button" title="Copy shared-folder path" aria-label="Copy shared-folder path">' +
+  return '<div class="folder-card">' +
+    '<span class="folder-glyph" aria-hidden="true">📁</span>' +
+    '<a class="folder-path" href="' + esc(folder.file_url || '#') + '" title="' + esc(folder.path) + '">' +
+    esc(folder.path) + '</a>' +
+    '<button type="button" id="bpe-copy-folder" class="icon-btn" title="Copy shared-folder path" aria-label="Copy shared-folder path">' +
     icon('copy') + '</button></div>';
 }
 
@@ -642,7 +663,10 @@ function commonTail(options) {
   options = options || {};
   return commentsMarkup() + folderMarkup(options.omitFolder) +
     '<div class="bpe-save-line"><span>All changes are saved automatically</span>' +
-    '<small id="bpe-save-feedback" aria-live="polite"></small>' +
+    // The house auto-save indicator (components.css .save-state): ambient
+    // status, not a toast. setFeedback() owns its is-saving/is-saved/is-error
+    // state classes; the texts are unchanged.
+    '<small id="bpe-save-feedback" class="save-state" aria-live="polite"></small>' +
     '<button type="button" id="bpe-retry-save" class="ghost hidden">Retry</button></div>' +
     approvalMarkup();
 }
@@ -916,13 +940,58 @@ function bodyMarkup() {
   return commonTail();
 }
 
+/* =========================================================================
+   Card R3 — the detail SHELL, in the Segment Maturation detail page's own
+   language: the house .detail-shell.detail-shell-lead grid (rail | editor |
+   summary), the house .rail-stage-lead / .component-item rail, the house
+   .editor-head, and the Lead Summary card's .ls-* anatomy.
+
+   Nothing about the save engine, the field keys or the focus-restore
+   attributes moved -- only the chrome around them.
+   ========================================================================= */
+
+// The rail: three stage blocks, all expanded (the BP page is not an accordion
+// -- its fourteen steps fit, and a fold would hide the step you came for).
+// The block holding the open step carries .is-active, the navy accent the
+// maturation rail uses for its current stage.
 function detailNavMarkup() {
+  var stageIcons = {};
+  STAGE_META.forEach(function (stage) { stageIcons[stage.key] = stage.icon; });
+  var number = 0;
   return (state.detail.navigation || []).map(function (group) {
-    return '<div class="bpe-nav-group"><h3>' + esc(group.stage_label) + '</h3>' + group.details.map(function (item) {
-      return '<button type="button" data-detail-slug="' + esc(item.slug) + '" class="bpe-nav-item ' +
-        (item.slug === state.detailSlug ? 'active' : '') + '">' + esc(item.label) + '</button>';
-    }).join('') + '</div>';
+    var isActive = group.details.some(function (item) { return item.slug === state.detailSlug; });
+    var items = group.details.map(function (item) {
+      number += 1;
+      // .bpe-nav-item is carried for the click wiring and the tests; the LOOK
+      // is entirely the house .component-item (+ .active, exactly as
+      // views/detail.js marks its current component).
+      return '<button type="button" class="component-item bpe-nav-item' +
+        (item.slug === state.detailSlug ? ' active' : '') + '" data-detail-slug="' + esc(item.slug) + '">' +
+        '<span class="component-num">' + number + '</span><b>' + esc(item.label) + '</b></button>';
+    }).join('');
+    return '<div class="rail-stage rail-stage-lead' + (isActive ? ' is-active' : '') + '"' +
+      ' data-stage="' + esc(group.stage_key) + '">' +
+      // A DIV, not a button: these blocks never collapse, so there is nothing
+      // to press and no chevron to promise one.
+      '<div class="rail-stage-head">' +
+        '<span class="stage-icon" aria-hidden="true">' + icon(stageIcons[group.stage_key]) + '</span>' +
+        '<span class="rail-stage-name">' + esc(group.stage_label) + '</span>' +
+        '<span class="rail-stage-count">' + group.details.length + '</span>' +
+      '</div>' +
+      '<div class="rail-stage-body">' + items + '</div>' +
+      '</div>';
   }).join('');
+}
+
+function railMarkup() {
+  var detail = state.detail;
+  return '<aside class="component-rail">' +
+    '<div class="rail-head">' +
+      '<div class="detail-title-row"><h3>' + esc(detail.project.project_name) + '</h3></div>' +
+      '<p class="bpe-rail-eyebrow">' + esc(detail.detail.stage_label) + '</p>' +
+    '</div>' +
+    '<div class="component-list">' + detailNavMarkup() + '</div>' +
+    '</aside>';
 }
 
 function assigneeOptions() {
@@ -930,26 +999,85 @@ function assigneeOptions() {
   return [{ value: '', label: 'Not Assigned' }].concat(users.map(function (user) { return { value: user.name, label: user.name }; }));
 }
 
+// The editor head's two controls wear the maturation editor's compact select
+// chrome (.editor-assignee). They keep their captions -- there are TWO of them
+// here, and "Supervisor / High" side by side says nothing on its own.
 function topControlsMarkup() {
   var role = state.detail.role || currentRole();
-  return '<div class="bpe-detail-controls"><label>Assignee<select id="bpe-assignee" ' +
+  return '<div class="bpe-detail-controls">' +
+    '<label>Assignee<select id="bpe-assignee" class="editor-assignee" ' +
     (role === 'employee' ? 'disabled' : '') + '>' + selectOptions(assigneeOptions(), state.detail.assignee) + '</select></label>' +
-    '<label>Priority<select id="bpe-priority" ' + (role !== 'supervisor' ? 'disabled' : '') + '>' +
+    '<label>Priority<select id="bpe-priority" class="editor-assignee" ' +
+    (role !== 'supervisor' ? 'disabled' : '') + '>' +
     selectOptions(['Low', 'Medium', 'High'], state.detail.project.priority) + '</select></label></div>';
 }
 
+function editorMarkup() {
+  var detail = state.detail;
+  var chip = (detail.tracking || []).length
+    ? '<span class="bpe-detail-status state-' + esc(detail.tracking[0].color) + '">' +
+      statusIcon(detail.tracking[0]) + esc(detail.tracking[0].status) + '</span>'
+    : '';
+  return '<section class="component-editor bpe-detail-form">' +
+    '<div class="editor-head"><h2>' + esc(detail.detail.label) + '</h2>' + chip + topControlsMarkup() + '</div>' +
+    bodyMarkup() +
+    '</section>';
+}
+
+/* -------------------------------------------------------------------------
+   The Well Summary — the Lead Summary card's anatomy (views/lead-summary.js:
+   .ls-card / .ls-head / .ls-progress / .ls-section / .ls-menu), filled with
+   this well's own facts. progressPercent() is IMPORTED rather than reproduced,
+   so the bar can never disagree with the maturation card's; the denominator
+   is the stage's OWN item count, not a hard-coded six.
+   ------------------------------------------------------------------------- */
+
+// A summary value cell: the value, or the one "no value" glyph. Never blank --
+// a blank cell reads as a layout bug, a dash reads as "not recorded yet".
+function summaryColumn(label, raw) {
+  return '<div class="ls-col">' +
+    '<span class="ls-col-label">' + esc(label) + '</span>' +
+    '<span class="ls-col-value">' + (isFilled(raw) ? esc(raw) : EM_DASH) + '</span>' +
+    '</div>';
+}
+
+function summaryProgressHtml(items) {
+  var total = items.length;
+  var done = items.filter(function (item) { return item.status === 'Completed'; }).length;
+  var percent = progressPercent({ completed: done, total: total });
+  return '<div class="ls-progress">' +
+    '<div class="ls-progress-track"><span style="width:' + percent + '%"></span></div>' +
+    '<div class="ls-progress-figures"><b>' + percent + '%</b>' +
+    '<small>' + done + ' / ' + total + '</small></div></div>';
+}
+
 function summaryMarkup() {
-  var completed = (state.detail.stage_items || []).filter(function (item) { return item.status === 'Completed'; }).length;
-  return '<aside class="bpe-well-summary"><header><h3>Well Summary</h3><button type="button" id="bpe-summary-gear" class="icon-btn" ' +
-    'aria-haspopup="menu" aria-expanded="false" title="Well Summary actions">' + icon('settings') + '</button>' +
-    '<div id="bpe-summary-menu" class="bpe-summary-menu hidden" role="menu" aria-labelledby="bpe-summary-gear"><button type="button" id="bpe-edit-all" role="menuitem">Edit all project fields</button></div></header>' +
-    '<dl><div><dt>Well</dt><dd>' + esc(state.detail.project.project_name) + '</dd></div>' +
-    '<div><dt>Field</dt><dd>' + esc(state.detail.project.field || '-') + '</dd></div>' +
-    '<div><dt>Business Plan Year</dt><dd>' + esc(state.detail.project.business_plan_year || '-') + '</dd></div>' +
-    '<div><dt>Stage Progress</dt><dd>' + completed + '/6</dd></div></dl>' +
-    '<div class="bpe-summary-items">' + (state.detail.stage_items || []).map(function (item) {
-      return '<div class="state-' + esc(item.color) + '"><span>' + statusIcon(item) + '</span><span>' + esc(item.label) + '</span></div>';
-    }).join('') + '</div></aside>';
+  var detail = state.detail;
+  var project = detail.project || {};
+  var items = detail.stage_items || [];
+  return '<aside class="summary-panel"><div class="ls-card">' +
+    '<div class="ls-head"><h3 class="ls-title">Well Summary</h3>' +
+      '<button type="button" id="bpe-summary-gear" class="icon-btn ls-gear" aria-haspopup="menu"' +
+      ' aria-expanded="false" title="Well Summary actions" aria-label="Well Summary actions">' + icon('settings') + '</button>' +
+    '</div>' +
+    summaryProgressHtml(items) +
+    '<section class="ls-section"><h4 class="ls-section-title">Well</h4>' +
+      '<div class="ls-grid" style="grid-template-columns:repeat(3,minmax(0,1fr))">' +
+      summaryColumn('Name', project.project_name) +
+      summaryColumn('Field', project.field) +
+      summaryColumn('BP Year', project.business_plan_year) +
+      '</div></section>' +
+    '<section class="ls-section"><h4 class="ls-section-title">' + esc(detail.detail.stage_label) + '</h4>' +
+      '<div class="ls-items">' + items.map(function (item) {
+        // The board's own dot vocabulary (views/board-widgets.js), so a step's
+        // state reads the same on the card and in this panel.
+        return '<span class="lead-item">' + leadItemHtml(item.status, item.label) +
+          '<span class="lead-item-label">' + esc(item.label) + '</span></span>';
+      }).join('') + '</div></section>' +
+    '<div id="bpe-summary-menu" class="ls-menu hidden" role="menu" aria-labelledby="bpe-summary-gear">' +
+      '<button type="button" id="bpe-edit-all" class="ls-menu-item" role="menuitem">Edit all project fields</button>' +
+    '</div>' +
+    '</div></aside>';
 }
 
 function approvalMarkup() {
@@ -1047,14 +1175,11 @@ function renderDetail() {
   if (!detail) return;
   var focus = captureDetailFocus();
   byId('bpe-detail-view').innerHTML =
-    '<button type="button" id="bpe-back" class="bpe-back ghost">' + icon('arrow-left') + ' Back to Business Plan Execution</button>' +
-    '<header class="bpe-detail-head"><div><span>' + esc(detail.detail.stage_label) + '</span><h1>' + esc(detail.project.project_name) + '</h1>' +
-    '<p>' + esc(detail.detail.label) + '</p></div>' + topControlsMarkup() + '</header>' +
-    '<div class="bpe-detail-grid"><nav class="bpe-detail-nav" aria-label="Business Plan steps">' + detailNavMarkup() + '</nav>' +
-    '<section class="bpe-detail-form"><header><h2>' + esc(detail.detail.label) + '</h2>' +
-    ((detail.tracking || []).length ? '<span class="bpe-detail-status state-' + esc(detail.tracking[0].color) + '">' +
-      statusIcon(detail.tracking[0]) + esc(detail.tracking[0].status) + '</span>' : '') + '</header>' + bodyMarkup() + '</section>' +
-    summaryMarkup() + '</div>';
+    '<button type="button" id="bpe-back" class="ghost back-to-board">' + icon('arrow-left') +
+      ' <span>Back to Business Plan Execution</span></button>' +
+    '<div class="detail-shell detail-shell-lead panel">' +
+      railMarkup() + editorMarkup() + summaryMarkup() +
+    '</div>';
   applyDetailControlLocks();
   bindDetail();
   ensureUsers();
@@ -1073,11 +1198,15 @@ function ensureUsers() {
   }).catch(function () {});
 }
 
+// The house .save-state indicator's three moods. The TEXTS are the contract
+// (the save engine and the tests read them); the classes only color them.
 function setFeedback(text, error) {
   var feedback = byId('bpe-save-feedback');
   if (!feedback) return;
   feedback.textContent = text || '';
   feedback.classList.toggle('is-error', !!error);
+  feedback.classList.toggle('is-saving', !error && text === 'Saving...');
+  feedback.classList.toggle('is-saved', !error && text === 'Saved');
   var retry = byId('bpe-retry-save');
   if (retry) retry.classList.toggle('hidden', !error);
 }
