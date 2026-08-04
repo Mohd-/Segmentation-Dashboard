@@ -758,10 +758,12 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
             # when only the YEAR changed: set_business_plan handles a year-only
             # change, and it re-captures the snapshot only for a non-bp
             # pipeline_type, so an already-promoted well keeps its snapshot.
-            # (Year < 2026 for historicals relies on the guard's 1990 floor.)
+            # (Year < 2026 for historicals relies on the guard's 1990 floor --
+            # allow_historical_year=True skips the promotion-only current-year
+            # floor, since imports legitimately land historical BP wells.)
             workflow.update_project_flags(
                 session, pid, business_plan_enabled=True, business_plan_year=year,
-                changed_by=IMPORT_USER)
+                changed_by=IMPORT_USER, allow_historical_year=True)
 
         classification = _text(row, "Classification")
         if classification:

@@ -12,6 +12,7 @@ early-promoted one returns to the board exactly where it left off.
 from __future__ import annotations
 
 import time
+from datetime import date
 
 import pytest
 
@@ -54,6 +55,57 @@ def test_promotion_year_validation(client):
 
     resp = client.patch(f"/api/projects/{pid}/flags", json={"business_plan_enabled": True})
     assert resp.status_code == 400
+
+
+def test_promotion_rejects_a_past_year(client):
+    """A fresh promotion (business_plan_enabled flips false -> true) can't
+    target a year before today's -- only Excel imports get that escape hatch
+    (see tests/test_import.py, allow_historical_year=True)."""
+    pid = create_project(client, "PROMO-PAST-1")
+    resp = client.patch(f"/api/projects/{pid}/flags", json={
+        "business_plan_enabled": True, "business_plan_year": date.today().year - 1,
+    })
+    assert resp.status_code == 400
+
+
+def test_promotion_accepts_current_year_through_2035(client):
+    pid_current = create_project(client, "PROMO-CURYEAR-1")
+    resp = client.patch(f"/api/projects/{pid_current}/flags", json={
+        "business_plan_enabled": True, "business_plan_year": date.today().year,
+    })
+    assert resp.status_code == 200
+
+    pid_max = create_project(client, "PROMO-2035-1")
+    resp = client.patch(f"/api/projects/{pid_max}/flags", json={
+        "business_plan_enabled": True, "business_plan_year": 2035,
+    })
+    assert resp.status_code == 200
+
+
+def test_promotion_rejects_year_past_2035(client):
+    pid = create_project(client, "PROMO-2036-1")
+    resp = client.patch(f"/api/projects/{pid}/flags", json={
+        "business_plan_enabled": True, "business_plan_year": 2036,
+    })
+    assert resp.status_code == 400
+
+
+def test_year_only_edit_of_already_enabled_well_keeps_the_wider_floor(client):
+    """Once a well is promoted, changing only its year is not a fresh
+    promotion -- the current-year floor doesn't apply, only the 1990-2040
+    window that also admits imported historical wells."""
+    pid = create_project(client, "PROMO-YEARONLY-1")
+    resp = client.patch(f"/api/projects/{pid}/flags", json={
+        "business_plan_enabled": True, "business_plan_year": date.today().year,
+    })
+    assert resp.status_code == 200
+
+    resp = client.patch(f"/api/projects/{pid}/flags", json={
+        "business_plan_enabled": True, "business_plan_year": 1999,
+    })
+    assert resp.status_code == 200
+    project = client.get(f"/api/projects/{pid}").get_json()
+    assert project["business_plan_year"] == 1999
 
 
 def test_demotion_preserves_snapshot_and_bp_task_statuses(client):

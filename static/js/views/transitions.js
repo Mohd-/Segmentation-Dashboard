@@ -4,7 +4,6 @@ import { currentRole } from '../state.js';
 import { DONE } from '../schema.js';
 import { confirmDialog } from '../dialog.js';
 
-var BP_YEAR_MIN = 1999;
 var BP_YEAR_MAX = 2035;
 
 // Phase transitions: the ONLY way a record moves between the lead maturation
@@ -12,6 +11,11 @@ var BP_YEAR_MAX = 2035;
 // dialog, then PATCH /flags with business_plan_enabled — the one backend path
 // that runs the full promote/recall side effects (snapshot, stage switch) and
 // 403s non-supervisors. Callers own the post-transition refresh + messaging.
+//
+// Promotion never targets a past year (backend-enforced too, current-year
+// through BP_YEAR_MAX): only Excel imports may land historical BP years, via
+// a separate backend path. The BP board's own year filter is unrelated and
+// still browses the full 1999-2035 history (business-plan.js — untouched).
 
 export function canTransitionPhase() {
   return currentRole() === 'supervisor';
@@ -25,9 +29,10 @@ export function canTransitionPhase() {
 export function promoteProject(project, prospectTasks, changedBy) {
   var tasks = prospectTasks || [];
   var approved = tasks.filter(function (task) { return DONE[task.status]; }).length;
-  var year = Number(project.business_plan_year || new Date().getFullYear());
-  if (year < BP_YEAR_MIN || year > BP_YEAR_MAX) {
-    year = Math.min(BP_YEAR_MAX, Math.max(BP_YEAR_MIN, new Date().getFullYear()));
+  var currentYear = new Date().getFullYear();
+  var year = Number(project.business_plan_year || currentYear);
+  if (year < currentYear || year > BP_YEAR_MAX) {
+    year = currentYear;
   }
   var lines = [];
   if (tasks.length) {
@@ -42,7 +47,7 @@ export function promoteProject(project, prospectTasks, changedBy) {
     message: lines.join('\n'),
     confirmLabel: 'Promote',
     selectLabel: 'Business Plan Year',
-    selectOptions: range(BP_YEAR_MIN, BP_YEAR_MAX),
+    selectOptions: range(currentYear, BP_YEAR_MAX),
     selectValue: String(year)
   }).then(function (selectedYear) {
     if (selectedYear === null) return null;

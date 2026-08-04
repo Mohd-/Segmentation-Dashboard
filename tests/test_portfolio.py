@@ -516,18 +516,32 @@ def test_completed_bp_well_leaves_bp_board_but_stays_in_portfolio_and_export(cli
 
 
 # ---------------------------------------------------------------------------
-# Business-plan year floor: 1990, not 2026 (imported historical wells)
+# Business-plan year windows: promotion targets current-year..2035, while
+# year edits on an already-enabled well keep the wide 1990 floor so imported
+# historical wells stay editable.
 # ---------------------------------------------------------------------------
 
-def test_business_plan_year_floor_admits_historical_years(client):
-    """1990 is the new floor (imported historical wells predate 2026); 1989
-    stays rejected."""
+def test_year_floor_is_strict_on_promotion_but_wide_on_edits(client):
+    from datetime import date
+
     pid = create_project(client, "HIST-YEAR-1")
+    resp = client.patch(f"/api/projects/{pid}/flags", json={
+        "business_plan_enabled": True, "business_plan_year": 2019,
+    })
+    assert resp.status_code == 400
+
+    resp = client.patch(f"/api/projects/{pid}/flags", json={
+        "business_plan_enabled": True, "business_plan_year": date.today().year,
+    })
+    assert resp.status_code == 200, resp.get_json()
+
+    # Already enabled: a year-only edit may land in history (import parity)...
     resp = client.patch(f"/api/projects/{pid}/flags", json={
         "business_plan_enabled": True, "business_plan_year": 2019,
     })
     assert resp.status_code == 200, resp.get_json()
 
+    # ...but never below the absolute 1990 floor.
     resp = client.patch(f"/api/projects/{pid}/flags", json={
         "business_plan_enabled": True, "business_plan_year": 1989,
     })

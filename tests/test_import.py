@@ -10,7 +10,8 @@ Two behaviors are owned by a parallel workstream and are RELIED ON here:
   (a) get_projects(pipeline_filter='bp') excludes completed BP wells (all BP
       steps Approved), and
   (b) the business-plan year guard accepts 1990-2040 (so a historical well with
-      year 2019 promotes).
+      year 2019 promotes) -- imports pass allow_historical_year=True, the
+      escape hatch that skips the promotion-only current-year floor.
 Where a case depends on those, it is noted in a comment.
 """
 from __future__ import annotations
@@ -122,6 +123,16 @@ def test_four_record_types_placed_correctly(client, app_modules, tmp_path):
         # Approved -> completed; relies on the completed-wells-exit rule).
         assert "HIST-1" in portfolio
         assert "HIST-1" not in bp_names
+
+        # The escape hatch: HIST-1's 2019 year is well before today, yet the
+        # import path (allow_historical_year=True) still enabled it -- a
+        # promotion through the UI/API would be rejected for the same year.
+        import db as db_module
+        hist_project = db_module.fetch_one(session,
+                                           "SELECT business_plan_enabled, business_plan_year FROM projects WHERE project_name = 'HIST-1'",
+                                           {})
+        assert int(hist_project["business_plan_enabled"]) == 1
+        assert int(hist_project["business_plan_year"]) == 2019
     finally:
         session.close()
 
