@@ -54,15 +54,20 @@ function navigation() {
 }
 
 test('business-plan renders the approved dashboard and one auto-save approval detail shell', async function () {
+  // The band as index.html builds it: the five selects are the hidden STATE
+  // STORE, #bpe-filter-row holds the visible triggers, #bpe-kpis the tiles.
   var host = fixture(
-    '<div id="bpe-main-view"><div class="bpe-filter-strip">' +
-      '<label>Assignee<select id="bp-assignee-filter"></select></label>' +
-      '<label>Field<select id="bp-field-filter"></select></label>' +
-      '<label>Status<select id="bp-status-filter"></select></label>' +
-      '<label>Business Plan Year<select id="bp-year-filter"></select></label>' +
-      '<label>BP Gate<select id="bp-step-filter"></select></label></div>' +
-      '<div id="bpe-kpis"></div><div id="bpe-data-notice" class="hidden"></div>' +
-      '<div id="bp-pipeline"></div></div><section id="bpe-detail-view" class="hidden"></section>'
+    '<div id="bpe-main-view" class="panel pipeline-panel"><div class="lead-controls">' +
+      '<select id="bp-assignee-filter" hidden></select>' +
+      '<select id="bp-field-filter" hidden></select>' +
+      '<select id="bp-status-filter" hidden></select>' +
+      '<select id="bp-year-filter" hidden></select>' +
+      '<select id="bp-step-filter" hidden></select>' +
+      '<div id="bpe-filter-row" class="lead-filter-row bpe-filter-row"></div>' +
+      '<div id="bpe-kpis" class="lead-kpi-row"></div></div>' +
+      '<div id="bpe-data-notice" class="hidden"></div>' +
+      '<div id="bp-pipeline" class="pipeline-board lead-board"></div></div>' +
+      '<section id="bpe-detail-view" class="hidden"></section>'
   );
   var currentYear = new Date().getFullYear();
   var years = [];
@@ -117,11 +122,35 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   assert.equal(host.querySelector('#bp-year-filter').value, String(currentYear));
   assert.equal(host.querySelector('#bp-step-filter').value, 'business-plan-gate');
   assert.equal(host.querySelectorAll('#bp-year-filter option').length, 37);
-  assert.equal(host.querySelectorAll('.bpe-stage').length, 3);
-  assert.equal(host.querySelectorAll('.bpe-well-card').length, 1);
-  assert.equal(host.querySelectorAll('.bpe-well-card .bpe-tracking-item').length, 6);
-  assert.equal(host.querySelectorAll('.bpe-kpi').length, 4);
-  assert.equal(host.querySelector('.bpe-kpis, #bpe-kpis').textContent.indexOf('40/80 BCF') >= 0, true);
+  // One visible trigger per hidden select, and the board in the maturation
+  // board's own vocabulary: three .lead-column blocks, one .lead-card, its six
+  // tracked items as dots.
+  assert.equal(host.querySelectorAll('#bpe-filter-row .lf-trigger').length, 5);
+  assert.equal(host.querySelectorAll('.lead-column').length, 3);
+  assert.equal(host.querySelectorAll('.lead-card').length, 1);
+  assert.equal(host.querySelectorAll('.lead-card .lead-dot').length, 6);
+  assert.equal(host.querySelectorAll('#bpe-kpis .kpi-tile').length, 3);
+  assert.equal(host.querySelectorAll('#bpe-kpis .kpi-donut').length, 1);
+  assert.equal(host.querySelector('#bpe-kpis').textContent.indexOf('40/80 BCF') >= 0, true);
+
+  // The trigger state machine: a menu opens on its trigger, its options are
+  // the hidden select's own options, and choosing one writes THE SELECT — the
+  // select's 'change' is still the single refresh path. Clear resets all five
+  // and refreshes once.
+  host.querySelector('.lead-filter[data-bp-filter="field"] .lf-trigger').click();
+  var fieldMenu = host.querySelector('.lead-filter[data-bp-filter="field"] .lf-menu');
+  assert.equal(fieldMenu.hidden, false);
+  assert.equal(fieldMenu.querySelectorAll('.lf-option').length, 2);
+  fieldMenu.querySelectorAll('.lf-option')[1].click();
+  assert.equal(host.querySelector('#bp-field-filter').value, 'MDFT');
+  assert.equal(host.querySelector('.lead-filter[data-bp-filter="field"] .lf-menu').hidden, true,
+    'a single choice is a finished choice');
+  await waitFor(function () { return dashboardRequests.length === 2; });
+  assert.equal(host.querySelector('#bpe-filter-row .lf-clear').disabled, false);
+  host.querySelector('#bpe-filter-row .lf-clear').click();
+  assert.equal(host.querySelector('#bp-field-filter').value, 'All Fields');
+  assert.equal(host.querySelector('#bpe-filter-row .lf-clear').disabled, true);
+  await waitFor(function () { return dashboardRequests.length === 3; });
 
   host.querySelector('#bp-assignee-filter').value = 'Supervisor';
   host.querySelector('#bp-field-filter').value = 'MDFT';
@@ -137,7 +166,11 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   assert.match(dashboardRequests[dashboardRequests.length - 1], /year=2027/,
     'the synchronized dashboard fetches the promoted year immediately');
 
-  host.querySelector('.bpe-tracking-item').click();
+  // The card is ONE target and opens the first item that is not Completed —
+  // here the Business Plan Gate (Well Proposal, the only completed one, is
+  // second). The mock serves that one step and nothing else.
+  assert.equal(host.querySelector('.lead-card').getAttribute('data-step'), 'business-plan-gate');
+  host.querySelector('.lead-card').click();
   await waitFor(function () { return host.querySelector('.bpe-detail-form'); });
   assert.equal(host.querySelectorAll('#bpe-back').length, 1);
   assert.equal(host.querySelector('#bpe-back').textContent.trim(), 'Back to Business Plan Execution');

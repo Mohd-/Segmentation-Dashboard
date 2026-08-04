@@ -1,7 +1,12 @@
-import { byId, all, esc, fmtNum, msg, truthy } from '../dom.js';
+import { byId, all, esc, compact, fmtNum, msg, truthy } from '../dom.js';
 import { ICONS } from '../icons.js';
 import { API } from '../api.js';
 import { Store, currentRole, currentUserName } from '../state.js';
+import {
+  placeFilterMenu, filterTriggerHtml, filterOptionHtml,
+  kpiDonutHtml, kpiTileHtml, personChipsHtml, leadItemHtml
+} from './board-widgets.js';
+import { DROPDOWN_OPEN_EVENT } from './lead-filters.js';
 
 var FLUIDS = ['Gas', 'Gas over Water', 'Water Bearing', 'Dry Hole', 'Oil', 'Oil over Gas', 'Oil over Water'];
 var STAGE_META = [
@@ -34,7 +39,6 @@ var state = {
   structureDrafts: { formations: null, flowback: null },
   retryCommand: null,
   timers: {},
-  collapsed: {},
   users: null
 };
 
@@ -86,6 +90,242 @@ function initialize() {
     var element = byId(id);
     if (element) element.addEventListener('change', refreshBusinessPlan);
   });
+  // Paint the visible band from the defaults above, so the row shows its five
+  // triggers from the first frame instead of a gap that fills in when the
+  // dashboard fetch lands (views/lead-kpis.js initLeadKpis does the same).
+  renderFilterTriggers();
+}
+
+/* =========================================================================
+   Card R2 — the VISIBLE filter band.
+
+   The five <select>s stay: they are the STATE STORE and the server contract
+   (currentFilters() reads them, renderDashboard() repopulates them,
+   syncBusinessPlanPromotion() writes them, and their own 'change' listener
+   above is the single refresh path). This section only draws the maturation
+   board's controls over them: a trigger per select, a menu of that select's
+   own <option>s, and a Clear. Choosing an option writes the select and
+   dispatches 'change' — so there is still exactly ONE refresh path, and a
+   fixture without #bpe-filter-row keeps working untouched.
+   ========================================================================= */
+
+// Left to right, matching the select order in index.html. `fallback` is the
+// select's default value, i.e. the one that reads as NO filter -- the same
+// literals currentFilters() falls back to and syncBusinessPlanPromotion()
+// resets to (Year defaults to the current year instead, see defaultValue).
+var BP_FILTERS = [
+  { key: 'assignee', id: 'bp-assignee-filter', caption: 'Assignee', fallback: 'All Assignees' },
+  { key: 'field', id: 'bp-field-filter', caption: 'Field', fallback: 'All Fields' },
+  { key: 'status', id: 'bp-status-filter', caption: 'Status', fallback: 'All Status' },
+  { key: 'year', id: 'bp-year-filter', caption: 'Year', fallback: null },
+  { key: 'step', id: 'bp-step-filter', caption: 'BP Gate', fallback: 'business-plan-gate' }
+];
+
+// Status glyphs echo the card dots and the maturation menu exactly, so the
+// two boards' menus speak one vocabulary. Everything else is glyph-less.
+var BP_STATUS_ICONS = {
+  'Completed': { icon: 'circle-check', slug: 'completed' },
+  'Pending Approval': { icon: 'circle-minus', slug: 'pending' },
+  'In Progress': { icon: 'circle', slug: 'in-progress' }
+};
+
+var BPE_FILTER_ROOT = 'bpe-filter-row';
+var BPE_DROPDOWN_SOURCE = 'bpe';
+var openFilterKey = null;   // the filter whose menu is open (one at a time)
+
+function defaultValue(filter) {
+  return filter.key === 'year' ? String(new Date().getFullYear()) : filter.fallback;
+}
+
+// The CLOSED control's text: the selected option's own label, so the row reads
+// as a sentence of what the board is showing. A select whose options have not
+// arrived yet falls back to its raw value, then to the caption.
+function triggerLabel(filter, select) {
+  var option = select.options[select.selectedIndex];
+  return (option && option.text) || select.value || filter.caption;
+}
+
+function isFilterActive(filter, select) {
+  return String(select.value) !== String(defaultValue(filter));
+}
+
+function anyFilterActive() {
+  return BP_FILTERS.some(function (filter) {
+    var select = byId(filter.id);
+    return !!select && isFilterActive(filter, select);
+  });
+}
+
+function filterGroupHtml(filter) {
+  var select = byId(filter.id);
+  if (!select) return '';
+  return '<div class="lead-filter" data-bp-filter="' + filter.key + '">' +
+    filterTriggerHtml({
+      key: filter.key,
+      caption: filter.caption,
+      label: triggerLabel(filter, select),
+      active: isFilterActive(filter, select)
+    }) +
+    // Filled on OPEN, from the select's live options -- never a second copy of
+    // the vocabulary that could drift from the one the server just sent.
+    '<div class="lf-menu" hidden role="radiogroup" aria-label="' + esc(filter.caption) + '"></div>' +
+    '</div>';
+}
+
+// Every filter here is single-select (the BP dashboard's server contract takes
+// one value per category), so every mark is a radio dot.
+function optionsMarkup(filter, select) {
+  return all('option', select).map(function (option) {
+    var glyph = filter.key === 'status' ? BP_STATUS_ICONS[option.value] : null;
+    return filterOptionHtml({
+      multi: false,
+      chosen: String(option.value) === String(select.value),
+      value: option.value,
+      icon: glyph && glyph.icon,
+      slug: glyph && glyph.slug,
+      strong: false,
+      label: option.text
+    });
+  }).join('');
+}
+
+/* -------------------------------------------------------------------------
+   Placement + dismissal — the same contract views/lead-filters.js honors:
+   a fixed-positioned menu placed against the viewport (the panel and the
+   columns clip their overflow), one open dropdown page-wide, and dismissal
+   that never changes a selection.
+   ------------------------------------------------------------------------- */
+
+function announceOpen() {
+  document.dispatchEvent(new CustomEvent(DROPDOWN_OPEN_EVENT, {
+    detail: { source: BPE_DROPDOWN_SOURCE }
+  }));
+}
+
+// Scoped to this row: the maturation module keeps its own open key, so closing
+// its menus is ITS job (our announce above is what asks it to).
+function closeBpeMenus() {
+  openFilterKey = null;
+  var host = byId(BPE_FILTER_ROOT);
+  if (!host) return;
+  all('.lf-menu', host).forEach(function (menu) { menu.hidden = true; });
+  all('.lf-trigger', host).forEach(function (trigger) { trigger.setAttribute('aria-expanded', 'false'); });
+}
+
+function openBpeMenu(filter) {
+  var host = byId(BPE_FILTER_ROOT);
+  var group = host && host.querySelector('.lead-filter[data-bp-filter="' + filter.key + '"]');
+  var select = byId(filter.id);
+  if (!group || !select) return;
+  closeBpeMenus();
+  var trigger = group.querySelector('.lf-trigger');
+  var menu = group.querySelector('.lf-menu');
+  menu.innerHTML = optionsMarkup(filter, select);
+  announceOpen();   // closes the maturation filters and the header's menus
+  menu.hidden = false;
+  placeFilterMenu(trigger, menu);
+  trigger.setAttribute('aria-expanded', 'true');
+  openFilterKey = filter.key;
+}
+
+// One registration for the lifetime of the page: the handlers query the DOM
+// live, so they keep working across every rebuild of the row.
+var bpeFilterDismissWired = false;
+function wireBpeFilterDismiss() {
+  if (bpeFilterDismissWired) return;
+  bpeFilterDismissWired = true;
+  document.addEventListener('click', function (event) {
+    var target = event.target;
+    if (!target || !target.closest) return;
+    // A trigger toggles itself and an in-menu click is a choice; neither is a
+    // dismissal. (Either board's controls -- ours close on their announce.)
+    if (target.closest('.lf-trigger') || target.closest('.lf-menu')) return;
+    closeBpeMenus();
+  });
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Escape' || !openFilterKey) return;
+    var host = byId(BPE_FILTER_ROOT);
+    var trigger = host && host.querySelector('.lead-filter[data-bp-filter="' + openFilterKey + '"] .lf-trigger');
+    closeBpeMenus();
+    if (trigger) trigger.focus();
+  });
+  // The other half of the one-dropdown-at-a-time contract.
+  document.addEventListener(DROPDOWN_OPEN_EVENT, function (event) {
+    if (!event.detail || event.detail.source === BPE_DROPDOWN_SOURCE) return;
+    closeBpeMenus();
+  });
+  window.addEventListener('resize', closeBpeMenus);
+  // Capture, so scrolling ANY ancestor dismisses a menu that is fixed-
+  // positioned and would otherwise hang in the wrong place -- but NOT when the
+  // scrolling element is the menu's own option list (37 Business Plan years).
+  window.addEventListener('scroll', function (event) {
+    var target = event.target;
+    if (target && target.closest && target.closest('.lf-menu')) return;
+    closeBpeMenus();
+  }, true);
+}
+
+/* -------------------------------------------------------------------------
+   Choosing
+   ------------------------------------------------------------------------- */
+
+// A choice is a WRITE TO THE SELECT plus its own 'change' -- the existing
+// listener refreshes the dashboard, so the trigger row can never become a
+// second, competing refresh path.
+function chooseFilterOption(filter, value) {
+  var select = byId(filter.id);
+  closeBpeMenus();
+  if (select && String(select.value) !== String(value)) {
+    select.value = String(value);
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  renderFilterTriggers();   // immediate feedback; the refresh repaints again
+}
+
+// Clear resets all five and refreshes ONCE, rather than dispatching five
+// 'change' events and firing five dashboard requests.
+function clearBpFilters() {
+  closeBpeMenus();
+  var changed = false;
+  BP_FILTERS.forEach(function (filter) {
+    var select = byId(filter.id);
+    if (!select || String(select.value) === String(defaultValue(filter))) return;
+    select.value = String(defaultValue(filter));
+    changed = true;
+  });
+  renderFilterTriggers();
+  if (changed) refreshBusinessPlan();
+}
+
+/* -------------------------------------------------------------------------
+   Render
+   ------------------------------------------------------------------------- */
+
+// Full rebuild of the row. The selection lives in the selects, so it survives
+// every rebuild -- and the row can be rebuilt as often as the data changes.
+function renderFilterTriggers() {
+  var host = byId(BPE_FILTER_ROOT);
+  if (!host) return;
+  closeBpeMenus();
+  host.innerHTML = BP_FILTERS.map(filterGroupHtml).join('') +
+    '<button type="button" class="lf-clear ghost">Clear</button>';
+
+  BP_FILTERS.forEach(function (filter) {
+    var group = host.querySelector('.lead-filter[data-bp-filter="' + filter.key + '"]');
+    if (!group) return;
+    group.querySelector('.lf-trigger').addEventListener('click', function () {
+      if (openFilterKey === filter.key) closeBpeMenus(); else openBpeMenu(filter);
+    });
+    // Delegated, because the options are built on open.
+    group.querySelector('.lf-menu').addEventListener('click', function (event) {
+      var option = event.target && event.target.closest ? event.target.closest('.lf-option') : null;
+      if (option) chooseFilterOption(filter, option.getAttribute('data-value'));
+    });
+  });
+  var clear = host.querySelector('.lf-clear');
+  clear.disabled = !anyFilterActive();
+  clear.addEventListener('click', clearBpFilters);
+  wireBpeFilterDismiss();
 }
 
 function showDashboard() {
@@ -159,30 +399,41 @@ function renderDashboard(payload, selected) {
   setSelect('bp-status-filter', options.statuses || [], selected.status);
   setSelect('bp-year-filter', (options.years || []).map(String), String(selected.year));
   setSelect('bp-step-filter', options.steps || [], selected.step);
+  // The triggers read their labels off the selects, so they are redrawn AFTER
+  // the repopulation above -- never before it.
+  renderFilterTriggers();
   renderKpis(payload.kpis || {});
   renderDataNotice(payload);
   renderStageBoard(payload);
 }
 
+// PLAIN text, not markup: kpiTileHtml() escapes every value it is handed, so
+// escaping here would double-escape.
 function dayValue(value) {
-  var shown = fmtNum(value == null ? 0 : value);
-  return esc(shown) + ' Days';
+  return fmtNum(value == null ? 0 : value) + ' Days';
 }
 
-function kpiMarkup(iconName, value, label, support) {
-  return '<div class="bpe-kpi">' +
-    '<span class="bpe-kpi-icon">' + icon(iconName) + '</span>' +
-    '<span class="bpe-kpi-copy"><strong>' + value + '</strong><span>' + esc(label) + '</span>' +
-    (support ? '<small>' + esc(support) + '</small>' : '') + '</span></div>';
-}
+/* The four KPI groups, in the maturation band's own vocabulary
+   (views/board-widgets.js): three tiles plus the Success Rate donut.
 
+   The donut is the SAME radial meter the maturation band uses and, like it,
+   prints its own percentage inside the ring -- so its group carries only the
+   label, in the same .kpi-label the tiles use. */
 function renderKpis(kpis) {
-  byId('bpe-kpis').innerHTML =
-    kpiMarkup('calendar-days', dayValue(kpis.rig_inventory_days), 'Rig Inventory') +
-    kpiMarkup('flag', dayValue(kpis.rig_target_days), 'Rig Target') +
-    kpiMarkup('trending-up', esc(kpis.success_rate_pct || 0) + '%', 'Success Rate') +
-    kpiMarkup('flame', esc(kpis.actual_mean_ogip_bcf || 0) + '/' + esc(kpis.simulated_mean_ogip_bcf || 0) + ' BCF',
-      'Total Mean OGIP', 'Actual/Simulated');
+  var host = byId('bpe-kpis');
+  if (!host) return;
+  // The dash array IS the percentage, so it must be a bounded whole number:
+  // a missing or malformed rate reads 0%, never NaN and never a runaway arc.
+  var percent = Math.min(Math.max(Math.round(Number(kpis.success_rate_pct) || 0), 0), 100);
+  host.innerHTML =
+    kpiTileHtml(dayValue(kpis.rig_inventory_days), 'Rig Inventory', '', 'calendar-days') +
+    kpiTileHtml(dayValue(kpis.rig_target_days), 'Rig Target', '', 'flag') +
+    '<div class="kpi-donut-group">' +
+      kpiDonutHtml(percent, 'Success Rate ' + percent + '%') +
+      '<small class="kpi-label">Success Rate</small>' +
+    '</div>' +
+    kpiTileHtml((kpis.actual_mean_ogip_bcf || 0) + '/' + (kpis.simulated_mean_ogip_bcf || 0) + ' BCF',
+      'Total Mean OGIP', 'kpi-tile-ogip', 'flame', 'Actual/Simulated');
 }
 
 function renderDataNotice(payload) {
@@ -205,47 +456,88 @@ function statusIcon(item) {
   return icon('circle');
 }
 
-function wellCard(well) {
-  var items = well.items.map(function (item) {
-    return '<button type="button" class="bpe-tracking-item state-' + esc(item.color) + '" ' +
-      'data-project-id="' + well.project_id + '" data-step="' + esc(item.detail_slug) + '" ' +
-      'title="Open ' + esc(item.label) + ': ' + esc(item.status) + '">' +
-      '<span class="bpe-track-icon">' + statusIcon(item) + '</span><span>' + esc(item.label) + '</span></button>';
+/* =========================================================================
+   Card R2 — the WELL BOARD, in the Segment Maturation board's language:
+   three .lead-column blocks of .lead-card buttons (views/board-widgets.js,
+   the same renderers views/pipeline.js renderLeadBoard uses).
+
+   The card is ONE target. Its six tracked items are a READOUT (dot + label,
+   exactly the maturation card's item rows), not six buttons: the card opens
+   the step the well is actually waiting on, so "where do I continue?" is
+   answered by clicking the well rather than by aiming at a row.
+   ========================================================================= */
+
+// Priority drives the card border, never workflow status. Anything the server
+// did not send reads Low, matching its own default.
+var CARD_PRIORITIES = ['high', 'medium', 'low'];
+function cardPriority(well) {
+  var priority = String(well.priority || '').toLowerCase();
+  return CARD_PRIORITIES.indexOf(priority) >= 0 ? priority : 'low';
+}
+
+// The payload carries BOTH an ordered, distinct `assignees` array and the
+// pre-joined `assignee_label` ('Not Assigned' when there is none). The array
+// is the one personChipsHtml wants -- it renders one chip per person and owns
+// the empty case ("Unassigned" is the absence of a person, not a person).
+function wellAssignees(well) {
+  return (well && well.assignees) || [];
+}
+
+// The step the card opens: the first of the six items that is not finished
+// ("Pending Approval" is work waiting on a supervisor, so it still counts as
+// open). A fully completed well falls back to its first item.
+function firstIncompleteSlug(well) {
+  var items = (well && well.items) || [];
+  var open = items.filter(function (item) { return item.status !== 'Completed'; })[0];
+  return (open || items[0] || {}).detail_slug || '';
+}
+
+// One row per tracked item: the shared dot (its SHAPE carries the status, and
+// its title reads "Label — Status") plus the item's label. The labels are
+// compacted because the BP vocabulary runs long ("Post-Drilling Analysis &
+// Reserves Booking") and this package must not eat the card's identity half --
+// the dot's title always holds the full text.
+function trackedItemsHtml(well) {
+  return ((well && well.items) || []).map(function (item) {
+    return '<span class="lead-item">' +
+      leadItemHtml(item.status, item.label) +
+      '<span class="lead-item-label">' + esc(compact(item.label, 22)) + '</span>' +
+      '</span>';
   }).join('');
-  return '<article class="bpe-well-card priority-' + esc(String(well.priority).toLowerCase()) + '" data-project-id="' + well.project_id + '">' +
-    '<header><button type="button" class="bpe-well-name" data-project-id="' + well.project_id + '" data-step="' +
-      esc(well.items[0].detail_slug) + '">' + esc(well.project_name) + '</button>' +
-      '<span class="bpe-progress-label">' + esc(well.completed_count) + '/6</span></header>' +
-    '<div class="bpe-assignees">' + icon('user') + '<span>' + esc(well.assignee_label) + '</span></div>' +
-    '<div class="bpe-tracking-list">' + items + '</div>' +
-    '<div class="bpe-progress" aria-label="' + esc(well.progress_percent) + '% complete"><span style="width:' +
-      esc(well.progress_percent) + '%"></span></div></article>';
+}
+
+function wellCard(well) {
+  return '<button type="button" class="lead-card lead-card-' + cardPriority(well) + '"' +
+    ' data-project-id="' + well.project_id + '" data-step="' + esc(firstIncompleteSlug(well)) + '">' +
+    '<span class="lead-card-identity">' +
+      '<span class="lead-card-name">' + esc(well.project_name) + '</span>' +
+      '<span class="lead-card-people">' + personChipsHtml(wellAssignees(well)) + '</span>' +
+    '</span>' +
+    '<span class="lead-card-items">' + trackedItemsHtml(well) + '</span>' +
+    '</button>';
 }
 
 function renderStageBoard(payload) {
   var wells = payload.wells || [];
-  var markup = STAGE_META.map(function (stage) {
+  var board = byId('bp-pipeline');
+  board.innerHTML = STAGE_META.map(function (stage) {
     var rows = wells.filter(function (well) { return well.stage_key === stage.key; });
-    var collapsed = !!state.collapsed[stage.key];
-    return '<section class="bpe-stage ' + (collapsed ? 'is-collapsed' : '') + '" data-stage="' + stage.key + '">' +
-      '<header class="bpe-stage-head"><span class="bpe-stage-icon">' + icon(stage.icon) + '</span>' +
-      '<h2>' + esc(stage.label) + '</h2><span class="bpe-stage-count">' + rows.length + '</span>' +
-      '<button type="button" class="icon-btn bpe-stage-toggle" data-stage="' + stage.key + '" ' +
-      'aria-expanded="' + (!collapsed) + '" title="' + (collapsed ? 'Expand' : 'Collapse') + ' ' + esc(stage.label) + '">' +
-      icon(collapsed ? 'chevron-down' : 'chevron-up') + '</button></header>' +
-      '<div class="bpe-stage-cards">' + (rows.length ? rows.map(wellCard).join('') :
-        '<div class="bpe-stage-empty">No wells match these filters.</div>') + '</div></section>';
+    var body = rows.length ? rows.map(wellCard).join('') :
+      '<div class="pipeline-empty">No wells match these filters.</div>';
+    // Plain navy headers, uniform across the three columns: the stage is named
+    // by its glyph and title, never by a per-column accent color.
+    return '<section class="lead-column">' +
+      '<header>' +
+        '<span class="lead-column-icon" aria-hidden="true">' + icon(stage.icon) + '</span>' +
+        '<h3>' + esc(stage.label) + '</h3>' +
+        '<span class="lead-column-count">' + rows.length + '</span>' +
+      '</header>' +
+      '<div class="lead-cards">' + body + '</div>' +
+      '</section>';
   }).join('');
-  byId('bp-pipeline').innerHTML = markup;
-  all('.bpe-tracking-item, .bpe-well-name', byId('bp-pipeline')).forEach(function (button) {
-    button.addEventListener('click', function () {
-      openBusinessPlanDetail(Number(button.dataset.projectId), button.dataset.step);
-    });
-  });
-  all('.bpe-stage-toggle', byId('bp-pipeline')).forEach(function (button) {
-    button.addEventListener('click', function () {
-      state.collapsed[button.dataset.stage] = !state.collapsed[button.dataset.stage];
-      renderStageBoard(payload);
+  all('.lead-card', board).forEach(function (card) {
+    card.addEventListener('click', function () {
+      openBusinessPlanDetail(Number(card.dataset.projectId), card.dataset.step);
     });
   });
 }
