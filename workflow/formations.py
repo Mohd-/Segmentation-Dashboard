@@ -161,12 +161,14 @@ def auto_complete_non_prospective_steps(session, project_id):
     return completed
 
 
-# Canonical spelling lookup for current values plus historical labels that an
-# older full-row client must be able to round-trip unchanged. The BPE endpoint
-# and editor remain strict; numbered migration v10 maps stored Dry/Water rows.
+# Canonical spelling lookup for current values plus the pre-v10 labels an older
+# client may still submit. Those aliases map FORWARD onto their replacements --
+# the same mapping numbered migration v10 applies to stored rows -- so a legacy
+# payload lands as current vocabulary instead of reintroducing a retired label.
+# The BPE endpoint and editor remain strict.
 _FLUID_BY_LOWER = {value.lower(): value for value in FORMATION_FLUID_TYPES}
-_FLUID_BY_LOWER.update({"dry": "Dry", "water": "Water",
-                        "condensate": "Condensate", "liquid": "Liquid"})
+_FLUID_BY_LOWER.update({"dry": "Dry Hole", "water": "Water Bearing",
+                        "condensate": "Oil over Gas", "liquid": "Oil"})
 
 
 def _clean_pay_intervals(raw, formation):

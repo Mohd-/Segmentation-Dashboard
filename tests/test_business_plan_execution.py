@@ -164,11 +164,12 @@ def test_gate_submission_requires_complete_draft_and_supervisor_approval(client)
         json={"action": "submit"},
     )
     assert incomplete.status_code == 400
+    # Calculated Drilling Days is deliberately ABSENT: the field is locked (no
+    # equation ships yet), so requiring it would leave the Gate unapprovable.
     _raw_fields(client, project_id, "BP Execution Gate", {
         "bp_gate_classification": "Appraisal",
         "bp_gate_calculated_td_ft_md": "12000",
         "bp_gate_actual_td_ft_md": "12100",
-        "bp_gate_calculated_drilling_days": "30",
         "bp_gate_actual_drilling_days": "31.5",
         "bp_gate_logging_program": "Standard A",
         "bp_gate_interval_from": "SARH",
@@ -467,3 +468,177 @@ def test_audit_correlates_system_defaults_approval_and_repeatable_structure_edit
         json={"rows": flowback_payload},
     ).status_code == 200
     assert _history(client, project_id) == before_flow_replay
+
+
+def test_a_stored_legacy_fluid_round_trips_but_is_never_written_afresh(client):
+    """A database that has not run migration v10 still serves pre-v10 fluid
+    labels to the editor, so saving an UNEDITED row back must not 400. The
+    allowance is exactly that -- a replace of the interval that already holds
+    the value; a new interval or a switch to another retired label is a WRITE
+    of retired vocabulary and stays rejected."""
+    project_id = _bp_project(client)
+    _confirm_quicklook_files(client, project_id)
+    created = _put_formations(client, project_id, "quicklook-logs", [_formation("Gas")])
+    assert created.status_code == 200, created.get_json()
+    row = created.get_json()["detail"]["formations"][0]
+    formation_id = row["id"]
+    interval_id = row["pay_intervals"][0]["id"]
+
+    conn = raw_sqlite_connect(client.db_path)
+    with conn:
+        conn.execute("UPDATE project_formation_pay_intervals SET fluid = 'Condensate' WHERE id = ?",
+                     (interval_id,))
+    conn.close()
+
+    unchanged = _put_formations(
+        client, project_id, "quicklook-logs",
+        [_formation("Condensate", formation_id=formation_id, interval_id=interval_id)])
+    assert unchanged.status_code == 200, unchanged.get_json()
+    assert unchanged.get_json()["detail"]["formations"][0]["pay_intervals"][0]["fluid"] == "Condensate"
+
+    fresh = _put_formations(client, project_id, "quicklook-logs",
+                            [_formation("Condensate", formation_id=formation_id)])
+    assert fresh.status_code == 400
+    switched = _put_formations(
+        client, project_id, "quicklook-logs",
+        [_formation("Liquid", formation_id=formation_id, interval_id=interval_id)])
+    assert switched.status_code == 400
+    assert "Fluid" in switched.get_json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# The BPE transition's lifecycle safeguards (its own state machine, the SAME
+# completion stamp, notification fan-out and route-level role gate)
+# ---------------------------------------------------------------------------
+
+def _submittable_gate(client, project_id):
+    _raw_fields(client, project_id, "BP Execution Gate", {
+        "bp_gate_classification": "Appraisal",
+        "bp_gate_calculated_td_ft_md": "12000",
+        "bp_gate_actual_td_ft_md": "12100",
+        "bp_gate_actual_drilling_days": "31.5",
+        "bp_gate_logging_program": "Standard A",
+        "bp_gate_interval_from": "SARH",
+        "bp_gate_interval_to": "QASM",
+        "bp_gate_swc": "30",
+        "bp_gate_pressure_points": "20",
+        "bp_gate_fluid_samples": "5",
+        "bp_gate_coring_program": "No",
+        "bp_gate_slides_saved": "1",
+    })
+
+
+def _transition(client, project_id, action, slug="business-plan-gate", **extra):
+    payload = {"action": action}
+    payload.update(extra)
+    return client.post(
+        f"/api/business-plan/wells/{project_id}/steps/{slug}/transition", json=payload)
+
+
+def _approve_every_other_task(client, project_id, except_name):
+    """Leave exactly one applicable step open, so the next approval is the one
+    that completes the project."""
+    conn = raw_sqlite_connect(client.db_path)
+    with conn:
+        conn.execute("UPDATE project_tasks SET status = 'Approved' "
+                     "WHERE project_id = ? AND task_name != ?", (project_id, except_name))
+    conn.close()
+
+
+def _completed_at(client, project_id):
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        return conn.execute("SELECT completed_at FROM projects WHERE project_id = ?",
+                            (project_id,)).fetchone()["completed_at"]
+    finally:
+        conn.close()
+
+
+def test_bpe_approval_stamps_and_reopening_clears_project_completion(client):
+    """The BPE transition runs the same derived completion stamp every other
+    write does: approving the last open applicable step completes the project,
+    and reopening it un-completes it."""
+    project_id = _bp_project(client)
+    _submittable_gate(client, project_id)
+    assert _transition(client, project_id, "submit").status_code == 200
+    _approve_every_other_task(client, project_id, "BP Execution Gate")
+    assert _completed_at(client, project_id) is None
+
+    assert _transition(client, project_id, "approve").status_code == 200
+    assert _completed_at(client, project_id)
+
+    assert _transition(client, project_id, "reopen").status_code == 200
+    assert _completed_at(client, project_id) is None
+
+    # A return leaves it cleared too -- the set is not complete while the step
+    # is only Ready.
+    assert _transition(client, project_id, "submit").status_code == 200
+    assert _transition(client, project_id, "return").status_code == 200
+    assert _completed_at(client, project_id) is None
+
+
+def _notifications(client, project_id):
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        return [dict(row) for row in conn.execute(
+            "SELECT recipient, actor, event, task_name, message FROM notifications "
+            "WHERE project_id = ? ORDER BY id", (project_id,))]
+    finally:
+        conn.close()
+
+
+def _login(client, name):
+    resp = client.post("/api/login", json={"name": name})
+    assert resp.status_code == 200, resp.get_json()
+
+
+def test_bpe_transitions_notify_the_same_people_a_lifecycle_transition_does(client):
+    """Submit asks every supervisor; approve and reopen tell the assignee. The
+    fan-out policy is shared with workflow/notifications.py -- the BPE state
+    machine only supplies the pre-transition row. A reopen files under the
+    'returned' event (the stored vocabulary is fixed by the table's CHECK
+    constraint) and is told apart by its message verb."""
+    _login(client, "Supervisor")
+    project_id = _bp_project(client)
+    _submittable_gate(client, project_id)
+    assigned = client.post(
+        f"/api/business-plan/wells/{project_id}/steps/business-plan-gate/assign",
+        json={"assignee": "Employee"})
+    assert assigned.status_code == 200, assigned.get_json()
+
+    _login(client, "Employee")
+    assert _transition(client, project_id, "submit").status_code == 200
+    assert [(row["recipient"], row["event"]) for row in _notifications(client, project_id)] == [
+        ("Supervisor", "submitted")]
+
+    _login(client, "Supervisor")
+    assert _transition(client, project_id, "approve").status_code == 200
+    assert _transition(client, project_id, "reopen").status_code == 200
+    rows = _notifications(client, project_id)
+    assert [(row["recipient"], row["actor"], row["event"]) for row in rows] == [
+        ("Supervisor", "Employee", "submitted"),
+        ("Employee", "Supervisor", "approved"),
+        ("Employee", "Supervisor", "returned"),
+    ]
+    assert "reopened for update" in rows[-1]["message"]
+    assert {row["task_name"] for row in rows} == {"BP Execution Gate"}
+
+
+def test_bpe_un_approving_actions_are_supervisor_only_at_the_route(client):
+    """approve / return / reopen all un-approve or grant an approval, so the
+    route gates them exactly like POST /api/tasks/<id>/transition does."""
+    _login(client, "Supervisor")
+    project_id = _bp_project(client)
+    _submittable_gate(client, project_id)
+    assert _transition(client, project_id, "submit").status_code == 200
+
+    _login(client, "Employee")
+    assert _transition(client, project_id, "approve").status_code == 403
+    assert _transition(client, project_id, "return").status_code == 403
+
+    _login(client, "Supervisor")
+    assert _transition(client, project_id, "approve").status_code == 200
+    _login(client, "Employee")
+    reopened = _transition(client, project_id, "reopen")
+    assert reopened.status_code == 403
+    assert "supervisor" in reopened.get_json()["detail"].lower()

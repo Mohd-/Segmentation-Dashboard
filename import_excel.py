@@ -88,12 +88,19 @@ IMPORT_USER = "External Import"
 # option), matched case-insensitively; the canonical casing is what gets
 # stored. External sheets also write "Tight" (or "Dry/Tight") for a dry well
 # and may spell Gas over Water with a slash -- those alias to the canonical
-# values instead of erroring the row.
+# values instead of erroring the row. The pre-v10 labels (Dry/Water/Condensate/
+# Liquid) alias FORWARD onto their replacements, exactly as migration v10 maps
+# stored rows, so an old sheet imports as current vocabulary rather than
+# reintroducing retired values.
 _FLUID_CANONICAL = {name.lower(): name for name in
-                    ("Dry", "Gas", "Water", "Condensate", "Liquid", "Gas over Water")}
+                    ("Gas", "Gas over Water", "Water Bearing", "Dry Hole", "Oil",
+                     "Oil over Gas", "Oil over Water")}
 _FLUID_CANONICAL.update({
-    "tight": "Dry", "dry/tight": "Dry", "dry / tight": "Dry",
-    "gas/water": "Gas over Water",
+    "dry": "Dry Hole", "tight": "Dry Hole", "dry/tight": "Dry Hole",
+    "dry / tight": "Dry Hole",
+    "water": "Water Bearing",
+    "condensate": "Oil over Gas", "liquid": "Oil",
+    "gas/water": "Gas over Water", "gas / water": "Gas over Water",
 })
 
 # Canonical select vocabularies (schema.js) for cells that feed <select> inputs:

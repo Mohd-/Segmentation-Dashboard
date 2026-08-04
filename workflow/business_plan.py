@@ -18,6 +18,8 @@ from helpers import today_str, utc_now_str
 
 from .constants import FORMATIONS, StaleRevisionError
 from .history import log_task_event
+from .notifications import notify_transition
+from .projects import _sync_completed_at
 
 
 FLUIDS = (
@@ -26,6 +28,11 @@ FLUIDS = (
 )
 PRODUCTIVE_FLUIDS = frozenset({"Gas", "Gas over Water", "Oil", "Oil over Gas", "Oil over Water"})
 NON_PRODUCTIVE_FLUIDS = frozenset({"Water Bearing", "Dry Hole"})
+# The pre-v10 spellings. Numbered migration v10 maps them, but a database that
+# has not run it yet still serves them to the editor, so a full-row save has to
+# be able to round-trip one UNCHANGED. They are never writable as a new value
+# (see save_formations) and never appear in the select's options.
+LEGACY_FLUIDS = frozenset({"Dry", "Water", "Condensate", "Liquid"})
 CLASSIFICATIONS = ("Development", "Appraisal", "Exploration")
 LOGGING_PROGRAMS = ("Standard A", "Standard B", "Optimized Standard B")
 PRIORITIES = ("Low", "Medium", "High")
@@ -1009,7 +1016,9 @@ def _gate_errors(values):
         "bp_gate_classification": "Well Classification",
         "bp_gate_calculated_td_ft_md": "Calculated Business Plan TD",
         "bp_gate_actual_td_ft_md": "Actual Business Plan TD",
-        "bp_gate_calculated_drilling_days": "Calculated Drilling Days",
+        # Calculated Drilling Days is NOT required: the field is locked (no
+        # equation ships yet), so requiring it would make the Gate
+        # unapprovable. It is still validated as numeric when present.
         "bp_gate_actual_drilling_days": "Actual Drilling Days",
         "bp_gate_logging_program": "Logging Program",
         "bp_gate_interval_from": "Interval From",
@@ -1112,6 +1121,16 @@ def transition_approval(session, project_id, detail_slug, action, actor="Web Use
                         "comment": str(comment or ""), "correlation": correlation},
                        sort_keys=True, separators=(",", ":")),
         )
+        # The header bell rides THIS transaction, beside the audit event it
+        # mirrors, exactly as lifecycle.transition_task does -- the fan-out
+        # policy is shared even though the two state machines are not. The
+        # PRE-transition row is what notify_transition wants: it reads
+        # assigned_to and the identifiers, none of which this UPDATE changed.
+        notify_transition(session, task, action, actor)
+        # Approve may have completed the applicable set; return/reopen reopens
+        # it. A BPE component is an ordinary project_tasks row, so the same
+        # derived completion stamp applies.
+        _sync_completed_at(session, project_id)
         db.execute(session, """
             UPDATE projects SET last_updated = :now, revision = revision + 1
             WHERE project_id = :project_id
@@ -1134,7 +1153,7 @@ def assign_detail(session, project_id, detail_slug, assignee, actor="Web User", 
     assignee = str(assignee or "").strip()
     if assignee:
         user = db.fetch_one(session, """
-            SELECT name FROM users WHERE active = 1 AND lower(name) = lower(:name)
+            SELECT name FROM users WHERE is_active = 1 AND lower(name) = lower(:name)
         """, {"name": assignee})
         if not user:
             raise ValueError("Assignee must be an active user.")
@@ -1259,7 +1278,7 @@ def _clean_formation_payload(rows):
             if not isinstance(interval, dict):
                 raise ValueError("Each Pay Interval must be an object.")
             fluid = str(interval.get("fluid") or "").strip()
-            if fluid and fluid not in FLUIDS:
+            if fluid and fluid not in FLUIDS and fluid not in LEGACY_FLUIDS:
                 raise ValueError("Select a valid Pay Interval Fluid.")
             item = {"id": interval.get("id"), "fluid": fluid}
             for key in ("top_tvdss_ft", "base_tvdss_ft", "phit_pct", "swt_pct", "ngr_pct", "kint_md"):
@@ -1290,6 +1309,23 @@ def save_formations(session, project_id, detail_slug, rows, actor="Web User", ro
     supplied_ids = {int(row["id"]) for row in cleaned if row.get("id") not in (None, "")}
     if not supplied_ids.issubset(existing_rows):
         raise ValueError("A Formation row is stale or belongs to another well.")
+    # A pre-v10 fluid label survives a save only as a REPLACE of itself: the
+    # interval must already exist and already hold that exact value. Anything
+    # else -- a new interval, or an edit that switches one interval to a
+    # retired label -- is a write of retired vocabulary and is rejected. This
+    # lives here, not in _clean_formation_payload, because it needs the stored
+    # rows; the payload cleaner stays a pure function of its argument.
+    stored_interval_fluids = {
+        int(item["id"]): str(item.get("fluid") or "")
+        for row in existing_rows.values() for item in row.get("pay_intervals", [])
+    }
+    for row in cleaned:
+        for interval in row["pay_intervals"]:
+            if interval["fluid"] not in LEGACY_FLUIDS:
+                continue
+            interval_id = int(interval["id"]) if interval.get("id") not in (None, "") else None
+            if interval_id is None or stored_interval_fluids.get(interval_id) != interval["fluid"]:
+                raise ValueError("Select a valid Pay Interval Fluid.")
     now = utc_now_str()
     correlation = str(uuid.uuid4())
     with db.write_transaction(session):

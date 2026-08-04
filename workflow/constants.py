@@ -285,10 +285,12 @@ NON_PROSPECTIVE_AUTO_COMPLETE_STEPS = (
 )
 
 # The quicklook fluids that mean "no hydrocarbons here" (compared lowercased
-# after strip, so 'dry', 'DRY' and ' Water ' all count). Blank or anything else
-# -- including 'Gas over Water' -- is NOT a trigger: the rule fires only on an
-# unambiguous non-hydrocarbon result.
-NON_PROSPECTIVE_FLUIDS = {"water", "dry"}
+# after strip, so 'dry hole', 'DRY HOLE' and ' Water Bearing ' all count). Blank
+# or anything else -- including 'Gas over Water' -- is NOT a trigger: the rule
+# fires only on an unambiguous non-hydrocarbon result. The pre-v10 spellings
+# stay in the set: a database that has not yet run migration v10 (or a row
+# written by an older server against it) must still trigger the rule.
+NON_PROSPECTIVE_FLUIDS = {"water", "dry", "water bearing", "dry hole"}
 
 # The distinct task_history action_type + comment the auto-walk leaves behind.
 # The action_type doubles as the ONCE-EVER marker: a task that already carries

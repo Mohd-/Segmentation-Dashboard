@@ -1492,7 +1492,9 @@ def _v10_business_plan_shape(db_path, project_id):
             SELECT pt.task_name, f.field_key, f.field_value
             FROM project_tasks pt
             JOIN task_dynamic_fields f ON f.task_id = pt.task_id
-            WHERE pt.project_id = ? AND pt.task_name IN ('Aramco Picks', 'Flowback Results')
+            WHERE pt.project_id = ? AND pt.task_name IN (
+                'Aramco Picks', 'Flowback Results', 'Quicklook Logs',
+                'Final Log Analysis', 'SAD Model', 'SAD Update')
             ORDER BY pt.task_name, f.field_key
         """, (project_id,))]
         formations = [tuple(row) for row in conn.execute("""
@@ -1515,8 +1517,9 @@ def _v10_business_plan_shape(db_path, project_id):
 
 
 def test_migration_v10_maps_unambiguous_business_plan_data_and_replays(client, app_modules):
-    """Upgrade-and-replay for v10 preserves identifiers/history, maps only
-    exact legacy aliases, splits the old AAP confirmation, merges Flowback
+    """Upgrade-and-replay for v10 preserves identifiers/history, maps the four
+    retired fluid labels everywhere they are stored (both formation tables and
+    the legacy EAV selects), splits the old AAP confirmation, merges Flowback
     confirmations conservatively, and upgrades the one-stage legacy payload."""
     _, dbmod = app_modules
     import migrations
@@ -1524,6 +1527,13 @@ def test_migration_v10_maps_unambiguous_business_plan_data_and_replays(client, a
     pid = create_project(client, "V10-BPE-1")
     aramco = get_task_by_name(client, pid, "Aramco Picks")
     flowback = get_task_by_name(client, pid, "Flowback Results")
+    # One legacy EAV fluid select per key, one per retired label.
+    eav_fluids = [
+        ("Quicklook Logs", "quicklook_fluid_type", "Dry", "Dry Hole"),
+        ("Final Log Analysis", "final_fluid_type", "Water", "Water Bearing"),
+        ("SAD Model", "post_drill_fluid_type", "Condensate", "Oil over Gas"),
+        ("SAD Update", "resource_update_fluid_type", "liquid", "Oil"),
+    ]
     old_stage = [{
         "_id": "legacy-stage-a",
         "flowback_formation": "SARH",
@@ -1548,15 +1558,25 @@ def test_migration_v10_maps_unambiguous_business_plan_data_and_replays(client, a
             (flowback["task_id"], "flowback_dynamic_ogip_bcf", "63"),
             (flowback["task_id"], "flowback_stages_rows", json.dumps(old_stage)),
         ])
+        conn.executemany("""
+            INSERT INTO task_dynamic_fields (task_id, field_key, field_value, updated_at)
+            VALUES (?, ?, ?, '2026-01-01 00:00:00')
+        """, [(get_task_by_name(client, pid, task_name)["task_id"], key, legacy)
+              for task_name, key, legacy, _current in eav_fluids])
         conn.execute("""
             INSERT INTO project_formations (project_id, formation, phase, fluid)
             VALUES (?, 'SARH', 'quicklook', 'Dry')
+        """, (pid,))
+        conn.execute("""
+            INSERT INTO project_formations (project_id, formation, phase, fluid)
+            VALUES (?, 'QASM', 'final', 'Condensate')
         """, (pid,))
         conn.executemany("""
             INSERT INTO project_formation_pay_intervals
               (project_id, formation, phase, seq, fluid)
             VALUES (?, 'SARH', 'quicklook', ?, ?)
-        """, [(pid, 1, "Water"), (pid, 2, "Condensate")])
+        """, [(pid, 1, "Water"), (pid, 2, "Condensate"), (pid, 3, "Liquid"),
+              (pid, 4, "Gas over Water")])
         conn.execute("""
             INSERT INTO task_history
               (task_id, project_id, task_name, action_type, old_status, new_status,
@@ -1572,11 +1592,17 @@ def test_migration_v10_maps_unambiguous_business_plan_data_and_replays(client, a
     fields, formations, intervals, history, version = upgraded
     field_map = {(task, key): value for task, key, value in fields}
     assert version == str(migrations.LATEST_SCHEMA_VERSION)
-    assert formations == [("SARH", "quicklook", "Dry Hole")]
+    assert formations == [("SARH", "quicklook", "Dry Hole"),
+                          ("QASM", "final", "Oil over Gas")]
     assert intervals == [
         ("SARH", "quicklook", 1, "Water Bearing"),
-        ("SARH", "quicklook", 2, "Condensate"),
+        ("SARH", "quicklook", 2, "Oil over Gas"),
+        ("SARH", "quicklook", 3, "Oil"),
+        # Already current vocabulary: the CASE leaves it alone.
+        ("SARH", "quicklook", 4, "Gas over Water"),
     ]
+    for task_name, key, _legacy, current in eav_fluids:
+        assert field_map[(task_name, key)] == current, (task_name, key)
     assert field_map[("Aramco Picks", "aap_petrel_loaded")] == "1"
     assert field_map[("Aramco Picks", "aap_geoknowledge_loaded")] == "1"
     assert field_map[("Flowback Results", "flowback_shared_confirmed")] == "0"

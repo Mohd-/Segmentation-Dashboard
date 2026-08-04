@@ -647,7 +647,9 @@ def test_multisheet_workbook_picks_best_matching_sheet(tmp_path):
 def test_tight_and_slash_status_aliases(client, app_modules, tmp_path):
     """External sheets write "Tight" (a dry well) and may spell Gas over Water
     with a slash; both alias to the canonical fluid instead of erroring the
-    row, and the canonical value is what stores/exports/shows as the status."""
+    row, and the canonical value is what stores/exports/shows as the status.
+    The pre-v10 labels alias the same way -- FORWARD onto their replacements --
+    so an old sheet never reintroduces retired vocabulary."""
     import import_excel
     import reporting
 
@@ -658,22 +660,27 @@ def test_tight_and_slash_status_aliases(client, app_modules, tmp_path):
     assert any("BP Year" in e for e in errors)
 
     rows = [{"Well Name": "TGT-1", "BP Year": 2027, "Status": "Tight"},
-            {"Well Name": "GOW-1", "BP Year": 2027, "Status": "gas/water"}]
+            {"Well Name": "GOW-1", "BP Year": 2027, "Status": "gas/water"},
+            {"Well Name": "DRY-1", "BP Year": 2027, "Status": "Dry"},
+            {"Well Name": "WAT-1", "BP Year": 2027, "Status": "water"},
+            {"Well Name": "CND-1", "BP Year": 2027, "Status": "Condensate"},
+            {"Well Name": "LIQ-1", "BP Year": 2027, "Status": "Liquid"}]
     _write_sheet(tmp_path / "tgt.xlsx", rows, header_row=1)
 
     session = _session(app_modules)
     try:
         report = import_excel.import_rows(session, import_excel.parse_workbook(str(tmp_path / "tgt.xlsx")))
         outcomes = {r.well_name: r.outcome for r in report.results}
-        assert outcomes == {"TGT-1": "created", "GOW-1": "created"}, report.format()
+        assert outcomes == {name: "created" for name in
+                            ("TGT-1", "GOW-1", "DRY-1", "WAT-1", "CND-1", "LIQ-1")}, report.format()
 
+        expected = {"TGT-1": "Dry Hole", "GOW-1": "Gas over Water", "DRY-1": "Dry Hole",
+                    "WAT-1": "Water Bearing", "CND-1": "Oil over Gas", "LIQ-1": "Oil"}
         portfolio = {r["well_name"]: r for r in reporting.get_portfolio_rows(session)["rows"]}
-        assert portfolio["TGT-1"]["status"] == "Dry"
-        assert portfolio["GOW-1"]["status"] == "Gas over Water"
+        assert {name: portfolio[name]["status"] for name in expected} == expected
 
         exported = _export_by_name(session)
-        assert exported["TGT-1"]["Status"] == "Dry"
-        assert exported["GOW-1"]["Status"] == "Gas over Water"
+        assert {name: exported[name]["Status"] for name in expected} == expected
     finally:
         session.close()
 

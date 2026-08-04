@@ -285,7 +285,8 @@ INTERVAL_A = {
     "kint_md": "1.4",
     "fluid": "Gas",
 }
-INTERVAL_B = {"top_tvdss_ft": "10560", "base_tvdss_ft": "10580", "phit_pct": "7", "fluid": "Water"}
+INTERVAL_B = {"top_tvdss_ft": "10560", "base_tvdss_ft": "10580", "phit_pct": "7",
+              "fluid": "Water Bearing"}
 
 
 def _formation(client, pid, phase, name):
@@ -306,7 +307,7 @@ def test_pay_intervals_round_trip_in_payload_order(client):
     assert intervals[0]["fluid"] == "Gas"
     # Absent numeric keys land as NULL, not as junk.
     assert intervals[1]["ngr_pct"] is None
-    assert intervals[1]["fluid"] == "Water"
+    assert intervals[1]["fluid"] == "Water Bearing"
     # The envelope itself is untouched by the intervals.
     assert stored["thickness_ft"] == 120.0
 
@@ -325,7 +326,7 @@ def test_pay_intervals_are_replaced_not_appended(client):
     intervals = _formation(client, pid, "quicklook", "SARH")["pay_intervals"]
     assert len(intervals) == 1
     assert intervals[0]["seq"] == 1
-    assert intervals[0]["fluid"] == "Water"
+    assert intervals[0]["fluid"] == "Water Bearing"
     # An empty array clears them outright.
     _put(client, pid, "quicklook", [dict(SARH_ROW, pay_intervals=[])])
     assert _formation(client, pid, "quicklook", "SARH")["pay_intervals"] == []
@@ -409,6 +410,20 @@ def test_pay_interval_fluid_must_come_from_the_vocabulary(client):
                 [dict(SARH_ROW, pay_intervals=[dict(INTERVAL_A, fluid="gas over water")])]
                 ).status_code == 200
     assert _formation(client, pid, "quicklook", "SARH")["pay_intervals"][0]["fluid"] == "Gas over Water"
+
+
+def test_legacy_pay_interval_fluid_labels_map_forward(client):
+    """A pre-v10 client's spelling is accepted, but it is not what gets STORED:
+    the alias resolves to the replacement label, the same four-way mapping
+    migration v10 applies to rows already in the database."""
+    pid = create_project(client, "PAYINT-LEGACY-1")
+    for legacy, current in (("Dry", "Dry Hole"), ("Water", "Water Bearing"),
+                            ("Condensate", "Oil over Gas"), ("Liquid", "Oil")):
+        assert _put(client, pid, "quicklook",
+                    [dict(SARH_ROW, pay_intervals=[dict(INTERVAL_A, fluid=legacy)])]
+                    ).status_code == 200
+        stored = _formation(client, pid, "quicklook", "SARH")["pay_intervals"][0]["fluid"]
+        assert stored == current, (legacy, stored)
 
 
 def test_pay_intervals_must_be_a_list_of_objects(client):

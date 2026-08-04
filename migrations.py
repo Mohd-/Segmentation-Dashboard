@@ -875,25 +875,43 @@ def _migrate_v9_project_priority(session, engine) -> None:
 
 
 def _migrate_v10_business_plan_execution(session, engine) -> None:
-    """v10: carry unambiguous legacy BPE values into the approved contracts.
+    """v10: carry legacy BPE values into the approved contracts.
 
     This is deliberately data-only. Stable task and formation identifiers stay
-    in place; combined detail pages are a read/write projection. Ambiguous old
-    values (Condensate/Liquid fluid labels, PDA ``Booked``, and file-type
-    confirmations) are preserved untouched rather than guessed.
+    in place; combined detail pages are a read/write projection. Values with no
+    approved counterpart (PDA ``Booked``, the file-type confirmations) are
+    preserved untouched rather than guessed.
+
+    The four retired fluid labels DO have approved counterparts and are mapped:
+    Dry -> Dry Hole, Water -> Water Bearing, Condensate -> Oil over Gas,
+    Liquid -> Oil. Idempotent by construction -- the WHERE list names only the
+    retired spellings, so a replay matches nothing.
     """
     now = utc_now_str()
-    # The two old aliases have exact approved replacements.  Formation-envelope
-    # fluid is retained for compatibility even though automation now reads every
-    # Pay Interval.
-    for table in ("project_formations", "project_formation_pay_intervals"):
-        db.execute(session, f"""
-            UPDATE {table} SET fluid = CASE lower(trim(fluid))
+    # Formation-envelope fluid is retained for compatibility even though
+    # automation now reads every Pay Interval; both tables and the legacy EAV
+    # fluid keys carry the SAME four-way mapping so no reader sees a mix.
+    fluid_case = """CASE lower(trim({column}))
               WHEN 'dry' THEN 'Dry Hole'
               WHEN 'water' THEN 'Water Bearing'
-              ELSE fluid END
-            WHERE lower(trim(fluid)) IN ('dry', 'water')
+              WHEN 'condensate' THEN 'Oil over Gas'
+              WHEN 'liquid' THEN 'Oil'
+              ELSE {column} END"""
+    for table in ("project_formations", "project_formation_pay_intervals"):
+        db.execute(session, f"""
+            UPDATE {table} SET fluid = {fluid_case.format(column="fluid")}
+            WHERE lower(trim(fluid)) IN ('dry', 'water', 'condensate', 'liquid')
         """)
+
+    # The step-level EAV fluid selects (reporting.py's fluid ladder reads all
+    # four) store the same vocabulary as free text, so they move with it.
+    db.execute(session, f"""
+        UPDATE task_dynamic_fields
+        SET field_value = {fluid_case.format(column="field_value")}, updated_at = :now
+        WHERE field_key IN ('final_fluid_type', 'resource_update_fluid_type',
+                            'post_drill_fluid_type', 'quicklook_fluid_type')
+          AND lower(trim(field_value)) IN ('dry', 'water', 'condensate', 'liquid')
+    """, {"now": now})
 
     def field_value(task_id, key):
         row = db.fetch_one(session, """

@@ -112,7 +112,7 @@ LEAD_CLUSTER_CENTERS = {
 # blocks, whose edges are ~30 km further out).
 LEAD_CLUSTER_JITTER_M = 5000.0
 
-DRILLED_FLUIDS = ["Dry", "Gas", "Water", "Condensate", "Liquid", "Gas over Water"]
+DRILLED_FLUIDS = ["Dry Hole", "Gas", "Water Bearing", "Oil over Gas", "Oil", "Gas over Water"]
 GHEER_CLASSIFICATIONS = ["Development", "Appraisal", "Exploration"]
 PULL_UP_OPTIONS = ["No", "Semi", "Yes"]
 
@@ -413,7 +413,7 @@ def _flowback_fields(legacy=False):
     fallback (detail.js flowback rate, portfolio_export flowback columns).
     Every rate field is filled regardless of fluid type so a fluid-type
     change in the UI never reveals a blank (incl. flowback_liquid_rate_bpd,
-    the BPD path for Condensate/Liquid fluids)."""
+    the BPD path for the oil-bearing fluids)."""
     def _stage():
         return {
             "flowback_formation": "SARH",
@@ -677,7 +677,7 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
 
         # The well's fluid, inherited from its SARH formation rows through
         # reporting.resolve_well_fluid (the step-level Quicklook / Final Log
-        # Analysis fluid selects are gone). i == 2 is pinned to Condensate so
+        # Analysis fluid selects are gone). i == 2 is pinned to Oil over Gas so
         # at least one well always exercises the flowback_liquid_rate_bpd /
         # BPD unit path (schema.js's FLOWBACK_RATE_FIELDS) in the summary
         # card. i == 5 (drilled, maturity 2) is the ONE legacy-fallback well:
@@ -688,7 +688,7 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
         # so the ladder must fall all the way through to the legacy keys,
         # exercising that path end-to-end like a well written before the
         # multi-formation editor existed.
-        fluid = "Condensate" if i == 2 else random.choice(DRILLED_FLUIDS)
+        fluid = "Oil over Gas" if i == 2 else random.choice(DRILLED_FLUIDS)
         legacy_fluid_well = (i == 5)
         sarh_fluid = "" if legacy_fluid_well else fluid
 

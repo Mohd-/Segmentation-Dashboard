@@ -857,8 +857,14 @@ def business_plan_save_flowback(project_id):
 def business_plan_transition(project_id, detail_slug):
     session = db.get_session()
     payload = request.get_json(silent=True) or {}
+    action = str(payload.get("action") or "").lower()
+    # The supervisor gate for the un-approve-capable actions lives here, beside
+    # every other route-level role check; transition_bpe_approval repeats it as
+    # defense-in-depth for non-HTTP callers.
+    if action in {"approve", "return", "reopen"}:
+        require_role("supervisor")
     result = workflow.transition_bpe_approval(
-        session, project_id, detail_slug, str(payload.get("action") or "").lower(),
+        session, project_id, detail_slug, action,
         actor(payload), current_role(), payload.get("comment", ""),
     )
     result["role"] = current_role()

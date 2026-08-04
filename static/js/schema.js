@@ -58,21 +58,27 @@ export function piip(prefix) {
 // render unselected on old projects; the stored data is untouched. 'Not Drilled
 // Yet' is no longer a fluid-type choice: the token was dropped entirely and a
 // well's pre-drill state is now conveyed by the derived Proposed/Staked
-// portfolio status instead.
-export var FLUID_TYPES = ['', 'Dry', 'Gas', 'Water', 'Condensate', 'Liquid', 'Gas over Water'];
+// portfolio status instead. The retired Dry/Water/Condensate/Liquid labels are
+// carried onto the current spellings by numbered migration v10.
+// Mirrors workflow/constants.py FORMATION_FLUID_TYPES exactly -- the two lists
+// are one vocabulary and drift between them is a bug.
+export var FLUID_TYPES = ['', 'Gas', 'Gas over Water', 'Water Bearing', 'Dry Hole', 'Oil',
+                          'Oil over Gas', 'Oil over Water'];
 // Flowback rate key + unit keyed by fluid type -- a well's headline flowback
 // rate lives under a different key depending on what it produced. Gas / Gas
-// over Water report gas (MMSCFD); Condensate / Liquid report liquid (BPD);
-// Water reports water (BWPD). Dry/blank have no dedicated key -- the call site
-// falls back to the gas entry. Imported by the well summary card (WS5). The
-// keys address a flowback STAGE row first (FLOWBACK_STAGE_COLUMNS reuses the
-// same names) and the retired step-level flat EAV keys as legacy fallback.
+// over Water report gas (MMSCFD); every oil-bearing result reports liquid
+// (BPD); Water Bearing reports water (BWPD). Dry Hole/blank have no dedicated
+// key -- the call site falls back to the gas entry. Imported by the well
+// summary card (WS5). The keys address a flowback STAGE row first
+// (FLOWBACK_STAGE_COLUMNS reuses the same names) and the retired step-level
+// flat EAV keys as legacy fallback.
 export var FLOWBACK_RATE_FIELDS = {
   'Gas': { key: 'flowback_gas_rate_mmscfd', unit: 'MMSCFD' },
   'Gas over Water': { key: 'flowback_gas_rate_mmscfd', unit: 'MMSCFD' },
-  'Condensate': { key: 'flowback_liquid_rate_bpd', unit: 'BPD' },
-  'Liquid': { key: 'flowback_liquid_rate_bpd', unit: 'BPD' },
-  'Water': { key: 'flowback_water_rate_bwpd', unit: 'BWPD' }
+  'Oil': { key: 'flowback_liquid_rate_bpd', unit: 'BPD' },
+  'Oil over Gas': { key: 'flowback_liquid_rate_bpd', unit: 'BPD' },
+  'Oil over Water': { key: 'flowback_liquid_rate_bpd', unit: 'BPD' },
+  'Water Bearing': { key: 'flowback_water_rate_bwpd', unit: 'BWPD' }
 };
 // One flowback stage (#1..#n) per row of the Flowback Results mini-sheet (EAV
 // key flowback_stages_rows, a JSON array exactly like reservoir_cos_rows).

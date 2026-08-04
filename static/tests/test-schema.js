@@ -191,6 +191,14 @@ test('schema.SEISMIC_BLOCKS fallback maps block → array of AR strings', functi
   });
 });
 
+// The vocabulary is shared with the server: this list must stay byte-identical
+// to workflow/constants.py FORMATION_FLUID_TYPES, so it is pinned rather than
+// merely sanity-checked.
+test('schema.FLUID_TYPES is the approved vocabulary, blank first', function () {
+  assert.deepEqual(FLUID_TYPES, ['', 'Gas', 'Gas over Water', 'Water Bearing', 'Dry Hole',
+                                 'Oil', 'Oil over Gas', 'Oil over Water']);
+});
+
 test('schema.FLOWBACK_RATE_FIELDS keys exist as flowback stage columns', function () {
   var colKeys = {};
   FLOWBACK_STAGE_COLUMNS.forEach(function (col) { colKeys[col.key] = true; });
@@ -200,6 +208,24 @@ test('schema.FLOWBACK_RATE_FIELDS keys exist as flowback stage columns', functio
     assert.ok(FLUID_TYPES.indexOf(fluid) >= 0, '"' + fluid + '" is a known fluid type');
     assert.ok(typeof entry.unit === 'string' && entry.unit.length, 'unit present for ' + fluid);
   });
+});
+
+// Which rate a fluid reports, pinned per fluid. Dry Hole is deliberately absent
+// (nothing flowed); the call site falls back to the gas entry for it and blank.
+test('schema.FLOWBACK_RATE_FIELDS routes every producing fluid to its own rate', function () {
+  var keyByFluid = {};
+  Object.keys(FLOWBACK_RATE_FIELDS).forEach(function (fluid) {
+    keyByFluid[fluid] = FLOWBACK_RATE_FIELDS[fluid].key;
+  });
+  assert.deepEqual(keyByFluid, {
+    'Gas': 'flowback_gas_rate_mmscfd',
+    'Gas over Water': 'flowback_gas_rate_mmscfd',
+    'Oil': 'flowback_liquid_rate_bpd',
+    'Oil over Gas': 'flowback_liquid_rate_bpd',
+    'Oil over Water': 'flowback_liquid_rate_bpd',
+    'Water Bearing': 'flowback_water_rate_bwpd'
+  });
+  assert.equal(FLOWBACK_RATE_FIELDS['Dry Hole'], undefined);
 });
 
 // GET /api/meta's resource_scenarios boot fallback: labels are verbatim

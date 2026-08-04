@@ -675,13 +675,14 @@ function sarhFluidAtPhase(phase) {
   return '';
 }
 // "tight" is DERIVED, never a default: the formation row must EXIST (it was
-// penetrated/logged in a BP step) AND read as non-pay — fluid 'Dry', or a blank
-// fluid with zero pay. A missing row (no BP data) is NOT tight; it renders as a
-// dash. Generic across formations so any barren reservoir can read "tight".
+// penetrated/logged in a BP step) AND read as non-pay — fluid 'Dry Hole' (or
+// its pre-v10 spelling 'Dry'), or a blank fluid with zero pay. A missing row
+// (no BP data) is NOT tight; it renders as a dash. Generic across formations so
+// any barren reservoir can read "tight".
 function formationIsTight(row) {
   if (!row) return false;
   var fluid = String(row.fluid || '').trim();
-  if (fluid === 'Dry') return true;
+  if (fluid === 'Dry' || fluid === 'Dry Hole') return true;
   return fluid === '' && (row.pay_ft === 0 || String(row.pay_ft).trim() === '0');
 }
 // One compact reservoir line: formation name + its filled metrics (thickness,

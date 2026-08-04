@@ -45,12 +45,20 @@ from helpers import utc_now_str
 from .users import SYSTEM_USER
 
 # transition action -> the stored ``event`` value and the verb its message uses.
-# The keys are exactly workflow.constants.TASK_TRANSITIONS' keys; an action
-# missing here simply produces no notification.
+# The keys are workflow.constants.TASK_TRANSITIONS' keys plus "reopen", which
+# only the Business Plan Execution state machine exposes (an un-approve back to
+# In Progress); an action missing here simply produces no notification.
+#
+# The stored EVENT vocabulary is fixed by models.Notification's CHECK
+# constraint ('submitted','approved','returned') -- the bell renders a row per
+# event, and an unknown string would render untitled. A reopen is therefore
+# filed under 'returned' (both send the step back for update; the fan-out is
+# identical) and carries its own VERB, which is what the message actually says.
 _EVENTS = {
     "submit": ("submitted", "submitted"),
     "approve": ("approved", "approved"),
     "return": ("returned", "returned for update"),
+    "reopen": ("returned", "reopened for update"),
 }
 
 
@@ -96,7 +104,7 @@ def _insert(session, recipient, actor, event, task, project_name, message) -> No
 
 
 def notify_transition(session, task, action, actor, automated=False) -> List[str]:
-    """Record the notifications one submit/approve/return transition produces.
+    """Record the notifications one submit/approve/return/reopen transition produces.
 
     Fan-out rules (the whole policy, in one place):
 
@@ -106,7 +114,7 @@ def notify_transition(session, task, action, actor, automated=False) -> List[str
       work -- nobody needs to be told what they just did. A submit BY the
       automation user, or any submit flagged ``automated``, notifies no one
       (see the inline note).
-    - ``approve`` / ``return`` -> the component's ASSIGNEE, when there is one,
+    - ``approve`` / ``return`` / ``reopen`` -> the component's ASSIGNEE, when there is one,
       it is not the actor, and the name still matches an active user (an
       assignee who has since been deactivated gets nothing rather than a row
       no one will ever read).
