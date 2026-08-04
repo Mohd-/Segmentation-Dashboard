@@ -1,7 +1,7 @@
 import { currentUserName } from './state.js';
 import { loginDialog } from './dialog.js';
 
-var API_VERSION = '12';
+var API_VERSION = '13';
 
 export function requestUrl(path) {
   return path + (path.indexOf('?') >= 0 ? '&' : '?') + '_v=' + API_VERSION + '&_t=' + Date.now();
@@ -81,6 +81,33 @@ export var API = {
   markAllNotificationsRead: function () { return api('/api/notifications/read-all', jsonOptions('POST', {})); },
   activity: function (projectId) { return api('/api/activity' + (projectId ? '?project_id=' + encodeURIComponent(projectId) : '')); },
   businessRows: function () { return api('/api/business-plan/rows'); },
+  businessPlanDashboard: function (query) {
+    var qs = new URLSearchParams(query || {}).toString();
+    return api('/api/business-plan/dashboard' + (qs ? '?' + qs : ''));
+  },
+  businessPlanDetail: function (projectId, step) {
+    return api('/api/business-plan/wells/' + projectId + '/steps/' + encodeURIComponent(step));
+  },
+  saveBusinessPlanField: function (projectId, step, payload) {
+    return api('/api/business-plan/wells/' + projectId + '/steps/' + encodeURIComponent(step) + '/field',
+      jsonOptions('PATCH', payload));
+  },
+  saveBusinessPlanFormations: function (projectId, step, rows) {
+    return api('/api/business-plan/wells/' + projectId + '/steps/' + encodeURIComponent(step) + '/formations',
+      jsonOptions('PUT', { rows: rows, changed_by: currentUserName() }));
+  },
+  saveBusinessPlanFlowback: function (projectId, rows) {
+    return api('/api/business-plan/wells/' + projectId + '/flowback-stages',
+      jsonOptions('PUT', { rows: rows, changed_by: currentUserName() }));
+  },
+  transitionBusinessPlan: function (projectId, step, action, comment) {
+    return api('/api/business-plan/wells/' + projectId + '/steps/' + encodeURIComponent(step) + '/transition',
+      jsonOptions('POST', { action: action, comment: comment || '', changed_by: currentUserName() }));
+  },
+  assignBusinessPlan: function (projectId, step, assignee) {
+    return api('/api/business-plan/wells/' + projectId + '/steps/' + encodeURIComponent(step) + '/assign',
+      jsonOptions('POST', { assignee: assignee, changed_by: currentUserName() }));
+  },
   portfolioRows: function (query) {
     var qs = new URLSearchParams(query || {}).toString();
     return api('/api/portfolio/rows' + (qs ? '?' + qs : ''));

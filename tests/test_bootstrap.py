@@ -11,6 +11,8 @@ the upgrade, then bootstrap once more and assert nothing changes.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from conftest import create_project, get_task_by_name, get_tasks, raw_sqlite_connect
@@ -1482,6 +1484,115 @@ def test_migration_v9_adds_and_backfills_lead_level_priority(client, app_modules
     assert _stored_project_priority(client.db_path, high) == "Medium"
     assert _stored_project_priority(client.db_path, done_high) == "Low"
 
+
+def _v10_business_plan_shape(db_path, project_id):
+    conn = raw_sqlite_connect(db_path)
+    try:
+        fields = [tuple(row) for row in conn.execute("""
+            SELECT pt.task_name, f.field_key, f.field_value
+            FROM project_tasks pt
+            JOIN task_dynamic_fields f ON f.task_id = pt.task_id
+            WHERE pt.project_id = ? AND pt.task_name IN ('Aramco Picks', 'Flowback Results')
+            ORDER BY pt.task_name, f.field_key
+        """, (project_id,))]
+        formations = [tuple(row) for row in conn.execute("""
+            SELECT formation, phase, fluid FROM project_formations
+            WHERE project_id = ? ORDER BY id
+        """, (project_id,))]
+        intervals = [tuple(row) for row in conn.execute("""
+            SELECT formation, phase, seq, fluid FROM project_formation_pay_intervals
+            WHERE project_id = ? ORDER BY id
+        """, (project_id,))]
+        history = [tuple(row) for row in conn.execute("""
+            SELECT task_name, action_type, old_status, new_status, changed_by, comment
+            FROM task_history WHERE project_id = ? ORDER BY history_id
+        """, (project_id,))]
+        version = conn.execute(
+            "SELECT value FROM app_settings WHERE key = 'schema_version'").fetchone()["value"]
+    finally:
+        conn.close()
+    return fields, formations, intervals, history, version
+
+
+def test_migration_v10_maps_unambiguous_business_plan_data_and_replays(client, app_modules):
+    """Upgrade-and-replay for v10 preserves identifiers/history, maps only
+    exact legacy aliases, splits the old AAP confirmation, merges Flowback
+    confirmations conservatively, and upgrades the one-stage legacy payload."""
+    _, dbmod = app_modules
+    import migrations
+
+    pid = create_project(client, "V10-BPE-1")
+    aramco = get_task_by_name(client, pid, "Aramco Picks")
+    flowback = get_task_by_name(client, pid, "Flowback Results")
+    old_stage = [{
+        "_id": "legacy-stage-a",
+        "flowback_formation": "SARH",
+        "flowback_top_md": "9000",
+        "flowback_base_md": "9050",
+        "flowback_gas_rate_mmscfd": "15",
+        "flowback_water_rate_bwpd": "2",
+        "flowback_liquid_rate_bpd": "1",
+        "flowback_choke_size_in": "0.5",
+        "flowback_fwhp_psi": "2100",
+    }]
+    conn = raw_sqlite_connect(client.db_path)
+    with conn:
+        conn.executemany("""
+            INSERT INTO task_dynamic_fields (task_id, field_key, field_value, updated_at)
+            VALUES (?, ?, ?, '2026-01-01 00:00:00')
+        """, [
+            (aramco["task_id"], "aramco_picks_loaded", "1"),
+            (flowback["task_id"], "flowback_sheet", "1"),
+            (flowback["task_id"], "flowback_slide", "0"),
+            (flowback["task_id"], "flowback_dynamic_area_km2", "14.5"),
+            (flowback["task_id"], "flowback_dynamic_ogip_bcf", "63"),
+            (flowback["task_id"], "flowback_stages_rows", json.dumps(old_stage)),
+        ])
+        conn.execute("""
+            INSERT INTO project_formations (project_id, formation, phase, fluid)
+            VALUES (?, 'SARH', 'quicklook', 'Dry')
+        """, (pid,))
+        conn.executemany("""
+            INSERT INTO project_formation_pay_intervals
+              (project_id, formation, phase, seq, fluid)
+            VALUES (?, 'SARH', 'quicklook', ?, ?)
+        """, [(pid, 1, "Water"), (pid, 2, "Condensate")])
+        conn.execute("""
+            INSERT INTO task_history
+              (task_id, project_id, task_name, action_type, old_status, new_status,
+               changed_at, changed_by, comment)
+            VALUES (?, ?, 'Flowback Results', 'Legacy Event', 'old', 'new',
+                    '2026-01-01 00:00:00', 'Legacy User', 'preserve me')
+        """, (flowback["task_id"], pid))
+        conn.execute("UPDATE app_settings SET value = '9' WHERE key = 'schema_version'")
+    conn.close()
+
+    _rebootstrap(dbmod, client.db_path)
+    upgraded = _v10_business_plan_shape(client.db_path, pid)
+    fields, formations, intervals, history, version = upgraded
+    field_map = {(task, key): value for task, key, value in fields}
+    assert version == str(migrations.LATEST_SCHEMA_VERSION)
+    assert formations == [("SARH", "quicklook", "Dry Hole")]
+    assert intervals == [
+        ("SARH", "quicklook", 1, "Water Bearing"),
+        ("SARH", "quicklook", 2, "Condensate"),
+    ]
+    assert field_map[("Aramco Picks", "aap_petrel_loaded")] == "1"
+    assert field_map[("Aramco Picks", "aap_geoknowledge_loaded")] == "1"
+    assert field_map[("Flowback Results", "flowback_shared_confirmed")] == "0"
+    migrated_stage = json.loads(field_map[("Flowback Results", "flowback_stages_rows")])[0]
+    assert migrated_stage == {
+        "id": "legacy-stage-a", "formation": "SARH", "top_md": "9000",
+        "base_md": "9050", "dynamic_area_km2": "14.5",
+        "dynamic_ogip_bcf": "63", "gas_rate_mmscfd": "15",
+        "water_rate_bwpd": "2", "liquid_rate_bpd": "1",
+        "choke_size_in": "0.5", "fwhp_psi": "2100",
+    }
+    assert ("Flowback Results", "Legacy Event", "old", "new", "Legacy User", "preserve me") in history
+
+    _stamp_schema_version(client.db_path, 9)
+    _rebootstrap(dbmod, client.db_path)
+    assert _v10_business_plan_shape(client.db_path, pid) == upgraded
 
 def test_segmentation_slides_ready_still_reads_pending_approval(client):
     """The one display rule that survived the restructure verbatim."""

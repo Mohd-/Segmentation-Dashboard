@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="icon" href="/static/icons/asas-logo.svg" type="image/svg+xml">
   <title>ASAS — Advanced Segment Assessment System</title>
   <!-- Stamp the theme before first paint to avoid a flash of the wrong theme:
        stored choice wins, else fall back to the OS preference. -->
@@ -16,7 +17,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/css/base.css?v=10">
-  <link rel="stylesheet" href="/static/css/components.css?v=40">
+  <link rel="stylesheet" href="/static/css/components.css?v=42">
 </head>
 <body>
   <section id="login-page" class="login-page hidden">
@@ -140,14 +141,21 @@
     </section>
 
     <section id="tab-bp" class="tab" role="tabpanel">
-      <div class="panel pipeline-panel">
-        <div class="toolbar pipeline-toolbar">
-          <select id="bp-year-filter" aria-label="Filter by Business Plan year"></select>
-          <select id="bp-status-filter" aria-label="Filter by status"></select>
-          <select id="bp-assignee-filter" aria-label="Filter by assignee"></select>
+      <div id="bpe-main-view" class="panel bpe-panel">
+        <div class="bpe-control-row">
+          <div class="bpe-filter-strip" aria-label="Business Plan filters">
+            <label>Assignee<select id="bp-assignee-filter"></select></label>
+            <label>Field<select id="bp-field-filter"></select></label>
+            <label>Status<select id="bp-status-filter"></select></label>
+            <label>Business Plan Year<select id="bp-year-filter"></select></label>
+            <label>BP Gate<select id="bp-step-filter"></select></label>
+          </div>
+          <div id="bpe-kpis" class="bpe-kpis" aria-live="polite"></div>
         </div>
-        <div id="bp-pipeline" class="pipeline-board" aria-live="polite"></div>
+        <div id="bpe-data-notice" class="bpe-data-notice hidden" role="status"></div>
+        <div id="bp-pipeline" class="bpe-stage-board" aria-live="polite"></div>
       </div>
+      <section id="bpe-detail-view" class="bpe-detail-view hidden" aria-live="polite"></section>
     </section>
 
     <section id="tab-portfolio" class="tab" role="tabpanel">
@@ -422,6 +430,6 @@
     <img id="ra-lightbox-img" alt="">
   </dialog>
 
-  <script type="module" src="/static/js/main.js?v=38"></script>
+  <script type="module" src="/static/js/main.js?v=39"></script>
 </body>
 </html>

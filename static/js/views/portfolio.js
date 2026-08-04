@@ -218,8 +218,8 @@ function renderBody(table) {
       // omits the N-of-M line/warning when the argument is falsy.
       promoteProject(project, null, currentUserName()).then(function (result) {
         if (result === null) return; // dialog cancelled
-        refreshAllBoards(); // includes refreshPortfolio, so the row switches to BP + Recall
-        msg('Promoted to BP well.', 'success');
+        refreshAllBoards({ businessPlanYear: result.business_plan_year });
+        msg('Promoted to Business Plan ' + result.business_plan_year + '.', 'success');
       }).catch(function (error) { msg(error.message, 'error'); });
     });
   });

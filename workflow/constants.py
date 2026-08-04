@@ -105,12 +105,13 @@ PAY_INTERVAL_VALUE_FIELDS = [
     "kint_md", "fluid",
 ]
 PAY_INTERVAL_NUMERIC_FIELDS = [f for f in PAY_INTERVAL_VALUE_FIELDS if f != "fluid"]
-# The fluid vocabulary offered by the formation/pay-interval editors. Mirrors
-# FLUID_TYPES in static/js/schema.js -- keep the two lists in sync. Pay-interval
-# fluids are validated against it (case-insensitively, normalized back to the
-# canonical spelling); the formation envelope's own ``fluid`` stays free text so
-# legacy/imported descriptions keep round-tripping unchanged.
-FORMATION_FLUID_TYPES = ["", "Dry", "Gas", "Water", "Condensate", "Liquid", "Gas over Water"]
+# The approved Pay Interval vocabulary, in display order.  Legacy aliases are
+# migrated where the mapping is unambiguous; ambiguous historical labels stay
+# readable but are no longer offered as new choices.
+FORMATION_FLUID_TYPES = [
+    "", "Gas", "Gas over Water", "Water Bearing", "Dry Hole", "Oil",
+    "Oil over Gas", "Oil over Water",
+]
 
 # The 24-step pipeline definition: (sequence_no, task_name, stage_group).
 # This list is the SINGLE SOURCE OF TRUTH for the workflow -- there is no
