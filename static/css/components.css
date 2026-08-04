@@ -2082,6 +2082,11 @@ button.ghost.success-outline:hover { background: var(--success-100); }
    separator, which is near-invisible at --border on dark. */
 :root[data-theme="dark"] .hm-head { border-bottom-color: var(--gray-300); }
 
+/* Business Plan Execution well summary gear menu -- same story as the filter
+   and header dropdowns above: the surface tokens carry it, and only the
+   floating menu's separation from the card behind it needs a spot-fix. */
+:root[data-theme="dark"] .bpe-summary-menu { border-color: var(--text-faint); }
+
 /* =========================================================================
    Card 2B — the CONSOLIDATED LEAD ASSESSMENT workspace
    (views/lead-assessment.js), mounted into the detail shell's own
@@ -2818,7 +2823,7 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   background: var(--surface);
   box-shadow: var(--shadow-sm);
 }
-.bpe-well-card.priority-low { border-left-color: var(--gray-400); }
+.bpe-well-card.priority-low { border-left-color: var(--gray-300); }
 .bpe-well-card.priority-medium { border-left-color: var(--warning-500); }
 .bpe-well-card.priority-high { border-left-color: var(--danger-500); }
 .bpe-well-card:focus-within { box-shadow: 0 0 0 2px var(--info-500); }
@@ -2837,8 +2842,8 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .bpe-track-icon .lucide, .bpe-summary-items .lucide { width: 15px; height: 15px; }
 .state-green .bpe-track-icon, .bpe-summary-items .state-green > span:first-child { color: var(--success-600); }
 .state-gray .bpe-track-icon, .bpe-summary-items .state-gray > span:first-child { color: var(--gray-500); }
-.state-orange .bpe-track-icon, .bpe-summary-items .state-orange > span:first-child { color: var(--warning-600); }
-.state-empty .bpe-track-icon, .bpe-summary-items .state-empty > span:first-child { color: var(--gray-400); }
+.state-orange .bpe-track-icon, .bpe-summary-items .state-orange > span:first-child { color: var(--warning-500); }
+.state-empty .bpe-track-icon, .bpe-summary-items .state-empty > span:first-child { color: var(--text-faint); }
 .bpe-progress { height: 4px; margin-top: auto; overflow: hidden; border-radius: 2px; background: var(--gray-100); }
 .bpe-progress span { display: block; height: 100%; background: var(--success-500); }
 
@@ -2903,9 +2908,9 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .bpe-folder-row { display: flex; align-items: center; gap: var(--space-2); min-width: 0; margin-top: var(--space-4); padding: var(--space-2) var(--space-3); border: 1px solid var(--border); background: var(--surface-sunken); }
 .bpe-folder-row a { display: flex; align-items: center; gap: var(--space-2); min-width: 0; color: var(--text); font-size: var(--text-xs); text-decoration: none; }
 .bpe-folder-row a > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bpe-folder-icon { display: grid; color: #d7a600; }
-.bpe-folder-icon .lucide { width: 20px; height: 20px; fill: #f5cf52; }
-.bpe-copy-button { display: grid; place-items: center; flex: 0 0 34px; height: 34px; margin-left: auto; padding: 0; border: 1px solid #b9e2e8; border-radius: 4px; background: #e6f7f9; color: #164e63; }
+.bpe-folder-icon { display: grid; color: var(--warning-500); }
+.bpe-folder-icon .lucide { width: 20px; height: 20px; fill: var(--warning-100); }
+.bpe-copy-button { display: grid; place-items: center; flex: 0 0 34px; height: 34px; margin-left: auto; padding: 0; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-sunken); color: var(--text-muted); }
 .bpe-copy-button .lucide { width: 17px; height: 17px; }
 .bpe-save-line { display: flex; align-items: center; gap: var(--space-3); min-height: 28px; margin-top: var(--space-3); color: var(--text-faint); font-size: var(--text-xs); }
 .bpe-save-line small { color: var(--success-700); font-weight: 700; }

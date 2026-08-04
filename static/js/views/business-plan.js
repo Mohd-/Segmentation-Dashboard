@@ -79,7 +79,10 @@ function initialize() {
     { value: 'all', label: 'All Steps' },
     { value: 'business-plan-gate', label: 'Business Plan Gate' }
   ], 'business-plan-gate');
-  ['bp-field-filter', 'bp-step-filter'].forEach(function (id) {
+  // Card BP1: this module owns all five filters -- populating them (above)
+  // AND binding their change handler, so there is exactly one fill and one
+  // listener per select, never main.js's boot() racing this initialize().
+  ['bp-assignee-filter', 'bp-field-filter', 'bp-status-filter', 'bp-year-filter', 'bp-step-filter'].forEach(function (id) {
     var element = byId(id);
     if (element) element.addEventListener('change', refreshBusinessPlan);
   });
@@ -1181,6 +1184,41 @@ function transition(action) {
   });
 }
 
+// Well Summary gear menu (mirrors views/lead-summary.js's dismissal pair):
+// bindDetail() re-runs on every render, but the two DOCUMENT-level listeners
+// must not stack, so they are registered exactly once for the page's
+// lifetime and resolve the popover by id at event time.
+function bpeSummaryMenuIsOpen() {
+  var menu = byId('bpe-summary-menu');
+  return !!menu && !menu.classList.contains('hidden');
+}
+
+function closeBpeSummaryMenu() {
+  var menu = byId('bpe-summary-menu');
+  if (menu) menu.classList.add('hidden');
+  var gear = byId('bpe-summary-gear');
+  if (gear) gear.setAttribute('aria-expanded', 'false');
+}
+
+var bpeSummaryDismissWired = false;
+function wireBpeSummaryDismissOnce() {
+  if (bpeSummaryDismissWired) return;
+  bpeSummaryDismissWired = true;
+  document.addEventListener('click', function (event) {
+    if (!bpeSummaryMenuIsOpen()) return;
+    var menu = byId('bpe-summary-menu');
+    var gear = byId('bpe-summary-gear');
+    if ((menu && menu.contains(event.target)) || (gear && gear.contains(event.target))) return;
+    closeBpeSummaryMenu();
+  });
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Escape' || !bpeSummaryMenuIsOpen()) return;
+    closeBpeSummaryMenu();
+    var gear = byId('bpe-summary-gear');
+    if (gear) gear.focus();
+  });
+}
+
 function bindDetail() {
   byId('bpe-back').addEventListener('click', refreshBusinessPlan);
   all('.bpe-nav-item', byId('bpe-detail-view')).forEach(function (button) {
@@ -1236,10 +1274,12 @@ function bindDetail() {
   });
   var gear = byId('bpe-summary-gear');
   var menu = byId('bpe-summary-menu');
-  if (gear && menu) gear.addEventListener('click', function () {
+  if (gear && menu) gear.addEventListener('click', function (event) {
+    event.stopPropagation();
     var open = menu.classList.toggle('hidden') === false;
     gear.setAttribute('aria-expanded', String(open));
   });
+  wireBpeSummaryDismissOnce();
   var edit = byId('bpe-edit-all');
   if (edit) edit.addEventListener('click', function () {
     flushPendingSaves().then(function (saved) {

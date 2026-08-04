@@ -1,4 +1,4 @@
-import { byId, all, esc, fillSelect, range } from './dom.js';
+import { byId, all } from './dom.js';
 import { Store } from './state.js';
 import { API } from './api.js';
 import { activateTab, backToBoard } from './navigation.js';
@@ -18,16 +18,6 @@ import { cycleLeadPriorityChip } from './views/detail.js';
 import { openProjectEditor } from './views/project-editor.js';
 import { performLogin, fetchUserOptions } from './auth.js';
 
-// The BP board's status select acts on projects.overall_status, which only
-// ever holds these two values -- filling it with task statuses made the filter
-// dead for every other option. 'Completed' is excluded: a fully-approved BP
-// well (drilled/finished, incl. imported historical wells) leaves the BP board
-// (workflow/projects.py get_projects), so the option would always yield an
-// empty board. (The prospect board has no server-side status select any more:
-// Card 1C filters it client-side and DOES show completed leads -- see
-// views/lead-filters.js.)
-var PROJECT_STATUSES = ['In Progress'];
-
 export function showTab(name) {
   activateTab(name);
   byId('detail-shell').classList.add('hidden');
@@ -43,7 +33,6 @@ export function showTab(name) {
 }
 
 function safeOn(id, event, handler) { var element = byId(id); if (element) element.addEventListener(event, handler); }
-
 
 /* The three app-chrome actions the Card 1F gear menu triggers.
 
@@ -125,10 +114,6 @@ export function wire() {
   safeOn('open-project-editor', 'click', function () {
     if (Store.projectId) openProjectEditor(Store.projectId);
   });
-  // The prospect board's filters are not selects any more (Card 1C's filter
-  // row wires itself and re-filters in place, with no refetch); the BP board
-  // keeps its three server-side selects exactly as they were.
-  ['bp-year-filter', 'bp-status-filter', 'bp-assignee-filter'].forEach(function (id) { safeOn(id, 'input', refreshBP); safeOn(id, 'change', refreshBP); });
   safeOn('audit-project-filter', 'change', refreshAudit);
   // Portfolio Analysis: cross plot dialog trigger, close, and filter selects.
   // (The portfolio table itself filters via its column menus -- portfolio.js.)
@@ -136,21 +121,7 @@ export function wire() {
   initCalculators();
 }
 
-// The BP board's assignee select: value '' = All assignees (pipeline.js maps
-// '' to the backend's 'All'). Options are the active users, matching
-// current_owner names.
-function fillAssigneeFilter(select, users) {
-  if (!select) return;
-  var previous = select.value;
-  select.innerHTML = '<option value="">All assignees</option>' + users.map(function (user) {
-    return '<option>' + esc(user.name) + '</option>';
-  }).join('');
-  select.value = previous || '';
-}
-
 function boot() {
-  fillSelect(byId('bp-status-filter'), PROJECT_STATUSES, true);
-  fillSelect(byId('bp-year-filter'), range(2026, 2040), true);
   // Card 1C: the filter row owns the lead board's rowset. It is initialized
   // BEFORE the first refresh so the payload lands in a live filter module, and
   // the board renders only through its onChange -- one filtered rowset, one
@@ -171,7 +142,6 @@ function boot() {
   });
   ensureUsers().then(function (users) {
     setLeadUsers(users || []);
-    fillAssigneeFilter(byId('bp-assignee-filter'), users || []);
   });
   wire();
   renderUserChip();
