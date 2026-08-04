@@ -6,6 +6,7 @@ import { PROSPECT_STAGES, BP_STAGES } from '../schema.js';
 import { openDetail } from './detail.js';
 import { refreshPortfolio } from './portfolio.js';
 import { setLeadRows } from './lead-filters.js';
+import { refreshBusinessPlan } from './business-plan.js';
 
 function prospectStages() { return (Store.meta && Store.meta.prospect_stages) || PROSPECT_STAGES; }
 function bpStages() { return (Store.meta && Store.meta.bp_stages) || BP_STAGES; }
@@ -197,18 +198,7 @@ export function refreshProspect() {
     .catch(function (error) { msg(error.message, 'error'); });
 }
 export function refreshBP() {
-  var query = {
-    status_filter: byId('bp-status-filter').value,
-    owner_filter: assigneeFilterValue('bp-assignee-filter'),
-    pipeline_filter: 'bp'
-  };
-  API.projects(query).then(function (projects) {
-    var year = byId('bp-year-filter').value;
-    var rows = (projects || []).filter(function (project) {
-      return year === 'All' || String(project.business_plan_year || '') === year;
-    });
-    renderPipeline(byId('bp-pipeline'), rows, bpStages(), 'bp');
-  }).catch(function (error) { msg(error.message, 'error'); });
+  return refreshBusinessPlan();
 }
 
 export function refreshAllBoards() {

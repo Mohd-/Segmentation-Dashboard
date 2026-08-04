@@ -3,14 +3,14 @@
 
 Boots the Flask app on 127.0.0.1:8021 against a scratch SQLite database
 (NEVER the real pipeline_tracker.db), starts a tiny stdlib HTTP receiver for
-the harness results beacon, drives headless Firefox at
+the harness results beacon, drives an installed headless browser at
 /static/tests/runner.html?live=1&post=<port>, and prints a report.
 
-Run:            .venv/bin/python run_frontend_tests.py
-Manual viewing: .venv/bin/python run_frontend_tests.py --browser open
+Run:            python run_frontend_tests.py
+Manual viewing: python run_frontend_tests.py --browser open
 
 Exit codes: 0 all tests passed, 1 at least one failure, 2 harness/timeout
-problems (server would not boot, Firefox produced no results, ...).
+problems (server would not boot, the browser produced no results, ...).
 """
 import argparse
 import json
@@ -24,16 +24,53 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PYTHON = os.path.join(BASE_DIR, ".venv", "bin", "python")
-FIREFOX = "/Applications/Firefox.app/Contents/MacOS/firefox"
+PYTHON = sys.executable
 HOST = "127.0.0.1"
 APP_PORT = 8021  # 8020 is the normal dev port; the test server must not collide.
 HEALTH_URL = "http://%s:%d/api/health" % (HOST, APP_PORT)
 RESULTS_TIMEOUT_S = 60
 BOOT_TIMEOUT_S = 15
+
+
+def browser_candidates():
+    """Installed browser executables in preference order for this platform."""
+    if sys.platform == "darwin":
+        return [
+            ("firefox", "/Applications/Firefox.app/Contents/MacOS/firefox"),
+            ("chromium", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            ("chromium", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+        ]
+    if os.name == "nt":
+        roots = [os.environ.get("PROGRAMFILES", ""), os.environ.get("PROGRAMFILES(X86)", ""),
+                 os.environ.get("LOCALAPPDATA", "")]
+        return [
+            ("firefox", os.path.join(roots[0], "Mozilla Firefox", "firefox.exe")),
+            ("firefox", os.path.join(roots[1], "Mozilla Firefox", "firefox.exe")),
+            ("chromium", os.path.join(roots[1], "Microsoft", "Edge", "Application", "msedge.exe")),
+            ("chromium", os.path.join(roots[0], "Microsoft", "Edge", "Application", "msedge.exe")),
+            ("chromium", os.path.join(roots[0], "Google", "Chrome", "Application", "chrome.exe")),
+            ("chromium", os.path.join(roots[2], "Google", "Chrome", "Application", "chrome.exe")),
+        ]
+    return [
+        ("firefox", shutil.which("firefox") or ""),
+        ("chromium", shutil.which("chromium") or ""),
+        ("chromium", shutil.which("chromium-browser") or ""),
+        ("chromium", shutil.which("google-chrome") or ""),
+        ("chromium", shutil.which("microsoft-edge") or ""),
+    ]
+
+
+def find_browser(requested="auto"):
+    for kind, path in browser_candidates():
+        if requested not in {"auto", kind}:
+            continue
+        if path and os.path.isfile(path):
+            return kind, path
+    return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -177,9 +214,11 @@ def print_report(payload):
 # ---------------------------------------------------------------------------
 
 def main():
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="Run the front-end test suite.")
-    parser.add_argument("--browser", choices=["firefox", "open"], default="firefox",
-                        help="firefox: headless automated run (default); "
+    parser.add_argument("--browser", choices=["auto", "firefox", "chromium", "open"], default="auto",
+                        help="auto: use an installed Firefox/Chromium browser (default); "
                              "open: boot the server and open the runner for manual viewing")
     args = parser.parse_args()
 
@@ -206,7 +245,7 @@ def main():
     env["SEGMENT_TRACKER_RF_MODEL_PATH"] = os.path.join(tmp_dir, "rf_model.joblib")
 
     flask_proc = None
-    firefox_proc = None
+    browser_proc = None
     httpd = None
     exit_code = 2
 
@@ -232,14 +271,16 @@ def main():
             return 2
         print("Server up on %s (db: %s)" % (HEALTH_URL, scratch_db))
 
-        manual = args.browser == "open" or not os.path.exists(FIREFOX)
-        if args.browser == "firefox" and not os.path.exists(FIREFOX):
-            print("WARNING: %s not found; falling back to --browser open." % FIREFOX)
+        browser_kind, browser_path = find_browser(args.browser)
+        manual = args.browser == "open"
+        if not manual and not browser_path:
+            print("ERROR: no supported Firefox, Chrome, Chromium, or Edge executable was found.")
+            return 2
 
         if manual:
             url = "http://%s:%d/static/tests/runner.html?live=1" % (HOST, APP_PORT)
             print("Opening %s — Ctrl-C to stop the server." % url)
-            subprocess.run(["open", url], check=False)
+            webbrowser.open(url)
             try:
                 while True:
                     time.sleep(1)
@@ -254,25 +295,40 @@ def main():
         results_port = httpd.server_address[1]
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
 
-        # 3. Headless Firefox with a throwaway profile.
-        profile_dir = os.path.join(tmp_dir, "ffprofile")
+        # 3. Headless installed browser with a throwaway profile.
+        profile_dir = os.path.join(tmp_dir, "browser-profile")
         os.makedirs(profile_dir, exist_ok=True)
-        write_firefox_prefs(profile_dir)
         runner_url = ("http://%s:%d/static/tests/runner.html?live=1&post=%d"
                       % (HOST, APP_PORT, results_port))
-        print("Launching headless Firefox → %s" % runner_url)
-        ff_env = dict(env)
-        ff_env["MOZ_HEADLESS"] = "1"
-        # -foreground stops macOS Firefox from re-launching itself through
-        # LaunchServices (which would orphan the browser from our process tree).
-        firefox_proc = subprocess.Popen(
-            [FIREFOX, "-foreground", "-headless", "-no-remote", "-profile", profile_dir, runner_url],
-            env=ff_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print("Launching headless %s: %s" % (browser_kind, runner_url))
+        browser_env = dict(env)
+        if browser_kind == "firefox":
+            write_firefox_prefs(profile_dir)
+            browser_env["MOZ_HEADLESS"] = "1"
+            command = [browser_path]
+            # This keeps macOS Firefox attached to our process tree.
+            if sys.platform == "darwin":
+                command.append("-foreground")
+            command.extend(["-headless", "-no-remote", "-profile", profile_dir, runner_url])
+        else:
+            command = [
+                browser_path,
+                "--headless=new",
+                "--disable-gpu",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-background-networking",
+                "--user-data-dir=" + profile_dir,
+                runner_url,
+            ]
+        browser_proc = subprocess.Popen(
+            command, env=browser_env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         # 4. Wait for the beacon.
         if not ResultsReceiver.received.wait(RESULTS_TIMEOUT_S):
             print("ERROR: no test results arrived within %ds "
-                  "(harness crash or Firefox failed to load the runner)." % RESULTS_TIMEOUT_S)
+                  "(harness crash or the browser failed to load the runner)." % RESULTS_TIMEOUT_S)
             return 2
 
         payload = ResultsReceiver.payload or {}
@@ -286,8 +342,9 @@ def main():
             exit_code = 0 if payload.get("failed", 1) == 0 else 1
         return exit_code
     finally:
-        stop_process(firefox_proc, "firefox")
-        kill_by_marker(tmp_dir)  # any LaunchServices-relaunched Firefox
+        stop_process(browser_proc, "browser")
+        if sys.platform == "darwin":
+            kill_by_marker(tmp_dir)  # any LaunchServices-relaunched Firefox
         stop_process(flask_proc, "flask app")
         if httpd is not None:
             httpd.shutdown()
