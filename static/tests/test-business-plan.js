@@ -1,6 +1,6 @@
 import { test, assert, fixture, mockFetch, waitFor } from './harness.js';
 import {
-  refreshBusinessPlan, openBusinessPlanDetail, businessPlanTestHooks
+  refreshBusinessPlan, syncBusinessPlanPromotion, openBusinessPlanDetail, businessPlanTestHooks
 } from '../js/views/business-plan.js';
 
 function response(payload) {
@@ -99,9 +99,13 @@ test('business-plan renders the approved dashboard and one auto-save approval de
     hole_sections: [], formation_options: ['SARH', 'QASM', 'QWRH'], booking_years: [currentYear, currentYear + 1, currentYear + 2, currentYear + 3],
     folder: { path: '\\\\share\\MDFT\\MDFT-7', file_url: 'file://share/MDFT/MDFT-7' }
   };
+  var dashboardRequests = [];
   mockFetch(function (url) {
     var path = String(url);
-    if (path.indexOf('/api/business-plan/dashboard') >= 0) return response(dashboard);
+    if (path.indexOf('/api/business-plan/dashboard') >= 0) {
+      dashboardRequests.push(path);
+      return response(dashboard);
+    }
     if (path.indexOf('/api/business-plan/wells/7/steps/business-plan-gate') >= 0) return response(detail);
     if (path.indexOf('/api/users') >= 0) return response([{ name: 'Supervisor', role: 'supervisor' }]);
     throw new Error('Unexpected request: ' + path);
@@ -118,6 +122,20 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   assert.equal(host.querySelectorAll('.bpe-well-card .bpe-tracking-item').length, 6);
   assert.equal(host.querySelectorAll('.bpe-kpi').length, 4);
   assert.equal(host.querySelector('.bpe-kpis, #bpe-kpis').textContent.indexOf('40/80 BCF') >= 0, true);
+
+  host.querySelector('#bp-assignee-filter').value = 'Supervisor';
+  host.querySelector('#bp-field-filter').value = 'MDFT';
+  host.querySelector('#bp-status-filter').value = 'Completed';
+  host.querySelector('#bp-step-filter').value = 'all';
+  await syncBusinessPlanPromotion(2027);
+  assert.equal(host.querySelector('#bp-year-filter').value, '2027',
+    'Portfolio promotion selects its target BP year');
+  assert.equal(host.querySelector('#bp-assignee-filter').value, 'All Assignees');
+  assert.equal(host.querySelector('#bp-field-filter').value, 'All Fields');
+  assert.equal(host.querySelector('#bp-status-filter').value, 'All Status');
+  assert.equal(host.querySelector('#bp-step-filter').value, 'business-plan-gate');
+  assert.match(dashboardRequests[dashboardRequests.length - 1], /year=2027/,
+    'the synchronized dashboard fetches the promoted year immediately');
 
   host.querySelector('.bpe-tracking-item').click();
   await waitFor(function () { return host.querySelector('.bpe-detail-form'); });

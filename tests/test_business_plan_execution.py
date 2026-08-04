@@ -113,6 +113,30 @@ def test_dashboard_has_approved_filters_steps_and_six_item_stage(client):
     ]
 
 
+def test_portfolio_promotion_year_immediately_feeds_business_plan_dashboard(client):
+    project_id = create_project(client, "PORT-BPE-1", pipeline_type="prospect")
+    before = client.get("/api/business-plan/dashboard?year=2030").get_json()
+    assert project_id not in {row["project_id"] for row in before["wells"]}
+
+    promoted = client.patch(
+        f"/api/projects/{project_id}/flags",
+        json={"business_plan_enabled": True, "business_plan_year": 2030},
+    )
+    assert promoted.status_code == 200, promoted.get_json()
+
+    portfolio = client.get("/api/portfolio/rows?year=All&activity=All").get_json()
+    portfolio_row = next(row for row in portfolio["rows"] if row["project_id"] == project_id)
+    assert (portfolio_row["pipeline_type"], portfolio_row["year"]) == ("bp", 2030)
+
+    dashboard = client.get("/api/business-plan/dashboard?year=2030").get_json()
+    well = next(row for row in dashboard["wells"] if row["project_id"] == project_id)
+    assert well["business_plan_year"] == 2030
+    assert well["stage_label"] == "Pre-Drilling"
+
+    other_year = client.get("/api/business-plan/dashboard?year=2031").get_json()
+    assert project_id not in {row["project_id"] for row in other_year["wells"]}
+
+
 def test_development_classification_resets_defaults_and_system_completes_only_proposal(client):
     project_id = _bp_project(client)
     response = _save(client, project_id, "business-plan-gate", "bp_gate_classification", "Development")

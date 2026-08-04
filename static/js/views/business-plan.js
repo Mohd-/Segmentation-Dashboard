@@ -125,6 +125,30 @@ export function refreshBusinessPlan() {
   });
 }
 
+export function syncBusinessPlanPromotion(year) {
+  var selectedYear = Number(year);
+  if (!Number.isInteger(selectedYear) || selectedYear < 1999 || selectedYear > 2035) {
+    return Promise.reject(new Error('Select a Business Plan year from 1999 to 2035.'));
+  }
+  initialize();
+  var ready = state.detail ? flushPendingSaves() : Promise.resolve(true);
+  return ready.then(function (saved) {
+    if (!saved) return null;
+    var defaults = {
+      'bp-assignee-filter': 'All Assignees',
+      'bp-field-filter': 'All Fields',
+      'bp-status-filter': 'All Status',
+      'bp-year-filter': String(selectedYear),
+      'bp-step-filter': 'business-plan-gate'
+    };
+    Object.keys(defaults).forEach(function (id) {
+      var element = byId(id);
+      if (element) element.value = defaults[id];
+    });
+    return loadBusinessPlanDashboard();
+  });
+}
+
 function renderDashboard(payload, selected) {
   var options = payload.options || {};
   setSelect('bp-assignee-filter', options.assignees || [], selected.assignee);

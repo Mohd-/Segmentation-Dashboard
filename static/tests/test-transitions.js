@@ -45,9 +45,9 @@ test('transitions.promoteProject: dialog content, year options, cancel resolves 
     assert.match(message, /1 of 3 prospect steps approved\./, 'progress line uses DONE (Approved only)');
     assert.match(message, /before maturation is complete/, 'early-promotion warning shown');
     var select = byId('app-dialog-select');
-    assert.equal(select.options.length, 15, 'years 2026..2040');
-    assert.equal(select.options[0].value, '2026');
-    assert.equal(select.options[14].value, '2040');
+    assert.equal(select.options.length, 37, 'years match Business Plan Execution 1999..2035');
+    assert.equal(select.options[0].value, '1999');
+    assert.equal(select.options[36].value, '2035');
     assert.equal(select.value, '2033', 'project business_plan_year preselected');
     assert.equal(byId('app-dialog-select-caption').textContent, 'Business Plan Year');
     byId('app-dialog-cancel').click();
@@ -64,7 +64,7 @@ test('transitions.promoteProject clamps an out-of-range year to 2026 and omits p
     assert.equal(byId('app-dialog-select').value, '2026');
     var message = byId('app-dialog-message').textContent;
     assert.ok(message.indexOf('prospect steps approved') < 0, 'no progress line for empty tasks');
-    assert.match(message, /Lead Summary snapshot/, 'always explains the promotion effect');
+    assert.match(message, /Business Plan Execution/, 'always explains where the promoted well appears');
     byId('app-dialog-cancel').click();
     return pending;
   }).then(function (result) {
@@ -92,7 +92,8 @@ test('transitions.promoteProject confirm PATCHes /flags with the selected year',
     dialog.close();
     return pending;
   }).then(function (result) {
-    assert.deepEqual(result, { ok: true, pipeline_type: 'bp' }, 'resolves the /flags response');
+    assert.deepEqual(result, { ok: true, pipeline_type: 'bp', business_plan_year: 2031 },
+      'resolves the /flags response with the synchronized BP year');
     assert.match(seen.url, /^\/api\/projects\/7\/flags\?_v=\d+&_t=\d+$/);
     assert.equal(seen.opts.method, 'PATCH');
     assert.deepEqual(JSON.parse(seen.opts.body), {

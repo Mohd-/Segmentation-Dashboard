@@ -4,6 +4,9 @@ import { currentRole } from '../state.js';
 import { DONE } from '../schema.js';
 import { confirmDialog } from '../dialog.js';
 
+var BP_YEAR_MIN = 1999;
+var BP_YEAR_MAX = 2035;
+
 // Phase transitions: the ONLY way a record moves between the lead maturation
 // pipeline and the Business Plan execution pipeline. Both helpers confirm via
 // dialog, then PATCH /flags with business_plan_enabled — the one backend path
@@ -23,7 +26,9 @@ export function promoteProject(project, prospectTasks, changedBy) {
   var tasks = prospectTasks || [];
   var approved = tasks.filter(function (task) { return DONE[task.status]; }).length;
   var year = Number(project.business_plan_year || new Date().getFullYear());
-  if (year < 2026 || year > 2040) year = 2026;
+  if (year < BP_YEAR_MIN || year > BP_YEAR_MAX) {
+    year = Math.min(BP_YEAR_MAX, Math.max(BP_YEAR_MIN, new Date().getFullYear()));
+  }
   var lines = [];
   if (tasks.length) {
     lines.push(approved + ' of ' + tasks.length + ' prospect steps approved.');
@@ -31,13 +36,13 @@ export function promoteProject(project, prospectTasks, changedBy) {
       lines.push('Promoting now switches this record to the Well Delivery stages before maturation is complete.');
     }
   }
-  lines.push('The record switches to the BP execution stages, a Lead Summary snapshot is captured, and the well appears in the Portfolio.');
+  lines.push('The record switches to the BP execution stages, a Lead Summary snapshot is captured, and the well appears in Business Plan Execution for the selected year.');
   return confirmDialog({
     title: 'Promote to BP Well',
     message: lines.join('\n'),
     confirmLabel: 'Promote',
     selectLabel: 'Business Plan Year',
-    selectOptions: range(2026, 2040),
+    selectOptions: range(BP_YEAR_MIN, BP_YEAR_MAX),
     selectValue: String(year)
   }).then(function (selectedYear) {
     if (selectedYear === null) return null;
@@ -45,6 +50,9 @@ export function promoteProject(project, prospectTasks, changedBy) {
       business_plan_enabled: true,
       business_plan_year: selectedYear,
       changed_by: changedBy
+    }).then(function (result) {
+      result.business_plan_year = Number(selectedYear);
+      return result;
     });
   });
 }

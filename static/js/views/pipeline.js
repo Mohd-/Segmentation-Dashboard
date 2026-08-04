@@ -6,7 +6,7 @@ import { PROSPECT_STAGES, BP_STAGES } from '../schema.js';
 import { openDetail } from './detail.js';
 import { refreshPortfolio } from './portfolio.js';
 import { setLeadRows } from './lead-filters.js';
-import { refreshBusinessPlan } from './business-plan.js';
+import { refreshBusinessPlan, syncBusinessPlanPromotion } from './business-plan.js';
 
 function prospectStages() { return (Store.meta && Store.meta.prospect_stages) || PROSPECT_STAGES; }
 function bpStages() { return (Store.meta && Store.meta.bp_stages) || BP_STAGES; }
@@ -201,9 +201,11 @@ export function refreshBP() {
   return refreshBusinessPlan();
 }
 
-export function refreshAllBoards() {
+export function refreshAllBoards(options) {
+  var businessPlanYear = options && options.businessPlanYear;
   refreshProspect();
-  refreshBP();
+  if (businessPlanYear == null) refreshBP();
+  else syncBusinessPlanPromotion(businessPlanYear);
   refreshPortfolio();
 }
 
