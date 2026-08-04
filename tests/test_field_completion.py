@@ -1662,5 +1662,5 @@ def test_pre_well_delivery_four_of_four_matures_the_whole_lead(client):
     assert resp.status_code == 200, resp.get_json()
     portfolio = resp.get_json()["rows"]
     entry = next(r for r in portfolio if r["project_id"] == pid)
-    assert entry["is_mature_lead"] == 1
+    assert entry["is_lead"] == 1
     assert entry["status"] == "Staked"

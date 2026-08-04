@@ -475,12 +475,12 @@ def _env_list(name: str):
 
 # Ordered standard hole-section values for Gate Interval From/To.  No approved
 # list was supplied, so this is empty unless deployment configures it.
-BPE_HOLE_SECTIONS = _env_list("ASAS_BPE_HOLE_SECTIONS")
+BPE_HOLE_SECTIONS = _env_list("SEGMENT_TRACKER_BPE_HOLE_SECTIONS")
 
 
 def business_plan_vsp_url() -> str:
-    return os.environ.get("ASAS_BPE_VSP_URL", "").strip()
+    return os.environ.get("SEGMENT_TRACKER_BPE_VSP_URL", "").strip()
 
 
 def business_plan_structural_mtr_url() -> str:
-    return os.environ.get("ASAS_BPE_STRUCTURAL_MTR_URL", "").strip()
+    return os.environ.get("SEGMENT_TRACKER_BPE_STRUCTURAL_MTR_URL", "").strip()

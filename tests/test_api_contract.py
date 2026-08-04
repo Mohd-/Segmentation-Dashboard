@@ -1019,8 +1019,10 @@ def test_export_includes_proposed_leads_with_latest_estimates(client):
     """The Portfolio Export sheet is one row per NON-ARCHIVED project: a
     still-maturing (Proposed) lead must appear, its estimate columns filled
     from the latest available (lead-phase) inputs; a just-created bare lead
-    must appear too. The Staking Options sheet keeps its mature-leads-only
-    membership, so neither lead may show there."""
+    must appear too. The Staking Options sheet now shares that same
+    non-archived membership (it filters reporting._portfolio_projects to
+    business_plan_enabled == 0, which is every lead once that reader was
+    widened), so both leads must show there too."""
     bare_pid = create_project(client, "EXPORT-LEAD-BARE")
     lead_pid = create_project(client, "EXPORT-LEAD-1")
     lead_ra_task = get_task_by_name(client, lead_pid, "Lead Assessment")
@@ -1066,8 +1068,8 @@ def test_export_includes_proposed_leads_with_latest_estimates(client):
     staking_header = [cell.value for cell in ws_staking[4]]
     staking_names = {row[staking_header.index("Lead Name")]
                      for row in ws_staking.iter_rows(min_row=5, max_row=ws_staking.max_row, values_only=True)}
-    assert "EXPORT-LEAD-1" not in staking_names
-    assert "EXPORT-LEAD-BARE" not in staking_names
+    assert "EXPORT-LEAD-1" in staking_names
+    assert "EXPORT-LEAD-BARE" in staking_names
 
 
 def test_export_status_reads_sarh_formation_fluid(client):

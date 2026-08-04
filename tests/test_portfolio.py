@@ -1,15 +1,16 @@
 """Tests for the Portfolio rework (reporting.get_portfolio_rows).
 
-The Portfolio is the analysis surface for BP-enabled wells PLUS fully-matured
-leads. Column sources each get pinned here -- gas-field derivation from the
-project name, seismic AR -> block-name mapping (config.AR_TO_SEISMIC_BLOCK,
-FIRST non-empty AR) with raw fallback, the well-fluid ladder (resolve_well_fluid:
-SARH 'final'-phase formation fluid -> legacy final_fluid_type -> resource_update
--> post_drill -> SARH 'quicklook'-phase formation fluid -> legacy
-quicklook_fluid_type), status (fluid -> Staked when Approval to Stake approved ->
-Proposed default), mean-OGIP precedence (post-drill -> pre-drill -> lead),
-classification (BP Execution Gate beats legacy GHEER), and mature-lead
-membership (a prospect with every prospect step Approved).
+The Portfolio is the analysis surface for every non-archived record -- BP
+wells PLUS leads at every maturity stage. Column sources each get pinned here
+-- gas-field derivation from the project name, seismic AR -> block-name
+mapping (config.AR_TO_SEISMIC_BLOCK, FIRST non-empty AR) with raw fallback,
+the well-fluid ladder (resolve_well_fluid: SARH 'final'-phase formation fluid
+-> legacy final_fluid_type -> resource_update -> post_drill -> SARH
+'quicklook'-phase formation fluid -> legacy quicklook_fluid_type), status
+(fluid -> Staked when Approval to Stake approved -> Proposed default),
+mean-OGIP precedence (post-drill -> pre-drill -> lead), classification (BP
+Execution Gate beats legacy GHEER), and lead/well membership (is_lead: 1 for
+every non-BP-enabled record, regardless of maturity).
 """
 from __future__ import annotations
 
@@ -408,11 +409,13 @@ def test_classification_bp_gate_beats_gheer(client):
 # Scope / filters keep working with the new row shape
 # ---------------------------------------------------------------------------
 
-def test_portfolio_scope_is_bp_enabled_only(client):
-    create_project(client, "NOT-IN-PORTFOLIO")
+def test_portfolio_includes_all_non_archived_records(client):
+    bare_pid = create_project(client, "BARE-LEAD")
     pid = create_project(client, "IN-PORTFOLIO", **BP_KWARGS)
     rows = _rows(client)["rows"]
-    assert [r["project_id"] for r in rows] == [pid]
+    assert {r["project_id"] for r in rows} == {bare_pid, pid}
+    bare_row = next(r for r in rows if r["project_id"] == bare_pid)
+    assert bare_row["status"] == "Proposed"
 
 
 def test_portfolio_membership_includes_bp_wells_and_mature_leads(client):
@@ -423,21 +426,44 @@ def test_portfolio_membership_includes_bp_wells_and_mature_leads(client):
 
     payload = _rows(client)
     by_id = {r["project_id"]: r for r in payload["rows"]}
-    assert set(by_id) == {bp_pid, lead_pid}                          # fresh prospect excluded
+    assert set(by_id) == {bp_pid, lead_pid, fresh_pid}                # every non-archived record
 
-    assert by_id[bp_pid]["is_mature_lead"] == 0
+    assert by_id[bp_pid]["is_lead"] == 0
     assert by_id[bp_pid]["pipeline_type"] == "bp"
-    assert by_id[lead_pid]["is_mature_lead"] == 1
+    assert by_id[lead_pid]["is_lead"] == 1
     assert by_id[lead_pid]["pipeline_type"] == "prospect"
-    assert by_id[lead_pid]["status"] in {"Proposed", "Staked"}
+    assert by_id[lead_pid]["status"] == "Staked"
+    assert by_id[fresh_pid]["is_lead"] == 1
+    assert by_id[fresh_pid]["status"] == "Proposed"
 
     assert payload["summary"]["business_plan_wells"] == 1
-    assert payload["summary"]["mature_leads"] == 1
+    assert payload["summary"]["leads"] == 2
 
     # A fully-matured lead leaves the prospect board; the fresh one stays.
     prospect_ids = [r["project_id"] for r in client.get("/api/projects?pipeline_filter=prospect").get_json()]
     assert lead_pid not in prospect_ids
     assert fresh_pid in prospect_ids
+
+
+# ---------------------------------------------------------------------------
+# risking_passed (Segmentation Slides approved) -- gates the promote "+" in
+# the Portfolio UI (static/js/views/portfolio.js yearCellMarkup), independent
+# of Approval to Stake.
+# ---------------------------------------------------------------------------
+
+def test_risking_passed_true_when_only_segmentation_slides_approved(client):
+    pid = create_project(client, "RISK-PASSED-1")
+    task = get_task_by_name(client, pid, "Segmentation Slides")
+    resp = client.patch(f"/api/tasks/{task['task_id']}", json={
+        "status": "Approved", "revision": task["revision"],
+    })
+    assert resp.status_code == 200, resp.get_json()
+    assert _row_for(client, pid)["risking_passed"] == 1
+
+
+def test_risking_passed_false_for_a_fresh_lead(client):
+    pid = create_project(client, "RISK-PASSED-2")
+    assert _row_for(client, pid)["risking_passed"] == 0
 
 
 def test_portfolio_year_and_activity_filters(client):

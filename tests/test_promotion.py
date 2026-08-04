@@ -86,8 +86,9 @@ def test_demotion_preserves_snapshot_and_bp_task_statuses(client):
 def test_recall_of_non_mature_lead_returns_it_unchanged(client):
     """Recalling an early-promoted well never fabricates approvals: every
     prospect step keeps its exact pre-recall status, so the record reappears
-    on the maturation board where it left off (and, not being mature, it is
-    not in the Portfolio)."""
+    on the maturation board where it left off. The Portfolio now includes
+    every non-archived record, so the recalled lead is still there too --
+    just as a 'Proposed' record, not a matured one."""
     import workflow
     pid = create_project(client, "RECALL-EARLY-1")
     client.patch(f"/api/projects/{pid}/flags", json={
@@ -107,7 +108,8 @@ def test_recall_of_non_mature_lead_returns_it_unchanged(client):
     board = client.get("/api/projects?pipeline_filter=prospect").get_json()
     assert "RECALL-EARLY-1" in [p["project_name"] for p in board]
     rows = client.get("/api/portfolio/rows").get_json()["rows"]
-    assert "RECALL-EARLY-1" not in [r["well_name"] for r in rows]
+    row = next(r for r in rows if r["well_name"] == "RECALL-EARLY-1")
+    assert row["status"] == "Proposed"
 
 
 def test_recall_of_fully_matured_lead_stays_off_the_board(client):
@@ -135,7 +137,7 @@ def test_recall_of_fully_matured_lead_stays_off_the_board(client):
     assert "RECALL-MATURE-1" not in [p["project_name"] for p in board]
     rows = client.get("/api/portfolio/rows").get_json()["rows"]
     row = next(r for r in rows if r["well_name"] == "RECALL-MATURE-1")
-    assert row["is_mature_lead"] == 1
+    assert row["is_lead"] == 1
     assert row["status"] == "Staked"
 
 

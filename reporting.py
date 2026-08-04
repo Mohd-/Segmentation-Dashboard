@@ -294,13 +294,12 @@ def get_business_plan_rows(session):
 def _portfolio_projects(session):
     """Return the Portfolio membership rows (shared reader, imported by export).
 
-    A record belongs in the Portfolio when it is either a BP-enabled well OR a
-    fully-matured lead: a prospect whose every active prospect-stage task is
-    Approved (the same completion notion as the derived overall_status). The
-    mature-lead arm is expressed as a NOT EXISTS over the still-open prospect
-    tasks so a brand-new prospect (12 un-approved steps) stays out until it
-    completes. Ordered by BP year then name; mature leads carry a NULL year and
-    sort together at the front.
+    The dashboard is an analysis surface, so it must not go blank while the
+    local database contains active leads that have not yet crossed the old
+    BP/mature-lead portfolio gate. Return every non-archived record; the row
+    still carries business_plan_enabled so callers can keep the BP well versus
+    lead split in summaries/actions. Ordered by BP year then name; leads without
+    a year sort together at the front.
     """
     return db.fetch_all(session, """
         SELECT p.project_id,
@@ -311,21 +310,8 @@ def _portfolio_projects(session):
                COALESCE(p.active_well_enabled, 0) AS active_well_enabled
         FROM projects p
         WHERE COALESCE(p.archived, 0) = 0
-          AND (
-              COALESCE(p.business_plan_enabled, 0) = 1
-              OR (
-                  LOWER(COALESCE(p.pipeline_type, 'prospect')) = 'prospect'
-                  AND NOT EXISTS (
-                      SELECT 1 FROM project_tasks pt
-                      WHERE pt.project_id = p.project_id
-                        AND pt.is_active = 1
-                        AND pt.stage_group IN :prospect_stages
-                        AND pt.status != 'Approved'
-                  )
-              )
-          )
         ORDER BY p.business_plan_year, p.project_name COLLATE NOCASE
-    """, {"prospect_stages": list(workflow.PROSPECT_STAGES)})  # PG: COLLATE NOCASE
+    """)  # PG: COLLATE NOCASE
 
 
 def _approval_to_stake_map(session, project_ids):
@@ -347,6 +333,27 @@ def _approval_to_stake_map(session, project_ids):
         GROUP BY pt.project_id
     """, {"project_ids": list(project_ids)})
     return {row["project_id"]: bool(row["staked"]) for row in rows}
+
+
+def _risking_passed_map(session, project_ids):
+    """Batched {project_id: bool} -- whether 'Segmentation Slides' is Approved.
+
+    Cloned from _approval_to_stake_map (same one-GROUP-BY-query shape, same
+    MAX-collapses-legacy-duplicate-rows behaviour) but keyed on the
+    Segmentation Slides task instead: this is the risking gate the Portfolio
+    UI's promote action checks, independent of Approval to Stake.
+    """
+    if not project_ids:
+        return {}
+    rows = db.fetch_all(session, """
+        SELECT pt.project_id,
+               MAX(CASE WHEN pt.status = 'Approved' THEN 1 ELSE 0 END) AS passed
+        FROM project_tasks pt
+        WHERE pt.project_id IN :project_ids AND pt.is_active = 1
+          AND pt.task_name = 'Segmentation Slides'
+        GROUP BY pt.project_id
+    """, {"project_ids": list(project_ids)})
+    return {row["project_id"]: bool(row["passed"]) for row in rows}
 
 
 def record_status(fields, staked, fluid=None):
@@ -411,22 +418,25 @@ def map_attributes_by_project(session, project_ids):
 def get_portfolio_rows(session, year="All", activity="All"):
     """Return the filtered Portfolio analysis rows + summary.
 
-    Membership is BP-enabled wells PLUS fully-matured leads (see
-    _portfolio_projects); each row carries its pipeline_type and an
-    is_mature_lead flag (1 for the prospect rows). Every column is composed
-    from the task inputs at read time (one batched _bp_task_fields query, one
-    _approval_to_stake_map query): well name, gas field (project-name prefix
-    before the first hyphen), seismic block (FIRST non-empty Reservoir CoS AR
-    number mapped through config.AR_TO_SEISMIC_BLOCK, raw AR fallback),
-    classification (BP Execution Gate input -> legacy GHEER fallback), BP year,
-    status (fluid -> 'Staked' when Approval to Stake is approved -> 'Proposed'),
-    raw fluid (resolve_well_fluid: SARH 'final'-phase formation fluid -> legacy
+    Membership is every non-archived record (see _portfolio_projects); each
+    row carries its pipeline_type and an is_lead flag (1 for the non-BP-enabled
+    records, 0 for BP wells -- no maturity requirement any more). Every column
+    is composed from the task inputs at read time (one batched _bp_task_fields
+    query, one _approval_to_stake_map query, one _risking_passed_map query):
+    well name, gas field (project-name prefix before the first hyphen),
+    seismic block (FIRST non-empty Reservoir CoS AR number mapped through
+    config.AR_TO_SEISMIC_BLOCK, raw AR fallback), classification (BP Execution
+    Gate input -> legacy GHEER fallback), BP year, status (fluid -> 'Staked'
+    when Approval to Stake is approved -> 'Proposed'), raw fluid
+    (resolve_well_fluid: SARH 'final'-phase formation fluid -> legacy
     final_fluid_type -> resource_update -> post_drill -> SARH 'quicklook'-phase
     formation fluid -> legacy quicklook_fluid_type, '' when unset), mean OGIP
     (latest assessment first: resource update -> post-drill -> pre-drill ->
-    lead) and total chance of success (workflow.total_cos_from_fields). One
-    batched SARH-formation fetch (sarh_formations_by_phase) feeds the fluid
-    ladder. Filters apply here so the summary reflects the displayed rows.
+    lead), total chance of success (workflow.total_cos_from_fields) and
+    risking_passed (1 when 'Segmentation Slides' is Approved -- gates the
+    Portfolio UI's promote action). One batched SARH-formation fetch
+    (sarh_formations_by_phase) feeds the fluid ladder. Filters apply here so
+    the summary reflects the displayed rows.
     """
     selected_year = str(year or "All").strip()
     selected_activity = str(activity or "All").strip()
@@ -451,6 +461,7 @@ def get_portfolio_rows(session, year="All", activity="All"):
     project_ids = [p["project_id"] for p in projects]
     task_fields = _bp_task_fields(session, project_ids)
     stake_map = _approval_to_stake_map(session, project_ids)
+    risking_map = _risking_passed_map(session, project_ids)
     sarh_formations = sarh_formations_by_phase(session, project_ids)
 
     filtered = []
@@ -466,10 +477,11 @@ def get_portfolio_rows(session, year="All", activity="All"):
 
         fields = task_fields.get(item["project_id"], {})
         well_fluid = resolve_well_fluid(fields, sarh_formations.get(item["project_id"], {}))
-        # Mature leads are the non-BP-enabled members of the portfolio: they got
-        # in via the fully-approved-prospect arm of _portfolio_projects. BP-enabled
-        # records (whether or not their pipeline_type has flipped to 'bp') are wells.
-        is_mature_lead = 0 if int(item.get("business_plan_enabled") or 0) == 1 else 1
+        # Leads are the non-BP-enabled members of the portfolio -- no maturity
+        # requirement any more, _portfolio_projects returns every non-archived
+        # record. BP-enabled records (whether or not their pipeline_type has
+        # flipped to 'bp') are wells.
+        is_lead = 0 if int(item.get("business_plan_enabled") or 0) == 1 else 1
         ar_number = workflow.first_reservoir_cos_row_value(
             fields.get("reservoir_cos_rows"), "seismic_volume_ar_number")
         mean_ogip = _first_filled(fields.get("resource_update_gas_mean"),
@@ -492,7 +504,8 @@ def get_portfolio_rows(session, year="All", activity="All"):
                 fields.get("reservoir_cos_rows"), fields.get("trap_cos_pct"), fields.get("seal_cos_pct")),
             "active_well_enabled": int(item["active_well_enabled"] or 0),
             "pipeline_type": str(item.get("pipeline_type") or "prospect").lower(),
-            "is_mature_lead": is_mature_lead,
+            "is_lead": is_lead,
+            "risking_passed": int(risking_map.get(item["project_id"], False)),
         }
         ogip_value = to_float_or_none(row["mean_ogip"])
         if ogip_value is not None:
@@ -502,8 +515,8 @@ def get_portfolio_rows(session, year="All", activity="All"):
     return {
         "rows": filtered,
         "summary": {
-            "business_plan_wells": sum(1 for r in filtered if r["is_mature_lead"] == 0),
-            "mature_leads": sum(1 for r in filtered if r["is_mature_lead"] == 1),
+            "business_plan_wells": sum(1 for r in filtered if r["is_lead"] == 0),
+            "leads": sum(1 for r in filtered if r["is_lead"] == 1),
             "cumulative_ogip": round(cumulative_ogip, 1),
         },
     }

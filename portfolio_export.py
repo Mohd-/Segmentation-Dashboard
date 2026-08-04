@@ -2,9 +2,9 @@
 
 What belongs here:
 - ``get_portfolio_export_rows(session)`` -- one row per non-archived lead/well
-  (BP wells, mature leads, AND still-maturing prospect leads), the full
-  per-record analysis table with the latest available value in every column.
-- ``get_staking_export_rows(session)`` -- one row per mature lead, the
+  (BP wells and leads, at every maturity stage), the full per-record analysis
+  table with the latest available value in every column.
+- ``get_staking_export_rows(session)`` -- one row per lead, the
   staking-options sheet.
 
 What does NOT belong here:
@@ -165,24 +165,14 @@ def _sarh_formations(session, project_ids) -> Dict[int, Dict[str, dict]]:
 def _export_projects(session):
     """Return one membership row per NON-ARCHIVED project (export-only reader).
 
-    Deliberately wider than reporting._portfolio_projects (the portfolio UI's
-    BP-wells-plus-mature-leads contract, which the Staking sheet still uses):
-    the analysis sheet also carries the still-maturing prospect leads, each
-    filled with the latest available value per column. Same row shape and
-    ordering as the shared reader -- BP year then name; leads' NULL years
-    group together at the front.
+    Delegates to reporting._portfolio_projects: the Business Plan Execution
+    merge widened that shared reader to every non-archived record, so this
+    export-only reader and the portfolio UI's membership are now identical.
+    Kept as a separate name/call surface (rather than callers reaching into
+    reporting.py directly) so this module's export composition stays free to
+    diverge again later without a reporting.py change.
     """
-    return db.fetch_all(session, """
-        SELECT p.project_id,
-               p.project_name,
-               p.business_plan_year AS year,
-               COALESCE(p.pipeline_type, 'prospect') AS pipeline_type,
-               COALESCE(p.business_plan_enabled, 0) AS business_plan_enabled,
-               COALESCE(p.active_well_enabled, 0) AS active_well_enabled
-        FROM projects p
-        WHERE COALESCE(p.archived, 0) = 0
-        ORDER BY p.business_plan_year, p.project_name COLLATE NOCASE
-    """)  # PG: COLLATE NOCASE
+    return reporting._portfolio_projects(session)
 
 
 def _project_lead_xy(session, project_ids) -> Dict[int, dict]:
@@ -264,9 +254,11 @@ def _parse_flowback_primary_stage(raw_rows_json) -> dict:
 def get_portfolio_export_rows(session) -> List[dict]:
     """One row per non-archived lead/well (_export_projects) for Excel.
 
-    Membership is EVERY non-archived project -- BP wells, mature leads, and
-    still-maturing prospect leads (wider than the portfolio UI). Each column
-    carries the latest available value for that record: proposed/staked rows
+    Membership is EVERY non-archived project -- BP wells and leads at every
+    maturity stage, identical to the portfolio UI's membership
+    (reporting.get_portfolio_rows; _export_projects delegates to the same
+    reporting._portfolio_projects reader). Each column carries the latest
+    available value for that record: proposed/staked rows
     fill their estimate columns from the prospect-step inputs, and the
     BP-execution-only columns (Dynamic Mean, flowback, Booked='No',
     classification) stay blank/No for leads because nothing later exists yet.
@@ -414,7 +406,9 @@ def get_portfolio_export_rows(session) -> List[dict]:
 
 
 def get_staking_export_rows(session) -> List[dict]:
-    """One row per mature lead (business_plan_enabled == 0 Portfolio members).
+    """One row per lead (business_plan_enabled == 0 Portfolio members) -- every
+    lead regardless of maturity stage, now that reporting._portfolio_projects
+    returns all non-archived records.
 
     X/Y prefer the 'Moving Tolerance' step's own staking_well_x/y
     (once a user has moved/confirmed a location) and fall back to the

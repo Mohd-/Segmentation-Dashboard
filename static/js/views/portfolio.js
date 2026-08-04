@@ -19,8 +19,8 @@ import { renderResourceBar, setCrossPlotRows } from './portfolio-analysis.js';
 // OGIP / Total CoS). `numeric` selects Number()-based sort with blanks-last
 // in both directions instead of localeCompare. The former `fluid` column is
 // now `status` (fluid value, or 'Staked'/'Proposed' for undrilled records --
-// see reporting.record_status); rows also carry `pipeline_type` and
-// `is_mature_lead`, consumed only by the Actions cell / stats below.
+// see reporting.record_status); rows also carry `pipeline_type`, `is_lead`
+// and `risking_passed`, consumed only by the Actions cell / stats below.
 // The full status vocabulary (reporting.record_status): every fluid a record
 // can carry plus the two undrilled markers. The Status checklist always offers
 // ALL of these -- a data-driven list alone hides whichever statuses happen to
@@ -44,20 +44,20 @@ var COLUMNS = [
 var state = { rows: [], sortKey: null, sortDir: 1, filters: {} };
 
 // Stats follow the VISIBLE rowset (server + column filters applied) instead
-// of the fetch payload's server-computed summary, using the same
-// is_mature_lead split reporting.get_portfolio_rows uses for its summary
-// object (business_plan_wells / mature_leads).
+// of the fetch payload's server-computed summary, using the same is_lead
+// split reporting.get_portfolio_rows uses for its summary object
+// (business_plan_wells / leads).
 function renderPortfolioStats(rows) {
   var element = byId('portfolio-stats');
   if (!element) return;
   var bpWells = 0;
-  var matureLeads = 0;
+  var leads = 0;
   rows.forEach(function (row) {
-    if (row.is_mature_lead) matureLeads += 1; else bpWells += 1;
+    if (row.is_lead) leads += 1; else bpWells += 1;
   });
   element.innerHTML =
     '<div class="portfolio-stat"><small>Business Plan Wells</small><b>' + esc(bpWells) + '</b></div>' +
-    '<div class="portfolio-stat"><small>Mature Leads</small><b>' + esc(matureLeads) + '</b></div>';
+    '<div class="portfolio-stat"><small>Leads</small><b>' + esc(leads) + '</b></div>';
 }
 
 function distinctValues(key) {
@@ -145,16 +145,17 @@ function visibleRows() {
 // BP Year cell with inline promote/recall icons (replaces the old trailing
 // Actions column; still supervisor-only via canTransitionPhase). A bare
 // Lucide X sits beside the year of every record already in the Business
-// Plan (is_mature_lead 0 -- the same membership signal the old Recall
-// button keyed on) and runs the Recall flow. A Lucide '+' stands in for the
-// missing year on undrilled (Staked/Proposed) records outside the BP and
-// runs the Promote flow (year prompt + snapshot). The .portfolio-promote/
-// .portfolio-recall classes keep the existing renderBody click wiring.
+// Plan (is_lead 0 -- the same membership signal the old Recall button keyed
+// on) and runs the Recall flow. A Lucide '+' stands in for the missing year
+// on undrilled (Staked/Proposed) lead records once risking has passed
+// (risking_passed -- 'Segmentation Slides' Approved) and runs the Promote
+// flow (year prompt + snapshot). The .portfolio-promote/.portfolio-recall
+// classes keep the existing renderBody click wiring.
 function yearCellMarkup(row) {
   var yearText = esc(row.year || '');
   if (!canTransitionPhase()) return '<td>' + yearText + '</td>';
   var attrs = ' data-project-id="' + esc(row.project_id) + '" data-project-name="' + esc(row.well_name || '') + '"';
-  if (!row.is_mature_lead) {
+  if (!row.is_lead) {
     // Bare, small X (no box chrome): muted until hovered so it doesn't
     // shout on every BP row; the confirm dialog still guards the recall.
     return '<td class="pf-year-cell">' + yearText + '<button type="button" class="pf-year-x portfolio-recall"' + attrs +
@@ -162,7 +163,7 @@ function yearCellMarkup(row) {
   }
   var hasYear = !(row.year === null || row.year === undefined || row.year === '');
   var undrilled = row.status === 'Staked' || row.status === 'Proposed';
-  if (!hasYear && undrilled) {
+  if (!hasYear && undrilled && row.risking_passed) {
     return '<td class="pf-year-cell"><button type="button" class="pf-year-action pf-year-add portfolio-promote"' + attrs +
       ' title="No BP year yet — promote to BP well" aria-label="Promote ' + esc(row.well_name || '') + ' to BP well">' + ICONS.plus + '</button></td>';
   }
@@ -213,8 +214,8 @@ function renderBody(table) {
         project_id: Number(button.getAttribute('data-project-id')),
         project_name: button.getAttribute('data-project-name') || ''
       };
-      // No prospectTasks here: portfolio mature leads are 100% approved by
-      // definition (that's how they entered the portfolio), so promoteProject
+      // No prospectTasks here: the "+" only ever shows once risking has
+      // passed (yearCellMarkup's risking_passed gate), so promoteProject
       // omits the N-of-M line/warning when the argument is falsy.
       promoteProject(project, null, currentUserName()).then(function (result) {
         if (result === null) return; // dialog cancelled
