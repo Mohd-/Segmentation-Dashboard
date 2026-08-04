@@ -149,6 +149,8 @@ function fillAssigneeFilter(select, users) {
 }
 
 function boot() {
+  wire();
+  renderUserChip();
   fillSelect(byId('bp-status-filter'), PROJECT_STATUSES, true);
   fillSelect(byId('bp-year-filter'), range(2026, 2040), true);
   // Card 1C: the filter row owns the lead board's rowset. It is initialized
@@ -173,8 +175,6 @@ function boot() {
     setLeadUsers(users || []);
     fillAssigneeFilter(byId('bp-assignee-filter'), users || []);
   });
-  wire();
-  renderUserChip();
   showTab('prospect');
 }
 

@@ -294,13 +294,12 @@ def get_business_plan_rows(session):
 def _portfolio_projects(session):
     """Return the Portfolio membership rows (shared reader, imported by export).
 
-    A record belongs in the Portfolio when it is either a BP-enabled well OR a
-    fully-matured lead: a prospect whose every active prospect-stage task is
-    Approved (the same completion notion as the derived overall_status). The
-    mature-lead arm is expressed as a NOT EXISTS over the still-open prospect
-    tasks so a brand-new prospect (12 un-approved steps) stays out until it
-    completes. Ordered by BP year then name; mature leads carry a NULL year and
-    sort together at the front.
+    The dashboard is an analysis surface, so it must not go blank while the
+    local database contains active leads that have not yet crossed the old
+    BP/mature-lead portfolio gate. Return every non-archived record; the row
+    still carries business_plan_enabled so callers can keep the BP well versus
+    lead split in summaries/actions. Ordered by BP year then name; leads without
+    a year sort together at the front.
     """
     return db.fetch_all(session, """
         SELECT p.project_id,
@@ -311,21 +310,8 @@ def _portfolio_projects(session):
                COALESCE(p.active_well_enabled, 0) AS active_well_enabled
         FROM projects p
         WHERE COALESCE(p.archived, 0) = 0
-          AND (
-              COALESCE(p.business_plan_enabled, 0) = 1
-              OR (
-                  LOWER(COALESCE(p.pipeline_type, 'prospect')) = 'prospect'
-                  AND NOT EXISTS (
-                      SELECT 1 FROM project_tasks pt
-                      WHERE pt.project_id = p.project_id
-                        AND pt.is_active = 1
-                        AND pt.stage_group IN :prospect_stages
-                        AND pt.status != 'Approved'
-                  )
-              )
-          )
         ORDER BY p.business_plan_year, p.project_name COLLATE NOCASE
-    """, {"prospect_stages": list(workflow.PROSPECT_STAGES)})  # PG: COLLATE NOCASE
+    """)  # PG: COLLATE NOCASE
 
 
 def _approval_to_stake_map(session, project_ids):
