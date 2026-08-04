@@ -8,10 +8,10 @@ import {
   kpiDonutHtml, kpiTileHtml, personChipsHtml, leadItemHtml
 } from './board-widgets.js';
 import { DROPDOWN_OPEN_EVENT } from './lead-filters.js';
-// The Well Summary reuses the Lead Summary card's two exported primitives, so
-// the two panels can never disagree about a percentage or about how "no value
-// recorded" looks.
-import { progressPercent, EM_DASH } from './lead-summary.js';
+// The Well Summary wears the Lead Summary card's chrome, and borrows its one
+// "no value recorded" glyph so the two panels cannot disagree about how an
+// empty fact looks.
+import { EM_DASH } from './lead-summary.js';
 
 var FLUIDS = ['Gas', 'Gas over Water', 'Water Bearing', 'Dry Hole', 'Oil', 'Oil over Gas', 'Oil over Water'];
 var STAGE_META = [
@@ -44,6 +44,9 @@ var state = {
   structureDrafts: { formations: null, flowback: null },
   retryCommand: null,
   timers: {},
+  // null = "follow the open step's stage"; a key = the user folded the rail by
+  // hand; '' = they folded every stage away.
+  railStage: null,
   users: null
 };
 
@@ -125,8 +128,13 @@ var BP_FILTERS = [
   { key: 'year', id: 'bp-year-filter', caption: 'Year', fallback: null },
   // An initialism has to keep its spelling in the spoken label, or the trigger
   // announces itself as "Filter by bp gate".
+  // `captionAtRest` is the maturation row's own rule (lead-filters triggerLabel):
+  // a filter sitting on its default shows the CAPTION, because the option text
+  // repeats it. Only this filter qualifies -- "All Assignees" still says more
+  // than "Assignee", and the Year's default is a real selection, not the
+  // absence of one.
   { key: 'step', id: 'bp-step-filter', caption: 'BP Gate', ariaCaption: 'BP Gate',
-    fallback: 'business-plan-gate' }
+    fallback: 'business-plan-gate', captionAtRest: true }
 ];
 
 // Status glyphs echo the card dots and the maturation menu exactly, so the
@@ -148,6 +156,7 @@ function defaultValue(filter) {
 // as a sentence of what the board is showing. A select whose options have not
 // arrived yet falls back to its raw value, then to the caption.
 function triggerLabel(filter, select) {
+  if (filter.captionAtRest && String(select.value) === String(defaultValue(filter))) return filter.caption;
   var option = select.options[select.selectedIndex];
   return (option && option.text) || select.value || filter.caption;
 }
@@ -604,6 +613,9 @@ function loadBusinessPlanDetail(projectId, detailSlug) {
   state.structureDrafts = { formations: null, flowback: null };
   state.retryCommand = null;
   state.timers = {};
+  // A hand-folded rail belongs to the page it was folded on: the new step's
+  // own stage is the one that should be open when it lands.
+  state.railStage = null;
   var requestId = ++state.detailRequest;
   var root = byId('bpe-detail-view');
   byId('bpe-main-view').classList.add('hidden');
@@ -1016,16 +1028,54 @@ function railStatusSlug(status) {
   return RAIL_STATUS_SLUG[status] || 'not-assigned';
 }
 
-// The rail: three stage blocks, all expanded (the BP page is not an accordion
-// -- its fourteen steps fit, and a fold would hide the step you came for).
-// The block holding the open step carries .is-active, the navy accent the
-// maturation rail uses for its current stage.
+/* The rail is the maturation rail's ACCORDION: exactly one stage expanded at
+   a time, chevron on the head, the open block carrying the navy .is-active
+   accent (views/detail.js renderLeadRail + wireRailHandlers + syncStageOpenState).
+
+   `state.railStage` is an OVERRIDE, not the state: null means "follow the step
+   that is open", which is what makes navigating to another stage's step expand
+   that stage. loadBusinessPlanDetail clears the override on every step load,
+   so a manual fold never outlives the page it was made on. */
+function activeStageKey() {
+  var groups = (state.detail && state.detail.navigation) || [];
+  var owner = groups.filter(function (group) {
+    return group.details.some(function (item) { return item.slug === state.detailSlug; });
+  })[0];
+  return owner ? owner.stage_key : (groups[0] || {}).stage_key;
+}
+
+function openStageKey() {
+  return state.railStage === undefined || state.railStage === null ? activeStageKey() : state.railStage;
+}
+
+// Sync the already-rendered rail to the open stage -- head open/aria-expanded,
+// body collapsed, block .is-active -- without re-rendering the list, exactly as
+// the house rail's syncStageOpenState does.
+function syncRailOpenState() {
+  var root = byId('bpe-detail-view');
+  if (!root) return;
+  var open = openStageKey();
+  all('.rail-stage-head', root).forEach(function (head) {
+    var isOpen = head.getAttribute('data-stage') === open;
+    head.classList.toggle('open', isOpen);
+    head.setAttribute('aria-expanded', String(isOpen));
+  });
+  all('.rail-stage-body', root).forEach(function (body) {
+    body.classList.toggle('collapsed', body.getAttribute('data-stage') !== open);
+  });
+  all('.rail-stage-lead', root).forEach(function (block) {
+    block.classList.toggle('is-active', block.getAttribute('data-stage') === open);
+  });
+}
+
 function detailNavMarkup() {
   var stageIcons = {};
   STAGE_META.forEach(function (stage) { stageIcons[stage.key] = stage.icon; });
+  var open = openStageKey();
   var number = 0;
   return (state.detail.navigation || []).map(function (group) {
-    var isActive = group.details.some(function (item) { return item.slug === state.detailSlug; });
+    var isOpen = group.stage_key === open;
+    var done = group.details.filter(function (item) { return item.status === 'Completed'; }).length;
     var items = group.details.map(function (item) {
       number += 1;
       // .bpe-nav-item is carried for the click wiring and the tests; the LOOK
@@ -1037,16 +1087,16 @@ function detailNavMarkup() {
         ' data-detail-slug="' + esc(item.slug) + '">' +
         '<span class="component-num">' + number + '</span><b>' + esc(item.label) + '</b></button>';
     }).join('');
-    return '<div class="rail-stage rail-stage-lead' + (isActive ? ' is-active' : '') + '"' +
+    return '<div class="rail-stage rail-stage-lead' + (isOpen ? ' is-active' : '') + '"' +
       ' data-stage="' + esc(group.stage_key) + '">' +
-      // A DIV, not a button: these blocks never collapse, so there is nothing
-      // to press and no chevron to promise one.
-      '<div class="rail-stage-head">' +
+      '<button type="button" class="rail-stage-head' + (isOpen ? ' open' : '') + '"' +
+        ' data-stage="' + esc(group.stage_key) + '" aria-expanded="' + isOpen + '">' +
         '<span class="stage-icon" aria-hidden="true">' + icon(stageIcons[group.stage_key]) + '</span>' +
         '<span class="rail-stage-name">' + esc(group.stage_label) + '</span>' +
-        '<span class="rail-stage-count">' + group.details.length + '</span>' +
-      '</div>' +
-      '<div class="rail-stage-body">' + items + '</div>' +
+        '<span class="rail-stage-count">' + done + '/' + group.details.length + '</span>' +
+        '<span class="rail-stage-chevron" aria-hidden="true"></span></button>' +
+      '<div class="rail-stage-body' + (isOpen ? '' : ' collapsed') + '"' +
+        ' data-stage="' + esc(group.stage_key) + '">' + items + '</div>' +
       '</div>';
   }).join('');
 }
@@ -1055,6 +1105,10 @@ function railMarkup() {
   var detail = state.detail;
   return '<aside class="component-rail">' +
     '<div class="rail-head">' +
+      // The page's one back control, where the maturation detail page keeps
+      // its own: first thing in the rail head, above the record name.
+      '<button type="button" id="bpe-back" class="ghost back-to-board">' + icon('arrow-left') +
+        ' <span>Back to Business Plan Execution</span></button>' +
       '<div class="detail-title-row"><h3>' + esc(detail.project.project_name) + '</h3></div>' +
       '<p class="bpe-rail-eyebrow">' + esc(detail.detail.stage_label) + '</p>' +
     '</div>' +
@@ -1093,55 +1147,46 @@ function editorMarkup() {
 }
 
 /* -------------------------------------------------------------------------
-   The Well Summary — the Lead Summary card's anatomy (views/lead-summary.js:
-   .ls-card / .ls-head / .ls-progress / .ls-section / .ls-menu), filled with
-   this well's own facts. progressPercent() is IMPORTED rather than reproduced,
-   so the bar can never disagree with the maturation card's; the denominator
-   is the stage's OWN item count, not a hard-coded six.
+   The Well Summary. Its CONTENT is the original panel's, unchanged and in the
+   original order -- four label/value rows (Well, Field, Business Plan Year,
+   Stage Progress as completed/total) over the stage's tracking items, with the
+   gear menu -- and its CHROME is the redesign's Lead Summary card
+   (views/lead-summary.js: .ls-card / .ls-head / .ls-title / .ls-section /
+   .ls-gear / .ls-menu). No progress bar and no column grid: this panel reads
+   as a fact sheet, which is what it always was.
    ------------------------------------------------------------------------- */
 
-// A summary value cell: the value, or the one "no value" glyph. Never blank --
-// a blank cell reads as a layout bug, a dash reads as "not recorded yet".
-function summaryColumn(label, raw) {
-  return '<div class="ls-col">' +
-    '<span class="ls-col-label">' + esc(label) + '</span>' +
-    '<span class="ls-col-value">' + (isFilled(raw) ? esc(raw) : EM_DASH) + '</span>' +
-    '</div>';
-}
-
-function summaryProgressHtml(items) {
-  var total = items.length;
-  var done = items.filter(function (item) { return item.status === 'Completed'; }).length;
-  var percent = progressPercent({ completed: done, total: total });
-  return '<div class="ls-progress">' +
-    '<div class="ls-progress-track"><span style="width:' + percent + '%"></span></div>' +
-    '<div class="ls-progress-figures"><b>' + percent + '%</b>' +
-    '<small>' + done + ' / ' + total + '</small></div></div>';
+// One fact row. The value is the value or the one "no value" glyph -- never
+// blank, because a blank cell reads as a layout bug where a dash reads as
+// "not recorded yet".
+function summaryFact(label, raw) {
+  return '<div><dt>' + esc(label) + '</dt>' +
+    '<dd>' + (isFilled(raw) ? esc(raw) : EM_DASH) + '</dd></div>';
 }
 
 function summaryMarkup() {
   var detail = state.detail;
   var project = detail.project || {};
   var items = detail.stage_items || [];
+  var done = items.filter(function (item) { return item.status === 'Completed'; }).length;
   return '<aside class="summary-panel"><div class="ls-card">' +
     '<div class="ls-head"><h3 class="ls-title">Well Summary</h3>' +
       '<button type="button" id="bpe-summary-gear" class="icon-btn ls-gear" aria-haspopup="menu"' +
       ' aria-expanded="false" title="Well Summary actions" aria-label="Well Summary actions">' + icon('settings') + '</button>' +
     '</div>' +
-    summaryProgressHtml(items) +
-    '<section class="ls-section"><h4 class="ls-section-title">Well</h4>' +
-      '<div class="ls-grid" style="grid-template-columns:repeat(3,minmax(0,1fr))">' +
-      summaryColumn('Name', project.project_name) +
-      summaryColumn('Field', project.field) +
-      summaryColumn('BP Year', project.business_plan_year) +
-      '</div></section>' +
-    '<section class="ls-section"><h4 class="ls-section-title">' + esc(detail.detail.stage_label) + '</h4>' +
-      '<div class="ls-items">' + items.map(function (item) {
-        // The board's own dot vocabulary (views/board-widgets.js), so a step's
-        // state reads the same on the card and in this panel.
-        return '<span class="lead-item">' + leadItemHtml(item.status, item.label) +
-          '<span class="lead-item-label">' + esc(item.label) + '</span></span>';
-      }).join('') + '</div></section>' +
+    '<dl class="bpe-summary-facts">' +
+      summaryFact('Well', project.project_name) +
+      summaryFact('Field', project.field) +
+      summaryFact('Business Plan Year', project.business_plan_year) +
+      // The denominator is the stage's OWN item count, never a hard-coded six.
+      summaryFact('Stage Progress', done + ' / ' + items.length) +
+    '</dl>' +
+    '<section class="ls-section"><div class="ls-items">' + items.map(function (item) {
+      // The board's own dot vocabulary (views/board-widgets.js), so a step's
+      // state reads the same on the card and in this panel.
+      return '<span class="lead-item">' + leadItemHtml(item.status, item.label) +
+        '<span class="lead-item-label">' + esc(item.label) + '</span></span>';
+    }).join('') + '</div></section>' +
     '<div id="bpe-summary-menu" class="ls-menu hidden" role="menu" aria-labelledby="bpe-summary-gear">' +
       '<button type="button" id="bpe-edit-all" class="ls-menu-item" role="menuitem">Edit all project fields</button>' +
     '</div>' +
@@ -1243,8 +1288,6 @@ function renderDetail() {
   if (!detail) return;
   var focus = captureDetailFocus();
   byId('bpe-detail-view').innerHTML =
-    '<button type="button" id="bpe-back" class="ghost back-to-board">' + icon('arrow-left') +
-      ' <span>Back to Business Plan Execution</span></button>' +
     '<div class="detail-shell detail-shell-lead panel">' +
       railMarkup() + editorMarkup() + summaryMarkup() +
     '</div>';
@@ -1810,6 +1853,16 @@ function wireBpeSummaryDismissOnce() {
 
 function bindDetail() {
   byId('bpe-back').addEventListener('click', refreshBusinessPlan);
+  // The stage accordion, mirroring views/detail.js wireRailHandlers: clicking
+  // a head opens that stage (the single-open sync closes whichever was open)
+  // and clicking the OPEN head folds it away again.
+  all('.rail-stage-head', byId('bpe-detail-view')).forEach(function (head) {
+    head.addEventListener('click', function () {
+      var stage = head.getAttribute('data-stage');
+      state.railStage = openStageKey() === stage ? '' : stage;
+      syncRailOpenState();
+    });
+  });
   all('.bpe-nav-item', byId('bpe-detail-view')).forEach(function (button) {
     button.addEventListener('click', function () { openBusinessPlanDetail(state.projectId, button.dataset.detailSlug); });
   });

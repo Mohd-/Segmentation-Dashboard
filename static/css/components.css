@@ -2792,9 +2792,9 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 }
 
 .bpe-detail-view { padding-bottom: var(--space-6); }
-/* The page's one back control, above the shell (the house .back-to-board
-   chrome; only the standoff below it is this page's own). */
-#bpe-detail-view .back-to-board { margin-bottom: var(--space-3); }
+/* The page's one back control needs NO rule of its own: it sits in the rail
+   head, in the house .back-to-board chrome, and the record name below it
+   carries the same standoff the maturation detail page uses. */
 /* The rail's stage eyebrow, under the well name. Scoped to .rail-head: the
    house's own `.rail-head p` (a bare subtitle) would otherwise outrank a lone
    class and repaint this faint gray at the wrong size. */
@@ -2885,30 +2885,64 @@ button.ghost.success-outline:hover { background: var(--success-100); }
    components' base rules -- which is why they are here rather than up in the
    filter/KPI sections.
    ------------------------------------------------------------------------- */
+/* This band's thirds are NOT equal. The maturation band divides in three so
+   each third sits over its board column; here the filter zone holds five
+   controls whose values are short ("All Fields", "2026") and the KPI zone
+   holds four groups instead of three, so the row cedes width to the KPIs and
+   column alignment gives way to fitting both on one line. */
+.lead-controls-bp { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.55fr); }
 /* FIVE filters and no Add New Lead control beside them, so this row takes the
-   band's first two thirds (leaving the last third to the KPIs, exactly as on
-   the maturation board) and grids five trigger tracks plus the Clear track. */
+   band's first two thirds and grids five trigger tracks plus the Clear one. */
 .bpe-filter-row {
   grid-column: 1 / 3;
   grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
 }
-/* FOUR KPI groups in a third sized for three: the row WRAPS rather than
-   overflowing the band (every group is flex: none and cannot shrink), so the
-   OGIP tile drops to a second line under the donut. Its left border divided
-   the two number tiles when they shared a line; on a line of its own it would
-   divide nothing, so it goes with the layout that gave it meaning -- the same
-   reasoning the 420px rule applies to the maturation row. */
+/* FOUR KPI groups on ONE line, in a band third sized for three. The width
+   comes from both ends: the band above gives this third more of its own
+   (.lead-controls-bp), and the groups themselves are a size smaller than the
+   maturation board's -- one step down the type scale, smaller glyphs, tighter
+   gaps. The OGIP tile keeps its separator, because on a shared line it divides
+   the numbers again. Wrap stays declared as the SAFETY NET for the band widths
+   between the 1100px stack and 1280px, where the third is at its narrowest. */
 .lead-kpi-row-bp {
   flex-wrap: wrap;
-  /* Tight BETWEEN groups (the row is buying horizontal room), airier between
-     the two lines the wrap creates. */
-  gap: var(--space-3) var(--space-2);
+  gap: var(--space-2) var(--space-2);
 }
-.lead-kpi-row-bp .kpi-tile-ogip { padding-left: 0; border-left: 0; }
+.lead-kpi-row-bp .kpi-tile, .lead-kpi-row-bp .kpi-donut-group { gap: var(--space-2); }
+.lead-kpi-row-bp .kpi-value { font-size: var(--text-lg); }
+.lead-kpi-row-bp .kpi-icon .lucide { width: 22px; height: 22px; }
+.lead-kpi-row-bp .kpi-donut { width: 46px; height: 46px; }
+.lead-kpi-row-bp .kpi-donut-value { font-size: var(--text-sm); }
+.lead-kpi-row-bp .kpi-tile-ogip { padding-left: var(--space-2); }
 /* The donut group: the ring already prints its own percentage, so the group
    carries only the label -- in the same .kpi-label the tiles use, laid out the
    same way (glyph-sized thing on the left, text beside it). */
 .kpi-donut-group { display: flex; flex: none; align-items: center; gap: var(--space-3); }
+
+/* The Well Summary's fact rows: label left, value right, one hairline under
+   each -- the original panel's <dl> geometry, re-expressed in the card's own
+   type tokens (display-font values, faint xs labels). */
+.bpe-summary-facts { margin-top: var(--space-3); }
+.bpe-summary-facts > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: baseline;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+.bpe-summary-facts dt { color: var(--text-muted); font-size: var(--text-xs); font-weight: 700; }
+.bpe-summary-facts dd {
+  min-width: 0;
+  margin: 0;
+  font-family: var(--font-display);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-sm);
+  font-weight: 800;
+  color: var(--ink-900);
+  overflow-wrap: anywhere;
+  text-align: right;
+}
 
 /* The Well Summary's tracked-item list. The rows are the board's own dot +
    label pair; in a ~270px rail they WRAP rather than truncate, which is the
@@ -2916,13 +2950,6 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .ls-items { display: flex; flex-direction: column; gap: 6px; }
 .ls-items .lead-item { align-items: flex-start; white-space: normal; }
 .ls-items .lead-dot { margin-top: 1px; }
-
-/* The rail's stage blocks never collapse here, so their heads are inert
-   <div>s: no pointer, and no hover feedback promising a press that does
-   nothing. The active block keeps its navy at rest AND on hover. */
-#bpe-detail-view .rail-stage-head { cursor: default; }
-#bpe-detail-view .rail-stage-head:hover { background: none; color: var(--text-muted); }
-#bpe-detail-view .rail-stage-lead.is-active .rail-stage-head:hover { color: var(--asas-navy); }
 
 /* =========================================================================
    Business Plan Execution — responsive.
@@ -2933,8 +2960,11 @@ button.ghost.success-outline:hover { background: var(--success-100); }
    source order alone -- silently, since the specificities match.
    ========================================================================= */
 @media (max-width: 1100px) {
-  /* The band is one column here, so the filter row gives up its two-thirds
-     span -- spanning to a second line would conjure the column back. */
+  /* The band stacks (house rule on .lead-controls, which this tab's uneven
+     thirds would otherwise outrank on source order), so the filter row gives
+     up its two-thirds span -- spanning to a second line would conjure the
+     column back. */
+  .lead-controls-bp { grid-template-columns: 1fr; }
   .bpe-filter-row { grid-column: auto; }
   /* The detail shell is already single-column (house rule), but the two widest
      form rows still out-measure it: the six-track Logging Program row and the

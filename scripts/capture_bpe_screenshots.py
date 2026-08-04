@@ -101,7 +101,12 @@ def open_gate(page):
     """
     page.locator("#bp-pipeline .lead-card").first.click()
     page.wait_for_selector(".bpe-detail-form", state="visible")
-    page.locator('.component-item[data-detail-slug="business-plan-gate"]').click()
+    # The rail is a one-open accordion: expand Pre-Drilling first when the
+    # card landed the detail on a step in another stage group.
+    gate_item = page.locator('.component-item[data-detail-slug="business-plan-gate"]')
+    if not gate_item.is_visible():
+        page.locator('.rail-stage-head[data-stage="pre_drilling"]').click()
+    gate_item.click()
     page.wait_for_selector(".bpe-detail-form .radio-group", state="visible")
 
 

@@ -59,7 +59,7 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   // The band as index.html builds it: the five selects are the hidden STATE
   // STORE, #bpe-filter-row holds the visible triggers, #bpe-kpis the tiles.
   var host = fixture(
-    '<div id="bpe-main-view" class="panel pipeline-panel"><div class="lead-controls">' +
+    '<div id="bpe-main-view" class="panel pipeline-panel"><div class="lead-controls lead-controls-bp">' +
       '<select id="bp-assignee-filter" hidden></select>' +
       '<select id="bp-field-filter" hidden></select>' +
       '<select id="bp-status-filter" hidden></select>' +
@@ -131,6 +131,10 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   // An initialism keeps its spelling in the spoken label.
   assert.equal(host.querySelector('.lead-filter[data-bp-filter="step"] .lf-trigger')
     .getAttribute('aria-label'), 'Filter by BP Gate');
+  // A filter resting on its default shows its caption, not the option text
+  // that repeats it (the maturation row's own rule).
+  assert.equal(host.querySelector('.lead-filter[data-bp-filter="step"] .lf-value').textContent, 'BP Gate');
+  assert.equal(host.querySelector('.lead-filter[data-bp-filter="year"] .lf-value').textContent, String(currentYear));
   assert.equal(host.querySelector('.lead-filter[data-bp-filter="field"] .lf-trigger')
     .getAttribute('aria-label'), 'Filter by field');
   assert.equal(host.querySelectorAll('.lead-column').length, 3);
@@ -189,6 +193,8 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   await waitFor(function () { return host.querySelector('.bpe-detail-form'); });
   assert.equal(host.querySelectorAll('#bpe-back').length, 1);
   assert.equal(host.querySelector('#bpe-back').textContent.trim(), 'Back to Business Plan Execution');
+  assert.ok(host.querySelector('.component-rail .rail-head > #bpe-back'),
+    'the back control sits in the rail head, where the maturation detail keeps its own');
   assert.equal(host.querySelectorAll('.bpe-nav-item').length, 14);
   assert.equal(host.querySelectorAll('.bpe-nav-item').length,
     new Set(Array.prototype.map.call(host.querySelectorAll('.bpe-nav-item'), function (button) { return button.textContent; })).size);
@@ -196,7 +202,24 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   // the open step's one marked active) | editor | Well Summary card.
   assert.equal(host.querySelectorAll('.detail-shell.detail-shell-lead').length, 1);
   assert.equal(host.querySelectorAll('.component-rail .rail-stage-lead').length, 3);
+  // The rail is the house ACCORDION: exactly one stage expanded, and it is the
+  // one owning the open step. All fourteen items stay in the DOM.
   assert.equal(host.querySelectorAll('.rail-stage-lead.is-active').length, 1);
+  assert.equal(host.querySelector('.rail-stage-lead.is-active').getAttribute('data-stage'), 'pre_drilling');
+  assert.equal(host.querySelectorAll('.rail-stage-head.open').length, 1);
+  assert.equal(host.querySelectorAll('.rail-stage-body:not(.collapsed)').length, 1);
+  assert.equal(host.querySelectorAll('.rail-stage-head').length, 3);
+  assert.equal(host.querySelector('.rail-stage-head').tagName, 'BUTTON');
+  // Opening another stage collapses the one that was open.
+  host.querySelector('.rail-stage-head[data-stage="post_testing"]').click();
+  assert.equal(host.querySelector('.rail-stage-lead.is-active').getAttribute('data-stage'), 'post_testing');
+  assert.equal(host.querySelectorAll('.rail-stage-head.open').length, 1);
+  assert.equal(host.querySelector('.rail-stage-body[data-stage="pre_drilling"]').classList.contains('collapsed'), true);
+  assert.equal(host.querySelectorAll('.bpe-nav-item').length, 14, 'collapsing hides items, never removes them');
+  // Clicking the open head folds it away, exactly as the maturation rail does.
+  host.querySelector('.rail-stage-head[data-stage="post_testing"]').click();
+  assert.equal(host.querySelectorAll('.rail-stage-head.open').length, 0);
+  host.querySelector('.rail-stage-head[data-stage="pre_drilling"]').click();
   assert.equal(host.querySelectorAll('.component-item.active').length, 1);
   assert.equal(host.querySelector('.component-item.active').getAttribute('data-detail-slug'), 'business-plan-gate');
   // Each rail badge is tinted by its step's status, mapped onto the house
@@ -218,10 +241,16 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   // is progressPercent() over the stage's own items (1 of 6 completed).
   assert.equal(host.querySelectorAll('.summary-panel .ls-card').length, 1);
   assert.equal(host.querySelector('.ls-title').textContent, 'Well Summary');
-  assert.equal(host.querySelector('.ls-progress-figures').textContent, '17%1 / 6');
-  assert.deepEqual(Array.prototype.map.call(host.querySelectorAll('.ls-col-value'), function (cell) {
+  // The original panel's four fact rows, in the original order — no progress
+  // bar and no column grid.
+  assert.equal(host.querySelectorAll('.ls-progress').length, 0);
+  assert.equal(host.querySelectorAll('.ls-grid').length, 0);
+  assert.deepEqual(Array.prototype.map.call(host.querySelectorAll('.bpe-summary-facts dt'), function (cell) {
     return cell.textContent;
-  }), ['MDFT-7', 'MDFT', String(currentYear)]);
+  }), ['Well', 'Field', 'Business Plan Year', 'Stage Progress']);
+  assert.deepEqual(Array.prototype.map.call(host.querySelectorAll('.bpe-summary-facts dd'), function (cell) {
+    return cell.textContent;
+  }), ['MDFT-7', 'MDFT', String(currentYear), '1 / 6']);
   assert.equal(host.querySelectorAll('.ls-items .lead-dot').length, 6);
   assert.ok(host.querySelector('.bpe-save-line').textContent.indexOf('All changes are saved automatically') >= 0);
   assert.equal(host.textContent.indexOf('Save Updates'), -1);
@@ -294,7 +323,7 @@ test('business-plan serializes auto-saves and a stale response cannot replace ne
   });
 
   await openBusinessPlanDetail(7, 'business-plan-gate');
-  assert.equal(host.querySelectorAll('.ls-col-value')[2].textContent, '—',
+  assert.equal(host.querySelectorAll('.bpe-summary-facts dd')[2].textContent, '—',
     'a missing Business Plan Year reads as a dash, not a blank');
   var program = host.querySelector('[data-bpe-field="bp_gate_logging_program"]');
   program.value = 'Standard A';
@@ -388,6 +417,10 @@ test('business-plan keeps zero Flowback panels after the final stage is deleted'
   });
 
   await openBusinessPlanDetail(7, 'flowback-results');
+  // The rail follows the STEP that is open: loading a Post-Testing step
+  // expands Post-Testing, never a remembered fold or the first group.
+  assert.equal(host.querySelector('.rail-stage-lead.is-active').getAttribute('data-stage'), 'post_testing');
+  assert.equal(host.querySelectorAll('.rail-stage-head.open').length, 1);
   assert.equal(host.querySelectorAll('.bpe-flow-stage').length, 1);
   assert.equal(host.querySelector('[data-flow-field="formation"]').tagName, 'SELECT',
     'Formation remains a dropdown even when its current value is blank');
