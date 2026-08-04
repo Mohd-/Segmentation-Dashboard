@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from conftest import create_project, get_tasks
 
-PROSPECT_STAGES = {"Lead Identification", "Risking", "Segmentation", "Pre-Well Delivery"}
+PROSPECT_STAGES = {"Lead Assessment", "Risk Analysis", "Pre-Well Delivery"}
 
 
 # ---------------------------------------------------------------------------
@@ -19,7 +19,9 @@ def test_duplicate_project_name_returns_friendly_message(client):
     create_project(client, "DUP-FRIENDLY-1")
     resp = client.post("/api/projects", json={"project_name": "DUP-FRIENDLY-1"})
     assert resp.status_code == 400
-    assert resp.get_json()["detail"] == "A lead / well with this name already exists."
+    # Card 1D pins the prospect wording verbatim (the Add New Lead control shows
+    # the server's detail as-is); BP well creation keeps "A lead / well ...".
+    assert resp.get_json()["detail"] == "A lead with this name already exists."
 
 
 def test_non_numeric_business_plan_year_returns_year_message(client):
@@ -29,7 +31,10 @@ def test_non_numeric_business_plan_year_returns_year_message(client):
         "business_plan_year": "not-a-year",
     })
     assert resp.status_code == 400
-    assert resp.get_json()["detail"] == "Select a business plan year from 1990 to 2040."
+    # Born-BP creation follows the promotion window, not the wide edit floor.
+    from datetime import date
+    assert resp.get_json()["detail"] == (
+        "Select a business plan year from %d to 2035." % date.today().year)
 
 
 def test_internal_error_returns_generic_500_without_leaking(client, monkeypatch):

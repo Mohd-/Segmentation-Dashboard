@@ -44,9 +44,11 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash
 
 import config
+import cos
 import db
 import export_excel
 import folders
+import map_layers
 import reporting
 import resource_calc
 import workflow
@@ -218,15 +220,35 @@ def current_role() -> Optional[str]:
     return None
 
 
+def current_identity() -> Optional[str]:
+    """WHO the current request is, for anything addressed to a person by name.
+
+    Exactly what GET /api/me reports as ``name``: the session identity, or None
+    when there is no session. Deliberately NOT ``actor()``'s 'Web User'
+    fallback and NOT ``current_role()``'s dev-mode 'supervisor': those answer
+    "what should we stamp on this write" and "what may this request do".
+    "Whose mail is this" has a third answer -- with AUTH_REQUIRED off and no
+    session there is no addressee at all, and the notification endpoints report
+    an empty feed rather than inventing an inbox for an anonymous user.
+
+    Consumers: the /api/notifications routes.
+    """
+    return flask_session.get("name") or None
+
+
 def require_role(*roles: str) -> None:
     """Raise PermissionError (-> 403) unless the current role is one of ``roles``.
 
     Consumers: POST /api/tasks/<id>/assign (supervisor, staff), the
     approve actions of POST /api/tasks/<id>/transition (supervisor),
     business_plan_enabled changes via PATCH /api/projects/<id>/flags
-    (supervisor), and PATCH /api/tasks/<id>/priority (supervisor). Priority is
-    also guarded on the Save path: PATCH /api/tasks/<id> passes
-    allow_priority_change so a non-supervisor's save keeps the stored value.
+    (supervisor), PATCH /api/tasks/<id>/priority (supervisor),
+    PATCH /api/projects/<id>/priority (supervisor), the approve/return/reopen
+    actions of POST /api/business-plan/wells/<id>/steps/<slug>/transition
+    (supervisor), and business_plan_enabled at creation via POST
+    /api/projects (supervisor). Priority is also guarded on the Save path:
+    PATCH /api/tasks/<id> passes allow_priority_change so a non-supervisor's
+    save keeps the stored value.
     """
     if current_role() not in roles:
         raise PermissionError("Forbidden: requires " + " or ".join(roles) + " role.")
@@ -348,9 +370,16 @@ def meta():
         # (seismic_blocks.json). Feeds the Reservoir CoS sheet's dependent
         # Block/AR dropdowns -- this endpoint is their single source of truth.
         "seismic_blocks": config.SEISMIC_BLOCK_AR_MAP,
-        # Configured resource-assessment scenarios for the Lead Resource
+        # Configured resource-assessment scenarios for the Resource
         # Assessment pop-up calculator's scenario dropdown.
         "resource_scenarios": resource_calc.scenario_options(),
+        # Card 2B, Section 1. row ("reservoir"/"formation") -> {m, b} for the
+        # straight-line TWT (ms) <-> thickness (ft) conversion, from
+        # config.TWT_THICKNESS_COEFFICIENTS. SHIPS EMPTY: a row with no entry
+        # renders as two plain manual inputs plus the "conversion pending
+        # configuration" note, so this endpoint is the single production switch
+        # that turns derivation on (see that constant's own comment).
+        "twt_thickness_coefficients": config.TWT_THICKNESS_COEFFICIENTS,
     })
 
 
@@ -373,6 +402,25 @@ _PROJECT_LIST_FIELDS = (
     "overall_status", "current_task_priority", "health",
     "business_plan_year", "active_well_enabled", "active_drilling",
     "has_high_priority_tasks",
+    # Card 1B lead-card fields: all derived at read time from the task rows the
+    # board query already loads (workflow.projects._annotate_card_state) -- no
+    # stored column, no extra query. Since migration v5 there is no presentation
+    # adapter left for the other eight items; v7 projects the first four from
+    # fields on the single Lead Assessment row, keeping twelve communicated
+    # items while the stored prospect workflow has nine rows. display_stage is
+    # the derived current_stage verbatim. assignees and
+    # lead_priority are the board's own per-lead values.
+    "assignees", "tracked_items", "display_stage", "lead_priority",
+    # Card 1C: the record's field, DERIVED from the record name by the same
+    # folders.parse_field_and_well split the share paths use -- there is no
+    # stored field column. Feeds the board's Field filter.
+    "field",
+    # Card 1E: the LATEST saved Mean Gas in BCF, derived at read time from the
+    # assessment steps' task_dynamic_fields on the LATEST_MEAN_GAS_SOURCES
+    # precedence (workflow.projects._annotate_mean_gas -- one batched query for
+    # the whole board). null when nothing is recorded or the stored value is
+    # not a number; the board's Total Mean OGIP tile treats null as 0.
+    "mean_gas_bcf",
 )
 
 
@@ -388,6 +436,10 @@ def list_projects():
         request.args.get("health_filter", "All"),
         request.args.get("sort_key", "Well Name"),
         request.args.get("pipeline_filter", "All"),
+        # Opt-in only (Card 1C's lead board, which offers its own Completed
+        # status filter); absent/0 keeps the "finished records leave the
+        # board" default every other caller relies on.
+        include_completed=request.args.get("include_completed", "") in ("1", "true", "yes"),
     )
     return json_response([{key: row.get(key) for key in _PROJECT_LIST_FIELDS} for row in rows])
 
@@ -396,13 +448,30 @@ def list_projects():
 def create_project():
     session = db.get_session()
     payload = request.get_json(silent=True) or {}
+    # A born-BP well is a promotion done at creation time, so it gets the same
+    # gates a promotion via PATCH /flags gets: supervisor-only, and the year
+    # window promotion.py enforces for a newly-enabling record (not the wider
+    # allow_historical_year floor -- import_excel is the only historical-year
+    # caller, and it creates via workflow.add_project in-process, never here).
+    if payload.get("business_plan_enabled"):
+        require_role("supervisor")
+        current_year = date.today().year
+        year_val = payload.get("business_plan_year")
+        try:
+            year_val = int(year_val)
+        except (TypeError, ValueError):
+            year_val = None
+        if year_val is None or year_val < current_year or year_val > 2035:
+            raise ValueError(f"Select a business plan year from {current_year} to 2035.")
     project_id = workflow.add_project(
         session,
         payload.get("project_name", ""),
         payload.get("start_date", ""),
         payload.get("target_date", ""),
         actor(payload),
-        # Coordinates are no longer collected in the UI; old API callers remain compatible.
+        # Card 1D's Add New Lead control requires both coordinates client-side;
+        # they stay OPTIONAL here (importer / older API callers), but a supplied
+        # value must be numeric -- workflow.add_project validates it.
         payload.get("lead_x"), payload.get("lead_y"),
         payload.get("business_plan_year"), bool(payload.get("business_plan_enabled")),
         bool(payload.get("active_well_enabled")), payload.get("pipeline_type", "prospect"),
@@ -519,6 +588,23 @@ def project_flags(project_id):
     return json_response({"ok": True})
 
 
+@app.patch("/api/projects/<int:project_id>/priority")
+def project_priority(project_id):
+    """Set the lead/well-level priority (supervisor only).
+
+    Body: {"priority": "Low"|"Medium"|"High", "changed_by": ...}. An
+    unrecognized priority is a ValueError -> 400 via the centralized handler;
+    a missing project is 404 (the single-project route pattern).
+    """
+    require_role("supervisor")
+    session = db.get_session()
+    if not workflow.get_project(session, project_id):
+        return error_response("Lead / well not found", 404)
+    payload = request.get_json(silent=True) or {}
+    value = workflow.set_project_priority(session, project_id, payload.get("priority"), actor(payload))
+    return json_response({"ok": True, "priority": value})
+
+
 @app.get("/api/projects/<int:project_id>/tasks")
 def tasks(project_id):
     session = db.get_session()
@@ -571,6 +657,13 @@ def transition_task(task_id):
     """
     payload = request.get_json(silent=True) or {}
     action = str(payload.get("action") or "").strip().lower()
+    # The PUBLIC vocabulary is exactly workflow.TASK_TRANSITIONS. workflow.
+    # transition_task additionally honors the engine-only "reopen"
+    # (Approved -> In Progress, used by the field-completion engine); this
+    # check is what keeps that move off the HTTP surface, where it would be an
+    # ungated un-approve.
+    if action not in workflow.TASK_TRANSITIONS:
+        raise ValueError("Unknown action. Use one of: submit, approve, return.")
     if action == "approve":
         require_role("supervisor")
     session = db.get_session()
@@ -584,7 +677,7 @@ def transition_task(task_id):
 
 @app.post("/api/tasks/<int:task_id>/resource-assessment")
 def resource_assessment(task_id):
-    """Run the Lead Resource Assessment pop-up calculator for a task.
+    """Run the Lead Assessment resource calculator for its owning task.
 
     The task must exist (404 otherwise). The JSON body carries the pop-up's
     scenario/method/inputs; resource_calc.run drives the Monte Carlo engine and
@@ -594,10 +687,37 @@ def resource_assessment(task_id):
     flow through the normal dynamic-fields path.
     """
     session = db.get_session()
-    if not workflow.get_task(session, task_id):
+    task = workflow.get_task(session, task_id)
+    if not task:
         return error_response("Task not found", 404)
+    # GeoX records results produced by the external GeoX application. Keeping
+    # the task-scoped calculator boundary narrow prevents a future UI wiring
+    # regression from silently turning that results-entry step back into a
+    # Monte Carlo calculator. Resource Assessment is the inactive pre-v7 name
+    # retained for rolling-upgrade compatibility.
+    if task.get("task_name") not in {"Lead Assessment", "Resource Assessment"}:
+        raise ValueError("Resource calculator is only available for Lead Assessment.")
     payload = request.get_json(silent=True) or {}
     return json_response(resource_calc.run(payload))
+
+
+@app.post("/api/calculators/resources")
+def calculator_resources():
+    """Run the Monte Carlo resource calculator without a project or task."""
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        raise ValueError("Request body must be a JSON object.")
+    return json_response(resource_calc.run(payload))
+
+
+@app.post("/api/calculators/reservoir-cos")
+def calculator_reservoir_cos():
+    """Score one standalone Reservoir CoS row with the approved RF model."""
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        raise ValueError("Request body must be a JSON object.")
+    rows_json = cos.calculate_reservoir_cos_rows([payload])
+    return app.response_class(rows_json, mimetype="application/json")
 
 
 @app.get("/api/tasks/<int:task_id>/dynamic-fields")
@@ -627,6 +747,12 @@ def component_folder(project_id, task_id):
     return json_response(folders.get_component_folder_link(session, project_id, task_id))
 
 
+@app.get("/api/projects/<int:project_id>/folders/<section_key>")
+def project_section_folder(project_id, section_key):
+    session = db.get_session()
+    return json_response(folders.get_section_folder_link(session, project_id, section_key))
+
+
 @app.patch("/api/tasks/<int:task_id>/priority")
 def priority(task_id):
     """Set a component's priority (supervisor only)."""
@@ -637,10 +763,143 @@ def priority(task_id):
     return json_response({"ok": True})
 
 
+# ---------------------------------------------------------------------------
+# Notifications (the header bell) -- every route is scoped to current_identity()
+# ---------------------------------------------------------------------------
+
+@app.get("/api/notifications")
+def notifications():
+    """The signed-in user's feed plus the unread count, in one round trip.
+
+    The count travels with the list (and with both mutations below) so the
+    client updates the red dot and the menu from a single response -- they can
+    never disagree. Anonymous (AUTH_REQUIRED off, no session) gets an empty
+    feed and a zero count; see current_identity() for why that is not
+    'Web User'.
+    """
+    session = db.get_session()
+    return json_response(workflow.notification_feed(session, current_identity()))
+
+
+@app.post("/api/notifications/<int:notification_id>/read")
+def notification_read(notification_id):
+    """Mark ONE of the caller's own notifications read (idempotent).
+
+    An unknown id and another user's id are indistinguishable here: both raise
+    ValueError -> 400 "Notification not found." from the domain layer, so the
+    endpoint cannot be used to enumerate other people's notifications.
+    """
+    session = db.get_session()
+    identity = current_identity()
+    workflow.mark_read(session, identity, notification_id)
+    return json_response({"ok": True, "unread_count": workflow.unread_count(session, identity)})
+
+
+@app.post("/api/notifications/read-all")
+def notifications_read_all():
+    """Mark every unread notification of the caller read (idempotent)."""
+    session = db.get_session()
+    identity = current_identity()
+    marked = workflow.mark_all_read(session, identity)
+    return json_response({"ok": True, "marked": marked,
+                          "unread_count": workflow.unread_count(session, identity)})
+
+
 @app.get("/api/business-plan/rows")
 def business_rows():
     session = db.get_session()
     return json_response(reporting.get_business_plan_rows(session))
+
+
+@app.get("/api/business-plan/dashboard")
+def business_plan_dashboard():
+    """One canonical filtered population for BPE cards, counts, and KPIs."""
+    session = db.get_session()
+    payload = workflow.get_bpe_dashboard(session, {
+        "assignee": request.args.get("assignee", "All Assignees"),
+        "field": request.args.get("field", "All Fields"),
+        "status": request.args.get("status", "All Status"),
+        "year": request.args.get("year", date.today().year),
+        "step": request.args.get("step", "business-plan-gate"),
+    })
+    payload["role"] = current_role()
+    return json_response(payload)
+
+
+@app.get("/api/business-plan/wells/<int:project_id>/steps/<detail_slug>")
+def business_plan_detail(project_id, detail_slug):
+    session = db.get_session()
+    payload = workflow.get_bpe_detail(session, project_id, detail_slug)
+    payload["role"] = current_role()
+    payload["folder"] = folders.get_component_folder_link(
+        session, project_id, payload["task"]["task_id"])
+    return json_response(payload)
+
+
+@app.patch("/api/business-plan/wells/<int:project_id>/steps/<detail_slug>/field")
+def business_plan_save_field(project_id, detail_slug):
+    session = db.get_session()
+    payload = request.get_json(silent=True) or {}
+    result = workflow.save_bpe_field(
+        session, project_id, detail_slug, payload.get("field_key", ""),
+        payload.get("value"), actor(payload), current_role(),
+        bool(payload.get("confirm_reset")), payload.get("override_reason"),
+    )
+    result["role"] = current_role()
+    return json_response({"ok": True, "detail": result})
+
+
+@app.put("/api/business-plan/wells/<int:project_id>/steps/<detail_slug>/formations")
+def business_plan_save_formations(project_id, detail_slug):
+    session = db.get_session()
+    payload = request.get_json(silent=True) or {}
+    result = workflow.save_bpe_formations(
+        session, project_id, detail_slug, payload.get("rows", []),
+        actor(payload), current_role(),
+    )
+    result["role"] = current_role()
+    return json_response({"ok": True, "detail": result})
+
+
+@app.put("/api/business-plan/wells/<int:project_id>/flowback-stages")
+def business_plan_save_flowback(project_id):
+    session = db.get_session()
+    payload = request.get_json(silent=True) or {}
+    result = workflow.save_bpe_flowback_stages(
+        session, project_id, payload.get("rows", []), actor(payload), current_role())
+    result["role"] = current_role()
+    return json_response({"ok": True, "detail": result})
+
+
+@app.post("/api/business-plan/wells/<int:project_id>/steps/<detail_slug>/transition")
+def business_plan_transition(project_id, detail_slug):
+    session = db.get_session()
+    payload = request.get_json(silent=True) or {}
+    action = str(payload.get("action") or "").lower()
+    # The supervisor gate for the un-approve-capable actions lives here, beside
+    # every other route-level role check; transition_bpe_approval repeats it as
+    # defense-in-depth for non-HTTP callers.
+    if action in {"approve", "return", "reopen"}:
+        require_role("supervisor")
+    result = workflow.transition_bpe_approval(
+        session, project_id, detail_slug, action,
+        actor(payload), current_role(), payload.get("comment", ""),
+    )
+    result["role"] = current_role()
+    return json_response({"ok": True, "detail": result})
+
+
+@app.post("/api/business-plan/wells/<int:project_id>/steps/<detail_slug>/assign")
+def business_plan_assign(project_id, detail_slug):
+    require_role("supervisor", "staff")
+    session = db.get_session()
+    payload = request.get_json(silent=True) or {}
+    result = workflow.assign_bpe_detail(
+        session, project_id, detail_slug, payload.get("assignee", ""),
+        actor(payload), current_role(),
+    )
+    result["role"] = current_role()
+    return json_response({"ok": True, "detail": result})
 
 
 @app.get("/api/portfolio/rows")
@@ -658,6 +917,39 @@ def activity():
     except ValueError:
         project_id_int = None
     return json_response(reporting.get_activity_log(session, project_id=project_id_int, limit=500))
+
+
+# ---------------------------------------------------------------------------
+# Map (UTM Zone 37N). Layers are files on the map share (map_layers.py); the
+# wells overlay is derived project state (workflow.map_wells). Coordinates are
+# metres and are never reprojected on the way out.
+# ---------------------------------------------------------------------------
+
+@app.get("/api/map/layers")
+def map_layers_list():
+    """Available layers as metadata only; the ``borders`` backdrop comes first."""
+    return json_response({"layers": map_layers.list_layers()})
+
+
+@app.get("/api/map/layers/<path:name>")
+def map_layer(name):
+    """One layer's geometry (UTM37 metres) as GeoJSON-like features.
+
+    ``borders`` is a prebuilt JSON file, passed through verbatim rather than
+    re-serialized. Every other name resolves to a shapefile set: an invalid or
+    traversing name raises ValueError -> 400 and an unknown one
+    FileNotFoundError -> 404, both through the centralized handlers.
+    """
+    if name == map_layers.BORDERS_LAYER_NAME:
+        return app.response_class(map_layers.load_borders(), mimetype="application/json")
+    return json_response(map_layers.load_layer(name))
+
+
+@app.get("/api/map/wells")
+def map_wells():
+    """Lead / well pins: staked coordinates when known, else the lead's."""
+    session = db.get_session()
+    return json_response({"wells": workflow.map_wells(session)})
 
 
 @app.get("/api/export/excel")

@@ -12,6 +12,7 @@ import {
 } from './detail-form.js';
 import { openDetail, tasksForPipeline } from './detail.js';
 import { refreshAllBoards } from './pipeline.js';
+import { refreshPortfolio } from './portfolio.js';
 import { refreshAudit } from './audit.js';
 
 // The full-project editor: one flat page exposing EVERY field of a project --
@@ -42,13 +43,25 @@ function adoptDetail(detail) {
   Store.formations = detail.formations || [];
 }
 
-// Head: back-to-portfolio, the project name + subtitle, and a jump into the
+// Head: the back control, the project name + subtitle, and a jump into the
 // pipeline detail view for the same record.
+//
+// KI-003: the back control used to say "Back to Portfolio" and go there
+// unconditionally, even though this editor is only ever opened FROM a record's
+// pipeline detail (the Lead Summary gear's "Edit All Inputs", or the BP well
+// shell's "Edit all project fields"). If Portfolio had never been visited its
+// data had never been fetched and the user landed on an empty table, having
+// also lost the pipeline/detail context they came from. It now returns to the
+// originating record's detail view in its own pipeline -- the acceptance
+// criterion's preferred destination -- and only falls back to Portfolio when
+// there is no record to go back to, refreshing it first so the table is never
+// empty on arrival (see backFromEditor).
 function headMarkup(project) {
-  var pipelineLabel = String(project.pipeline_type || '').toLowerCase() === 'bp'
-    ? 'Business Plan Execution' : 'Prospect Maturation';
+  var isBP = String(project.pipeline_type || '').toLowerCase() === 'bp';
+  var pipelineLabel = isBP ? 'Business Plan Execution' : 'Prospect Maturation';
   return '<div class="pe-head">' +
-    '<button id="pe-back" type="button" class="ghost">' + ICONS['arrow-left'] + ' Back to Portfolio</button>' +
+    '<button id="pe-back" type="button" class="ghost">' + ICONS['arrow-left'] +
+    ' Back to ' + (isBP ? 'Well' : 'Lead') + '</button>' +
     '<div class="pe-head-titles">' +
     '<h2 id="pe-name">' + esc(project.project_name || 'Lead / Well') + '</h2>' +
     '<p class="pe-subtitle">All project fields</p></div>' +
@@ -149,7 +162,7 @@ function renderEditor() {
 }
 
 function bindEditor() {
-  byId('pe-back').addEventListener('click', backToPortfolio);
+  byId('pe-back').addEventListener('click', backFromEditor);
   byId('pe-open-pipeline').addEventListener('click', function () {
     openDetail(Store.projectId, String((Store.project || {}).pipeline_type || '').toLowerCase() === 'bp' ? 'bp' : 'prospect');
   });
@@ -165,10 +178,23 @@ function bindEditor() {
   });
 }
 
-function backToPortfolio() {
+/* KI-003's fix. Leaving the all-fields editor returns to where it was opened
+   from: the same record's detail view, in the record's OWN pipeline (openDetail
+   activates that tab, hides this editor's sibling shell and re-fetches the
+   record, so nothing is stale). Only a stateless editor -- no selected record
+   at all -- falls through to Portfolio, and that fallback now REFRESHES the
+   portfolio before showing it, so a session that has never opened the tab can
+   no longer land on an empty table. Exported so the regression test can drive
+   both paths directly. */
+export function backFromEditor() {
   byId('project-editor').classList.add('hidden');
+  if (Store.projectId) {
+    openDetail(Store.projectId, String((Store.project || {}).pipeline_type || '').toLowerCase() === 'bp' ? 'bp' : 'prospect');
+    return;
+  }
   activateTab('portfolio');
   scrollToTab('portfolio');
+  refreshPortfolio();
 }
 
 // Re-render the phase row in place (chip + action button) and rebind its

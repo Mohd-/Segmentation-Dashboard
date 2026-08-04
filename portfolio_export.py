@@ -2,9 +2,9 @@
 
 What belongs here:
 - ``get_portfolio_export_rows(session)`` -- one row per non-archived lead/well
-  (BP wells, mature leads, AND still-maturing prospect leads), the full
-  per-record analysis table with the latest available value in every column.
-- ``get_staking_export_rows(session)`` -- one row per mature lead, the
+  (BP wells and leads, at every maturity stage), the full per-record analysis
+  table with the latest available value in every column.
+- ``get_staking_export_rows(session)`` -- one row per lead, the
   staking-options sheet.
 
 What does NOT belong here:
@@ -129,6 +129,13 @@ def _task_fields(session, project_ids, keys) -> Dict[int, Dict[str, str]]:
     Same shape/idiom as reporting._bp_task_fields (one query for the whole id
     list; higher task_id wins on legacy duplicate rows) but generalized over
     the caller's own key list instead of a module-private one.
+
+    RETIRED-INCLUSIVE like its twin: rows of steps merged away by a migration
+    (``is_active = 0``) are read too, ordered FIRST so an active row folds in
+    last, and folded first-non-blank-wins via reporting.fold_task_field_rows.
+    The map keys on the FIELD key, so a value entered on a retired step and
+    the same value re-entered on the step that absorbed it are the same
+    column here.
     """
     if not project_ids or not keys:
         return {}
@@ -136,14 +143,11 @@ def _task_fields(session, project_ids, keys) -> Dict[int, Dict[str, str]]:
         SELECT pt.project_id, tdf.field_key, tdf.field_value
         FROM project_tasks pt
         JOIN task_dynamic_fields tdf ON tdf.task_id = pt.task_id
-        WHERE pt.project_id IN :project_ids AND pt.is_active = 1
+        WHERE pt.project_id IN :project_ids
           AND tdf.field_key IN :field_keys
-        ORDER BY pt.task_id
+        ORDER BY pt.is_active, pt.task_id
     """, {"project_ids": list(project_ids), "field_keys": list(keys)})
-    fields: Dict[int, Dict[str, str]] = {}
-    for row in rows:
-        fields.setdefault(row["project_id"], {})[row["field_key"]] = row["field_value"] or ""
-    return fields
+    return reporting.fold_task_field_rows(rows)
 
 
 def _sarh_formations(session, project_ids) -> Dict[int, Dict[str, dict]]:
@@ -161,24 +165,14 @@ def _sarh_formations(session, project_ids) -> Dict[int, Dict[str, dict]]:
 def _export_projects(session):
     """Return one membership row per NON-ARCHIVED project (export-only reader).
 
-    Deliberately wider than reporting._portfolio_projects (the portfolio UI's
-    BP-wells-plus-mature-leads contract, which the Staking sheet still uses):
-    the analysis sheet also carries the still-maturing prospect leads, each
-    filled with the latest available value per column. Same row shape and
-    ordering as the shared reader -- BP year then name; leads' NULL years
-    group together at the front.
+    Delegates to reporting._portfolio_projects: the Business Plan Execution
+    merge widened that shared reader to every non-archived record, so this
+    export-only reader and the portfolio UI's membership are now identical.
+    Kept as a separate name/call surface (rather than callers reaching into
+    reporting.py directly) so this module's export composition stays free to
+    diverge again later without a reporting.py change.
     """
-    return db.fetch_all(session, """
-        SELECT p.project_id,
-               p.project_name,
-               p.business_plan_year AS year,
-               COALESCE(p.pipeline_type, 'prospect') AS pipeline_type,
-               COALESCE(p.business_plan_enabled, 0) AS business_plan_enabled,
-               COALESCE(p.active_well_enabled, 0) AS active_well_enabled
-        FROM projects p
-        WHERE COALESCE(p.archived, 0) = 0
-        ORDER BY p.business_plan_year, p.project_name COLLATE NOCASE
-    """)  # PG: COLLATE NOCASE
+    return reporting._portfolio_projects(session)
 
 
 def _project_lead_xy(session, project_ids) -> Dict[int, dict]:
@@ -260,9 +254,11 @@ def _parse_flowback_primary_stage(raw_rows_json) -> dict:
 def get_portfolio_export_rows(session) -> List[dict]:
     """One row per non-archived lead/well (_export_projects) for Excel.
 
-    Membership is EVERY non-archived project -- BP wells, mature leads, and
-    still-maturing prospect leads (wider than the portfolio UI). Each column
-    carries the latest available value for that record: proposed/staked rows
+    Membership is EVERY non-archived project -- BP wells and leads at every
+    maturity stage, identical to the portfolio UI's membership
+    (reporting.get_portfolio_rows; _export_projects delegates to the same
+    reporting._portfolio_projects reader). Each column carries the latest
+    available value for that record: proposed/staked rows
     fill their estimate columns from the prospect-step inputs, and the
     BP-execution-only columns (Dynamic Mean, flowback, Booked='No',
     classification) stay blank/No for leads because nothing later exists yet.
@@ -288,8 +284,9 @@ def get_portfolio_export_rows(session) -> List[dict]:
     -table scalar EAV keys quicklook_pay_thickness_ft /
     quicklook_average_porosity_pct / quicklook_average_swt_pct so old wells
     (written before the multi-formation editor existed) still populate. P50 Pay
-    falls back one rung further, to the Thickness Estimation step's
-    reservoir_thickness_ft -- the pre-drill estimate an undrilled lead carries.
+    falls back one rung further to ``reservoir_thickness_ft`` -- now stored on
+    the consolidated Lead Assessment row, with v7's retired Thickness
+    Estimation row remaining a read fallback.
     """
     projects = _export_projects(session)
     project_ids = [item["project_id"] for item in projects]
@@ -348,8 +345,9 @@ def get_portfolio_export_rows(session) -> List[dict]:
             p50_porosity = _first_filled(fields.get("quicklook_average_porosity_pct"))
             water_saturation = _first_filled(fields.get("quicklook_average_swt_pct"))
         # Undrilled leads have no formation row or quicklook read yet: the
-        # Thickness Estimation step's reservoir thickness is their latest
-        # available pay estimate.
+        # Lead Assessment's reservoir thickness is their latest available pay
+        # estimate. The retired-inclusive field fold also preserves a pre-v7
+        # value still attached to Thickness Estimation.
         p50_pay = p50_pay or _first_filled(fields.get("reservoir_thickness_ft"))
 
         # Flowback columns read the primary stage of the stages mini-sheet as
@@ -408,9 +406,11 @@ def get_portfolio_export_rows(session) -> List[dict]:
 
 
 def get_staking_export_rows(session) -> List[dict]:
-    """One row per mature lead (business_plan_enabled == 0 Portfolio members).
+    """One row per lead (business_plan_enabled == 0 Portfolio members) -- every
+    lead regardless of maturity stage, now that reporting._portfolio_projects
+    returns all non-archived records.
 
-    X/Y prefer the 'Staking Moving Tolerance' step's own staking_well_x/y
+    X/Y prefer the 'Moving Tolerance' step's own staking_well_x/y
     (once a user has moved/confirmed a location) and fall back to the
     project's lead_x/lead_y (the pre-fill source, req 5) when the step has
     never been touched. Batches one EAV query (the 8 staking keys) and one

@@ -1,4 +1,4 @@
-"""Lead Resource Assessment calculator -- adapter over the vendored engine.
+"""Resource Assessment calculator -- adapter over the vendored engine.
 
 Charter mirrors cos.py: pure calculation glue with NO Flask and NO database
 imports. Give it the pop-up calculator's API body, get back the PIIP percentiles

@@ -10,7 +10,8 @@ Two behaviors are owned by a parallel workstream and are RELIED ON here:
   (a) get_projects(pipeline_filter='bp') excludes completed BP wells (all BP
       steps Approved), and
   (b) the business-plan year guard accepts 1990-2040 (so a historical well with
-      year 2019 promotes).
+      year 2019 promotes) -- imports pass allow_historical_year=True, the
+      escape hatch that skips the promotion-only current-year floor.
 Where a case depends on those, it is noted in a comment.
 """
 from __future__ import annotations
@@ -102,10 +103,10 @@ def test_four_record_types_placed_correctly(client, app_modules, tmp_path):
         prospect_names = {p["project_name"] for p in workflow.get_projects(session, pipeline_filter="prospect")}
         assert "PROP-4" in prospect_names
         prop_tasks = _tasks_by_name(session, "PROP-4")
-        assert prop_tasks["Reservoir Area Definition"]["status"] == "Approved"
+        assert prop_tasks["Lead Assessment"]["status"] == "Approved"
         assert prop_tasks["Reservoir CoS"]["status"] == "Approved"
         # A step with no imported data stays open (not fully matured).
-        assert prop_tasks["Trap CoS"]["status"] != "Approved"
+        assert prop_tasks["Trap and Seal CoS"]["status"] != "Approved"
 
         # mature lead -> off the Prospect board, in the Portfolio as 'Staked'.
         assert "MATR-3" not in prospect_names
@@ -122,8 +123,115 @@ def test_four_record_types_placed_correctly(client, app_modules, tmp_path):
         # Approved -> completed; relies on the completed-wells-exit rule).
         assert "HIST-1" in portfolio
         assert "HIST-1" not in bp_names
+
+        # The escape hatch: HIST-1's 2019 year is well before today, yet the
+        # import path (allow_historical_year=True) still enabled it -- a
+        # promotion through the UI/API would be rejected for the same year.
+        import db as db_module
+        hist_project = db_module.fetch_one(session,
+                                           "SELECT business_plan_enabled, business_plan_year FROM projects WHERE project_name = 'HIST-1'",
+                                           {})
+        assert int(hist_project["business_plan_enabled"]) == 1
+        assert int(hist_project["business_plan_year"]) == 2019
     finally:
         session.close()
+
+
+def test_lead_columns_share_the_consolidated_assessment_task_and_export(client, app_modules, tmp_path):
+    """Area, thickness and lead PIIP keys now have one active EAV owner.
+
+    The export is intentionally field-key based and retired-inclusive, so the
+    task merge changes no column names or values on the round trip.
+    """
+    import import_excel
+    import workflow
+
+    row = {
+        "Well Name": "ONE-LA-1", "Status": "Proposed",
+        "P90 Area (km2)": 4, "P10 Area (km2)": 12,
+        "SARH Formation Thickness (ft)": 85,
+        "OGIP P90 (BCF)": 6, "OGIP Mean (BCF)": 10, "OGIP P10 (BCF)": 18,
+    }
+    _write_sheet(tmp_path / "one-la.xlsx", [row], header_row=1)
+
+    session = _session(app_modules)
+    try:
+        result = import_excel.import_rows(
+            session, import_excel.parse_workbook(str(tmp_path / "one-la.xlsx"))).results[0]
+        assert result.outcome == "created", result.reason
+
+        tasks = _tasks_by_name(session, "ONE-LA-1")
+        assert "Lead Assessment" in tasks
+        assert not ({"Area Definition", "Thickness Estimation", "GRV Inputs", "Resource Assessment"}
+                    & set(tasks)), "retired checkpoint labels are not runnable tasks"
+        fields = workflow.get_task_dynamic_fields(session, tasks["Lead Assessment"]["task_id"])
+        assert fields["p90_area_km2"] == "4"
+        assert fields["p10_area_km2"] == "12"
+        assert fields["formation_thickness_ft"] == "85"
+        assert fields["lead_piip_gas_mean"] == "10"
+
+        exported = _export_by_name(session)["ONE-LA-1"]
+        assert float(exported["P90 Area (km2)"]) == 4
+        assert float(exported["P10 Area (km2)"]) == 12
+        assert float(exported["SARH Formation Thickness (ft)"]) == 85
+        assert float(exported["OGIP Mean (BCF)"]) == 10
+    finally:
+        session.close()
+
+
+def test_export_folds_v7_retired_lead_rows_then_prefers_active_values(client, app_modules):
+    """Pre-v7 EAV remains export-visible without letting history beat new data."""
+    import db as db_module
+    import workflow
+
+    pid = create_project_for_import_test(client, "V7-EXPORT-LEGACY")
+    session = _session(app_modules)
+    try:
+        with db_module.write_transaction(session):
+            legacy_groups = [
+                (1, "Area Definition", {"p90_area_km2": "4", "p10_area_km2": "12"}),
+                (2, "Thickness Estimation", {"reservoir_thickness_ft": "70"}),
+                (4, "Resource Assessment", {"lead_piip_gas_mean": "10"}),
+            ]
+            for sequence, task_name, fields in legacy_groups:
+                retired = db_module.execute(session, """
+                    INSERT INTO project_tasks
+                        (project_id, sequence_no, task_name, stage_group, status, priority, is_active)
+                    VALUES (:project_id, :sequence, :task_name, 'Lead Assessment',
+                            'Approved', 'Low', 0)
+                """, {"project_id": pid, "sequence": sequence,
+                       "task_name": task_name}).lastrowid
+                db_module.execute_many(session, """
+                    INSERT INTO task_dynamic_fields (task_id, field_key, field_value)
+                    VALUES (:task_id, :field_key, :field_value)
+                """, [
+                    {"task_id": retired, "field_key": key, "field_value": value}
+                    for key, value in fields.items()
+                ])
+
+        row = _export_by_name(session)["V7-EXPORT-LEGACY"]
+        assert row["P90 Area (km2)"] == "4"
+        assert row["P10 Area (km2)"] == "12"
+        assert row["P50 Pay Thickness (ft)"] == "70"
+        assert row["OGIP Mean (BCF)"] == "10"
+
+        active = _tasks_by_name(session, "V7-EXPORT-LEGACY")["Lead Assessment"]
+        workflow.save_task_dynamic_fields(session, active["task_id"], {
+            "p90_area_km2": "6", "p10_area_km2": "", "lead_piip_gas_mean": "15",
+        }, changed_by="Test")
+        row = _export_by_name(session)["V7-EXPORT-LEGACY"]
+        assert row["P90 Area (km2)"] == "6", "active nonblank wins"
+        assert row["P10 Area (km2)"] == "12", "active blank cannot erase history"
+        assert row["P50 Pay Thickness (ft)"] == "70"
+        assert row["OGIP Mean (BCF)"] == "15"
+    finally:
+        session.close()
+
+
+def create_project_for_import_test(client, name):
+    response = client.post("/api/projects", json={"project_name": name})
+    assert response.status_code == 201, response.get_json()
+    return response.get_json()["project_id"]
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +332,7 @@ def test_duplicate_skip_and_update_merge(client, app_modules, tmp_path):
 
         # Confirm a data-bearing BP step reached Approved on the first import.
         tasks = _tasks_by_name(session, "UPD-1")
-        assert tasks["Resource Assessment Update"]["status"] == "Approved"
+        assert tasks["SAD Update"]["status"] == "Approved"
 
         # --update: change OGIP Mean, leave Trap CoS blank (must not erase).
         upd = {"Well Name": "UPD-1", "BP Year": 2027, "Status": "Gas", "OGIP Mean (BCF)": 20}
@@ -239,7 +347,7 @@ def test_duplicate_skip_and_update_merge(client, app_modules, tmp_path):
 
         # An Approved step stays Approved after the additive update.
         tasks = _tasks_by_name(session, "UPD-1")
-        assert tasks["Resource Assessment Update"]["status"] == "Approved"
+        assert tasks["SAD Update"]["status"] == "Approved"
     finally:
         session.close()
 
@@ -340,7 +448,7 @@ def test_partial_seal_inputs_warn_and_pct_pins(client, app_modules, tmp_path):
         assert any("incomplete Seal CoS inputs" in w and "seal_dip" in w for w in result.warnings)
 
         fields = workflow.get_task_dynamic_fields(
-            session, _tasks_by_name(session, "SEAL-1")["Seal CoS"]["task_id"])
+            session, _tasks_by_name(session, "SEAL-1")["Trap and Seal CoS"]["task_id"])
         assert "seal_dip" not in fields                    # incomplete inputs skipped
         assert fields.get("seal_cos_pct") == "55"          # sheet pct pinned
         assert fields.get("seal_pore_pressure_gradient_psi_ft") == "0.45"  # rider kept
@@ -458,7 +566,7 @@ def test_fluidless_bp_well_trio_lands_in_pre_drill(client, app_modules, tmp_path
         assert report.results[0].outcome == "created", report.results[0].reason
 
         fields = workflow.get_task_dynamic_fields(
-            session, _tasks_by_name(session, "NOF-1")["Pre-Drilling Resource Assessment"]["task_id"])
+            session, _tasks_by_name(session, "NOF-1")["Pre-Drilling GeoX Assessment"]["task_id"])
         assert fields.get("pre_drill_piip_gas_mean") == "10"
 
         exported = _export_by_name(session)["NOF-1"]
@@ -550,7 +658,9 @@ def test_multisheet_workbook_picks_best_matching_sheet(tmp_path):
 def test_tight_and_slash_status_aliases(client, app_modules, tmp_path):
     """External sheets write "Tight" (a dry well) and may spell Gas over Water
     with a slash; both alias to the canonical fluid instead of erroring the
-    row, and the canonical value is what stores/exports/shows as the status."""
+    row, and the canonical value is what stores/exports/shows as the status.
+    The pre-v10 labels alias the same way -- FORWARD onto their replacements --
+    so an old sheet never reintroduces retired vocabulary."""
     import import_excel
     import reporting
 
@@ -561,22 +671,27 @@ def test_tight_and_slash_status_aliases(client, app_modules, tmp_path):
     assert any("BP Year" in e for e in errors)
 
     rows = [{"Well Name": "TGT-1", "BP Year": 2027, "Status": "Tight"},
-            {"Well Name": "GOW-1", "BP Year": 2027, "Status": "gas/water"}]
+            {"Well Name": "GOW-1", "BP Year": 2027, "Status": "gas/water"},
+            {"Well Name": "DRY-1", "BP Year": 2027, "Status": "Dry"},
+            {"Well Name": "WAT-1", "BP Year": 2027, "Status": "water"},
+            {"Well Name": "CND-1", "BP Year": 2027, "Status": "Condensate"},
+            {"Well Name": "LIQ-1", "BP Year": 2027, "Status": "Liquid"}]
     _write_sheet(tmp_path / "tgt.xlsx", rows, header_row=1)
 
     session = _session(app_modules)
     try:
         report = import_excel.import_rows(session, import_excel.parse_workbook(str(tmp_path / "tgt.xlsx")))
         outcomes = {r.well_name: r.outcome for r in report.results}
-        assert outcomes == {"TGT-1": "created", "GOW-1": "created"}, report.format()
+        assert outcomes == {name: "created" for name in
+                            ("TGT-1", "GOW-1", "DRY-1", "WAT-1", "CND-1", "LIQ-1")}, report.format()
 
+        expected = {"TGT-1": "Dry Hole", "GOW-1": "Gas over Water", "DRY-1": "Dry Hole",
+                    "WAT-1": "Water Bearing", "CND-1": "Oil over Gas", "LIQ-1": "Oil"}
         portfolio = {r["well_name"]: r for r in reporting.get_portfolio_rows(session)["rows"]}
-        assert portfolio["TGT-1"]["status"] == "Dry"
-        assert portfolio["GOW-1"]["status"] == "Gas over Water"
+        assert {name: portfolio[name]["status"] for name in expected} == expected
 
         exported = _export_by_name(session)
-        assert exported["TGT-1"]["Status"] == "Dry"
-        assert exported["GOW-1"]["Status"] == "Gas over Water"
+        assert {name: exported[name]["Status"] for name in expected} == expected
     finally:
         session.close()
 

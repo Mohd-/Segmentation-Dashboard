@@ -9,7 +9,8 @@
 import { test, assert, fixture } from './harness.js';
 import {
   validateResourceInputs, formatStored, buildCalculatePayload, buildLeadApplyFields, buildPlotMarkup,
-  buildResultsMarkup, resultsFromStoredFields, resultsFromCalculation
+  buildResultsMarkup, resultsFromStoredFields, resultsFromCalculation,
+  fieldPrefixForStep, FIELD_PREFIX_BY_STEP
 } from '../js/views/resource-calculator.js';
 
 // --- validateResourceInputs -------------------------------------------------
@@ -301,4 +302,35 @@ test('buildResultsMarkup: values are display-only <output>s, not editable inputs
   var container = fixture(buildResultsMarkup({ gas: { p90: '1', mean: '2', p10: '3' }, liquid: null }));
   assert.equal(container.querySelectorAll('input').length, 0);
   assert.equal(container.querySelectorAll('.calculated-output').length, 3);
+});
+
+
+// --- calculator ownership ---------------------------------------------------
+
+test('fieldPrefixForStep: only Lead Assessment owns the in-app calculator', function () {
+  assert.equal(fieldPrefixForStep('Resource Assessment'), 'lead');
+  assert.equal(FIELD_PREFIX_BY_STEP['Pre-Drilling GeoX Assessment'], undefined,
+    'GeoX records external software results and is deliberately not a host');
+  // Anything else (and a missing name) falls back to the lead family, so no
+  // caller can silently write an un-prefixed key.
+  assert.equal(fieldPrefixForStep('Pre-Drilling GeoX Assessment'), 'lead');
+  assert.equal(fieldPrefixForStep('Reservoir CoS'), 'lead');
+  assert.equal(fieldPrefixForStep(undefined), 'lead');
+});
+
+test('buildLeadApplyFields: an explicit legacy prefix is still mechanically supported', function () {
+  var result = { gas: { p90: 1.5, mean: 2.5, p10: 3.5 } };
+  var fields = buildLeadApplyFields(result, { method: 'GRV', grvP90: '1', grvP10: '2',
+                                              scenario: 'dry_gas_high_pressure' }, 'pre_drill');
+  assert.equal(fields.pre_drill_piip_gas_mean, '2.50');
+  assert.equal(fields.pre_drill_calculation_method, 'GRV');
+  assert.equal(fields.pre_drill_grv_p90_thousand_acre_ft, '1');
+  // ... and NOTHING lands in the lead family, which a different step owns.
+  assert.equal(fields.lead_piip_gas_mean, undefined);
+});
+
+test('resultsFromStoredFields: reads the prefix it is given, lead by default', function () {
+  var stored = { lead_piip_gas_mean: '9.00', pre_drill_piip_gas_mean: '12.00' };
+  assert.equal(resultsFromStoredFields(stored).gas.mean, '9.00');
+  assert.equal(resultsFromStoredFields(stored, 'pre_drill').gas.mean, '12.00');
 });

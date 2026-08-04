@@ -27,12 +27,13 @@ PATCH /api/tasks/<id>/dynamic-fields uses, which does not re-invoke the model
 That keeps seeding independent of the model file while still going through
 the domain layer. Seal CoS has no such external dependency, so its inputs are
 seeded and left to the real formula (cos.calculate_seal_cos, invoked by
-save_task_dynamic_fields for the "Seal CoS" task) to compute the stored
-percentage.
+save_task_dynamic_fields for the merged "Trap and Seal CoS" task) to compute
+the stored percentage.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import sys
@@ -65,7 +66,53 @@ EXTRA_USERS = [
 PROSPECT_FIELD_CODES = ["GALV", "ORYX", "FYNN", "CROX", "WREN", "IBEX", "LUNA", "VEGA"]
 BP_FIELD_CODES = ["MDFT", "QASM", "SARH", "RUBX", "TANQ", "HOFR", "DYNE", "KELS", "BRAN"]
 
-DRILLED_FLUIDS = ["Dry", "Gas", "Water", "Condensate", "Liquid", "Gas over Water"]
+# ---------------------------------------------------------------------------
+# Map coordinates (UTM Zone 37N metres -- the plane the map surface draws in)
+# ---------------------------------------------------------------------------
+# Every seeded record is born with a lead X/Y so the map has pins in dev. One
+# CENTER per field code, because a field is a place: GALV-1 and GALV-2 belong
+# beside each other, not scattered across the country. The centers sit inside
+# Saudi Arabia's UTM37N extent (eastings ~250-800 km, northings ~2200-3300 km)
+# and are grouped into the four quadrants scripts/seed_map_layers.py draws its
+# sample blocks around -- that script imports LEAD_CLUSTER_CENTERS from here,
+# so the blocks always enclose the wells and the two never drift apart.
+#
+# Offsets within a field are DETERMINISTIC (a hash of the record name, never
+# random): re-seeding puts the same well in the same place, and the map is
+# diffable across runs. random.seed(42) governs the rest of this script, but a
+# coordinate drawn from the shared stream would move every well whenever any
+# earlier draw changed.
+LEAD_CLUSTER_CENTERS = {
+    # North-west quadrant (Block A)
+    "GALV": (350000.0, 3100000.0),
+    "ORYX": (460000.0, 2950000.0),
+    "FYNN": (330000.0, 2870000.0),
+    "MDFT": (470000.0, 3180000.0),
+    "QASM": (390000.0, 2980000.0),
+    # North-east quadrant (Block B)
+    "CROX": (600000.0, 3100000.0),
+    "WREN": (720000.0, 2950000.0),
+    "SARH": (650000.0, 2870000.0),
+    "RUBX": (740000.0, 3180000.0),
+    # South-west quadrant (Block C)
+    "IBEX": (340000.0, 2600000.0),
+    "LUNA": (460000.0, 2450000.0),
+    "TANQ": (380000.0, 2320000.0),
+    "HOFR": (490000.0, 2620000.0),
+    # South-east quadrant (Block D)
+    "VEGA": (610000.0, 2600000.0),
+    "DYNE": (730000.0, 2450000.0),
+    "KELS": (620000.0, 2320000.0),
+    "BRAN": (750000.0, 2620000.0),
+}
+
+# Half-width of the per-record scatter around its field center, in metres. A
+# few km: far enough apart to be distinguishable pins at field zoom, close
+# enough that the field still reads as one cluster (and well inside the sample
+# blocks, whose edges are ~30 km further out).
+LEAD_CLUSTER_JITTER_M = 5000.0
+
+DRILLED_FLUIDS = ["Dry Hole", "Gas", "Water Bearing", "Oil over Gas", "Oil", "Gas over Water"]
 GHEER_CLASSIFICATIONS = ["Development", "Appraisal", "Exploration"]
 PULL_UP_OPTIONS = ["No", "Semi", "Yes"]
 
@@ -106,6 +153,29 @@ def _unique_name(session, prefix) -> str:
         n += 1
 
 
+def _lead_coordinates(name):
+    """Deterministic (lead_x, lead_y) in UTM37N metres for a record name.
+
+    The field code (the part before the dash, exactly as
+    folders.parse_field_and_well splits it) picks the cluster center; a
+    BLAKE2b digest of the full name picks the offset inside it. hashlib, not
+    the builtin ``hash``, because PYTHONHASHSEED randomizes the latter per
+    process -- the same seed run twice would then place the same well in two
+    places. An unknown code (a hand-added field) gets no coordinates rather
+    than an invented location.
+    """
+    code = name.split("-")[0]
+    center = LEAD_CLUSTER_CENTERS.get(code)
+    if not center:
+        return None, None
+    digest = hashlib.blake2b(name.encode("utf-8"), digest_size=8).digest()
+    # Two independent 24-bit slices -> two offsets in [-jitter, +jitter].
+    span = 2 * LEAD_CLUSTER_JITTER_M
+    dx = (int.from_bytes(digest[0:3], "big") / 0xFFFFFF) * span - LEAD_CLUSTER_JITTER_M
+    dy = (int.from_bytes(digest[3:6], "big") / 0xFFFFFF) * span - LEAD_CLUSTER_JITTER_M
+    return round(center[0] + dx, 1), round(center[1] + dy, 1)
+
+
 def _ar_number(n) -> str:
     return f"AR-{n:07d}"
 
@@ -130,6 +200,15 @@ def _prospect_stage_windows():
 # Lifecycle drivers (assign / submit / return / approve via the domain layer)
 # ---------------------------------------------------------------------------
 
+# Steps like "SAD Update" refuse a submit until their sign-off boxes are checked
+# (workflow.lifecycle._check_submit_requirements). Seeded wells drive those
+# steps to Approved, so the seeder records the sign-off first, through the same
+# shared helper the domain layer's own automated walks use -- the audit trail
+# then matches what a real user's tick would leave behind. Not inlined into
+# _complete_task because _advance_to needs it for the Ready anchor too.
+_satisfy_submit_gate = workflow.satisfy_submit_gate
+
+
 def _complete_task(session, task, assignee, role_by_name, approver, cycle=False):
     """Drive one task to Approved: assign -> submit -> approve.
 
@@ -137,6 +216,7 @@ def _complete_task(session, task, assignee, role_by_name, approver, cycle=False)
     first, so the Audit Trail carries a realistic back-and-forth.
     """
     role = role_by_name.get(assignee)
+    _satisfy_submit_gate(session, task, assignee)
     task = workflow.assign_task(session, task["task_id"], assignee, cascade=False, changed_by=assignee)
     task = workflow.transition_task(session, task["task_id"], "submit", changed_by=assignee,
                                      actor_role=role, actor_name=assignee)
@@ -157,6 +237,7 @@ def _advance_to(session, task, status, assignee, role_by_name):
     task = workflow.assign_task(session, task["task_id"], assignee, cascade=False, changed_by=assignee)
     if status == "In Progress":
         return task
+    _satisfy_submit_gate(session, task, assignee)
     role = role_by_name.get(assignee)
     return workflow.transition_task(session, task["task_id"], "submit", changed_by=assignee,
                                     actor_role=role, actor_name=assignee)
@@ -192,7 +273,7 @@ def _add_comment(session, task, changed_by):
     priority variety seeded above.
 
     The stored dynamic fields are resent too, mirroring the real UI (which
-    always submits the whole form): save_task on a "Seal CoS" task recomputes
+    always submits the whole form): save_task on a "Trap and Seal CoS" task recomputes
     seal_cos_pct from the PAYLOAD's fields, so a fields-less save would trip
     calculate_seal_cos's blank-form guard and wipe the stored percentage.
     ``reservoir_cos_rows`` is the one exception: resending it would make
@@ -288,9 +369,19 @@ def _reservoir_cos_rows(force_ar_one=False):
 
 def _seal_fields():
     """Raw Seal CoS inputs; save_task_dynamic_fields computes seal_cos_pct
-    from these via the real formula (cos.calculate_seal_cos)."""
+    from these via the real formula (cos.calculate_seal_cos).
+
+    The activity range is capped at 1.0 (it was 0.1-1.4 until KI-004): above
+    0.9 the formula takes the ``activity x fracture_permeability`` branch and
+    range-checks nothing, so a draw over 1/0.9 -- the largest permeability
+    below -- produced a stored seal_cos_pct above 100%. That value is outside
+    the domain every READER accepts, and roughly one seeded lead per run was
+    therefore born with a detail page that could not be opened. 1.0 x the 0.9
+    permeability ceiling is 90%, comfortably inside the domain, and still
+    leaves ~11% of draws exercising the "recently active" branch.
+    """
     return {
-        "seal_recent_activity_age": round(random.uniform(0.1, 1.4), 2),
+        "seal_recent_activity_age": round(random.uniform(0.1, 1.0), 2),
         "seal_dip": round(random.uniform(0.1, 0.9), 2),
         "seal_azimuth_vs_shmax": round(random.uniform(0.1, 0.9), 2),
         "seal_fault_level_confidence": round(random.uniform(0.1, 0.9), 2),
@@ -299,7 +390,7 @@ def _seal_fields():
 
 
 def _staking_fields():
-    """Coherent 'Staking Moving Tolerance' inputs: a well location plus the
+    """Coherent 'Moving Tolerance' inputs: a well location plus the
     3 distance/azimuth option pairs (schema.js's staking_opt1/2/3 rows) --
     used to seed fully-mature leads for the Staking Options export sheet."""
     fields = {
@@ -322,7 +413,7 @@ def _flowback_fields(legacy=False):
     fallback (detail.js flowback rate, portfolio_export flowback columns).
     Every rate field is filled regardless of fluid type so a fluid-type
     change in the UI never reveals a blank (incl. flowback_liquid_rate_bpd,
-    the BPD path for Condensate/Liquid fluids)."""
+    the BPD path for the oil-bearing fluids)."""
     def _stage():
         return {
             "flowback_formation": "SARH",
@@ -377,40 +468,52 @@ def _phase_formation_rows(names, sarh_fluid):
 def _prospect_step_fields(task_name, force_ar_one=False, force_pore_pressure=False):
     """Coherent dynamic-field payload for one data-entry prospect step, or
     None for the steps that carry no inputs (Seismic Signature Validation,
-    Prospect Evaluation Presentation, Well Creation, Approval to Stake).
+    Segmentation Slides, Approval to Stake, Well Site Location).
 
     The SINGLE source of prospect-step seed data, shared by the proposed-lead,
     mature-lead and BP-well seeders, so a step that has been progressed
     through always carries the fields a real user would have filled:
-    - Lead Identification: P90/P10 areas, formation/reservoir thickness,
-      lead PIIP gas trio (occasionally + the liquid trio).
-    - Risking: pre-scored reservoir_cos_rows (coherent Block/AR pairs), the
-      Trap inputs, the 5 Seal CoS inputs (occasionally + pore pressure;
-      forced via ``force_pore_pressure`` for fully-drilled BP wells).
+    - Lead Assessment: P90/P10 areas, formation/reservoir thickness, lead PIIP
+      gas trio (occasionally + the liquid trio).
+    - Risk Analysis: pre-scored reservoir_cos_rows (coherent Block/AR pairs) and
+      the merged Trap and Seal CoS form -- the Trap inputs PLUS the 5 Seal CoS
+      inputs in one payload (occasionally + pore pressure; forced via
+      ``force_pore_pressure`` for fully-drilled BP wells).
     - Pre-Well Delivery: pre-drill PIIP gas trio, staking location + the 3
       distance/azimuth option pairs.
     """
-    if task_name == "Reservoir Area Definition":
+    if task_name == "Lead Assessment":
         p90 = round(random.uniform(2, 25), 2)
-        return {"p90_area_km2": p90, "p10_area_km2": round(p90 * random.uniform(1.5, 3.5), 2)}
-    if task_name == "Thickness Estimation":
-        return {"formation_thickness_ft": round(random.uniform(40, 180), 1),
-                "reservoir_thickness_ft": round(random.uniform(30, 150), 1)}
-    if task_name == "Lead Resource Assessment":
-        return _piip_fields("lead_piip", include_liquid=random.random() < 0.35)
+        reservoir_thickness = round(random.uniform(30, 150), 1)
+        grv_p90 = round(random.uniform(20, 300), 2)
+        fields = {
+            "p90_area_km2": p90,
+            "p10_area_km2": round(p90 * random.uniform(1.5, 3.5), 2),
+            "reservoir_thickness_ft": reservoir_thickness,
+            "formation_thickness_ft": round(reservoir_thickness * random.uniform(1.2, 2.5), 1),
+            "grv_p90_thousand_acre_ft": grv_p90,
+            "grv_p10_thousand_acre_ft": round(grv_p90 * random.uniform(1.5, 3.5), 2),
+            "polygons_surfaces_loaded": "1",
+        }
+        fields.update(_piip_fields("lead_piip", include_liquid=random.random() < 0.35))
+        return fields
     if task_name == "Reservoir CoS":
         return {"reservoir_cos_rows": _reservoir_cos_rows(force_ar_one=force_ar_one)}
-    if task_name == "Trap CoS":
-        return {"sarah_quwarah_thickness_ft": round(random.uniform(60, 400), 1),
-                "trap_cos_pct": str(random.randint(20, 90))}
-    if task_name == "Seal CoS":
-        fields = _seal_fields()
+    if task_name == workflow.MERGED_COS_TASK_NAME:
+        # One save carrying both halves. The explicit trap_cos_pct is KEPT as
+        # sent (the client is the primary calculator now; the server hook
+        # stands down for a payload that carries the pct); seal_cos_pct is
+        # absent from the payload, so the server still recomputes it from the
+        # 5 inputs.
+        fields = {"sarah_quwarah_thickness_ft": round(random.uniform(60, 400), 1),
+                  "trap_cos_pct": str(random.randint(20, 90))}
+        fields.update(_seal_fields())
         if force_pore_pressure or random.random() < 0.5:
             fields["seal_pore_pressure_gradient_psi_ft"] = round(random.uniform(0.35, 0.75), 3)
         return fields
-    if task_name == "Pre-Drilling Resource Assessment":
+    if task_name == "Pre-Drilling GeoX Assessment":
         return _piip_fields("pre_drill_piip", include_liquid=random.random() < 0.35)
-    if task_name == "Staking Moving Tolerance":
+    if task_name == "Moving Tolerance":
         return _staking_fields()
     return None
 
@@ -423,8 +526,9 @@ def _fill_prospect_step_data(session, tasks, force_ar_one=False, force_pore_pres
         fields = _prospect_step_fields(task["task_name"], force_ar_one=force_ar_one,
                                        force_pore_pressure=force_pore_pressure)
         if fields:
+            # reconcile=False: bulk writer -- ensure_task_approved drives status.
             workflow.save_task_dynamic_fields(session, task["task_id"], fields,
-                                              changed_by="Seed Script")
+                                              changed_by="Seed Script", reconcile=False)
 
 
 # ---------------------------------------------------------------------------
@@ -432,7 +536,7 @@ def _fill_prospect_step_data(session, tasks, force_ar_one=False, force_pore_pres
 # ---------------------------------------------------------------------------
 
 def _seed_prospect_leads(session, users, role_by_name, supervisors):
-    """~16 prospect leads, 4 spread across each of the 4 PROSPECT_STAGES, plus
+    """12 prospect leads, 4 spread across each of the 3 PROSPECT_STAGES, plus
     3 fully-mature leads (every prospect-phase task Approved, incl. 'Approval
     to Stake').
 
@@ -451,7 +555,9 @@ def _seed_prospect_leads(session, users, role_by_name, supervisors):
     for i, stage in enumerate(stage_targets):
         code = PROSPECT_FIELD_CODES[i % len(PROSPECT_FIELD_CODES)]
         name = _unique_name(session, code)
-        pid = workflow.add_project(session, name, changed_by=random.choice(users))
+        lead_x, lead_y = _lead_coordinates(name)
+        pid = workflow.add_project(session, name, changed_by=random.choice(users),
+                                   lead_x=lead_x, lead_y=lead_y)
         tasks = [t for t in workflow.get_project_tasks(session, pid)
                 if t["stage_group"] in workflow.PROSPECT_STAGES]
 
@@ -480,7 +586,9 @@ def _seed_prospect_leads(session, users, role_by_name, supervisors):
     for i in range(3):
         code = PROSPECT_FIELD_CODES[(len(stage_targets) + i) % len(PROSPECT_FIELD_CODES)]
         name = _unique_name(session, code)
-        pid = workflow.add_project(session, name, changed_by=random.choice(users))
+        lead_x, lead_y = _lead_coordinates(name)
+        pid = workflow.add_project(session, name, changed_by=random.choice(users),
+                                   lead_x=lead_x, lead_y=lead_y)
         tasks = [t for t in workflow.get_project_tasks(session, pid)
                 if t["stage_group"] in workflow.PROSPECT_STAGES]
         _seed_pipeline_progress(session, tasks, len(tasks), "Not Assigned", users, role_by_name, supervisors)
@@ -503,7 +611,7 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
     _capture_lead_summary_snapshot) -- never created as BP directly. The order
     matters: the promotion snapshot freezes the prospect-stage fields into
     lead_summary_snapshots, which feeds /detail's ``lead_summary`` and the
-    Well card's Prediction-vs-Actual rows (snapshot Thickness Estimation /
+    Well card's Prediction-vs-Actual rows (snapshot Lead Assessment /
     Pre-Drilling RA values vs the live post-drill actuals). BP-stage data is
     saved only AFTER promotion, matching real usage.
     """
@@ -511,7 +619,9 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
     project_ids = []
     for i, code in enumerate(BP_FIELD_CODES):
         name = _unique_name(session, code)
-        pid = workflow.add_project(session, name, changed_by=random.choice(users))
+        lead_x, lead_y = _lead_coordinates(name)
+        pid = workflow.add_project(session, name, changed_by=random.choice(users),
+                                   lead_x=lead_x, lead_y=lead_y)
         project_ids.append(pid)
 
         tasks = workflow.get_project_tasks(session, pid)
@@ -537,33 +647,41 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
         # like a genuinely promoted lead's.
         workflow.update_project_flags(
             session, pid, business_plan_enabled=True, active_well_enabled=(i % 2 == 0),
-            business_plan_year=years[i % len(years)], changed_by=random.choice(supervisors))
+            business_plan_year=years[i % len(years)], changed_by=random.choice(supervisors),
+            # Seeded wells are synthetic history: the years list starts at
+            # 2026 and stays fixed, so this promotion must skip the
+            # promotion-only current-year..2035 floor once "today" moves past it.
+            allow_historical_year=True)
 
         # BP-stage lifecycle progress + inputs, AFTER promotion.
+        # Windows over the 15 BP-execution steps (v4 merged four away):
+        # 0 = early Well Delivery, 1 = mid pipeline, 2 = fully drilled.
         approve_count = {
-            0: random.randint(0, 4),
-            1: random.randint(5, 11),
-            2: random.randint(12, 18),
+            0: random.randint(0, 3),
+            1: random.randint(4, 9),
+            2: random.randint(10, 15),
         }[maturity]
         anchor_status = random.choice(["Not Assigned", "In Progress", "Ready"])
         _seed_pipeline_progress(session, bp_tasks, approve_count, anchor_status, users, role_by_name, supervisors)
         _sprinkle_priorities(session, tasks, random.choice(users))
 
+        # reconcile=False: bulk writer -- ensure_task_approved drives status.
         workflow.save_task_dynamic_fields(session, by_name["GHEER"]["task_id"],
                                           {"gheer_classification": random.choice(GHEER_CLASSIFICATIONS)},
-                                          changed_by="Seed Script")
+                                          changed_by="Seed Script", reconcile=False)
         # WS7: half the wells ALSO get the new BP-gate classification key, so
         # reporting._first_filled(bp_gate, gheer) picks it there; the other
         # half keep ONLY the legacy GHEER key above, exercising the
         # read-fallback (constants.py's _OVERVIEW_READ_SOURCES["classification"]).
         if i % 2 == 0:
+            # reconcile=False: bulk writer -- ensure_task_approved drives status.
             workflow.save_task_dynamic_fields(session, by_name["BP Execution Gate"]["task_id"],
                                               {"bp_gate_classification": random.choice(GHEER_CLASSIFICATIONS)},
-                                              changed_by="Seed Script")
+                                              changed_by="Seed Script", reconcile=False)
 
         # The well's fluid, inherited from its SARH formation rows through
         # reporting.resolve_well_fluid (the step-level Quicklook / Final Log
-        # Analysis fluid selects are gone). i == 2 is pinned to Condensate so
+        # Analysis fluid selects are gone). i == 2 is pinned to Oil over Gas so
         # at least one well always exercises the flowback_liquid_rate_bpd /
         # BPD unit path (schema.js's FLOWBACK_RATE_FIELDS) in the summary
         # card. i == 5 (drilled, maturity 2) is the ONE legacy-fallback well:
@@ -574,7 +692,7 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
         # so the ladder must fall all the way through to the legacy keys,
         # exercising that path end-to-end like a well written before the
         # multi-formation editor existed.
-        fluid = "Condensate" if i == 2 else random.choice(DRILLED_FLUIDS)
+        fluid = "Oil over Gas" if i == 2 else random.choice(DRILLED_FLUIDS)
         legacy_fluid_well = (i == 5)
         sarh_fluid = "" if legacy_fluid_well else fluid
 
@@ -584,7 +702,7 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
             # inherits SARH's fluid.
             workflow.upsert_project_formations(
                 session, pid, "quicklook", _phase_formation_rows(workflow.FORMATIONS, sarh_fluid),
-                changed_by="Seed Script", source_task_id=by_name["Quicklook Logs Interpretation"]["task_id"])
+                changed_by="Seed Script", source_task_id=by_name["Quicklook Logs"]["task_id"])
 
         if maturity == 2:
             post_drill_fields = _piip_fields("post_drill_piip")
@@ -594,40 +712,56 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
                 # Analysis only (rungs 2 and 6 of the ladder); see the comment
                 # above for why this well seeds nothing else fluid-wise.
                 top = round(random.uniform(8500, 12000), 1)
+                # reconcile=False: bulk writer -- ensure_task_approved drives status.
                 workflow.save_task_dynamic_fields(
-                    session, by_name["Quicklook Logs Interpretation"]["task_id"],
+                    session, by_name["Quicklook Logs"]["task_id"],
                     {"quicklook_fluid_type": fluid,
                      "quicklook_top_reservoir_tvdss_ft": top,
                      "quicklook_base_reservoir_tvdss_ft": round(top + random.uniform(30, 150), 1)},
-                    changed_by="Seed Script")
+                    changed_by="Seed Script", reconcile=False)
                 top = round(random.uniform(8500, 12000), 1)
+                # reconcile=False: bulk writer -- ensure_task_approved drives status.
                 workflow.save_task_dynamic_fields(
                     session, by_name["Final Log Analysis"]["task_id"],
                     {"final_fluid_type": fluid,
                      "final_top_reservoir_tvdss_ft": top,
                      "final_base_reservoir_tvdss_ft": round(top + random.uniform(30, 150), 1)},
-                    changed_by="Seed Script")
+                    changed_by="Seed Script", reconcile=False)
             else:
-                # Steps 20/30 kept their step-level fluid selects; one fluid
-                # value flows through everything for coherence.
+                # SAD Model / SAD Update kept the merged-away steps' fluid
+                # selects (post_drill_fluid_type / resource_update_fluid_type);
+                # one fluid value flows through everything for coherence.
                 post_drill_fields["post_drill_fluid_type"] = fluid
                 resource_update_fields["resource_update_fluid_type"] = fluid
-            workflow.save_task_dynamic_fields(session, by_name["Post-Drilling Resource Assessment"]["task_id"],
-                                              post_drill_fields, changed_by="Seed Script")
-            workflow.save_task_dynamic_fields(session, by_name["Resource Assessment Update"]["task_id"],
-                                              resource_update_fields, changed_by="Seed Script")
+            # v4: the post-drill / resource-update PIIP trios now live on the
+            # steps that absorbed them, under their ORIGINAL EAV keys.
+            post_drill_fields["sad_surfaces_polygons_loaded"] = "1"
+            resource_update_fields["sad_update_done"] = "1"
+            resource_update_fields["final_exec_summary_done"] = "1"
+            # reconcile=False: bulk writer -- ensure_task_approved drives status.
+            workflow.save_task_dynamic_fields(session, by_name["SAD Model"]["task_id"],
+                                              post_drill_fields, changed_by="Seed Script", reconcile=False)
+            # reconcile=False: bulk writer -- ensure_task_approved drives status.
+            workflow.save_task_dynamic_fields(session, by_name["SAD Update"]["task_id"],
+                                              resource_update_fields, changed_by="Seed Script", reconcile=False)
+            # reconcile=False: bulk writer -- ensure_task_approved drives status.
+            workflow.save_task_dynamic_fields(session, by_name["Executive Summary"]["task_id"],
+                                              {"exec_summary_loaded": "1", "ured_update_loaded": "1"},
+                                              changed_by="Seed Script", reconcile=False)
             # The legacy-fallback well also keeps its flowback data in the
             # retired flat keys (no stages sheet), so the flat-key fallback
             # is exercised end-to-end alongside the legacy fluid ladder.
+            # reconcile=False: bulk writer -- ensure_task_approved drives status.
             workflow.save_task_dynamic_fields(session, by_name["Flowback Results"]["task_id"],
                                               _flowback_fields(legacy=legacy_fluid_well),
-                                              changed_by="Seed Script")
+                                              changed_by="Seed Script", reconcile=False)
             # pda_booked on SOME (not all) maturity-2 wells, so the Portfolio
             # Export sheet's Booked column shows both 'Yes' and the blank/'No'
             # case.
             if (i // 3) % 2 == 0:
+                # reconcile=False: bulk writer -- ensure_task_approved drives status.
                 workflow.save_task_dynamic_fields(session, by_name["PDA"]["task_id"],
-                                                  {"pda_booked": "1"}, changed_by="Seed Script")
+                                                  {"pda_booked": "1"}, changed_by="Seed Script", reconcile=False)
 
             # Drilled wells get formation interpretation rows across the
             # remaining FORMATION_PHASES (quicklook was written above), SARH
@@ -641,10 +775,10 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
                 changed_by="Seed Script", source_task_id=by_name["Final Log Analysis"]["task_id"])
             workflow.upsert_project_formations(
                 session, pid, "post_drill", _phase_formation_rows(workflow.FORMATIONS, sarh_fluid),
-                changed_by="Seed Script", source_task_id=by_name["Post-Drilling Resource Assessment"]["task_id"])
+                changed_by="Seed Script", source_task_id=by_name["SAD Model"]["task_id"])
             workflow.upsert_project_formations(
                 session, pid, "resource_update", _phase_formation_rows(workflow.FORMATIONS + custom, sarh_fluid),
-                changed_by="Seed Script", source_task_id=by_name["Resource Assessment Update"]["task_id"])
+                changed_by="Seed Script", source_task_id=by_name["SAD Update"]["task_id"])
     return project_ids
 
 

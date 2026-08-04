@@ -26,8 +26,15 @@ import db
 # Kept local to this path-only module to avoid importing the workflow package
 # (workflow.projects imports folders.py). These are the persisted stage_group
 # values whose component files belong under the Leads share.
+#
+# The three v5 groups plus the four they replaced: v5 rewrote every prospect
+# row's stage_group, but a row a migration could not reach (or an old export /
+# hand-repaired record) must still file under the Leads share rather than
+# silently switching to the Wells one. Mirrors workflow.constants
+# .PROSPECT_STAGES + LEGACY_PROSPECT_STAGE_GROUPS.
 _PROSPECT_STAGE_GROUPS = {
-    "Lead Identification", "Risking", "Segmentation", "Pre-Well Delivery",
+    "Lead Assessment", "Risk Analysis", "Pre-Well Delivery",
+    "Lead Identification", "Risking", "Segmentation",
 }
 
 
@@ -114,6 +121,30 @@ def _task_row(session, task_id: int):
                         {"task_id": task_id})
 
 
+# A folder section resolves under ONE of three share roots, chosen by the
+# section key alone. Named once here (server side) and once below (Windows side)
+# so the two can never drift:
+#   * LEAD_WORKFLOW_SECTION_KEYS -> the Lead_Workflow share (Task Update stages);
+#   * LEAD_COMPONENT_SECTION_KEYS -> the Leads share (a lead's own deliverables,
+#     e.g. card 2B's "polygons" row), beside the prospect-step component folders
+#     get_component_folder_link already files there;
+#   * everything else -> the Wells share.
+def _section_server_root(section_key: str) -> Path:
+    if section_key in config.LEAD_WORKFLOW_SECTION_KEYS:
+        return config.LEAD_WORKFLOW_DIRECTORY_ROOT
+    if section_key in getattr(config, "LEAD_COMPONENT_SECTION_KEYS", ()):
+        return config.LEAD_COMPONENT_DIRECTORY_ROOT
+    return config.WELL_OVERVIEW_DIRECTORY_ROOT
+
+
+def _section_windows_root(section_key: str) -> str:
+    if section_key in config.LEAD_WORKFLOW_SECTION_KEYS:
+        return config.WINDOWS_LEAD_WORKFLOW_SHARE_ROOT
+    if section_key in getattr(config, "LEAD_COMPONENT_SECTION_KEYS", ()):
+        return config.WINDOWS_LEAD_COMPONENT_SHARE_ROOT
+    return config.WINDOWS_WELL_SHARE_ROOT
+
+
 def get_open_folder_path(session, project_id: int, section_key: str = "well") -> Path:
     """Return the on-disk (mounted) path for a project's folder section."""
     project = _project_row(session, project_id)
@@ -121,8 +152,7 @@ def get_open_folder_path(session, project_id: int, section_key: str = "well") ->
         raise ValueError("Well not found.")
     if section_key not in config.WELL_OVERVIEW_DIRECTORY_MAP:
         raise ValueError(f"Unknown folder section: {section_key}")
-    root = (config.LEAD_WORKFLOW_DIRECTORY_ROOT if section_key in config.LEAD_WORKFLOW_SECTION_KEYS
-            else config.WELL_OVERVIEW_DIRECTORY_ROOT)
+    root = _section_server_root(section_key)
     section = config.WELL_OVERVIEW_DIRECTORY_MAP.get(section_key, "")
     field_name, well_name = parse_field_and_well(project.get("project_name") or "")
     path = root / field_name / well_name
@@ -152,6 +182,53 @@ def get_component_folder_link(session, project_id: int, task_id: int) -> Dict[st
         "unc_path": unc_path,
         "file_url": _windows_path_to_file_url(unc_path),
         "section": task_name,
+        "server_path": str(server_path),
+    }
+
+
+# Display names for the well-overview folder-link buttons; falls back to the
+# raw section_key for anything not listed here (defensive only -- every key in
+# WELL_OVERVIEW_DIRECTORY_MAP is listed today).
+_SECTION_DISPLAY_NAMES = {
+    "lead": "Lead Folder",
+    "well": "Well Folder",
+    "segmentation": "Segmentation",
+    "pda": "PDA",
+    "mtr": "MTR",
+    "identification_workflow": "Identification",
+    "risking_workflow": "Risking",
+    "segmentation_workflow": "Segmentation",
+    # Card 2B's folder row on the consolidated Lead Assessment page.
+    "polygons": "Polygons & Surfaces",
+}
+
+
+def get_section_folder_link(session, project_id: int, section_key: str) -> Dict[str, object]:
+    """Return the client-facing folder link for one WELL_OVERVIEW_DIRECTORY_MAP section.
+
+    Mirrors get_component_folder_link's return shape (path/unc_path/file_url/
+    section/server_path) so the UI can render both kinds of folder cards with
+    the same markup. An unknown section_key is a caller/user error (400); a
+    missing project means there is nothing to resolve a folder for (404).
+    """
+    if section_key not in config.WELL_OVERVIEW_DIRECTORY_MAP:
+        raise ValueError(f"Unknown folder section: {section_key}")
+    project = _project_row(session, project_id)
+    if not project:
+        raise FileNotFoundError("Well not found.")
+    field_name, well_name = parse_field_and_well(project.get("project_name") or "")
+    section = config.WELL_OVERVIEW_DIRECTORY_MAP.get(section_key, "")
+    windows_root = _section_windows_root(section_key)
+    # Section values can nest ("Leads/Identification"); split so each level
+    # joins with the Windows separator instead of leaving a stray "/".
+    section_parts = section.split("/") if section else []
+    unc_path = _windows_join(windows_root, field_name, well_name, *section_parts)
+    server_path = get_open_folder_path(session, project_id, section_key)
+    return {
+        "path": unc_path,
+        "unc_path": unc_path,
+        "file_url": _windows_path_to_file_url(unc_path),
+        "section": _SECTION_DISPLAY_NAMES.get(section_key, section_key),
         "server_path": str(server_path),
     }
 

@@ -1,25 +1,22 @@
-import { byId, all, esc, fillSelect, range } from './dom.js';
-import { ICONS } from './icons.js';
-import { Store, currentProjectPipeline } from './state.js';
+import { byId, all } from './dom.js';
+import { Store } from './state.js';
 import { API } from './api.js';
-import { activateTab, scrollToTab } from './navigation.js';
-import { refreshProspect, refreshBP, createLead } from './views/pipeline.js';
+import { activateTab, backToBoard } from './navigation.js';
+import { refreshProspect, refreshBP, renderLeadBoard } from './views/pipeline.js';
+import { initLeadFilters, setLeadUsers } from './views/lead-filters.js';
+import { initLeadKpis, renderLeadKpis } from './views/lead-kpis.js';
+import { initLeadCreate } from './views/lead-create.js';
+import { initHeaderMenus } from './views/header-menus.js';
 import { refreshPortfolio } from './views/portfolio.js';
 import { initPortfolioAnalysis } from './views/portfolio-analysis.js';
 import { refreshAudit } from './views/audit.js';
-import { saveComponent, assignComponent, transitionComponent, cyclePriorityChip, ensureUsers } from './views/detail-form.js';
+import { refreshMap } from './views/map-view.js';
+import { initCalculators } from './views/calculators.js';
+import { saveComponent, assignComponent, transitionComponent, ensureUsers } from './views/detail-form.js';
+import { initAutoSave } from './views/autosave.js';
+import { cycleLeadPriorityChip } from './views/detail.js';
 import { openProjectEditor } from './views/project-editor.js';
 import { performLogin, fetchUserOptions } from './auth.js';
-
-// The board status filters act on projects.overall_status, which only ever
-// holds these two values -- filling them with task statuses made the filter
-// dead for every other option. Both boards exclude 'Completed': a fully
-// matured lead leaves the prospect board and a fully-approved BP well
-// (drilled/finished, incl. imported historical wells) leaves the BP board
-// (workflow/projects.py get_projects), so the option would always yield an
-// empty board.
-var PROJECT_STATUSES = ['In Progress'];
-var PROSPECT_STATUSES = ['In Progress'];
 
 export function showTab(name) {
   activateTab(name);
@@ -28,109 +25,123 @@ export function showTab(name) {
   if (name === 'prospect') refreshProspect();
   if (name === 'bp') refreshBP();
   if (name === 'portfolio') refreshPortfolio();
+  // The map canvas is 0x0 while the tab is display:none, so refreshMap() is
+  // BOTH the lazy first-time boot and the per-activation re-measure. It runs
+  // after activateTab() above, i.e. once the section is actually laid out.
+  if (name === 'map') refreshMap();
   if (name === 'audit') refreshAudit();
 }
 
 function safeOn(id, event, handler) { var element = byId(id); if (element) element.addEventListener(event, handler); }
 
-// Dark theme. The <head> inline script stamps data-theme pre-paint; these
-// keep the toggle icon/state in sync and persist the user's choice. The
-// button shows a moon in light mode (click → go dark) and a sun in dark
-// (click → light) — Lucide icons, matching the static markup's default.
-function syncThemeToggle() {
-  var isDark = document.documentElement.dataset.theme === 'dark';
-  var button = byId('theme-toggle');
-  if (!button) return;
-  button.innerHTML = isDark ? ICONS.sun : ICONS.moon;
-  button.setAttribute('aria-pressed', String(isDark));
-}
-function applyTheme(theme) {
+/* The three app-chrome actions the Card 1F gear menu triggers.
+
+   They live HERE, not in views/header-menus.js: they are app behaviors (the
+   theme, the export download, ending the session), and the menu is only the
+   surface that offers them. Before Card 1F they were wired to the
+   #theme-toggle / #export-excel / #sign-out buttons in the header; that markup
+   is gone and these same functions are now handed to initHeaderMenus. Nothing
+   about what they DO changed. */
+
+// Dark theme. The <head> inline script stamps data-theme pre-paint; this
+// persists the user's choice and announces the change so any surface showing
+// the current theme (the gear menu's Dark/Light Mode item) re-renders.
+export function applyTheme(theme) {
   var root = document.documentElement;
   if (theme === 'dark') root.dataset.theme = 'dark'; else delete root.dataset.theme;
   try { localStorage.setItem('theme', theme); } catch (e) { /* storage may be unavailable */ }
-  syncThemeToggle();
+  document.dispatchEvent(new CustomEvent('theme:changed', { detail: { theme: theme } }));
 }
 
-// New Lead disclosure: swap the toggle label, reveal/hide the form body, and
-// focus the name field when opening. Collapsed again on 'lead:created' (fired
-// by createLead's success path).
-function setNewLeadOpen(open) {
-  var body = byId('new-lead-body');
-  var toggle = byId('new-lead-toggle');
-  if (!body || !toggle) return;
-  body.classList.toggle('hidden', !open);
-  toggle.textContent = open ? '− New Lead' : '+ New Lead';
-  if (open) { var nameInput = byId('new-lead-name'); if (nameInput) nameInput.focus(); }
+export function toggleTheme() {
+  applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
 }
 
-// Header identity chip: "Signed in as <name> (<role>)" + Sign out. Hidden
-// entirely when anonymous (dev mode with AUTH_REQUIRED off). Re-rendered on
-// the 'auth:changed' event the login dialog dispatches after a mid-session
-// sign-in (see dialog.js).
+// Excel export: a plain navigation to the download endpoint, exactly as the
+// old #export-excel button did. There is no completion event to observe (the
+// browser owns the download), which is why the gear item guards against a
+// double fire itself rather than waiting for a result here.
+export function exportExcel() {
+  window.location.href = '/api/export/excel';
+}
+
+// Reload after sign-out: it resets all in-memory state, and when
+// AUTH_REQUIRED is on the first API call of the fresh page reopens the
+// login dialog.
+export function signOut() {
+  return API.logout().catch(function () {}).then(function () { window.location.reload(); });
+}
+
+// Header identity chip: "Signed in as <name> (<role>)". Hidden entirely when
+// anonymous (dev mode with AUTH_REQUIRED off). Re-rendered on the
+// 'auth:changed' event the login dialog dispatches after a mid-session sign-in
+// (see dialog.js). The Sign out control it used to hide alongside itself is
+// now a gear-menu item, which applies the SAME rule (header-menus.canSignOut).
 export function renderUserChip() {
   var chip = byId('user-chip');
-  var signOutButton = byId('sign-out');
-  if (!chip || !signOutButton) return;
+  if (!chip) return;
   chip.textContent = Store.user ? 'Signed in as ' + Store.user.name + ' (' + Store.user.role + ')' : '';
   chip.classList.toggle('hidden', !Store.user);
-  signOutButton.classList.toggle('hidden', !Store.user);
 }
 
 export function wire() {
   all('.tabs button').forEach(function (button) { button.addEventListener('click', function () { showTab(button.getAttribute('data-tab')); }); });
-  safeOn('export-excel', 'click', function () { window.location.href = '/api/export/excel'; });
-  safeOn('theme-toggle', 'click', function () {
-    applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+  // Card 1F: the bell and the gear. The three chrome actions are handed in
+  // rather than re-implemented there, and Sign out is shown only when there is
+  // a session to end — the rule the removed #sign-out button carried.
+  initHeaderMenus({
+    actions: { toggleTheme: toggleTheme, exportExcel: exportExcel, signOut: signOut },
+    canSignOut: function () { return !!Store.user; }
   });
-  syncThemeToggle();
-  // Reload after sign-out: it resets all in-memory state, and when
-  // AUTH_REQUIRED is on the first API call of the fresh page reopens the
-  // login dialog.
-  safeOn('sign-out', 'click', function () { API.logout().catch(function () {}).then(function () { window.location.reload(); }); });
-  safeOn('create-lead-form', 'submit', createLead);
-  safeOn('new-lead-toggle', 'click', function () { setNewLeadOpen(byId('new-lead-body').classList.contains('hidden')); });
-  document.addEventListener('lead:created', function () { setNewLeadOpen(false); });
+  // Card 1D: the Add New Lead control wires itself (button, Enter, Escape,
+  // outside click, inline validation) -- there is no form to submit and no
+  // disclosure state for main.js to own any more.
+  initLeadCreate();
   safeOn('component-form', 'submit', saveComponent);
-  safeOn('component-priority-chip', 'click', cyclePriorityChip);
+  // Item A: prospect step pages have no Save button -- edits auto-save
+  // (debounced input / immediate Enter). BP pages keep the explicit submit
+  // above; the controller gates itself out of them.
+  initAutoSave();
+  // The record-level priority chip in the detail shell header (lead-level
+  // attribute — see views/detail.js renderLeadPriorityChip).
+  safeOn('lead-priority-chip', 'click', cycleLeadPriorityChip);
   safeOn('assigned-to', 'change', assignComponent);
   safeOn('submit-component', 'click', function () { transitionComponent('submit'); });
   safeOn('approve-component', 'click', function () { transitionComponent('approve'); });
   safeOn('return-component', 'click', function () { transitionComponent('return'); });
-  safeOn('back-to-overview', 'click', function () {
-    var pipeline = currentProjectPipeline();
-    activateTab(pipeline);
-    byId('detail-shell').classList.add('hidden');
-    scrollToTab(pipeline);
-  });
+  safeOn('back-to-overview', 'click', backToBoard);
+  safeOn('back-to-board', 'click', backToBoard);
   safeOn('open-project-editor', 'click', function () {
     if (Store.projectId) openProjectEditor(Store.projectId);
   });
-  ['prospect-status-filter', 'prospect-assignee-filter'].forEach(function (id) { safeOn(id, 'input', refreshProspect); safeOn(id, 'change', refreshProspect); });
-  ['bp-year-filter', 'bp-status-filter', 'bp-assignee-filter'].forEach(function (id) { safeOn(id, 'input', refreshBP); safeOn(id, 'change', refreshBP); });
   safeOn('audit-project-filter', 'change', refreshAudit);
   // Portfolio Analysis: cross plot dialog trigger, close, and filter selects.
   // (The portfolio table itself filters via its column menus -- portfolio.js.)
   initPortfolioAnalysis();
-}
-
-// Board assignee filters: value '' = All assignees (pipeline.js maps '' to the
-// backend's 'All'). Options are the active users, matching current_owner names.
-function fillAssigneeFilter(select, users) {
-  if (!select) return;
-  var previous = select.value;
-  select.innerHTML = '<option value="">All assignees</option>' + users.map(function (user) {
-    return '<option>' + esc(user.name) + '</option>';
-  }).join('');
-  select.value = previous || '';
+  initCalculators();
 }
 
 function boot() {
-  fillSelect(byId('prospect-status-filter'), PROSPECT_STATUSES, true);
-  fillSelect(byId('bp-status-filter'), PROJECT_STATUSES, true);
-  fillSelect(byId('bp-year-filter'), range(2026, 2040), true);
+  // Card 1C: the filter row owns the lead board's rowset. It is initialized
+  // BEFORE the first refresh so the payload lands in a live filter module, and
+  // the board renders only through its onChange -- one filtered rowset, one
+  // renderer. The users list is the same single /api/users fetch the assignee
+  // select uses (ensureUsers caches it in Store), never a second request.
+  // Card 1E: the KPI tiles are wired into the SAME onChange the board renders
+  // from, so every filter change recomputes cards, badges and tiles from ONE
+  // filteredLeads() array in one pass -- no second subscription that could see
+  // a different rowset, and no fetch of its own (the data is already local, so
+  // there is no in-flight response to go stale). initLeadKpis runs first so
+  // the row paints 0% / 0 / 0 BCF instead of a gap before the first payload.
+  initLeadKpis();
+  initLeadFilters({
+    onChange: function (leads) {
+      renderLeadBoard(byId('prospect-pipeline'), leads);
+      renderLeadKpis(leads);
+    }
+  });
   ensureUsers().then(function (users) {
-    fillAssigneeFilter(byId('prospect-assignee-filter'), users || []);
-    fillAssigneeFilter(byId('bp-assignee-filter'), users || []);
+    setLeadUsers(users || []);
   });
   wire();
   renderUserChip();

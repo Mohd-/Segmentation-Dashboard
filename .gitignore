@@ -1,10 +1,13 @@
 # Live application data — never version the database.
 # To back up: stop the app and copy pipeline_tracker.db (plus -wal/-shm if present).
-# Pre-deployment: the DB is throwaway (see migrations.py); on a schema change,
-# just delete these files and restart the app to regenerate a fresh one.
+# The DB holds real production data: NEVER delete it on a schema change.
+# Schema changes ship as numbered, append-only migration steps (see migrations.py).
 *.db
 *.db-shm
 *.db-wal
+
+# Secrets — never version credentials.
+.env
 
 # Local environments and caches
 .venv/
@@ -15,3 +18,17 @@ __pycache__/
 # Approved model binary is deployed out-of-band, not versioned.
 RF_model.joblib
 portfolio-analysis.png
+
+# Claude agent worktrees (embedded repos, never version)
+.claude/worktrees/
+screenshots/
+
+# Map layers: shapefile sets are deployment data (dropped on the server) or
+# generated samples (scripts/seed_map_layers.py) — never versioned. The
+# prebuilt country borders (data/map/borders_utm37.json) ARE versioned.
+data/map/layers/
+
+# Grid surfaces: ZMAP+ ASCII grids (TSQ thickness, ground elevation) are
+# deployment data dropped on the share, like the shapefile layers above —
+# never versioned.
+data/map/surfaces/

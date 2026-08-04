@@ -9,12 +9,16 @@ Trap x Seal). Nothing here writes anything, so the values can never go stale.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Dict
 
 import cos
 import db
 
-from .constants import _OVERVIEW_LEGACY_KEYS, _OVERVIEW_READ_SOURCES
+from .constants import (RESERVOIR_COS_ROWS_SOURCES, SEAL_COS_SOURCES, TRAP_COS_SOURCES,
+                        _OVERVIEW_LEGACY_KEYS, _OVERVIEW_READ_SOURCES)
+
+logger = logging.getLogger(__name__)
 
 
 def get_project_overview(session, project_id: int):
@@ -37,21 +41,39 @@ def get_project_overview(session, project_id: int):
 
     overview = {key: first_filled(sources) for key, sources in _OVERVIEW_READ_SOURCES.items()}
     overview.update({key: "" for key in _OVERVIEW_LEGACY_KEYS})
+    # Surviving-first ladders: the v5 merge left a lead's pre-merge Trap/Seal
+    # values under the retired "Trap CoS" / "Seal CoS" buckets, which this map
+    # still carries (it is retired-inclusive).
     overview["derisking"] = total_cos_from_fields(
-        (field_map.get("Reservoir CoS") or {}).get("reservoir_cos_rows"),
-        first_filled([("Trap CoS", "trap_cos_pct")]),
-        first_filled([("Seal CoS", "seal_cos_pct")]),
+        first_filled(RESERVOIR_COS_ROWS_SOURCES),
+        first_filled(TRAP_COS_SOURCES),
+        first_filled(SEAL_COS_SOURCES),
     )
     return overview
 
 
 def get_project_dynamic_field_map(session, project_id: int):
-    """Return {task_name: {field_key: value}} for a project's active tasks."""
+    """Return {task_name: {field_key: value}} for a project's tasks.
+
+    RETIRED-INCLUSIVE on purpose: inactive rows (steps merged away by a
+    migration -- see migrations._migrate_v4_bp_step_merges) are included so
+    their stored inputs stay readable under their own task_name bucket. That
+    is what the surviving-first / legacy-second fallbacks read from, both
+    server-side (_OVERVIEW_READ_SOURCES) and client-side (Store.allFields in
+    static/js/views/detail-form.js + detail.js). Buckets are keyed by
+    task_name and every reader addresses them by an explicit name, so the
+    extra keys are inert for everything else.
+
+    This map is a pure EAV read; it is NOT the step list. The rail, the
+    project editor and every derived-state query take their steps from
+    ``get_project_tasks`` (``is_active = 1``), so a retired step never
+    reappears as a workable component.
+    """
     rows = db.fetch_all(session, """
         SELECT pt.task_name, pt.sequence_no, tdf.field_key, tdf.field_value
         FROM project_tasks pt
         LEFT JOIN task_dynamic_fields tdf ON tdf.task_id = pt.task_id
-        WHERE pt.project_id = :project_id AND pt.is_active = 1
+        WHERE pt.project_id = :project_id
         ORDER BY pt.sequence_no, tdf.field_key
     """, {"project_id": project_id})
     data: Dict[str, Dict[str, str]] = {}
@@ -111,10 +133,42 @@ def total_cos_from_fields(reservoir_rows_json, trap, seal):
     Trap CoS x Seal CoS, as a whole-percent string. Shared by
     get_project_overview (per project) and reporting's batched BP-well reads so
     the formula exists in exactly one place.
+
+    A STORED VALUE THIS FORMULA REFUSES DEGRADES TO UNAVAILABLE -- it never
+    fails the request (KI-004). ``cos.calculate_presence_cos`` raises ValueError
+    on a component CoS outside 0-100%, and every caller here is a READ:
+    ``GET /api/projects/<id>/detail``, the portfolio rows, the BP-well report.
+    A read-only endpoint must never 400 on data it merely found, or one bad row
+    written before the save-time guard existed (``lifecycle._guard_seal_cos_range``)
+    takes the whole page down with it -- which is exactly the bug that was filed.
+    So the Total reads as blank, the UI shows its em-dash, and the reason lands
+    in the log once per read rather than in the user's face forever. Repairing
+    the row is a WRITE, and the save path is where it is refused.
     """
     reservoir = first_reservoir_cos_row_value(reservoir_rows_json, "reservoir_cos_pct")
-    values = cos.calculate_presence_cos(reservoir, str(trap or "").strip(), str(seal or "").strip())
+    trap = str(trap or "").strip()
+    seal = str(seal or "").strip()
+    try:
+        values = cos.calculate_presence_cos(reservoir, trap, seal)
+    except ValueError as exc:
+        logger.warning(
+            "Total Chance of Success unavailable -- stored CoS inputs out of domain "
+            "(reservoir=%r, trap=%r, seal=%r): %s", reservoir, trap, seal, exc)
+        return ""
     return str(values.get("presence_cos", "") or "")
+
+
+def first_task_field_value(session, project_id, sources):
+    """First non-blank value across an ordered ((task_name, field_key), ...) ladder.
+
+    The per-project twin of get_project_overview's ``first_filled``, for the
+    callers that read one value rather than composing the whole overview.
+    """
+    for task_name, field_key in sources:
+        value = _task_field_value(session, project_id, task_name, field_key)
+        if value:
+            return value
+    return ""
 
 
 def calculate_total_cos(session, project_id):
@@ -123,8 +177,13 @@ def calculate_total_cos(session, project_id):
     Pure READ -- nothing is stored and no history is written: the value is
     recomposed from the Reservoir/Trap/Seal CoS task inputs on every call, so
     it can never go stale.
+
+    Each input is read through its surviving-first ladder: since v5 the Trap and
+    Seal inputs live on the merged "Trap and Seal CoS" step, with the retired
+    "Trap CoS" / "Seal CoS" rows as the fallback that keeps a lead scored before
+    the merge reading exactly the same number.
     """
-    raw_rows = _task_field_value(session, project_id, "Reservoir CoS", "reservoir_cos_rows")
-    trap = _task_field_value(session, project_id, "Trap CoS", "trap_cos_pct")
-    seal = _task_field_value(session, project_id, "Seal CoS", "seal_cos_pct")
+    raw_rows = first_task_field_value(session, project_id, RESERVOIR_COS_ROWS_SOURCES)
+    trap = first_task_field_value(session, project_id, TRAP_COS_SOURCES)
+    seal = first_task_field_value(session, project_id, SEAL_COS_SOURCES)
     return total_cos_from_fields(raw_rows, trap, seal)

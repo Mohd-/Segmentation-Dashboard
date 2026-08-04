@@ -33,16 +33,18 @@ matched headers mapped back to the canonical column names.
 Flagged assumptions (documented, cheap to change)
 -------------------------------------------------
 1. OGIP/Condensate trio destination step, by (record type, fluid presence):
-   - proposed / mature lead            -> 'Lead Resource Assessment' (lead_piip_*)
-   - bp / historical WITHOUT a fluid   -> 'Pre-Drilling Resource Assessment' (pre_drill_piip_*)
-   - any record WITH a fluid status    -> 'Resource Assessment Update' (resource_update_*)
+   - proposed / mature lead            -> 'Lead Assessment' (lead_piip_*)
+   - bp / historical WITHOUT a fluid   -> 'Pre-Drilling GeoX Assessment' (pre_drill_piip_*)
+   - any record WITH a fluid status    -> 'SAD Update' (resource_update_*)
+     (v4 merged the old 'Resource Assessment Update' step into 'SAD Update',
+     which kept the resource_update_* keys verbatim.)
    (The plan states the lead / bp-without-fluid / with-fluid cases explicitly;
    a *historical* well without a fluid status is not separately specified, so it
    is grouped with the bp-without-fluid case -> pre_drill_piip.)
 2. SARH formation phase for the P50 Pay/Porosity/Swt + fluid row: 'final' for a
    record that carries a fluid status (a drilled well), else 'quicklook'. The
    owning step used as ``source_task_id`` follows: 'Final Log Analysis' for
-   final, 'Quicklook Logs Interpretation' for quicklook.
+   final, 'Quicklook Logs' for quicklook.
 3. Dry-run: the domain layer owns its own commits (``db.write_transaction``), so
    an in-process rollback of already-committed work is not available. ``--dry-run``
    therefore runs the identical flow against a throwaway *copy* of the target
@@ -86,12 +88,19 @@ IMPORT_USER = "External Import"
 # option), matched case-insensitively; the canonical casing is what gets
 # stored. External sheets also write "Tight" (or "Dry/Tight") for a dry well
 # and may spell Gas over Water with a slash -- those alias to the canonical
-# values instead of erroring the row.
+# values instead of erroring the row. The pre-v10 labels (Dry/Water/Condensate/
+# Liquid) alias FORWARD onto their replacements, exactly as migration v10 maps
+# stored rows, so an old sheet imports as current vocabulary rather than
+# reintroducing retired values.
 _FLUID_CANONICAL = {name.lower(): name for name in
-                    ("Dry", "Gas", "Water", "Condensate", "Liquid", "Gas over Water")}
+                    ("Gas", "Gas over Water", "Water Bearing", "Dry Hole", "Oil",
+                     "Oil over Gas", "Oil over Water")}
 _FLUID_CANONICAL.update({
-    "tight": "Dry", "dry/tight": "Dry", "dry / tight": "Dry",
-    "gas/water": "Gas over Water",
+    "dry": "Dry Hole", "tight": "Dry Hole", "dry/tight": "Dry Hole",
+    "dry / tight": "Dry Hole",
+    "water": "Water Bearing",
+    "condensate": "Oil over Gas", "liquid": "Oil",
+    "gas/water": "Gas over Water", "gas / water": "Gas over Water",
 })
 
 # Canonical select vocabularies (schema.js) for cells that feed <select> inputs:
@@ -115,6 +124,16 @@ _SEAL_INPUT_KEYS = (
     "seal_recent_activity_age", "seal_dip", "seal_azimuth_vs_shmax",
     "seal_fault_level_confidence", "seal_fracture_permeability",
 )
+
+# The step that owns BOTH CoS halves since v5 (they used to be two steps,
+# "Trap CoS" and "Seal CoS", now retired). Named once so the Trap/Seal writes
+# below read as what they are: several saves against one component.
+_COS_STEP = workflow.MERGED_COS_TASK_NAME
+
+# v7 merged Area Definition / Thickness Estimation / GRV Inputs / Resource
+# Assessment into one active row. Their EAV keys stay unchanged and now share
+# this owner, so every lead import writes the consolidated workspace directly.
+_LEAD_ASSESSMENT_STEP = "Lead Assessment"
 
 # The per-stage measurement keys of the flowback_stages_rows mini-sheet
 # (schema.js FLOWBACK_STAGE_COLUMNS); must track portfolio_export's own
@@ -544,28 +563,25 @@ def _ensure_import_user(session) -> None:
 
 
 def _ensure_approved(session, task_id) -> None:
-    """Drive one task to Approved by WALKING the state machine, never a shortcut:
-    Not Assigned -> (assign) In Progress -> (submit) Ready -> (approve) Approved.
-    Already-Approved is a no-op, so on --update this only ever ADDS approvals."""
-    task = workflow.get_task(session, task_id)
-    status = (task or {}).get("status") or "Not Assigned"
-    if status == "Approved":
-        return
-    if status == "Not Assigned":
-        workflow.assign_task(session, task_id, IMPORT_USER, cascade=False, changed_by=IMPORT_USER)
-        status = "In Progress"
-    if status == "In Progress":
-        workflow.transition_task(session, task_id, "submit", changed_by=IMPORT_USER)
-        status = "Ready"
-    if status == "Ready":
-        # approve has no workflow-layer role gate (the supervisor gate lives in
-        # the route), so no actor_role is passed.
-        workflow.transition_task(session, task_id, "approve", changed_by=IMPORT_USER)
+    """Drive one task to Approved as IMPORT_USER, WALKING the state machine.
+
+    Thin alias for ``workflow.ensure_task_approved`` -- the shared walk the
+    domain layer owns (Not Assigned -> assign -> submit -> approve, resuming
+    from wherever the task is, already-Approved a no-op, so on --update this
+    only ever ADDS approvals). It also satisfies a step's submit gate
+    (workflow.REQUIRED_FIELDS_FOR_SUBMIT -- today "SAD Update") through the
+    normal audited field-save path: an imported historical well IS complete by
+    definition, so the sign-off is RECORDED rather than the gate bypassed.
+    """
+    workflow.ensure_task_approved(session, task_id, IMPORT_USER)
 
 
 def _save(session, task_id, fields, data_bearing: set) -> None:
     """save_task_dynamic_fields wrapper that records the step as data-bearing."""
-    workflow.save_task_dynamic_fields(session, task_id, fields, changed_by=IMPORT_USER)
+    # reconcile=False: bulk writers drive statuses explicitly via
+    # ensure_task_approved, the engine must not fight them.
+    workflow.save_task_dynamic_fields(session, task_id, fields,
+                                      changed_by=IMPORT_USER, reconcile=False)
     data_bearing.add(task_id)
 
 
@@ -601,11 +617,11 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
 
     # Trio destination step by record type + fluid presence (flagged assumption 1).
     if has_fluid:
-        prefix, trio_step = "resource_update", "Resource Assessment Update"
+        prefix, trio_step = "resource_update", "SAD Update"
     elif record_type in ("bp", "historical"):
-        prefix, trio_step = "pre_drill_piip", "Pre-Drilling Resource Assessment"
+        prefix, trio_step = "pre_drill_piip", "Pre-Drilling GeoX Assessment"
     else:
-        prefix, trio_step = "lead_piip", "Lead Resource Assessment"
+        prefix, trio_step = "lead_piip", _LEAD_ASSESSMENT_STEP
 
     # Lead rows have no BP phase, so BP-only cells would vanish silently: name
     # the ignored columns instead. Booked counts only when truthy -- the export
@@ -627,11 +643,11 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
         if value is not None:
             area[key] = value
     if area:
-        _save(session, tid("Reservoir Area Definition"), area, data_bearing)
+        _save(session, tid(_LEAD_ASSESSMENT_STEP), area, data_bearing)
 
     thickness = _num(row, "SARH Formation Thickness (ft)", warnings)
     if thickness is not None:
-        _save(session, tid("Thickness Estimation"), {"formation_thickness_ft": thickness}, data_bearing)
+        _save(session, tid(_LEAD_ASSESSMENT_STEP), {"formation_thickness_ft": thickness}, data_bearing)
 
     reservoir_contribution = _reservoir_contribution(row, warnings)
     if reservoir_contribution:
@@ -658,10 +674,13 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
     if value is not None:
         trap["trap_cos_pct"] = value
     if trap:
-        _save(session, tid("Trap CoS"), trap, data_bearing)
+        _save(session, tid(_COS_STEP), trap, data_bearing)
 
     # Seal CoS: inputs first (their save fires the server-side recompute), then
-    # a pct-only override when the sheet disagrees.
+    # a pct-only override when the sheet disagrees. Since v5 the Trap and Seal
+    # halves share ONE step (_COS_STEP) and therefore one task_id; the two
+    # saves stay separate because the Seal half has its own recompute /
+    # incomplete-inputs retry contract.
     seal = {}
     for col, key in (("Most Recent Age of Fault", "seal_recent_activity_age"),
                      ("Dip", "seal_dip"),
@@ -678,7 +697,7 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
     has_seal_inputs = any(key in seal for key in _SEAL_INPUT_KEYS)
     if seal:
         try:
-            _save(session, tid("Seal CoS"), seal, data_bearing)
+            _save(session, tid(_COS_STEP), seal, data_bearing)
         except ValueError as exc:
             # cos.calculate_seal_cos rejects an INCOMPLETE input set (some but
             # not all of the required keys). The recompute raises before any
@@ -691,17 +710,17 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
                             f"({', '.join(skipped)}): {exc}")
             retry = {key: val for key, val in seal.items() if key not in _SEAL_INPUT_KEYS}
             if retry:
-                _save(session, tid("Seal CoS"), retry, data_bearing)
+                _save(session, tid(_COS_STEP), retry, data_bearing)
             has_seal_inputs = False
     if sheet_seal_pct is not None:
         if has_seal_inputs:
-            stored = workflow.get_task_dynamic_fields(session, tid("Seal CoS")).get("seal_cos_pct", "")
+            stored = workflow.get_task_dynamic_fields(session, tid(_COS_STEP)).get("seal_cos_pct", "")
             if _norm_num(stored) != _norm_num(sheet_seal_pct):
                 # Inputs-free save -> no recompute -> the sheet value wins.
-                _save(session, tid("Seal CoS"), {"seal_cos_pct": sheet_seal_pct}, data_bearing)
+                _save(session, tid(_COS_STEP), {"seal_cos_pct": sheet_seal_pct}, data_bearing)
                 notes.append(f"Seal CoS (%): sheet value {sheet_seal_pct} pinned over recomputed {stored!r}")
         else:
-            _save(session, tid("Seal CoS"), {"seal_cos_pct": sheet_seal_pct}, data_bearing)
+            _save(session, tid(_COS_STEP), {"seal_cos_pct": sheet_seal_pct}, data_bearing)
 
     if prefix in ("lead_piip", "pre_drill_piip"):
         trio = _piip_trio(row, prefix, warnings)
@@ -715,8 +734,8 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
             existing = [r for r in workflow.get_project_formations(session, pid) if r["phase"] == "quicklook"]
             workflow.upsert_project_formations(
                 session, pid, "quicklook", _merge_sarh_rows(existing, sarh),
-                changed_by=IMPORT_USER, source_task_id=tid("Quicklook Logs Interpretation"))
-            data_bearing.add(tid("Quicklook Logs Interpretation"))
+                changed_by=IMPORT_USER, source_task_id=tid("Quicklook Logs"))
+            data_bearing.add(tid("Quicklook Logs"))
 
     # ---- 2. Approve prospect steps -----------------------------------------
     # proposed lead: only data-bearing steps (so 'Approval to Stake' stays open
@@ -739,10 +758,12 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
             # when only the YEAR changed: set_business_plan handles a year-only
             # change, and it re-captures the snapshot only for a non-bp
             # pipeline_type, so an already-promoted well keeps its snapshot.
-            # (Year < 2026 for historicals relies on the guard's 1990 floor.)
+            # (Year < 2026 for historicals relies on the guard's 1990 floor --
+            # allow_historical_year=True skips the promotion-only current-year
+            # floor, since imports legitimately land historical BP wells.)
             workflow.update_project_flags(
                 session, pid, business_plan_enabled=True, business_plan_year=year,
-                changed_by=IMPORT_USER)
+                changed_by=IMPORT_USER, allow_historical_year=True)
 
         classification = _text(row, "Classification")
         if classification:
@@ -774,7 +795,7 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
         if prefix == "resource_update":
             trio = _piip_trio(row, prefix, warnings)
             if trio:
-                _save(session, tid("Resource Assessment Update"), trio, data_bearing)
+                _save(session, tid("SAD Update"), trio, data_bearing)
 
         # Drilled records place the SARH P50 + fluid row at the 'final' phase.
         if has_fluid:
@@ -913,8 +934,13 @@ def import_rows(session, rows, update=False) -> ImportReport:
                     workflow.update_project_name(session, pid, name, changed_by=IMPORT_USER,
                                                  lead_x=lead_x, lead_y=lead_y)
             else:
+                # auto_assign=False: an imported record carries its own
+                # historical lifecycle state -- the creation auto-assignment
+                # rules are for brand-new leads, and _ensure_approved below
+                # must find steps exactly as a pre-rule creation left them
+                # (Not Assigned, then walked as IMPORT_USER).
                 pid = workflow.add_project(session, name, changed_by=IMPORT_USER,
-                                           lead_x=lead_x, lead_y=lead_y)
+                                           lead_x=lead_x, lead_y=lead_y, auto_assign=False)
                 created_pid = pid
             warnings, notes = _import_record(session, row, record_type, year, fluid, pid, is_update)
             warnings = xy_warnings + warnings

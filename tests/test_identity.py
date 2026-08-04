@@ -14,7 +14,12 @@ import pytest
 from conftest import create_project, get_tasks, raw_sqlite_connect
 
 # Seeded by config.SEED_USERS on every bootstrap (see migrations._ensure_base_data).
-SEEDED = [("Employee", "employee"), ("Staff Member", "staff"), ("Supervisor", "supervisor")]
+# Name-ordered, matching /api/users. Tahira/Saad/Salem are the named
+# creation-auto-assignment assignees (config.STEP_ASSIGNMENT_RULES /
+# PRE_WELL_ASSIGNEES): they ride config.SEED_USERS so assignment resolves and
+# the assignee dropdown offers them.
+SEEDED = [("Employee", "employee"), ("Saad", "employee"), ("Salem", "employee"),
+          ("Staff Member", "staff"), ("Supervisor", "supervisor"), ("Tahira", "employee")]
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +94,7 @@ def test_users_excludes_inactive(client):
 
     names = [u["name"] for u in client.get("/api/users").get_json()]
     assert "Employee" not in names
-    assert names == ["Staff Member", "Supervisor"]
+    assert names == ["Saad", "Salem", "Staff Member", "Supervisor", "Tahira"]
 
     # Deactivated users can no longer log in either.
     resp = client.post("/api/login", json={"name": "Employee"})

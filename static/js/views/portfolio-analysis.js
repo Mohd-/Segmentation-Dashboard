@@ -10,8 +10,8 @@ import { byId, all, esc } from '../dom.js';
 
 // Resource-class buckets over reporting.record_status values: a well with a
 // recorded gas fluid is a discovery; an undrilled record (Staked/Proposed)
-// is undiscovered potential. The remaining fluids (Dry, Water, Condensate,
-// Liquid) are gas write-offs and count toward neither bucket.
+// is undiscovered potential. The remaining fluids (Dry Hole, Water Bearing,
+// Oil over Gas, Oil) are gas write-offs and count toward neither bucket.
 export var DISCOVERED_STATUSES = ['Gas', 'Gas over Water'];
 export var UNDISCOVERED_STATUSES = ['Staked', 'Proposed'];
 // Yet-to-find is a fixed planning assumption, not data: 400 BCF for every

@@ -12,6 +12,7 @@ early-promoted one returns to the board exactly where it left off.
 from __future__ import annotations
 
 import time
+from datetime import date
 
 import pytest
 
@@ -20,7 +21,7 @@ from conftest import create_project, get_task_by_name, get_tasks
 
 def test_promotion_sets_pipeline_type_and_captures_lead_summary(client):
     pid = create_project(client, "PROMO-1")
-    lra = get_task_by_name(client, pid, "Lead Resource Assessment")
+    lra = get_task_by_name(client, pid, "Lead Assessment")
     client.patch(f"/api/tasks/{lra['task_id']}/dynamic-fields", json={
         "fields": {"lead_piip_gas_mean": "12.5"},
     })
@@ -36,7 +37,7 @@ def test_promotion_sets_pipeline_type_and_captures_lead_summary(client):
     detail = client.get(f"/api/projects/{pid}/detail").get_json()
     lead_summary = detail["lead_summary"]
     assert lead_summary is not None
-    assert lead_summary["fields"]["Lead Resource Assessment"]["lead_piip_gas_mean"] == "12.5"
+    assert lead_summary["fields"]["Lead Assessment"]["lead_piip_gas_mean"] == "12.5"
 
     # v17 lifecycle: promotion opens the BP pipeline but no longer auto-assigns
     # its first step -- assignment (not promotion) moves a step to In Progress.
@@ -56,9 +57,60 @@ def test_promotion_year_validation(client):
     assert resp.status_code == 400
 
 
+def test_promotion_rejects_a_past_year(client):
+    """A fresh promotion (business_plan_enabled flips false -> true) can't
+    target a year before today's -- only Excel imports get that escape hatch
+    (see tests/test_import.py, allow_historical_year=True)."""
+    pid = create_project(client, "PROMO-PAST-1")
+    resp = client.patch(f"/api/projects/{pid}/flags", json={
+        "business_plan_enabled": True, "business_plan_year": date.today().year - 1,
+    })
+    assert resp.status_code == 400
+
+
+def test_promotion_accepts_current_year_through_2035(client):
+    pid_current = create_project(client, "PROMO-CURYEAR-1")
+    resp = client.patch(f"/api/projects/{pid_current}/flags", json={
+        "business_plan_enabled": True, "business_plan_year": date.today().year,
+    })
+    assert resp.status_code == 200
+
+    pid_max = create_project(client, "PROMO-2035-1")
+    resp = client.patch(f"/api/projects/{pid_max}/flags", json={
+        "business_plan_enabled": True, "business_plan_year": 2035,
+    })
+    assert resp.status_code == 200
+
+
+def test_promotion_rejects_year_past_2035(client):
+    pid = create_project(client, "PROMO-2036-1")
+    resp = client.patch(f"/api/projects/{pid}/flags", json={
+        "business_plan_enabled": True, "business_plan_year": 2036,
+    })
+    assert resp.status_code == 400
+
+
+def test_year_only_edit_of_already_enabled_well_keeps_the_wider_floor(client):
+    """Once a well is promoted, changing only its year is not a fresh
+    promotion -- the current-year floor doesn't apply, only the 1990-2040
+    window that also admits imported historical wells."""
+    pid = create_project(client, "PROMO-YEARONLY-1")
+    resp = client.patch(f"/api/projects/{pid}/flags", json={
+        "business_plan_enabled": True, "business_plan_year": date.today().year,
+    })
+    assert resp.status_code == 200
+
+    resp = client.patch(f"/api/projects/{pid}/flags", json={
+        "business_plan_enabled": True, "business_plan_year": 1999,
+    })
+    assert resp.status_code == 200
+    project = client.get(f"/api/projects/{pid}").get_json()
+    assert project["business_plan_year"] == 1999
+
+
 def test_demotion_preserves_snapshot_and_bp_task_statuses(client):
     pid = create_project(client, "DEMOTE-1")
-    lra = get_task_by_name(client, pid, "Lead Resource Assessment")
+    lra = get_task_by_name(client, pid, "Lead Assessment")
     client.patch(f"/api/tasks/{lra['task_id']}/dynamic-fields", json={
         "fields": {"lead_piip_gas_mean": "7.0"},
     })
@@ -77,7 +129,7 @@ def test_demotion_preserves_snapshot_and_bp_task_statuses(client):
 
     detail = client.get(f"/api/projects/{pid}/detail").get_json()
     assert detail["lead_summary"] is not None
-    assert detail["lead_summary"]["fields"]["Lead Resource Assessment"]["lead_piip_gas_mean"] == "7.0"
+    assert detail["lead_summary"]["fields"]["Lead Assessment"]["lead_piip_gas_mean"] == "7.0"
 
     gate_after = get_task_by_name(client, pid, "BP Execution Gate")
     assert gate_after["status"] == gate_before["status"]
@@ -86,8 +138,9 @@ def test_demotion_preserves_snapshot_and_bp_task_statuses(client):
 def test_recall_of_non_mature_lead_returns_it_unchanged(client):
     """Recalling an early-promoted well never fabricates approvals: every
     prospect step keeps its exact pre-recall status, so the record reappears
-    on the maturation board where it left off (and, not being mature, it is
-    not in the Portfolio)."""
+    on the maturation board where it left off. The Portfolio now includes
+    every non-archived record, so the recalled lead is still there too --
+    just as a 'Proposed' record, not a matured one."""
     import workflow
     pid = create_project(client, "RECALL-EARLY-1")
     client.patch(f"/api/projects/{pid}/flags", json={
@@ -107,7 +160,8 @@ def test_recall_of_non_mature_lead_returns_it_unchanged(client):
     board = client.get("/api/projects?pipeline_filter=prospect").get_json()
     assert "RECALL-EARLY-1" in [p["project_name"] for p in board]
     rows = client.get("/api/portfolio/rows").get_json()["rows"]
-    assert "RECALL-EARLY-1" not in [r["well_name"] for r in rows]
+    row = next(r for r in rows if r["well_name"] == "RECALL-EARLY-1")
+    assert row["status"] == "Proposed"
 
 
 def test_recall_of_fully_matured_lead_stays_off_the_board(client):
@@ -135,13 +189,13 @@ def test_recall_of_fully_matured_lead_stays_off_the_board(client):
     assert "RECALL-MATURE-1" not in [p["project_name"] for p in board]
     rows = client.get("/api/portfolio/rows").get_json()["rows"]
     row = next(r for r in rows if r["well_name"] == "RECALL-MATURE-1")
-    assert row["is_mature_lead"] == 1
+    assert row["is_lead"] == 1
     assert row["status"] == "Staked"
 
 
 def test_repromotion_refreshes_snapshot_timestamp(client):
     pid = create_project(client, "REPROMOTE-1")
-    lra = get_task_by_name(client, pid, "Lead Resource Assessment")
+    lra = get_task_by_name(client, pid, "Lead Assessment")
     client.patch(f"/api/tasks/{lra['task_id']}/dynamic-fields", json={
         "fields": {"lead_piip_gas_mean": "3.3"},
     })
@@ -302,7 +356,7 @@ def test_overview_lead_ogip_composed_from_lead_piip_gas_mean_at_read(client):
     # The /detail overview is a read-time composition of task inputs (there is
     # no stored mirror): every save is reflected on the very next read.
     pid = create_project(client, "READ-COMPOSE-1")
-    lra = get_task_by_name(client, pid, "Lead Resource Assessment")
+    lra = get_task_by_name(client, pid, "Lead Assessment")
     client.patch(f"/api/tasks/{lra['task_id']}/dynamic-fields", json={
         "fields": {"lead_piip_gas_mean": "12.5"},
     })

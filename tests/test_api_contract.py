@@ -13,7 +13,7 @@ import openpyxl
 import pytest
 
 import portfolio_export
-from conftest import create_project, get_task_by_name, get_tasks
+from conftest import create_project, get_task_by_name, get_tasks, raw_sqlite_connect
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +79,7 @@ def test_component_folder_uses_leads_for_prospect_steps_and_wells_for_bp_steps(c
     pipeline, so historical prospect steps remain under Leads after promotion."""
     pid = create_project(client, "PATH-1", pipeline_type="bp",
                          business_plan_enabled=True, business_plan_year=2030)
-    prospect_task = get_task_by_name(client, pid, "Reservoir Area Definition")
+    prospect_task = get_task_by_name(client, pid, "Lead Assessment")
     bp_task = get_task_by_name(client, pid, "Well Proposal")
 
     prospect = client.get(
@@ -92,11 +92,40 @@ def test_component_folder_uses_leads_for_prospect_steps_and_wells_for_bp_steps(c
     assert prospect["unc_path"].startswith("\\\\aramco.com\\ecc\\data\\NAUGAD\\Leads\\")
     assert prospect["server_path"].startswith("/mnt/leads/")
     assert prospect["unc_path"].endswith(
-        r"PATH\PATH-1\Component Files\Reservoir Area Definition"
+        r"PATH\PATH-1\Component Files\Lead Assessment"
     )
     assert bp["unc_path"].startswith("\\\\aramco.com\\ecc\\data\\NAUGAD\\Wells\\")
     assert bp["server_path"].startswith("/mnt/wells/")
     assert bp["unc_path"].endswith(r"PATH\PATH-1\Component Files\Well Proposal")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/projects/<id>/folders/<section_key>
+# ---------------------------------------------------------------------------
+
+def test_section_folder_returns_resolved_link_for_a_known_section(client):
+    pid = create_project(client, "SECFLD-1")
+    resp = client.get(f"/api/projects/{pid}/folders/well")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert set(body) == {"path", "unc_path", "file_url", "section", "server_path"}
+    assert body["path"] == body["unc_path"]
+    assert body["unc_path"] == r"\\aramco.com\ecc\data\NAUGAD\Wells\SECFLD\SECFLD-1"
+    assert body["file_url"].startswith("file:")
+    assert body["section"] == "Well Folder"
+    assert body["server_path"] == "/mnt/wells/SECFLD/SECFLD-1"
+
+
+def test_section_folder_unknown_section_is_400(client):
+    pid = create_project(client, "SECFLD-2")
+    resp = client.get(f"/api/projects/{pid}/folders/not-a-real-section")
+    assert resp.status_code == 400
+    assert "Unknown folder section" in resp.get_json()["detail"]
+
+
+def test_section_folder_unknown_project_is_404(client):
+    resp = client.get("/api/projects/999999/folders/well")
+    assert resp.status_code == 404
 
 
 def test_create_project_empty_name(client):
@@ -116,6 +145,110 @@ def test_create_project_name_too_long(client):
     resp = client.post("/api/projects", json={"project_name": "A" * 121})
     assert resp.status_code == 400
     assert "detail" in resp.get_json()
+
+
+# --- Card 1D: name uniqueness is case- and whitespace-insensitive ------------
+
+@pytest.mark.parametrize("collider", ["wwww-44", "WWWW-44", " WWWW-44 ", "  wWwW-44"])
+def test_create_project_duplicate_name_ignores_case_and_surrounding_space(client, collider):
+    """'WWWW-44', 'wwww-44' and ' WWWW-44 ' are ONE lead.
+
+    The DB's UNIQUE(project_name) index is case-sensitive, so the rule lives in
+    workflow.add_project's pre-check -- pinned here per collision shape.
+    """
+    create_project(client, "WWWW-44")
+    resp = client.post("/api/projects", json={"project_name": collider})
+    assert resp.status_code == 400
+    assert resp.get_json()["detail"] == "A lead with this name already exists."
+
+
+def test_create_project_stores_the_original_casing(client):
+    """Case-insensitive COMPARISON, case-preserving STORAGE."""
+    pid = create_project(client, "  MiXeD-Case-7  ")
+    assert client.get(f"/api/projects/{pid}").get_json()["project_name"] == "MiXeD-Case-7"
+
+
+def test_create_bp_well_duplicate_keeps_the_lead_or_well_wording(client):
+    create_project(client, "BPDUP-1", pipeline_type="bp",
+                   business_plan_enabled=True, business_plan_year=2030)
+    resp = client.post("/api/projects", json={
+        "project_name": "bpdup-1", "pipeline_type": "bp",
+        "business_plan_enabled": True, "business_plan_year": 2030,
+    })
+    assert resp.status_code == 400
+    assert resp.get_json()["detail"] == "A lead / well with this name already exists."
+
+
+def test_rename_cannot_create_a_case_variant_duplicate(client):
+    create_project(client, "RENCASE-1")
+    other = create_project(client, "RENCASE-2")
+    resp = client.patch(f"/api/projects/{other}/rename", json={"new_name": "rencase-1"})
+    assert resp.status_code == 400
+    assert "already exists" in resp.get_json()["detail"]
+
+
+def test_rename_can_recase_its_own_name(client):
+    """The project_id exclusion keeps a pure re-casing of the record itself legal."""
+    pid = create_project(client, "RECASE-9")
+    resp = client.patch(f"/api/projects/{pid}/rename", json={"new_name": "recase-9"})
+    assert resp.status_code == 200
+    assert client.get(f"/api/projects/{pid}").get_json()["project_name"] == "recase-9"
+
+
+# --- Card 1D: coordinates are optional, but a supplied value must be numeric --
+
+@pytest.mark.parametrize("key,label", [("lead_x", "X"), ("lead_y", "Y")])
+@pytest.mark.parametrize("value", ["abc", "12.3.4", "1,5", "NaN", "inf", "-inf", "12 34"])
+def test_create_project_rejects_non_numeric_coordinates(client, key, label, value):
+    resp = client.post("/api/projects", json={"project_name": f"COORD-{label}-BAD", key: value})
+    assert resp.status_code == 400
+    assert resp.get_json()["detail"] == f"Enter a valid Lead {label} Coordinate."
+
+
+@pytest.mark.parametrize("lead_x,lead_y", [
+    ("100", "200"),
+    ("-3.5", "0"),                      # NO positive-only rule: signed is valid
+    ("612345.678", "2734567.891"),      # UTM-scale precision survives
+    ("1e3", "2E-2"),
+])
+def test_create_project_accepts_signed_and_precise_coordinates(client, lead_x, lead_y):
+    pid = create_project(client, f"COORD-OK-{lead_x}-{lead_y}", lead_x=lead_x, lead_y=lead_y)
+    row = client.get(f"/api/projects/{pid}").get_json()
+    # projects.lead_x/lead_y are REAL columns, so the value round-trips as a
+    # number: what is pinned is that the entered magnitude/precision survives
+    # (no truncation, no sign rule), not the literal string.
+    assert float(row["lead_x"]) == float(lead_x)
+    assert float(row["lead_y"]) == float(lead_y)
+
+
+def test_create_project_still_allows_missing_coordinates(client):
+    """The API contract stays coordinate-OPTIONAL (Excel importer, older callers);
+    Card 1D's requirement is a client-side rule on the Add New Lead control."""
+    pid = create_project(client, "COORD-NONE-1")
+    row = client.get(f"/api/projects/{pid}").get_json()
+    assert row["lead_x"] in (None, "")
+    assert row["lead_y"] in (None, "")
+
+
+def test_create_project_is_not_role_gated_unless_born_bp(client):
+    """Pinning the CURRENT permission model: plain creation carries no
+    require_role check (unlike approve / delete / priority, which are
+    supervisor-only) -- Card 1D preserves it exactly. A born-BP creation
+    (business_plan_enabled truthy) is the one exception: it is a promotion
+    done at creation time, so it gates on supervisor exactly like
+    PATCH /api/projects/<id>/flags does. Change this test only with a
+    deliberate decision.
+    """
+    resp = client.post("/api/projects", json={"project_name": "ROLE-UNGATED-1"})
+    assert resp.status_code == 201
+
+    resp = client.post("/api/login", json={"name": "Employee"})
+    assert resp.status_code == 200, resp.get_json()
+    resp = client.post("/api/projects", json={
+        "project_name": "ROLE-GATED-BP-1", "business_plan_enabled": True,
+        "business_plan_year": 2026,
+    })
+    assert resp.status_code == 403
 
 
 @pytest.mark.parametrize("payload", [
@@ -157,6 +290,33 @@ def test_list_projects_row_shape(client):
     rows = resp.get_json()
     assert len(rows) == 1
     assert set(rows[0].keys()) == set(main._PROJECT_LIST_FIELDS)
+    # Card 1B widened the projection deliberately: four DERIVED lead-card
+    # fields (no stored column, no extra query -- see
+    # workflow.projects._annotate_card_state). Pinned by name and by shape so a
+    # later card can't quietly drop one the board renders from.
+    row = rows[0]
+    assert row["display_stage"] == "Lead Assessment"      # the stored stage group itself
+    # Creation auto-assignment: the configured rule assignees (Tahira on
+    # Seismic Signature Validation, then the Saad/Salem Pre-Well picks) appear
+    # on a brand-new lead; the anonymous creator does not.
+    assert row["assignees"][0] == "Tahira"
+    assert set(row["assignees"][1:]) <= {"Saad", "Salem"}
+    assert row["lead_priority"] in ("High", "Medium", "Low")
+    assert len(row["tracked_items"]) == 12
+    # Card 2A widened each ITEM by one key: `steps`, the item's source step
+    # names, so the lead detail page's three-stage sidebar can open the real
+    # step behind an item without re-implementing the _TRACKED_ITEMS mapping.
+    assert all(set(item) == {"stage", "label", "status", "steps"} for item in row["tracked_items"])
+    assert all(isinstance(item["steps"], list) for item in row["tracked_items"])
+    # Card 1C widened it by one more DERIVED key: the record's field, feeding
+    # the lead board's Field filter (there is no stored field column).
+    assert row["field"] == "ROWSHAPE"
+    # Card 1E widened it by one more: the latest saved Mean Gas (BCF), derived
+    # from the assessment steps' dynamic fields. A brand-new lead has recorded
+    # none, so the payload carries an explicit null (the KPI tile reads 0) --
+    # the key is always PRESENT, which is what the tile can rely on.
+    assert "mean_gas_bcf" in row
+    assert row["mean_gas_bcf"] is None
     # The single-project route stays full-row (the editor/detail surfaces
     # read promotion flags, dates and folder path from it).
     full = client.get(f"/api/projects/{rows[0]['project_id']}").get_json()
@@ -180,6 +340,52 @@ def test_list_projects_pipeline_filter(client):
     assert [p["project_name"] for p in resp_bp.get_json()] == ["BP-A"]
     resp_prospect = client.get("/api/projects?pipeline_filter=prospect")
     assert [p["project_name"] for p in resp_prospect.get_json()] == ["PROSPECT-A"]
+
+
+def test_list_projects_field_is_the_folder_field_derivation(client):
+    """`field` must be the SAME split folders.py builds share paths from.
+
+    There is no stored field column: the field is the first segment of the
+    record name. Pinning it against folders.parse_field_and_well keeps the
+    board's Field filter and the folder links from drifting into two
+    conventions.
+    """
+    import folders
+
+    for name in ("GALV-2", "LUNA-10", "SOLO"):
+        create_project(client, name)
+    rows = {row["project_name"]: row["field"] for row in client.get("/api/projects").get_json()}
+    for name, field in rows.items():
+        assert field == folders.parse_field_and_well(name)[0]
+    assert rows == {"GALV-2": "GALV", "LUNA-10": "LUNA", "SOLO": "SOLO"}
+
+
+def test_list_projects_include_completed_is_opt_in(client):
+    """A matured lead leaves the board by default and returns only on request.
+
+    Card 1C's lead board offers an explicit Completed status filter and asks
+    for those leads with include_completed=1; every other caller (the BP board,
+    the portfolio, the tests) keeps the historical behaviour.
+    """
+    from test_portfolio import _approve_all_prospect_tasks
+
+    done_pid = create_project(client, "MATURED-1")
+    open_pid = create_project(client, "OPEN-1")
+    _approve_all_prospect_tasks(client, done_pid)
+
+    default_ids = [r["project_id"] for r in client.get("/api/projects?pipeline_filter=prospect").get_json()]
+    assert default_ids == [open_pid]
+
+    rows = client.get("/api/projects?pipeline_filter=prospect&include_completed=1").get_json()
+    by_id = {row["project_id"]: row for row in rows}
+    assert set(by_id) == {open_pid, done_pid}
+    assert by_id[done_pid]["overall_status"] == "Completed"
+    # It lands in the board's last column, with every tracked item done -- the
+    # board can render it without a special case.
+    assert by_id[done_pid]["display_stage"] == "Pre-Well Delivery"
+    # Since v5 every tracked item has a real step, so a fully approved lead
+    # reads ALL twelve done (pre-v5 two items were pinned at In Progress).
+    assert {item["status"] for item in by_id[done_pid]["tracked_items"]} == {"Completed"}
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +422,17 @@ def test_project_detail_shape(client):
     # project_overview table); derisking carries the computed Total CoS.
     assert isinstance(body["overview"], dict)
     assert "derisking" in body["overview"]
+    # Card 2A: the detail payload's project row is the FULL project dict, so it
+    # already carries the same derived card fields the board rows do
+    # (get_project -> _annotate_derived_state -> _annotate_card_state). The
+    # lead detail page's three-stage sidebar and its Lead Summary progress bar
+    # read tracked_items straight from here -- same derivation as the board, so
+    # the two surfaces can never disagree. Pinned so the detail payload is not
+    # narrowed to the board's projection without noticing.
+    assert len(body["project"]["tracked_items"]) == 12
+    assert all(set(item) == {"stage", "label", "status", "steps"}
+               for item in body["project"]["tracked_items"])
+    assert body["project"]["display_stage"] == "Lead Assessment"
 
 
 # ---------------------------------------------------------------------------
@@ -248,76 +465,6 @@ def test_rename_project_duplicate_name_rejected(client):
     assert resp.status_code == 400
     assert "already exists" in resp.get_json()["detail"]
     assert client.get(f"/api/projects/{pid}").get_json()["project_name"] == "RENAME-DUP-1"
-
-
-# ---------------------------------------------------------------------------
-# Well Creation step: well_name override (renames the project itself)
-# ---------------------------------------------------------------------------
-
-def _rename_event_count(client, project_id):
-    from conftest import raw_sqlite_connect
-    conn = raw_sqlite_connect(client.db_path)
-    try:
-        row = conn.execute(
-            "SELECT COUNT(*) AS n FROM task_history WHERE project_id = ? "
-            "AND action_type IN ('Lead Renamed', 'Well Renamed')", (project_id,)).fetchone()
-        return row["n"]
-    finally:
-        conn.close()
-
-
-def test_well_creation_well_name_renames_project(client):
-    """Saving well_name on the Well Creation step renames the project itself:
-    projects.project_name is the single source of truth (the form prefills
-    from it), so the value is never stored as a dynamic field."""
-    pid = create_project(client, "WCN-1")
-    task = get_task_by_name(client, pid, "Well Creation")
-    resp = client.patch(f"/api/tasks/{task['task_id']}",
-                        json={"fields": {"well_name": "WCN-1-REAL"}})
-    assert resp.status_code == 200
-    assert client.get(f"/api/projects/{pid}").get_json()["project_name"] == "WCN-1-REAL"
-    fields = client.get(f"/api/tasks/{task['task_id']}/dynamic-fields").get_json()
-    assert "well_name" not in fields
-    assert _rename_event_count(client, pid) == 1
-
-
-def test_well_creation_well_name_via_dynamic_fields_patch(client):
-    """The fields-only save path (PATCH /dynamic-fields) applies the same
-    rename override as the full component save."""
-    pid = create_project(client, "WCN-2")
-    task = get_task_by_name(client, pid, "Well Creation")
-    resp = client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
-                        json={"fields": {"well_name": "WCN-2-REAL"}})
-    assert resp.status_code == 200
-    assert client.get(f"/api/projects/{pid}").get_json()["project_name"] == "WCN-2-REAL"
-    fields = client.get(f"/api/tasks/{task['task_id']}/dynamic-fields").get_json()
-    assert "well_name" not in fields
-
-
-def test_well_creation_blank_or_same_well_name_is_noop(client):
-    """A blank well_name keeps the current name; re-saving the current name
-    logs no spurious 'Renamed' audit event."""
-    pid = create_project(client, "WCN-3")
-    task = get_task_by_name(client, pid, "Well Creation")
-    resp = client.patch(f"/api/tasks/{task['task_id']}",
-                        json={"fields": {"well_name": "   "}})
-    assert resp.status_code == 200
-    assert client.get(f"/api/projects/{pid}").get_json()["project_name"] == "WCN-3"
-    resp = client.patch(f"/api/tasks/{task['task_id']}",
-                        json={"fields": {"well_name": "WCN-3"}})
-    assert resp.status_code == 200
-    assert _rename_event_count(client, pid) == 0
-
-
-def test_well_creation_duplicate_well_name_rejected(client):
-    pid = create_project(client, "WCN-4")
-    create_project(client, "WCN-5")
-    task = get_task_by_name(client, pid, "Well Creation")
-    resp = client.patch(f"/api/tasks/{task['task_id']}",
-                        json={"fields": {"well_name": "WCN-5"}})
-    assert resp.status_code == 400
-    assert "already exists" in resp.get_json()["detail"]
-    assert client.get(f"/api/projects/{pid}").get_json()["project_name"] == "WCN-4"
 
 
 # ---------------------------------------------------------------------------
@@ -512,6 +659,78 @@ def test_set_task_priority_unknown_falls_back_to_medium(client):
     assert resp.status_code == 200
     got = client.get(f"/api/tasks/{task['task_id']}").get_json()
     assert got["priority"] == "Medium"
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/projects/<id>/priority -- the LEAD-LEVEL priority (v9)
+# ---------------------------------------------------------------------------
+
+def _priority_history(client, project_id):
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        return [tuple(row) for row in conn.execute("""
+            SELECT task_name, old_status, new_status, changed_by, comment
+            FROM task_history
+            WHERE project_id = ? AND action_type = 'Priority Changed'
+            ORDER BY history_id
+        """, (project_id,))]
+    finally:
+        conn.close()
+
+
+def test_set_project_priority_updates_stored_value_and_logs_one_event(client):
+    pid = create_project(client, "LEADPRIO-1")
+    resp = client.patch(f"/api/projects/{pid}/priority",
+                        json={"priority": "high", "changed_by": "Supervisor"})
+    assert resp.status_code == 200
+    # Input is normalized (title-cased) and echoed back.
+    assert resp.get_json() == {"ok": True, "priority": "High"}
+    # The detail payload's project dict carries the stored priority, and both
+    # legacy derived keys now read the SAME stored value.
+    project = client.get(f"/api/projects/{pid}/detail").get_json()["project"]
+    assert project["priority"] == "High"
+    assert project["lead_priority"] == "High"
+    assert project["current_task_priority"] == "High"
+    # Exactly ONE history event, anchored on the first active task (the same
+    # anchor "Lead Created" uses), with the old and new values.
+    assert _priority_history(client, pid) == [
+        ("Lead Assessment", "Low", "High", "Supervisor", "Priority set to High.")]
+
+
+def test_set_project_priority_rejects_invalid_values(client):
+    import db as dbmod
+    import workflow
+
+    pid = create_project(client, "LEADPRIO-2")
+    # Route: unlike the legacy per-task endpoint, an unknown value is REJECTED
+    # (400), never silently defaulted.
+    resp = client.patch(f"/api/projects/{pid}/priority", json={"priority": "Urgent"})
+    assert resp.status_code == 400
+    assert client.get(f"/api/projects/{pid}").get_json()["priority"] == "Low"
+    assert _priority_history(client, pid) == []
+    # Domain: the same rejection is a ValueError at the function boundary.
+    session = dbmod.get_session()
+    with pytest.raises(ValueError, match="Priority must be Low, Medium or High."):
+        workflow.set_project_priority(session, pid, "bogus")
+    with pytest.raises(ValueError, match="Priority must be Low, Medium or High."):
+        workflow.set_project_priority(session, pid, None)
+
+
+def test_set_project_priority_unchanged_value_writes_nothing(client):
+    pid = create_project(client, "LEADPRIO-3")
+    before = client.get(f"/api/projects/{pid}").get_json()["last_updated"]
+    resp = client.patch(f"/api/projects/{pid}/priority", json={"priority": "Low"})
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True, "priority": "Low"}
+    after = client.get(f"/api/projects/{pid}").get_json()
+    assert after["priority"] == "Low"
+    assert after["last_updated"] == before   # the no-op touched nothing
+    assert _priority_history(client, pid) == []
+
+
+def test_set_project_priority_missing_project_is_404(client):
+    resp = client.patch("/api/projects/424242/priority", json={"priority": "High"})
+    assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -811,21 +1030,23 @@ def test_export_includes_proposed_leads_with_latest_estimates(client):
     """The Portfolio Export sheet is one row per NON-ARCHIVED project: a
     still-maturing (Proposed) lead must appear, its estimate columns filled
     from the latest available (lead-phase) inputs; a just-created bare lead
-    must appear too. The Staking Options sheet keeps its mature-leads-only
-    membership, so neither lead may show there."""
+    must appear too. The Staking Options sheet now shares that same
+    non-archived membership (it filters reporting._portfolio_projects to
+    business_plan_enabled == 0, which is every lead once that reader was
+    widened), so both leads must show there too."""
     bare_pid = create_project(client, "EXPORT-LEAD-BARE")
     lead_pid = create_project(client, "EXPORT-LEAD-1")
-    lead_ra_task = get_task_by_name(client, lead_pid, "Lead Resource Assessment")
+    lead_ra_task = get_task_by_name(client, lead_pid, "Lead Assessment")
     resp = client.patch(f"/api/tasks/{lead_ra_task['task_id']}/dynamic-fields",
                          json={"fields": {"lead_piip_gas_p90": "3.1",
                                           "lead_piip_gas_mean": "7.5",
                                           "lead_piip_gas_p10": "15.2"}})
     assert resp.status_code == 200
-    area_task = get_task_by_name(client, lead_pid, "Reservoir Area Definition")
+    area_task = lead_ra_task
     resp = client.patch(f"/api/tasks/{area_task['task_id']}/dynamic-fields",
                          json={"fields": {"p90_area_km2": "2.4", "p10_area_km2": "9.8"}})
     assert resp.status_code == 200
-    thickness_task = get_task_by_name(client, lead_pid, "Thickness Estimation")
+    thickness_task = lead_ra_task
     resp = client.patch(f"/api/tasks/{thickness_task['task_id']}/dynamic-fields",
                          json={"fields": {"reservoir_thickness_ft": "88"}})
     assert resp.status_code == 200
@@ -856,10 +1077,17 @@ def test_export_includes_proposed_leads_with_latest_estimates(client):
 
     ws_staking = workbook["Staking Options"]
     staking_header = [cell.value for cell in ws_staking[4]]
-    staking_names = {row[staking_header.index("Lead Name")]
-                     for row in ws_staking.iter_rows(min_row=5, max_row=ws_staking.max_row, values_only=True)}
-    assert "EXPORT-LEAD-1" not in staking_names
-    assert "EXPORT-LEAD-BARE" not in staking_names
+    staking_by_name = {row[staking_header.index("Lead Name")]: row
+                       for row in ws_staking.iter_rows(min_row=5, max_row=ws_staking.max_row, values_only=True)}
+    assert "EXPORT-LEAD-1" in staking_by_name
+    assert "EXPORT-LEAD-BARE" in staking_by_name
+    # A membership assert alone would pass even if the row's content were
+    # wrong: the bare lead was created with no lead_x/lead_y and has never
+    # touched the Moving Tolerance step, so its X/Y must come back blank, not
+    # some stray/junk coordinate.
+    bare_staking_row = staking_by_name["EXPORT-LEAD-BARE"]
+    assert bare_staking_row[staking_header.index("X")] in ("", None)
+    assert bare_staking_row[staking_header.index("Y")] in ("", None)
 
 
 def test_export_status_reads_sarh_formation_fluid(client):

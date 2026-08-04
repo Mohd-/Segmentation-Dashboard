@@ -89,6 +89,80 @@ def resource_scenarios_path() -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Map data (the UTM Zone 37N viewer -- map_layers.py + the /api/map/* routes)
+# ---------------------------------------------------------------------------
+# Everything the map draws lives under ONE directory so a deployment points at
+# a share with a single env var (SEGMENT_TRACKER_MAP_DATA_DIR):
+#
+#   <map data dir>/layers/            the shapefile sets (.shp + .shx + .dbf)
+#   <map data dir>/borders_utm37.json the prebuilt country outlines
+#
+# Read lazily (like db_path()) so tests can re-point the map directory per test.
+# Coordinates are used AS-IS: every file here must already be in UTM37N metres.
+
+def map_data_dir() -> Path:
+    """Root of the map data tree, from SEGMENT_TRACKER_MAP_DATA_DIR."""
+    raw = os.environ.get("SEGMENT_TRACKER_MAP_DATA_DIR", str(BASE_DIR / "data" / "map"))
+    return Path(raw).expanduser().resolve()
+
+
+def map_layers_dir() -> Path:
+    """Directory holding the shapefile sets; one set = one selectable layer.
+
+    Deployment data (or generated samples from scripts/seed_map_layers.py), so
+    it is NOT versioned -- see .gitignore. A missing directory is not an error:
+    the layer list is simply empty.
+    """
+    return map_data_dir() / "layers"
+
+
+def map_borders_file() -> Path:
+    """The prebuilt Saudi/Iraq/Jordan/Kuwait outlines in UTM37N metres.
+
+    Unlike the layers directory this file IS versioned: it is the fixed
+    backdrop every other layer is read against.
+    """
+    return map_data_dir() / "borders_utm37.json"
+
+
+# ---------------------------------------------------------------------------
+# Grid surfaces (ZMAP+ ASCII grids, read by surfaces.py and sampled at a
+# project's coordinates by workflow/surfaces_fill.py)
+# ---------------------------------------------------------------------------
+# Surfaces live INSIDE the map data tree (they are map-plane data: every grid
+# must already be in UTM Zone 37N metres, like the shapefile layers), so a
+# deployment that re-points SEGMENT_TRACKER_MAP_DATA_DIR carries its surfaces
+# along for free. Deployment data (dropped on the share), so the directory is
+# NOT versioned -- see .gitignore, same block as data/map/layers/. A missing
+# directory or file is not an error: sampling simply returns no value.
+
+def map_surfaces_dir() -> Path:
+    """Directory holding the ZMAP+ grid surface files (``.dat``)."""
+    raw = os.environ.get("SEGMENT_TRACKER_SURFACES_DIR", str(map_data_dir() / "surfaces"))
+    return Path(raw).expanduser().resolve()
+
+
+# !!! PLACEHOLDER FILENAMES -- EDIT BEFORE DEPLOYING !!!
+# The two defaults below are stand-in names; swap them for the real delivered
+# grid filenames (or set the env override) when the surfaces land on the share.
+
+def tsq_surface_file() -> Path:
+    """The SARH-QWRH thickness ("TSQ") grid: sampled at a lead's coordinates to
+    auto-fill the Trap and Seal CoS step's SARH-QWRH thickness when empty."""
+    raw = os.environ.get("SEGMENT_TRACKER_TSQ_SURFACE_FILE",
+                         str(map_surfaces_dir() / "tsq_sarh_qwrh.dat"))
+    return Path(raw).expanduser().resolve()
+
+
+def ground_elevation_surface_file() -> Path:
+    """The digital-elevation grid: sampled at a project's coordinates to keep
+    the machine-derived ``projects.ground_elevation`` column current."""
+    raw = os.environ.get("SEGMENT_TRACKER_GROUND_ELEVATION_SURFACE_FILE",
+                         str(map_surfaces_dir() / "ground_elevation.dat"))
+    return Path(raw).expanduser().resolve()
+
+
+# ---------------------------------------------------------------------------
 # Security / auth
 # ---------------------------------------------------------------------------
 
@@ -129,7 +203,58 @@ SEED_USERS = [
     ("Supervisor", "supervisor"),
     ("Staff Member", "staff"),
     ("Employee", "employee"),
+    # Named step assignees for the creation auto-assignment rules below
+    # (STEP_ASSIGNMENT_RULES / PRE_WELL_ASSIGNEES). Assignment always requires
+    # an ACTIVE ``users`` row (workflow.lifecycle.assign_task), so the three
+    # ride the seed list -- as employees -- until the real roster replaces it.
+    ("Tahira", "employee"),
+    ("Saad", "employee"),
+    ("Salem", "employee"),
 ]
+
+
+# ---------------------------------------------------------------------------
+# Step auto-assignment at lead creation
+# ---------------------------------------------------------------------------
+# When a NEW prospect lead is created, every step of its operating pipeline
+# (the Lead Assessment / Risk Analysis / Pre-Well Delivery stage groups) is
+# assigned automatically -- which also moves it Not Assigned -> In Progress,
+# exactly like a manual assignment would. BP-pipeline records ("Well added to
+# BP") are never touched by these rules, and neither is promotion.
+#
+# Resolution order, per step (first match wins; see
+# workflow.projects._resolve_creation_assignee):
+#   1. an explicit per-step rule below naming "assignees";
+#   2. the Pre-Well Delivery stage rule (PRE_WELL_ASSIGNEES);
+#   3. a per-step "role" rule, resolved through STEP_ROLE_POOLS (skipped while
+#      that role's pool is empty);
+#   4. the lead's CREATOR (the signed-in name that created it). A creator that
+#      is blank, "System", or not an active user leaves the step Not Assigned.
+# When a rule lists several candidates, one is picked at RANDOM.
+#
+# This file is hand-edited by the owner: keep the shapes below exactly --
+# plain lists of names, and per-step dicts with either an "assignees" list or
+# a "role" string.
+
+# Role name -> list of member names. !!! PLACEHOLDER -- fill from Nawaf's
+# sheet when it arrives !!! While a pool is empty, any "role" rule pointing at
+# it simply does not fire (the step falls through to the creator default), so
+# populating this dict is the only edit needed to turn role rules on.
+# Example: {"petrophysicist": ["Name A", "Name B"],
+#           "structural geologist": ["Name C"]}
+STEP_ROLE_POOLS = {}
+
+# Every Pre-Well Delivery step is auto-assigned to a random pick from this
+# list at lead creation (unless an explicit per-step rule above it wins).
+PRE_WELL_ASSIGNEES = ["Saad", "Salem"]
+
+# Per-step overrides: step name -> {"assignees": [names...]} for a fixed
+# assignment, or {"role": "role name"} to draw from STEP_ROLE_POOLS.
+STEP_ASSIGNMENT_RULES = {
+    "Seismic Signature Validation": {"assignees": ["Tahira"]},
+    # Role-based example (inert until STEP_ROLE_POOLS carries the pool):
+    # "Reservoir CoS": {"role": "petrophysicist"},
+}
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +311,34 @@ AR_TO_SEISMIC_BLOCK = _invert_seismic_block_ar_map(SEISMIC_BLOCK_AR_MAP)
 
 
 # ---------------------------------------------------------------------------
+# TWT <-> thickness conversion (Card 2B, Section 1)
+# ---------------------------------------------------------------------------
+# The consolidated Lead Assessment page captures each of its two thickness rows
+# (Reservoir / Formation) as a two-way pair: a two-way time in milliseconds and
+# a thickness in feet. Where a calibrated conversion exists, entering ONE side
+# derives the other through the straight line
+#
+#     thickness_ft = m * twt_ms + b          (and its inverse)
+#
+# with the coefficients keyed by ROW:
+#
+#     TWT_THICKNESS_COEFFICIENTS = {
+#         "reservoir": {"m": 0.42, "b": -105.0},
+#         "formation": {"m": 0.51, "b": -160.0},
+#     }
+#
+# SHIPS EMPTY, deliberately. The owner has not supplied calibrated coefficients
+# yet, and a guessed line would silently manufacture thicknesses that feed the
+# lead's PIIP volumes. While a row's entry is ABSENT the UI degrades to two
+# plain manual inputs for that row -- no derivation, no one-source rule -- and
+# shows a quiet "TWT <-> thickness conversion pending configuration" note.
+# Populate a row here and the client picks the derivation up on its next
+# /api/meta read (GET /api/meta serves this map as twt_thickness_coefficients);
+# there is no code change and no migration.
+TWT_THICKNESS_COEFFICIENTS = {}
+
+
+# ---------------------------------------------------------------------------
 # Windows share roots and directory maps (consumed by folders.py)
 # ---------------------------------------------------------------------------
 # Shared/root directories only. Do NOT put a field name or well name here.
@@ -227,6 +380,12 @@ WELL_OVERVIEW_DIRECTORY_MAP = {
     "identification_workflow": "Leads/Identification",
     "risking_workflow": "Leads/Risking",
     "segmentation_workflow": "Leads/Segmentation",
+
+    # Card 2B. The consolidated Lead Assessment page's ONE folder row: where the
+    # lead's interpreted polygons and surfaces are filed. Lead-scoped (see
+    # LEAD_COMPONENT_SECTION_KEYS below), so it resolves under the Leads share
+    # -- \\...\Leads\<field>\<lead>\Polygons__Surfaces -- not the Wells one.
+    "polygons": "Polygons__Surfaces",
 }
 
 LEAD_WORKFLOW_SECTION_KEYS = {
@@ -235,19 +394,93 @@ LEAD_WORKFLOW_SECTION_KEYS = {
     "segmentation_workflow",
 }
 
+# Sections that resolve under the LEADS share (LEAD_COMPONENT_DIRECTORY_ROOT /
+# WINDOWS_LEAD_COMPONENT_SHARE_ROOT) rather than the Wells or Lead_Workflow
+# roots. A third root-selection bucket rather than a special case: a lead's own
+# deliverables sit beside its component files, which folders.py already files
+# under this share for every prospect-stage step.
+LEAD_COMPONENT_SECTION_KEYS = {
+    "polygons",
+}
+
 # Components where users typically need a physical/share location for supporting files.
 # The app automatically generates: Leads-or-Wells ROOT / Field / Well /
 # Component Files / Component Name
 COMPONENT_FILE_SECTIONS = {
-    # First eight Prospect Maturation components require generated file
-    # locations. (v18 removed the Presence CoS Evaluation step.)
-    "Reservoir Area Definition", "Thickness Estimation", "Lead Resource Assessment",
-    "Seismic Signature Validation", "Reservoir CoS", "Trap CoS", "Seal CoS",
+    # The Prospect Maturation components that require generated file locations.
+    # (v18 removed the Presence CoS Evaluation step.)
+    #
+    # BOTH the v5 names and the names they replaced stay in this set, for the
+    # same reason both quicklook spellings do below: a lead's share folder was
+    # created on disk under whatever the step was called at the time, so the
+    # folder card must keep resolving for leads foldered before v5. The v5
+    # renames ("Reservoir Area Definition" -> "Area Definition",
+    # "Lead Resource Assessment" -> "Resource Assessment",
+    # "Prospect Evaluation Presentation" -> "Segmentation Slides",
+    # "Pre-Drilling Resource Assessment" -> "Pre-Drilling GeoX Assessment") are
+    # in-place task_name rewrites, so the old entries are reachable only through
+    # that historical path -- and the retired "Trap CoS" / "Seal CoS" halves
+    # only through it too, now that "Trap and Seal CoS" is the live step.
+    # v7's live consolidated component, followed by its retired source folders
+    # so links created before the merge remain resolvable.
+    "Lead Assessment", "Area Definition", "Thickness Estimation", "Resource Assessment",
+    "Seismic Signature Validation", "Reservoir CoS", "Trap and Seal CoS",
+    "Segmentation Slides", "Pre-Drilling GeoX Assessment",
+    # Their pre-v5 spellings (legacy on-disk folders).
+    "Reservoir Area Definition", "Lead Resource Assessment", "Trap CoS", "Seal CoS",
     "Prospect Evaluation Presentation",
     # Additional components with supporting-file requirements.
+    # BOTH quicklook names stay in this set on purpose. The v3 migration
+    # renamed the step to "Quicklook Logs", but a well's share folder was
+    # created on disk under whatever name the step had at the time -- keeping
+    # the old name here is what makes the folder card keep resolving for wells
+    # foldered before the rename (and for any row the migration's
+    # both-names guard skipped).
     "Approval to Stake", "Well Proposal", "GHEER", "Quicklook Logs Interpretation", "Quicklook Logs", "SAD Model",
-    "Executive Summary", "URED Update", "Aramco Picks", "Aramco Approved Picks", "Flowback Results",
-    "SAD Update", "Executive Summary Final", "Final Log Analysis", "PVAD Structural MTR",
-    "Resource Assessment Update", "PDA", "Pre-Drilling Resource Assessment",
-    "Post-Drilling Resource Assessment",
+    "Executive Summary", "Flowback Results",
+    "SAD Update", "Final Log Analysis", "PVAD Structural MTR",
+    "PDA", "Pre-Drilling Resource Assessment",
+    # The four names the v4 merges retired stay in this set for the same reason
+    # the old quicklook name does: a well's share folder was created on disk
+    # under whatever the step was called at the time, so the folder card must
+    # keep resolving for wells foldered before the merge. Retired steps no
+    # longer render as components, so these entries are reachable only through
+    # that historical path.
+    "URED Update", "Executive Summary Final",
+    "Resource Assessment Update", "Post-Drilling Resource Assessment",
 }
+
+# Business Plan Execution configuration.  The approved year selector is fixed;
+# historical values outside it remain stored and are reported by the API as a
+# data-quality condition rather than being silently coerced.  The three
+# unresolved production values intentionally ship empty: deployment can supply
+# them without a code change, while the UI shows "Not configured" instead of a
+# fabricated destination or calculation input.
+BPE_YEAR_MIN = 1999
+BPE_YEAR_MAX = 2035
+
+
+def _env_list(name: str):
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return ()
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        value = [part.strip() for part in raw.split(",")]
+    if not isinstance(value, list):
+        return ()
+    return tuple(str(item).strip() for item in value if str(item).strip())
+
+
+# Ordered standard hole-section values for Gate Interval From/To.  No approved
+# list was supplied, so this is empty unless deployment configures it.
+BPE_HOLE_SECTIONS = _env_list("SEGMENT_TRACKER_BPE_HOLE_SECTIONS")
+
+
+def business_plan_vsp_url() -> str:
+    return os.environ.get("SEGMENT_TRACKER_BPE_VSP_URL", "").strip()
+
+
+def business_plan_structural_mtr_url() -> str:
+    return os.environ.get("SEGMENT_TRACKER_BPE_STRUCTURAL_MTR_URL", "").strip()

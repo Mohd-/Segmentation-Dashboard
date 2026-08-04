@@ -1,3 +1,18 @@
+> **HISTORICAL — SUPERSEDED. Do not use this document as a specification.**
+>
+> Every track in this plan (A through E) has shipped, and a large redesign has
+> landed on top of them. The file is kept only as a record of the original
+> handoff: its line references, file layouts and counts no longer match the
+> code, and its "Ground rules" section in particular is out of date — the
+> schema is NO LONGER pre-deployment. Databases hold real data and upgrade in
+> place through numbered migrations; the schema is at
+> `LATEST_SCHEMA_VERSION = 5`.
+>
+> For current facts read `README.md` (what the system is, version history),
+> `ARCHITECTURE.md` (module map, data model, derive-don't-store) and
+> `CONTRIBUTING.md` (the recipes, including the migration recipe). Nothing
+> below is maintained.
+
 # Implementation Plan: Seed Data, Login Page, Compact UI, Portfolio, Dark Theme
 
 Handoff plan for an implementing agent. Each track is independent; suggested
@@ -45,8 +60,8 @@ Design:
   ("Test Supervisor A", …). Do NOT touch `config.SEED_USERS` (that's the
   owner's placeholder to fill with real names).
 - Content mix (~20–25 projects, deterministic via `random.seed(42)`):
-  - Prospect leads spread across all four `PROSPECT_STAGES` — achieve stage
-    placement by assigning + approving the right prefix of the 31 steps
+  - Prospect leads spread across all three `PROSPECT_STAGES` — achieve stage
+    placement by assigning + approving the right prefix of the 27 steps
     (`PIPELINE_TEMPLATES` in `workflow/constants.py`); the board derives
     current stage from task rows.
   - A mix of task statuses (Not Assigned / In Progress / Ready / Approved)
@@ -69,7 +84,7 @@ Design:
 - Usage line in the module docstring:
   `SEGMENT_TRACKER_DB_PATH=/tmp/seed.db .venv/bin/python seed_dev.py`
 
-**Verify**: run it on a fresh scratch DB, start the app, eyeball all four
+**Verify**: run it on a fresh scratch DB, start the app, eyeball all six
 tabs; run the full pytest suite (must stay green — the script must not import
 side effects into the app).
 
@@ -296,10 +311,10 @@ Files: `static/css/base.css`, `static/css/components.css`,
   before D's portfolio work only if touching shared CSS; otherwise
   independent.
 - Bump `?v=` query strings in `index.html` for changed CSS/JS files.
-- Tests to run after each track: `.venv/bin/python -m pytest -q` (592-ish
-  backend tests; the frontend has none — manual verification per track's
-  Verify section, ideally with a browser screenshot pass at desktop and
-  ~640px widths).
+- Tests to run after each track: `.venv/bin/python -m pytest -q` (532 backend
+  tests) and `.venv/bin/python run_frontend_tests.py` (416 front-end harness
+  tests) — plus manual verification per track's Verify section, ideally with a
+  browser screenshot pass at desktop and ~640px widths.
 - `tests/test_api_contract.py` pins JSON shapes — Track B's `/api/me`
   addition is the only API-shape change; extend the test, don't weaken it.
 - Nothing here should touch `models.py` — if an implementation seems to need

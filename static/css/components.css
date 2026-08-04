@@ -23,14 +23,264 @@
 .status.approved { background: var(--success-100); color: var(--success-700); border-color: var(--success-500); }
 .status.not-assigned { background: var(--gray-100); color: var(--text-faint); }
 
+/* Priority reads as a HEAT SCALE — gray, orange, red — the same vocabulary the
+   lead board's card borders use (.lead-card-low/-medium/-high). Deliberately
+   NOT the blue "info" trio: blue is the app's neutral/informational hue and
+   said nothing about urgency, so a Medium chip and an In Progress status chip
+   were indistinguishable. */
 .priority-low { color: var(--text-faint); }
-.priority-medium { background: var(--info-100); color: var(--info-700); border-color: var(--info-500); }
-.priority-high { background: var(--warning-100); color: var(--warning-700); border-color: var(--warning-500); }
+.priority-medium { background: var(--warning-100); color: var(--warning-700); border-color: var(--warning-500); }
+.priority-high { background: var(--danger-100); color: var(--danger-700); border-color: var(--danger-500); }
 
-/* Slim New Lead disclosure: just the toggle button when collapsed; the form
-   reveals below it on open. */
-.new-lead-panel { padding: var(--space-2) var(--space-3); }
-.new-lead-panel #new-lead-body { margin-top: var(--space-3); }
+/* =========================================================================
+   Add New Lead (Card 1D)
+
+   ONE control with two states, IN PLACE — no modal, no disclosure chrome:
+     collapsed  the navy "+ Add New Lead" button
+     expanded   exactly three inline fields (Lead Name / X / Y) + the hint
+   Behavior lives in views/lead-create.js; this file only dresses the states.
+
+   Height discipline: .new-lead-controls fixes the row height, so swapping the
+   button for the fields never moves the board below. Everything that hangs off
+   the row — the "Press Enter to create" hint (right-aligned) and the per-field
+   error messages (left-aligned under their own inputs) — is absolutely
+   positioned, so none of it can push the row either; the BAND (.lead-controls,
+   which hosts this control) adds bottom padding via .has-error so the
+   messages never spill onto the board.
+
+   The control occupies the band's FIRST THIRD (the cell over the Lead
+   Assessment column) in BOTH states: collapsed it is the full-width navy
+   button, expanded the three inputs share exactly the button's cell — the
+   filter and KPI thirds beside it never move. .is-expanded (still set by
+   views/lead-create.js, and pinned by the frontend tests) is a state hook
+   only; it carries no geometry of its own.
+   ========================================================================= */
+.new-lead-controls { display: flex; align-items: center; min-height: 40px; min-width: 0; }
+
+.new-lead-button {
+  /* Fills the band's first third: the primary action, and the only filled
+     navy control on the page, sized by its cell — never by its label. */
+  width: 100%;
+  padding: 9px var(--space-5);
+  background: var(--asas-navy-fill);
+  border: 1px solid var(--asas-navy-fill);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  color: var(--asas-navy-ink);
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+.new-lead-button:hover { background: var(--asas-navy-fill-hover); border-color: var(--asas-navy-fill-hover); }
+
+/* position: relative anchors the hint, which hangs under the row's right end
+   (the band's bottom margin is its room). flex: 1 1 0 fills the cell. */
+.new-lead-fields {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: nowrap;
+  flex: 1 1 0;
+  min-width: 0;
+}
+/* The anchor for the absolutely positioned error message. The three fields
+   split the cell evenly — exactly the width the button vacated. */
+.nl-field { position: relative; display: flex; flex: 1 1 0; min-width: 0; }
+.nl-input {
+  width: 100%;
+  min-width: 0;
+  padding: 9px var(--space-3);
+  font-size: var(--text-base);
+}
+.nl-input[aria-invalid="true"] {
+  border-color: var(--danger-500);
+  background: var(--danger-100);
+  color: var(--danger-700);
+}
+/* Constrained to its own field's width and allowed to wrap (a third-of-a-third
+   field is too narrow for the longest message on one line), so two messages
+   showing at once can never overlap each other. */
+.nl-error {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  color: var(--danger-700);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1.3;
+}
+.nl-error[hidden] { display: none; }
+/* Deliberately quiet: it explains the interaction, it is not a control. Hangs
+   under the row's RIGHT end — the errors hang left, under their own inputs —
+   and yields entirely while any error is up (the errors say what to do). */
+.nl-hint {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  margin: 0;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+.lead-controls.has-error .nl-hint { visibility: hidden; }
+/* In-flight: the POST is running, Enter is locked out. */
+.new-lead-fields.is-busy .nl-input { opacity: .6; }
+.new-lead-fields.is-busy .nl-hint { color: var(--text-muted); font-weight: 700; }
+
+@media (max-width: 720px) {
+  /* The band is stacked here (see the responsive block at the end of this
+     file), so the fields own a full row — but three abreast would still be
+     cramped, so they wrap at a sane floor instead of shrinking forever. */
+  .new-lead-fields { flex-wrap: wrap; }
+  .nl-field { flex: 1 1 140px; }
+}
+
+/* =========================================================================
+   Header dropdowns (Card 1F) — the notification bell and the gear menu
+
+   Both are position: fixed and placed against the VIEWPORT by
+   views/header-menus.js (placeMenu), right-aligned under their trigger: the
+   header is a sticky bar and an absolutely positioned menu would be clipped by
+   it. z-index sits above the board's filter menus (100) and the sticky header
+   (20), so a header menu is always the topmost surface. Because they are out
+   of flow and hidden with [hidden], opening either shifts nothing.
+   ========================================================================= */
+.header-menu {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-1);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  text-align: left;
+}
+.header-menu[hidden] { display: none; }
+
+/* --- the gear menu: three actions, icon + label ------------------------- */
+.gear-menu { min-width: 200px; }
+.hm-action {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: 8px var(--space-3);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  color: var(--ink-800);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.hm-action:hover { background: var(--surface-sunken); color: var(--ink-800); }
+.hm-action[disabled] { opacity: .55; cursor: default; }
+.hm-action-icon { display: inline-flex; align-items: center; flex: none; color: var(--text-muted); }
+.hm-action-icon .lucide { width: 18px; height: 18px; }
+/* The Excel glyph is the one tinted item: green is the spreadsheet's own
+   signal, and it rides the success token so it inverts with the theme. The
+   LABEL still carries the meaning — the color is redundant. */
+.hm-icon-excel { color: var(--success-600); }
+.hm-action-label { white-space: nowrap; }
+
+/* --- the bell menu: heading + list -------------------------------------- */
+/* A fixed width (not max-width): a long project or component name WRAPS inside
+   it. Nothing in this menu may scroll sideways. */
+.notify-menu { width: 360px; max-width: calc(100vw - 16px); }
+.hm-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3) var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+.hm-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: 700;
+  letter-spacing: .02em;
+  color: var(--ink-900);
+}
+.hm-mark-all {
+  padding: 2px 6px;
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: var(--brand-700);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.hm-mark-all:hover { text-decoration: underline; background: none; }
+.hm-mark-all[disabled] { color: var(--text-faint); cursor: default; text-decoration: none; }
+
+.hm-list { overflow-y: auto; overflow-x: hidden; }
+.hm-note {
+  margin: 0;
+  padding: var(--space-4) var(--space-3);
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+.hm-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  color: var(--ink-800);
+  font-family: var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+.hm-item + .hm-item { border-top-color: var(--border); }
+.hm-item:hover { background: var(--surface-sunken); color: var(--ink-800); }
+.hm-item-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 auto; }
+/* Long names wrap rather than overflow — the menu width is the hard limit. */
+.hm-item-title, .hm-item-target, .hm-item-message, .hm-item-time {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.hm-item-title { font-size: var(--text-sm); font-weight: 600; color: var(--ink-900); }
+.hm-item-target { font-size: var(--text-sm); font-weight: 600; color: var(--text-muted); }
+.hm-item-message { font-size: var(--text-sm); color: var(--text-muted); }
+.hm-item-time { font-size: var(--text-xs); color: var(--text-faint); }
+/* Unread reads as WEIGHT + a dot with its own position and shape, so it never
+   depends on color alone. A read row keeps the dot's space (no reflow when an
+   item is marked) but draws nothing in it. */
+.hm-item-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: var(--radius-pill);
+  background: transparent;
+}
+.hm-item.is-unread .hm-item-dot { background: var(--danger-500); }
+.hm-item.is-unread .hm-item-title { font-weight: 700; }
+.hm-item.is-unread .hm-item-target { color: var(--ink-800); }
+.hm-item.is-unread .hm-item-message { color: var(--text); }
 
 /* =========================================================================
    Pipeline board (kanban-style columns for prospect + BP tabs)
@@ -40,6 +290,228 @@
    left-aligned instead of a fixed 4-column grid. */
 .pipeline-toolbar { display: flex; flex-wrap: wrap; justify-content: flex-start; }
 .pipeline-toolbar select { flex: 0 1 220px; min-width: 150px; }
+
+/* =========================================================================
+   Lead filter row (Card 1C) — Assignee / Field / Status
+
+   Three dropdown controls plus Clear, above the lead board. The menus
+   are position: fixed and placed against the viewport by views/lead-filters.js
+   (placeMenu): .pipeline-panel and .lead-column both clip their overflow, so
+   an absolutely positioned menu would be cut off by the stage container.
+   ========================================================================= */
+/* The ONE controls band (owner-approved consolidation), divided in THIRDS
+   that line up with the three board columns underneath: the Add New Lead
+   control over Lead Assessment, the filter row over Risk Analysis, the KPI
+   tiles over Pre-Well Delivery. The column gap and the 2px side padding match
+   .pipeline-board exactly, so each third's edges sit on its column's edges.
+   One bottom margin — neither child carries one (they are children, not the
+   band). Below ~1100px the board scrolls sideways and third-to-column
+   alignment stops existing, so the band stacks instead — see the responsive
+   block near the end of this file. */
+.lead-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: center;
+  gap: var(--space-3) var(--space-4);
+  padding: 0 2px;
+  margin-bottom: var(--space-4);
+}
+/* Bottom room for the absolutely positioned Add-New-Lead inline errors, which
+   may wrap to two lines at cell-third field widths, so no message ever spills
+   onto the board below. */
+.lead-controls.has-error { padding-bottom: 32px; }
+/* The middle third. A grid, not a wrapping flex row: three equal trigger
+   tracks plus an auto Clear track, so the row is STRUCTURALLY one line at
+   every desktop width — nothing can wrap to a second line, the triggers can
+   only get narrower. The resting captions (Assignee / Field / Status) fit
+   unellipsized down to 1280; a long SELECTED value ellipsizes inside its
+   trigger (.lf-value) instead of growing the row. */
+.lead-filter-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  align-items: center;
+  min-width: 0;
+  gap: var(--space-2);
+}
+/* The Business Plan band's own filter row and KPI row are the same components
+   with different counts; their rules live with the rest of that tab's glue, at
+   the end of this file (they must come AFTER these base rules to win). */
+.lead-filter { position: relative; min-width: 0; }
+.lf-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  color: var(--ink-800);
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+.lf-trigger:hover { background: var(--surface); border-color: var(--brand-500); color: var(--ink-800); }
+/* A constrained filter reads as constrained even when the row is glanced at:
+   brand border + tint, not the label text alone. */
+.lf-trigger.is-active { border-color: var(--brand-600); background: var(--brand-050); color: var(--brand-700); }
+.lf-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lf-caret { display: inline-flex; align-items: center; color: var(--text-muted); flex: none; }
+.lf-caret .lucide { width: 14px; height: 14px; }
+
+.lf-menu {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  min-width: 168px;
+  max-width: 280px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: var(--space-1);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+.lf-menu[hidden] { display: none; }
+.lf-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 6px var(--space-2);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  color: var(--ink-800);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.lf-option:hover { background: var(--surface-sunken); color: var(--ink-800); }
+.lf-option.is-chosen { background: var(--brand-050); border-color: var(--brand-500); color: var(--brand-700); font-weight: 700; }
+/* "Unassigned" is a category of its own, not a person — it reads heavier and
+   carries no person glyph. */
+.lf-option-strong { font-weight: 700; }
+/* The selection mark: a box for the multi-select (Assignee), a dot for the
+   single-selects. Shape + a tick/fill, never color alone. */
+.lf-mark {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+}
+.lf-mark-box { position: relative; border-radius: 2px; }
+.lf-mark-dot { border-radius: 50%; }
+.lf-option.is-chosen .lf-mark { border-color: var(--brand-600); background: var(--brand-600); }
+/* The tick: two borders of an empty box, rotated — no icon file, no font. */
+.lf-option.is-chosen .lf-mark-box::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 3px;
+  height: 7px;
+  border: solid var(--white);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.lf-option.is-chosen .lf-mark-dot { box-shadow: inset 0 0 0 2px var(--surface); }
+.lf-option-icon { display: inline-flex; align-items: center; flex: none; color: var(--text-muted); }
+.lf-option-icon .lucide { width: 15px; height: 15px; }
+/* Status glyphs echo the card dots exactly (components.css .lead-dot-*), so
+   the menu and the cards speak one vocabulary. */
+.lf-icon-completed { color: var(--success-600); }
+.lf-icon-pending { color: var(--warning-500); }
+.lf-icon-in-progress { color: var(--text-faint); }
+.lf-option-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.lf-clear {
+  padding: 8px var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+.lf-clear:disabled { opacity: .45; cursor: default; }
+
+/* =========================================================================
+   Lead KPI tiles (Card 1E) — completion donut | Total Active Leads |
+   Total Mean OGIP, filling the controls band's LAST third (the band's grid
+   gutter divides them from the filter zone — no border needed for that).
+
+   SEPARATOR: exactly one, declared on exactly ONE element — .kpi-tile-ogip's
+   left border divides the two number tiles. Nothing declares a right border,
+   so the boundary can never render as a doubled 2px rule.
+
+   The donut is a radial METER (one value against a fixed limit): one brand hue
+   on a recessive neutral track, no legend, no hover layer. Its geometry lives
+   in views/lead-kpis.js (r = 15.9155 ⇒ circumference 100, so the dash array is
+   the percentage itself).
+   ========================================================================= */
+.lead-kpi-row {
+  display: flex;
+  align-items: center;
+  /* The three groups spread across the third, per the mockup — not packed. */
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.kpi-donut { position: relative; flex: none; width: 56px; height: 56px; }
+.kpi-donut-svg { display: block; width: 100%; height: 100%; }
+.kpi-donut-track { fill: none; stroke: var(--gray-200); stroke-width: 5; }
+.kpi-donut-arc {
+  fill: none;
+  stroke: var(--asas-navy);
+  stroke-width: 5;
+  /* Rounded data-ends. The 0% case renders NO arc element at all (see
+     donutMarkup) — a zero-length dash with this cap would draw a dot. */
+  stroke-linecap: round;
+}
+/* Centred over the ring rather than an SVG <text>, so the numeral inherits the
+   real display-font token and the same optical centring as the other tiles. */
+.kpi-donut-value {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: var(--ink-800);
+}
+.kpi-tile { display: flex; flex: none; align-items: center; gap: var(--space-3); }
+.kpi-tile-ogip { padding-left: var(--space-4); border-left: 1px solid var(--border); }
+.kpi-tile-text { display: flex; flex-direction: column; align-items: center; line-height: 1.15; }
+.kpi-value {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: 700;
+  color: var(--ink-800);
+  white-space: nowrap;
+}
+.kpi-label { font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; }
+/* The optional third line of a tile (kpiTileHtml's `support`, today the BP
+   board's "Actual/Simulated"): it names what the two numbers ARE, so it reads
+   quieter than the label. It lives here, with the tile anatomy the shared
+   renderer emits, rather than with either board. */
+.kpi-support { font-size: var(--text-xs); color: var(--text-faint); white-space: nowrap; }
+/* The one warm note on the board. Decorative: the number and its label carry
+   the meaning, so the hue is never the only thing saying "OGIP". */
+.kpi-icon { display: inline-flex; flex: none; align-items: center; color: var(--warning-500); }
+.kpi-icon .lucide { width: 30px; height: 30px; }
+
 .pipeline-board {
   display: grid;
   grid-auto-flow: column;
@@ -123,6 +595,129 @@
 .pipeline-card-assignee { font-size: var(--text-sm); color: var(--text-muted); border-top: 1px solid var(--gray-100); padding-top: var(--space-2); }
 .pipeline-empty { padding: var(--space-5) var(--space-3); color: var(--text-faint); font-size: var(--text-sm); text-align: center; }
 
+/* -------------------------------------------------------------------------
+   Lead board (Card 1B) — the PROSPECT board only; the BP board keeps every
+   .pipeline-column / .pipeline-card rule above.
+
+   Anatomy: three equal columns on a sunken tray, each with a fixed-height
+   header (glyph + title + live count) over a stack of lead cards. A card is a
+   two-package row — identity (name + assignees) on the left, the column's four
+   tracked items on the right — vertically centered, text left-aligned, and the
+   SAME height whatever the assignee count, because the four item rows always
+   set the floor. The border color is the lead's PRIORITY, never its status.
+   ------------------------------------------------------------------------- */
+.pipeline-board.lead-board {
+  /* Equal widths, equal heights (stretch), and no inner vertical scroll: the
+     columns grow and the page scrolls. */
+  grid-auto-columns: minmax(330px, 1fr);
+  align-items: stretch;
+}
+.lead-column {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  min-height: 320px;
+  overflow: hidden;
+}
+.lead-column > header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  /* Fixed height (not padding-derived) so the three headers line up exactly
+     even when one title wraps differently. */
+  height: 56px;
+  flex: 0 0 auto;
+  padding: 0 var(--space-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.lead-column-icon { display: inline-flex; color: var(--asas-navy); }
+.lead-column-icon .lucide { width: 24px; height: 24px; }
+.lead-column > header h3 {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: 700;
+  color: var(--asas-navy);
+  letter-spacing: .01em;
+}
+.lead-column-count {
+  flex: 0 0 auto;
+  min-width: 28px;
+  height: 26px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--asas-navy);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--text-base);
+}
+.lead-cards { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3); }
+
+.lead-card {
+  display: flex;
+  align-items: center;          /* the content package sits centered ... */
+  justify-content: space-between;
+  gap: var(--space-4);
+  width: 100%;
+  /* Identical geometry on every card: same radius, same padding, same floor.
+     The floor is a guard only — four item rows already set the real height. */
+  min-height: 92px;
+  padding: var(--space-3) var(--space-4);
+  text-align: left;             /* ... but every string reads left-aligned */
+  background: var(--surface);
+  border: 1.5px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--transition), background var(--transition);
+}
+.lead-card:hover { box-shadow: var(--shadow-md); background: var(--surface); }
+/* Priority, NOT workflow status, drives the border. */
+.lead-card-high { border-color: var(--danger-500); }
+.lead-card-medium { border-color: var(--warning-500); }
+.lead-card-low { border-color: var(--border-strong); }
+
+.lead-card-identity { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.lead-card-name {
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: 700;
+  color: var(--asas-navy);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.lead-card-people { display: flex; flex-direction: column; gap: 3px; }
+.lead-person { display: flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--text-muted); }
+.lead-person-icon { display: inline-flex; color: var(--asas-blue); }
+.lead-person-icon .lucide { width: 13px; height: 13px; }
+.lead-person-name { overflow-wrap: anywhere; }
+.lead-person-empty { color: var(--text-faint); font-style: italic; }
+
+/* The four tracked items never wrap or truncate — long labels such as
+   "Segmentation Slides" stay fully visible, so this package keeps its width
+   and the identity package takes the remainder. */
+.lead-card-items { display: flex; flex-direction: column; gap: 3px; flex: 0 0 auto; }
+.lead-item { display: flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--text-muted); white-space: nowrap; }
+.lead-dot { display: inline-flex; flex: 0 0 auto; }
+/* One size for all three states; the glyph SHAPE carries the meaning and the
+   color only reinforces it. */
+.lead-dot .lucide { width: 14px; height: 14px; }
+.lead-dot-completed { color: var(--success-500); }
+/* Filled disc + knocked-out check, the mockup's "done" mark. The CSS beats the
+   inherited fill="none" presentation attribute on the <svg>. */
+.lead-dot-completed circle { fill: var(--success-500); }
+.lead-dot-completed path { stroke: var(--white); }
+.lead-dot-pending { color: var(--warning-500); }
+.lead-dot-in-progress { color: var(--border-strong); }
+
 /* =========================================================================
    Detail shell — component rail, editor, summary panel
    ========================================================================= */
@@ -131,18 +726,18 @@
   grid-template-columns: 280px minmax(420px, 1fr) minmax(360px, 400px);
   gap: var(--space-4);
   align-items: start;
-  /* scrollIntoView target: land below the sticky header (56px) + tab bar
-     (44px) with breathing room instead of overshooting behind them. */
-  scroll-margin-top: 112px;
+  /* scrollIntoView target: land below the sticky header (64px) + tab bar
+     (64px) with breathing room instead of overshooting behind them. */
+  scroll-margin-top: 140px;
 }
 .component-rail, .component-editor, .summary-panel { min-width: 0; }
 
-/* The rail and summary panel pin below the sticky header stack (56 + 44 +
+/* The rail and summary panel pin below the sticky header stack (64 + 64 +
    12px gap) and scroll internally, so long step lists fit any viewport. */
 .component-rail {
   position: sticky;
-  top: 112px;
-  max-height: calc(100vh - 124px);
+  top: 140px;
+  max-height: calc(100vh - 152px);
   display: flex;
   flex-direction: column;
 }
@@ -152,6 +747,15 @@
 .rail-nav button { flex: 1 1 120px; padding: 6px 8px; font-size: var(--text-xs); }
 .rail-switch-pipeline { border-color: var(--brand-500); color: var(--brand-700); }
 .rail-head h3 { margin: var(--space-3) 0 4px; font-size: var(--text-base); color: var(--ink-800); }
+/* Record name + the lead-level priority chip on one line. The chip is small
+   and the rail column is narrow (272px on lead pages), so the row may wrap
+   the chip under a long name instead of squeezing either — holds at 1366px
+   and 1600px alike. */
+.detail-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+.detail-title-row h3 { min-width: 0; overflow-wrap: anywhere; }
+.lead-priority-chip { box-shadow: none; cursor: pointer; flex: 0 0 auto; }
+/* Non-supervisors see the value, but it is not a toggle for them. */
+.lead-priority-chip-static { cursor: default; }
 .rail-head p { color: var(--text-faint); font-size: var(--text-sm); }
 .rail-head .detail-view-note {
   margin-top: var(--space-2);
@@ -175,6 +779,82 @@
   text-underline-offset: 2px;
 }
 .rail-all-fields:hover { background: none; color: var(--brand-600); }
+
+/* =========================================================================
+   Card 2A — the shared LEAD detail shell
+
+   Applied by views/detail.js as .detail-shell-lead, so a BP well page and any
+   reference view keep the original shell verbatim. Three changes only: a
+   squeezed summary column, one outlined back control, and the three-stage
+   sidebar.
+   ========================================================================= */
+/* The Lead Summary is a narrow reference rail (~⅙ of the content width per
+   the 2B mockup — its widest section, the four CoS columns, still fits at
+   270px); the freed width goes to the centre workspace, whose side-by-side
+   sections need it more. */
+.detail-shell-lead { grid-template-columns: 272px minmax(360px, 1fr) minmax(270px, 290px); }
+
+/* The single back control: outlined, up-arrow, top-left of every lead page. */
+.back-to-board {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 8px var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: none;
+  color: var(--ink-800);
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+.back-to-board:hover { background: var(--surface-sunken); border-color: var(--asas-navy); color: var(--asas-navy); }
+.back-to-board .lucide { width: 18px; height: 18px; flex: 0 0 auto; }
+/* The lead name is the page's title: larger and bolder than the well shell's,
+   and the head loses the subtitle/link rows beneath it. */
+.detail-shell-lead .rail-head { border-bottom: 0; padding-bottom: var(--space-3); }
+.detail-shell-lead .rail-head h3 {
+  margin: var(--space-4) 0 var(--space-3);
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: 800;
+  letter-spacing: .01em;
+  color: var(--ink-900);
+}
+
+/* The three-stage sidebar. Each stage is a boxed row (not the well rail's bare
+   header): the ACTIVE one carries the dark ASAS navy accent — a left rule plus
+   a navy label — so the current stage reads at a glance. */
+.rail-stage-lead { border: 1px solid transparent; border-radius: var(--radius-md); margin-bottom: var(--space-1); }
+.rail-stage-lead .rail-stage-head {
+  border-top: 0;
+  padding: var(--space-3) var(--space-3);
+  font-size: var(--text-sm);
+  letter-spacing: .05em;
+  color: var(--text-muted);
+  border-left: 3px solid transparent;
+  border-radius: var(--radius-md);
+}
+.rail-stage-lead .rail-stage-head:hover { color: var(--asas-navy); background: var(--surface-sunken); }
+.rail-stage-lead.is-active { border-color: var(--border); background: var(--surface-sunken); }
+.rail-stage-lead.is-active .rail-stage-head { color: var(--asas-navy); border-left-color: var(--asas-navy); }
+.rail-stage-lead.is-active .stage-icon,
+.rail-stage-lead.is-active .rail-stage-count { color: var(--asas-navy); }
+.rail-stage-lead .stage-icon { display: inline-flex; }
+.rail-stage-lead .stage-icon .lucide { width: 18px; height: 18px; }
+.rail-stage-lead .rail-stage-count { font-variant-numeric: tabular-nums; }
+.rail-stage-lead .rail-stage-body { padding: 0 var(--space-2) var(--space-2); }
+/* A tracked item with no stored step behind it yet: present, ordered, and
+   plainly not actionable (the title attribute says why). */
+.component-item-future {
+  opacity: .55;
+  cursor: default;
+  background: var(--surface-sunken);
+  border-style: dashed;
+  border-left-color: var(--border);
+}
+.component-item-future .component-num { background: transparent; color: var(--text-faint); }
 
 .component-list { display: flex; flex-direction: column; gap: var(--space-1); overflow-y: auto; flex: 1; min-height: 0; padding-right: 2px; }
 
@@ -275,20 +955,31 @@
   font-size: var(--text-sm);
 }
 .editor-head h2 { font-family: var(--font-display); letter-spacing: .02em; font-size: var(--text-lg); color: var(--ink-900); }
-/* Right-aligned control cluster: the assignee select leads, then the priority
-   chip and status chip, all sitting at the end of the editor head. margin-left:
-   auto on the first item (assignee) pushes the whole group right so it reads
-   assignee | priority | status. */
-.editor-priority-chip { box-shadow: none; cursor: pointer; }
-/* Non-supervisors see the value, but it is not a toggle for them. */
-.editor-priority-chip-static { cursor: default; }
-/* The supervisor priority toggle is the only .priority chip that is a <button>
-   (plain-span .priority chips never fire the button hover). Re-assert each
-   variant's resting tint on hover so it doesn't fill teal from button:hover.
-   Scoped to button.priority so the non-button chips elsewhere are untouched. */
+/* Right-aligned control cluster: the assignee select leads, then the status
+   chip, sitting at the end of the editor head. margin-left: auto on the first
+   item (assignee) pushes the group right so it reads assignee | status. (The
+   per-step priority chip is gone — priority is lead-level now, one chip beside
+   the record name in the rail head; see .lead-priority-chip below.) */
+/* The supervisor priority toggle (#lead-priority-chip) is the only .priority
+   chip that is a <button> (plain-span .priority chips never fire the button
+   hover). Re-assert each variant's resting tint on hover so it doesn't fill
+   teal from button:hover. Scoped to button.priority so the non-button chips
+   elsewhere are untouched. */
 button.priority:hover { background: var(--gray-050); }
-button.priority.priority-medium:hover { background: var(--info-100); }
-button.priority.priority-high:hover { background: var(--warning-100); }
+button.priority.priority-medium:hover { background: var(--warning-100); }
+button.priority.priority-high:hover { background: var(--danger-100); }
+/* Item A — the auto-save state indicator (#save-state), sitting after the
+   step title in the editor head. Muted by design: it is ambient status, not a
+   toast. Every color is a token, so both themes come for free (base.css
+   redefines the tokens under :root[data-theme="dark"]). Empty on BP pages
+   (which keep their Save button) and while idle. Error text may be a whole
+   validation message, so it alone is allowed to wrap, capped so it can never
+   crowd the assignee/status cluster out of the row. */
+.save-state { font-size: var(--text-xs); font-weight: 600; color: var(--text-faint); white-space: nowrap; }
+.save-state.is-saving { color: var(--text-muted); }
+.save-state.is-saved { color: var(--success-700); }
+.save-state.is-error { color: var(--danger-600); white-space: normal; max-width: 42ch; }
+
 .editor-assignee {
   margin-left: auto;
   width: auto;
@@ -323,8 +1014,13 @@ button.priority.priority-high:hover { background: var(--warning-100); }
 }
 .check-label input, .radio-option input { width: auto; }
 /* Bottom-align the checkbox card with neighboring inputs so rows mixing
-   checkboxes with label+input columns keep a straight baseline. */
+   checkboxes with label+input columns keep a straight baseline (reachable
+   outside the dynamic grid, e.g. the Lead Assessment card 3 row). */
 .check-label { align-self: end; min-height: 42px; }
+/* In the dynamic form grid a checkbox is a STATEMENT, not a value column: it
+   claims the full row (the .wide-field idiom), so its label never truncates
+   against a 1-of-3 track and consecutive checkboxes read as a checklist. */
+.dynamic-fields > .check-label { grid-column: 1 / -1; }
 
 /* Horizontal radio group (e.g. BP Execution Gate classification): a quiet
    label over a row of option pills that wraps on narrow screens. */
@@ -394,8 +1090,14 @@ button.priority.priority-high:hover { background: var(--warning-100); }
 .summary-list b { color: var(--ink-900); text-align: right; }
 
 .action-row { display: flex; gap: var(--space-3); justify-content: space-between; }
-.action-row button:last-child { margin-left: auto; background: var(--success-500); }
-.action-row button:last-child:hover { background: var(--success-600); }
+/* Card 2A: the detailed pages' primary SAVE action is dark ASAS navy, not
+   green. Green is this app's "approved / complete" signal (status chips, the
+   Approve transition) and a save is neither — it is the page's own primary
+   action, so it wears the brand's primary fill. Shared class: the lead pages
+   and the BP well page carry the same button, deliberately, so the two shells
+   keep one primary-action color. */
+.action-row button:last-child { margin-left: auto; background: var(--asas-navy-fill); border-color: var(--asas-navy-fill); color: var(--asas-navy-ink); }
+.action-row button:last-child:hover { background: var(--asas-navy-fill-hover); border-color: var(--asas-navy-fill-hover); }
 
 /* Repeatable field (e.g. Reservoir CoS evaluations) rendered as a compact
    mini-spreadsheet: one muted header row of column labels, then slim rows of
@@ -470,6 +1172,15 @@ button.priority.priority-high:hover { background: var(--warning-100); }
 .formation-panel { display: flex; flex-direction: column; gap: var(--space-1); }
 /* First section heading sits directly under the picker -- drop its extra top gap. */
 .formation-panel > .field-section-label:first-child { margin-top: 0; }
+/* Pay intervals: the selected formation's sub-table (quicklook / final only).
+   Rides the repeatable sheet's grid (.repeatable-rows / .repeatable-head /
+   .repeatable-col-label) so its columns line up exactly like every other
+   mini-spreadsheet; only the row class differs, because the generic repeatable
+   JS must not treat these rows as step fields. */
+.pay-intervals { margin-top: var(--space-3); border-top: 1px solid var(--border); padding-top: var(--space-3); }
+.pay-interval-row { display: contents; }
+.pay-interval-row input, .pay-interval-row select { padding: 4px 8px; font-size: var(--text-sm); }
+.pay-interval-empty { margin: 0; font-size: var(--text-sm); color: var(--text-faint); }
 
 /* =========================================================================
    Summary panel (right-hand rail)
@@ -482,8 +1193,8 @@ button.priority.priority-high:hover { background: var(--warning-100); }
   /* Same sticky treatment as .component-rail: pin below the header stack and
      scroll the panel internally when it outgrows the viewport. */
   position: sticky;
-  top: 112px;
-  max-height: calc(100vh - 124px);
+  top: 140px;
+  max-height: calc(100vh - 152px);
   overflow-y: auto;
 }
 .summary-card { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--space-4); max-width: 100%; }
@@ -558,6 +1269,115 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .summary-popover-actions { display: flex; gap: var(--space-2); margin-top: var(--space-1); }
 .summary-popover-actions button { flex: 1; min-width: 0; padding: 8px 10px; font-size: var(--text-sm); }
 
+/* =========================================================================
+   Card 2A — the shared LEAD SUMMARY component (views/lead-summary.js)
+
+   A self-contained block: its own header + gear, a slim progress bar, five
+   left-aligned sections of evenly distributed value columns, and a footer
+   carrying the seismic reference. Deliberately NOT collapsible — no folds, no
+   chevrons — so the whole lead reads without a single interaction.
+
+   Palette: a slightly-darker-gray panel (--surface-sunken) with dark ASAS navy
+   for the title, the progress fill and the accents; separators are single 1px
+   rules on each section's TOP edge, so no boundary can double up.
+   ========================================================================= */
+/* The component IS the card on a lead page, so the shell's own card chrome
+   steps aside rather than framing it twice. */
+.detail-shell-lead .summary-card { background: none; border: 0; padding: 0; }
+.ls-card {
+  position: relative;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+}
+.ls-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.ls-title {
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--asas-navy);
+}
+.ls-gear { flex: 0 0 auto; width: 28px; height: 28px; color: var(--asas-navy); }
+.ls-gear .lucide { width: 18px; height: 18px; }
+
+.ls-progress { display: flex; align-items: center; gap: var(--space-3); margin: var(--space-4) 0; }
+.ls-progress-track {
+  flex: 1;
+  min-width: 0;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--gray-200);
+  overflow: hidden;
+}
+.ls-progress-track span { display: block; height: 100%; background: var(--asas-navy); border-radius: var(--radius-pill); }
+.ls-progress-figures { flex: 0 0 auto; display: flex; align-items: baseline; gap: var(--space-2); }
+.ls-progress-figures b { font-family: var(--font-display); font-variant-numeric: tabular-nums; font-size: var(--text-lg); font-weight: 800; color: var(--ink-900); }
+.ls-progress-figures small { color: var(--text-faint); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+
+.ls-section { padding: var(--space-3) 0; border-top: 1px solid var(--border); }
+.ls-section-title {
+  margin-bottom: var(--space-2);
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  font-weight: 800;
+  color: var(--asas-navy);
+  text-align: left;
+}
+.ls-grid { display: grid; gap: var(--space-2); align-items: end; }
+.ls-col { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ls-col-label { color: var(--text-muted); font-size: var(--text-xs); font-weight: 700; }
+.ls-col-value {
+  font-family: var(--font-display);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-md);
+  font-weight: 800;
+  color: var(--ink-900);
+  overflow-wrap: anywhere;
+}
+.ls-footer {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+.ls-footer-sep { color: var(--border-strong); }
+
+/* The gear menu: three items, anchored under the header, closed by default. */
+.ls-menu {
+  position: absolute;
+  top: calc(var(--space-4) + 32px);
+  right: var(--space-4);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 176px;
+  padding: var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+.ls-menu-item {
+  padding: 8px var(--space-3);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  color: var(--ink-800);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  text-align: left;
+}
+.ls-menu-item:hover { background: var(--surface-sunken); color: var(--asas-navy); }
+.ls-menu-item-danger { color: var(--danger-700); }
+.ls-menu-item-danger:hover { background: var(--danger-100); color: var(--danger-700); }
+
 /* Well-card reservoirs list: one quiet line per formation (name + filled
    metrics + fluid tag). A barren formation shows a "tight" note (SARH always
    renders, tight or not). Grouped under a small muted section title. */
@@ -613,6 +1433,11 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .summary-pva-delta { text-align: right; font-variant-numeric: tabular-nums; font-size: var(--text-xs); font-weight: 800; min-width: 44px; }
 .summary-pva-delta.pos { color: var(--success-700); }
 .summary-pva-delta.neg { color: var(--danger-700); }
+/* Folders fold (well/lead shared-folder links): one .folder-card row per
+   section, stacked with the same compact glyph/path/copy treatment as the
+   component-folder card (detail-form.js renderComponentFolder). */
+.summary-folders { display: flex; flex-direction: column; gap: var(--space-2); }
+.summary-folders .folder-card { grid-column: auto; }
 
 /* =========================================================================
    Project editor — the full-project "all fields" view (views/project-editor.js)
@@ -625,7 +1450,7 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   gap: var(--space-4);
   /* Same scroll-into-view landing as .detail-shell: clear the sticky header
      (56px) + tab bar (44px) stack instead of hiding behind them. */
-  scroll-margin-top: 112px;
+  scroll-margin-top: 140px;
 }
 .pe-head {
   display: flex;
@@ -1104,6 +1929,13 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .ra-lightbox-close { position: absolute; top: var(--space-2); right: var(--space-2); width: 34px; height: 34px; font-size: var(--text-lg); }
 
 /* =========================================================================
+   Placeholder tabs (Map, Calculator) — Card 1A ships the nav entry + shared
+   page chrome only; a later card fills in the real screen. No mock data.
+   ========================================================================= */
+.placeholder-panel { text-align: center; padding: var(--space-8) var(--space-4); color: var(--text-muted); }
+.placeholder-panel h3 { font-size: var(--text-lg); color: var(--ink-800); margin-bottom: var(--space-2); }
+
+/* =========================================================================
    Full-page boot login (fronts the app under AUTH_REQUIRED; the modal above
    handles mid-session 401s). Reuses the panel/dialog token language.
    ========================================================================= */
@@ -1129,9 +1961,27 @@ button.ghost.success-outline:hover { background: var(--success-100); }
    Responsive — component level
    ========================================================================= */
 @media (max-width: 1100px) {
+  /* The board scrolls sideways below here, so the thirds no longer have
+     columns to line up with: the band stacks — Add New Lead, then the
+     filters, then the KPI tiles. The button gives up its cell-filling width
+     (a viewport-wide navy bar would shout), and the KPI row regains a
+     separator on its TOP edge, since the grid gutter it replaced no longer
+     divides anything side-by-side. Still a SINGLE border, never a pair. */
+  .lead-controls { grid-template-columns: 1fr; }
+  .new-lead-button { width: auto; min-width: 176px; }
+  .lead-kpi-row {
+    justify-content: flex-start;
+    gap: var(--space-4);
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--border);
+  }
   .pipeline-toolbar { flex-direction: column; }
   .pipeline-toolbar select { flex-basis: auto; width: 100%; }
   .pipeline-board { grid-auto-columns: minmax(245px, 80vw); }
+  /* The lead card carries two packages side by side, so its column needs more
+     floor than a BP column before the board starts scrolling sideways —
+     squeezing it further just wraps every assignee name. */
+  .pipeline-board.lead-board { grid-auto-columns: minmax(380px, 85vw); }
   .detail-shell { grid-template-columns: 1fr; }
   .summary-panel { order: 3; }
   .component-rail { order: 1; }
@@ -1145,9 +1995,26 @@ button.ghost.success-outline:hover { background: var(--success-100); }
      when the narrower editor column can't fit every column. */
 }
 @media (max-width: 640px) {
+  /* The filter row re-grids into a tidy 2×2: Assignee | Field on the first
+     line, Status | Clear on the second. Above this width the band is already
+     stacked (1100px block) and the single-line grid has the whole viewport,
+     so it needs no override there. */
+  .lead-filter-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lf-clear { width: 100%; }
+  /* The band is already stacked (1100px block); here the KPI row additionally
+     wraps its tiles, and the Add New Lead button takes the full width like
+     every other stacked control. Its top-edge separator carries down. */
+  .new-lead-button { width: 100%; }
+  .lead-kpi-row {
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
   .pipeline-board { grid-auto-columns: minmax(230px, 86vw); }
+  .pipeline-board.lead-board { grid-auto-columns: minmax(360px, 92vw); }
   .pipeline-card { padding: var(--space-3); }
-  .detail-shell { scroll-margin-top: 106px; } /* 52px header + 40px tabs + room */
+  .lead-card { padding: var(--space-3); gap: var(--space-3); }
+  .detail-shell { scroll-margin-top: 120px; } /* 56px header + 52px tabs + room */
   .detail-shell.panel { padding: var(--space-3); }
   .summary-card { padding: var(--space-3); }
   .action-row { flex-wrap: wrap; }
@@ -1165,6 +2032,12 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   .resource-calculator-panel .field-row.cols-2,
   .resource-calculator-panel .field-row.cols-3 { grid-template-columns: 1fr; }
 }
+/* Below ~420px the three KPI tiles no longer fit on one line and the OGIP tile
+   wraps to its own; its left border would then divide nothing, so it goes with
+   the layout that gave it a meaning. */
+@media (max-width: 420px) {
+  .kpi-tile-ogip { padding-left: 0; border-left: none; }
+}
 
 /* =========================================================================
    Dark theme — scoped spot-fixes (token block lives in base.css). Only the
@@ -1173,4 +2046,945 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 :root[data-theme="dark"] .app-dialog::backdrop {
   /* deeper scrim than the light rgba(13,36,56,.45) so the dialog reads */
   background: rgba(0, 0, 0, .6);
+}
+
+/* Lead board (Card 1B). The tokens carry the rest; these three are the places
+   where a border-weight neutral disappears against a dark card. */
+:root[data-theme="dark"] .lead-dot-in-progress {
+  /* --border-strong is a dark slate on dark — the empty ring has to step up to
+     a text-weight neutral to stay visible. */
+  color: var(--text-faint);
+}
+:root[data-theme="dark"] .lead-card-low { border-color: var(--text-faint); }
+:root[data-theme="dark"] .lead-card:hover {
+  /* Shadows barely read on dark; lift the surface instead. */
+  background: var(--gray-100);
+}
+
+/* Lead filter row (Card 1C). The tokens carry the controls themselves; these
+   are the two places where a light-mode assumption breaks on dark. */
+:root[data-theme="dark"] .lf-menu {
+  /* The big shadow does no work on dark — the border is what separates the
+     floating menu from the board behind it. */
+  border-color: var(--text-faint);
+}
+/* The tick itself needs no override: it is drawn in --white, which stays #fff
+   on dark by design (white glyphs on brand/semantic fills), and the radio
+   dot's ring is --surface, which follows the theme already. */
+:root[data-theme="dark"] .lf-icon-in-progress { color: var(--text-muted); }
+
+/* Lead KPI tiles (Card 1E). The arc, the numerals and the flame all follow
+   tokens that already invert (--asas-navy lightens to #a5bdf7, --ink-800 to a
+   pale slate, --warning-500 to a brighter amber), so only the TRACK needs a
+   spot-fix: --gray-200 is a near-surface tone on dark and the empty part of
+   the ring would vanish, taking the "how much is left" reading with it. */
+:root[data-theme="dark"] .kpi-donut-track { stroke: var(--gray-300); }
+
+/* Header dropdowns (Card 1F). Same story as the filter menus: the tokens carry
+   the surfaces, and only the floating menu's SEPARATION from the page behind
+   it needs a spot-fix — the big shadow does no work on a dark background. */
+:root[data-theme="dark"] .header-menu { border-color: var(--text-faint); }
+/* The unread dot and the Excel glyph both sit on --surface here; --danger-500
+   and --success-600 already lighten on dark (base.css), so they keep their
+   contrast without an override. The one token that does not is the item
+   separator, which is near-invisible at --border on dark. */
+:root[data-theme="dark"] .hm-head { border-bottom-color: var(--gray-300); }
+
+/* =========================================================================
+   Card 2B — the CONSOLIDATED LEAD ASSESSMENT workspace
+   (views/lead-assessment.js), mounted into the detail shell's own
+   #dynamic-fields body on a lead page's four Lead Assessment steps.
+
+   The body is normally a 3-column field grid; in this mode it becomes a
+   single vertical stack of numbered cards, so the workspace controls its own
+   internal geometry instead of inheriting a form grid it does not use.
+   ========================================================================= */
+.dynamic-fields.lead-assessment-body { display: block; }
+
+.la-workspace { display: flex; flex-direction: column; gap: var(--space-3); }
+
+.la-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+}
+
+/* Numbered card headers: the step number in a soft square, then the title.
+   Section 4 adds its helper sentence on the same line, pushed right. */
+.la-card-head { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-2); }
+.la-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; flex: none;
+  border-radius: var(--radius-md);
+  background: var(--gray-100); color: var(--text-muted);
+  font-family: var(--font-display); font-size: var(--text-base); font-weight: 700;
+}
+.la-card-title { margin: 0; font-size: var(--text-md); font-weight: 700; color: var(--ink-800); }
+.la-helper { margin: 0 0 0 auto; font-size: var(--text-xs); color: var(--text-faint); max-width: 42ch; }
+
+/* ---- Sections 1 and 2: the SYMMETRIC TWIN cards --------------------------
+   Both cards share .la-card-twin (equal share of one 2-column row) and both
+   lay their values out with the SAME .la-grid: one row-label track plus two
+   equal value tracks, one header row, two data rows, identical gaps. That
+   shared geometry is the whole point — the two cards must read as one pair,
+   so the grid is declared once and used twice rather than copied. */
+.la-twins { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.la-card-twin { display: flex; flex-direction: column; }
+.la-grid {
+  display: grid;
+  grid-template-columns: minmax(96px, auto) minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-1) var(--space-2);
+  align-items: start;
+}
+.la-col-head, .la-row-head {
+  font-size: var(--text-sm); font-weight: 700; color: var(--ink-800);
+  align-self: center;
+}
+/* One line, always — a wrapped column head ("Thickness (ft)") pushes the
+   header row taller than its twin's and breaks the side-by-side alignment. */
+.la-col-head { text-align: center; white-space: nowrap; }
+.la-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.la-cell input { width: 100%; text-align: center; }
+
+/* A DERIVED input (the far side of a configured TWT<->thickness conversion)
+   must not look like something you can type into: sunken ground, muted italic
+   figures, and the not-allowed cursor the readonly attribute alone does not
+   give you. */
+.la-derived {
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  font-style: italic;
+  cursor: not-allowed;
+}
+
+/* The card's ONE error strip, at its bottom — below the grid, so a message
+   appearing (or wrapping) never moves an input row. `hidden` while clean:
+   no reserved dead space. */
+.la-card-errors {
+  width: 100%;
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  color: var(--danger-600);
+}
+.la-invalid { border-color: var(--danger-500); }
+
+.la-note { margin: var(--space-2) 0 0; font-size: var(--text-xs); color: var(--text-faint); }
+
+/* ---- Section 3: full-width TVDSS + confirmation --------------------------
+   Essentially ONE control row tall: slim vertical padding, one inner flex row
+   (number badge | TVDSS | checkbox) with the card's error strip BELOW it. The
+   checkbox sentence stays on one line — the TVDSS input yields width first
+   (no wrap: the row shrinks its input, it never drops the checkbox). */
+.la-card-wide {
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
+}
+.la-wide-row { display: flex; align-items: center; gap: var(--space-3); }
+.la-tvdss { display: flex; flex-direction: column; gap: 2px; flex: 0 1 340px; min-width: 150px; }
+.la-polygons { margin: 0; font-size: var(--text-sm); white-space: nowrap; }
+
+/* ---- Section 4: PIIP results -------------------------------------------- */
+.la-scenarios { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-2); }
+.la-scenario {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+}
+.la-scenario:has(input:checked) {
+  border-color: var(--asas-blue);
+  background: var(--brand-050);
+  color: var(--asas-navy);
+  font-weight: 700;
+}
+
+.la-piip-status { display: none; margin: var(--space-3) 0 0; font-size: var(--text-xs); }
+.la-piip-status.is-shown { display: block; }
+.la-status-error { color: var(--danger-600); }
+.la-status-idle, .la-status-running { color: var(--text-faint); }
+
+.la-results {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3); margin-top: var(--space-3);
+}
+/* A dry-gas scenario has no Liquid block, so Gas takes the full width rather
+   than leaving a hole where the second column was. */
+.la-results-gas-only { grid-template-columns: minmax(0, 1fr); }
+
+.la-result-block { border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-3); }
+.la-result-heading { font-weight: 700; font-size: var(--text-base); color: var(--ink-800); margin-bottom: var(--space-2); }
+.la-result-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); }
+/* Labels sit OUTSIDE the tinted boxes (card 2B is explicit): the label is a
+   quiet caption above the value, the box holds only the number. */
+.la-result-col { display: flex; flex-direction: column; align-items: stretch; gap: 2px; text-align: center; }
+.la-result-label { font-size: var(--text-xs); font-weight: 700; color: var(--text-muted); }
+.la-result-box {
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: 700;
+  color: var(--ink-900);
+}
+/* Gas reads light-red, Liquid light-green. Both tints are the semantic -100
+   tokens, which become low-alpha rgba of the same hue on dark, so the blocks
+   stay tinted-but-legible in either theme with no override. */
+.la-result-gas { border-color: var(--danger-100); background: color-mix(in srgb, var(--danger-100) 40%, transparent); }
+.la-result-gas .la-result-box { background: var(--danger-100); }
+.la-result-liquid { border-color: var(--success-100); background: color-mix(in srgb, var(--success-100) 40%, transparent); }
+.la-result-liquid .la-result-box { background: var(--success-100); }
+
+.la-plot-slot:empty { display: none; }
+.la-plot-slot { margin-top: var(--space-3); }
+.la-plot-slot .ra-plot img { width: 100%; }
+
+/* ---- The read-only provenance fold -------------------------------------- */
+.la-earlier {
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3); font-size: var(--text-sm);
+  background: var(--surface-sunken);
+}
+.la-earlier > summary { cursor: pointer; color: var(--text-muted); font-weight: 700; }
+.la-earlier-entry { margin-top: var(--space-2); }
+.la-earlier-entry b { font-size: var(--text-xs); color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em; }
+.la-earlier-entry p { margin: 2px 0 0; white-space: pre-wrap; color: var(--text); }
+
+/* The page's ONE action: a navy Save Updates, right-aligned like the mockup. */
+.action-row .save-primary {
+  background: var(--asas-navy-fill);
+  border-color: var(--asas-navy-fill);
+  color: var(--asas-navy-ink);
+  min-width: 160px;
+}
+.action-row .save-primary:hover:not(:disabled) {
+  background: var(--asas-navy-fill-hover);
+  border-color: var(--asas-navy-fill-hover);
+}
+
+@media (max-width: 1100px) {
+  .la-twins { grid-template-columns: minmax(0, 1fr); }
+  .la-results { grid-template-columns: minmax(0, 1fr); }
+  .la-scenarios { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .la-wide-row { flex-direction: column; align-items: stretch; }
+  .la-polygons { white-space: normal; }
+  .la-helper { margin-left: 0; }
+  .la-card-head { flex-wrap: wrap; }
+}
+
+/* Dark theme: everything above resolves through tokens that already invert.
+   The one exception is the numbered badge — --gray-100 becomes an elevated
+   DARK tone there, which is right for the fill but leaves the numeral at
+   --text-muted too close to it to read at 14px. */
+:root[data-theme="dark"] .la-num { color: var(--ink-800); }
+
+/* =========================================================================
+   Card 4B — the CONSOLIDATED STAKING LETTERS page
+   (views/staking-letters.js), mounted into the SAME #dynamic-fields body on a
+   lead page's "Approval to Stake" and "Well Site Location" steps.
+
+   Same arrangement as card 2B one stage later, so the body switches out of its
+   3-column field grid the same way and the page controls its own geometry.
+   Everything else is deliberately quieter than 2B: one card, three checkbox
+   rows in process order, and the staked location revealed under the third.
+   ========================================================================= */
+.dynamic-fields.staking-letters-body { display: block; }
+
+.sl-workspace { display: flex; flex-direction: column; gap: var(--space-3); }
+
+.sl-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  display: flex; flex-direction: column; gap: var(--space-3);
+}
+
+/* The three confirmations read as a LIST, not as three boxed cards: the
+   generic .check-label chrome (border, sunken row, bottom-alignment for a form
+   grid this page does not use) would turn one sequence of statements into
+   three competing tiles. Box + sentence, full width, in order. */
+.sl-card .sl-check {
+  align-self: stretch;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  min-height: 0;
+  gap: var(--space-3);
+  font-size: var(--text-md);
+  color: var(--ink-800);
+  line-height: 1.4;
+}
+.sl-card .sl-check input { flex: none; width: 18px; height: 18px; accent-color: var(--asas-navy); }
+
+/* ---- The revealed staking location --------------------------------------
+   Indented under the third checkbox, because it is that box's consequence
+   rather than a fourth item. `.hidden` (the app-wide utility) is what the
+   reveal toggles — the inputs stay in the DOM carrying their values, so an
+   untick can never clear a stored survey. */
+.sl-location {
+  margin-left: calc(18px + var(--space-3));
+  display: flex; flex-direction: column; gap: var(--space-2);
+}
+.sl-location-heading { font-size: var(--text-md); font-weight: 700; color: var(--ink-800); }
+/* Item B: three cells — Well Name, Staked X, Staked Y — one row on wide
+   screens, stacking to a single column below 1100px (media query further
+   down). */
+.sl-location-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
+.sl-cell { display: flex; flex-direction: column; gap: 2px; }
+
+.sl-field-error {
+  display: none;
+  font-size: var(--text-xs);
+  line-height: 1.3;
+  color: var(--danger-600);
+}
+.sl-field-error.is-shown { display: block; }
+.sl-invalid { border-color: var(--danger-500); }
+
+/* The read-only provenance fold, identical in shape to card 2B's. */
+.sl-earlier {
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3); font-size: var(--text-sm);
+  background: var(--surface-sunken);
+}
+.sl-earlier > summary { cursor: pointer; color: var(--text-muted); font-weight: 700; }
+.sl-earlier-entry { margin-top: var(--space-2); }
+.sl-earlier-entry b { font-size: var(--text-xs); color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em; }
+.sl-earlier-entry p { margin: 2px 0 0; white-space: pre-wrap; color: var(--text); }
+
+@media (max-width: 1100px) {
+  .sl-location-row { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* =========================================================================
+   Map tab — canvas map viewer
+   Ported from the standalone UTM37 viewer and re-skinned onto the app's
+   tokens. Layout: a fixed-width layer sidebar beside a stage that the canvas
+   fills, with the summary panel, toolbox, zoom pad, readout and tooltip all
+   floating INSIDE that stage (position:absolute against .map-stage) so none
+   of them can reflow the canvas and force a re-measure.
+
+   Theme: nothing here hardcodes a color. The chrome resolves through the
+   :root tokens (so dark mode re-skins it with the rest of the app), and the
+   canvas itself reads the same custom properties through getComputedStyle at
+   paint time — see map/map-canvas.js's themeColors(). The only per-element
+   dark overrides are the two translucent scrims at the end of this section,
+   which have to be tinted rather than re-pointed.
+   ========================================================================= */
+.map-panel {
+  /* Header (64) + tabs (64) + main's vertical padding (2 x 24) + the panel's
+     own bottom margin (12) + the two 1px borders the header and tab strip
+     add (which the sum used to miss, and 2px is all it takes to put a
+     scrollbar on the page). The map is a viewport-height workspace, not a
+     document that scrolls. */
+  --map-chrome: 190px;
+  padding: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 268px minmax(0, 1fr);
+  height: calc(100vh - var(--map-chrome));
+  min-height: 440px;
+}
+
+/* ---- Sidebar: the ordered layer list ------------------------------------ */
+.map-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+.map-sidebar-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2);
+  padding: var(--space-3) var(--space-4) var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+.map-sidebar-head h3 { margin: 0; }
+.map-crs { font-size: var(--text-xs); color: var(--text-faint); font-family: var(--font-mono); }
+.map-sidebar-actions { display: flex; gap: var(--space-2); padding: var(--space-3) var(--space-4); }
+.map-sidebar-actions button { flex: 1; font-size: var(--text-sm); padding: var(--space-1) var(--space-2); }
+
+.map-layer-list { flex: 1; overflow-y: auto; padding: 0 var(--space-2) var(--space-4); min-height: 0; }
+.map-empty-hint { padding: var(--space-3); font-size: var(--text-sm); color: var(--text-muted); line-height: 1.4; }
+
+/* Four map-well checklist filters. The options reuse Portfolio's compact
+   checkbox rows, while this wrapper keeps the controls legible inside the
+   narrower layer sidebar. An empty checklist means no constraint. */
+.map-well-filters {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) 0 var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+.map-well-filters-title {
+  padding: 0 var(--space-2);
+  color: var(--text-faint);
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.map-well-filter {
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-1) var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.map-well-filter legend {
+  padding: 0 var(--space-1);
+  color: var(--ink-700);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+.map-well-filter-options {
+  max-height: 92px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.map-well-filter-option {
+  min-height: 26px;
+  padding: 3px var(--space-1);
+  font-size: var(--text-xs);
+}
+
+.map-layer {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+}
+.map-layer:hover { background: var(--surface-sunken); border-color: var(--border); }
+.map-layer-check { flex: none; width: 15px; height: 15px; accent-color: var(--asas-navy); cursor: pointer; }
+.map-swatch {
+  flex: none; width: 14px; height: 14px; padding: 0;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  cursor: pointer; box-shadow: none;
+}
+.map-swatch:hover { border-color: var(--asas-blue); }
+.map-layer-name {
+  flex: 1; min-width: 0; cursor: pointer;
+  font-size: var(--text-sm); color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.map-layer-count { flex: none; font-size: var(--text-xs); color: var(--text-faint); font-variant-numeric: tabular-nums; }
+/* A listed layer whose geometry would not load. Deliberately quiet — the row
+   still works (it can be hidden, recolored, reordered); the marker only says
+   why the canvas is empty, with the server's message in its title. Both
+   themes come free: --warning-700 is re-pointed by the dark palette. */
+.map-layer-error { flex: none; font-size: var(--text-xs); line-height: 1; color: var(--warning-700); cursor: help; }
+.map-layer-actions { flex: none; display: flex; align-items: center; gap: 1px; }
+.map-layer-btn {
+  background: transparent; border: 0; box-shadow: none;
+  padding: 2px; border-radius: var(--radius-sm);
+  color: var(--text-faint); cursor: pointer; line-height: 0;
+}
+.map-layer-btn:hover { color: var(--asas-blue); background: var(--brand-050); }
+.map-layer-btn .lucide { width: 14px; height: 14px; }
+
+/* ---- Stage: the canvas and everything floating on it -------------------- */
+.map-stage { position: relative; min-width: 0; background: var(--surface-sunken); overflow: hidden; }
+.map-canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+.map-canvas.dragging { cursor: grabbing; }
+.map-canvas.measuring { cursor: crosshair; }
+
+/* ---- Summary panel (top-left, collapsible) ------------------------------ */
+.map-summary {
+  position: absolute; top: var(--space-3); left: var(--space-3); z-index: 3;
+  min-width: 186px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+.map-summary-toggle {
+  width: 100%; text-align: left; background: transparent; border: 0; box-shadow: none;
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-display); letter-spacing: .03em;
+  font-size: var(--text-sm); color: var(--ink-800); cursor: pointer;
+}
+.map-summary-toggle::after { content: '−'; float: right; color: var(--text-faint); }
+.map-summary.is-collapsed .map-summary-toggle::after { content: '+'; }
+.map-summary-toggle:hover { background: var(--surface-sunken); }
+.map-summary-body { padding: 0 var(--space-3) var(--space-2); }
+.map-summary-row {
+  display: flex; justify-content: space-between; gap: var(--space-4);
+  padding: 2px 0; font-size: var(--text-sm);
+}
+.map-summary-key { color: var(--text-muted); }
+.map-summary-value { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+.map-summary-note {
+  margin: var(--space-2) 0 0; max-width: 200px;
+  font-size: var(--text-xs); line-height: 1.35; color: var(--text-faint);
+}
+
+/* ---- Toolbox (top-right) + the color panel it opens --------------------- */
+.map-toolbox {
+  position: absolute; top: var(--space-3); right: var(--space-3); z-index: 3;
+  display: flex; flex-direction: column; align-items: flex-end; gap: var(--space-1);
+}
+.map-tool-row {
+  display: flex; gap: 1px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+.map-tool {
+  background: transparent; border: 0; box-shadow: none; border-radius: 0;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-sm); color: var(--text-muted); cursor: pointer;
+}
+.map-tool:hover { background: var(--surface-sunken); color: var(--text); }
+.map-tool[aria-pressed="true"], .map-tool[aria-expanded="true"] {
+  background: var(--asas-navy-fill); color: var(--asas-navy-ink);
+}
+.map-measure-readout {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 2px var(--space-2);
+  font-size: var(--text-xs); font-variant-numeric: tabular-nums; color: var(--text-muted);
+}
+
+.map-color-panel {
+  position: absolute; top: 62px; right: var(--space-3); z-index: 4;
+  width: 218px; max-height: 320px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
+  padding: var(--space-2);
+}
+.map-color-head {
+  font-family: var(--font-display); letter-spacing: .03em;
+  font-size: var(--text-xs); text-transform: uppercase; color: var(--text-faint);
+  padding: 0 var(--space-1) var(--space-2);
+}
+.map-color-row {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-1); border-radius: var(--radius-sm);
+  font-size: var(--text-sm); color: var(--text); cursor: pointer;
+}
+.map-color-row:hover { background: var(--surface-sunken); }
+.map-color-row span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-color-row input[type="color"] {
+  flex: none; width: 26px; height: 20px; padding: 0;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: none; cursor: pointer;
+}
+
+/* ---- Zoom pad, coordinate readout, tooltip ------------------------------ */
+.map-zoom {
+  position: absolute; right: var(--space-3); bottom: var(--space-3); z-index: 3;
+  display: flex; flex-direction: column; gap: 1px;
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md); overflow: hidden;
+}
+.map-zoom button {
+  width: 32px; height: 32px; padding: 0; border: 0; border-radius: 0; box-shadow: none;
+  background: var(--surface); color: var(--ink-800);
+  font-size: var(--text-md); line-height: 1; cursor: pointer;
+}
+.map-zoom button:hover { background: var(--surface-sunken); }
+
+.map-readout {
+  position: absolute; left: var(--space-3); bottom: var(--space-3); z-index: 3;
+  font-size: var(--text-xs); font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  background: var(--map-scrim, rgba(255, 255, 255, .82));
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 2px var(--space-2);
+  pointer-events: none;
+}
+
+.map-tooltip {
+  position: absolute; z-index: 6; max-width: 280px;
+  font-size: var(--text-xs); line-height: 1.35;
+  background: var(--map-scrim, rgba(255, 255, 255, .97));
+  border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-2) var(--space-3);
+  pointer-events: none;
+}
+.map-tt-title { font-weight: 700; color: var(--asas-navy); margin-bottom: 2px; }
+.map-tt-sub { font-size: var(--text-xs); color: var(--text-faint); margin-bottom: var(--space-1); }
+.map-tooltip table { border-collapse: collapse; width: 100%; }
+.map-tooltip td { padding: 1px 0; vertical-align: top; color: var(--text); }
+.map-tooltip td.k { color: var(--text-muted); padding-right: var(--space-3); white-space: nowrap; }
+.map-tooltip td.n { text-align: right; font-variant-numeric: tabular-nums; }
+.map-tt-metric { margin-top: var(--space-1); font-weight: 700; color: var(--text); }
+.map-tt-inside { margin-top: 2px; color: var(--text); }
+.map-tt-inside .k { color: var(--text-muted); }
+.map-tt-section { margin-top: var(--space-2); border-top: 1px solid var(--border); padding-top: var(--space-1); }
+.map-tt-section-head { font-weight: 700; color: var(--text-muted); margin-bottom: 2px; }
+.map-tt-total { margin-top: 2px; font-weight: 700; color: var(--text); }
+.map-tt-empty { color: var(--text-faint); }
+
+/* The two translucent scrims: a pale wash over the canvas in light mode, a
+   dark one on dark. Everything else in this section re-skins for free through
+   the tokens, so this is the whole dark-theme delta. */
+:root[data-theme="dark"] .map-readout,
+:root[data-theme="dark"] .map-tooltip { --map-scrim: rgba(23, 34, 49, .95); }
+
+@media (max-width: 1100px) {
+  .map-panel { grid-template-columns: 220px minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .map-panel { --map-chrome: 158px; grid-template-columns: minmax(0, 1fr); grid-template-rows: 180px minmax(0, 1fr); }
+  .map-sidebar { border-right: 0; border-bottom: 1px solid var(--border); }
+}
+
+/* =========================================================================
+   Calculator tab — project-free subsurface workbench
+
+   Five instruments share one disclosure rack. The square abbreviations echo
+   a well-log track index; the rest stays deliberately quiet so units, inputs,
+   and governed outputs remain the visual hierarchy. All selectors are scoped
+   to this tab's calculator classes.
+   ========================================================================= */
+.calculator-shell { max-width: 1180px; margin: 0 auto; }
+.calculator-intro {
+  padding: var(--space-6) var(--space-6) var(--space-5);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom: 3px solid var(--asas-navy);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+.calculator-eyebrow {
+  margin-bottom: var(--space-1);
+  color: var(--asas-blue);
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.calculator-intro h2 { color: var(--ink-900); font-family: var(--font-display); font-size: var(--text-xl); letter-spacing: .02em; }
+.calculator-intro > p:last-child { margin-top: var(--space-2); color: var(--text-muted); }
+.calculator-workbench { background: var(--surface); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius-lg) var(--radius-lg); box-shadow: var(--shadow-sm); }
+.calculator-card { border-bottom: 1px solid var(--border); }
+.calculator-card:last-child { border-bottom: 0; }
+.calculator-card > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
+  color: var(--text);
+  cursor: pointer;
+  list-style: none;
+  transition: background var(--transition);
+}
+.calculator-card > summary::-webkit-details-marker { display: none; }
+.calculator-card > summary:hover { background: var(--surface-sunken); }
+.calculator-card > summary:focus-visible { outline: 2px solid var(--brand-500); outline-offset: -2px; }
+.calculator-mark {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 42px;
+  height: 32px;
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--asas-blue);
+  background: var(--surface-sunken);
+  color: var(--asas-navy);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 800;
+  letter-spacing: .04em;
+}
+.calculator-summary-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.calculator-summary-copy strong { color: var(--ink-900); font-family: var(--font-display); font-size: var(--text-md); letter-spacing: .02em; }
+.calculator-summary-copy small { color: var(--text-muted); font-size: var(--text-sm); font-weight: 400; }
+.calculator-chevron { width: 9px; height: 9px; margin-left: auto; border-right: 2px solid var(--text-faint); border-bottom: 2px solid var(--text-faint); transform: rotate(45deg); transition: transform var(--transition); }
+.calculator-card[open] .calculator-chevron { transform: rotate(225deg); }
+.calculator-body { padding: var(--space-5) var(--space-6) var(--space-6); background: var(--surface-sunken); border-top: 1px solid var(--border); }
+.calc-guidance { margin-bottom: var(--space-4); color: var(--text-muted); font-size: var(--text-sm); }
+.calc-notice { margin-bottom: var(--space-4); padding: var(--space-3); border-left: 3px solid var(--warning-500); background: var(--warning-100); color: var(--warning-700); font-size: var(--text-sm); font-weight: 700; }
+.calc-conversion-grid { display: grid; gap: var(--space-3); }
+.calc-conversion-row { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(170px, 1fr) 28px minmax(170px, 1fr); align-items: end; gap: var(--space-3); padding: var(--space-3); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.calc-row-label { align-self: center; display: flex; flex-direction: column; gap: 2px; }
+.calc-row-label strong { color: var(--ink-800); font-family: var(--font-display); }
+.calc-row-label small { color: var(--text-faint); font-family: var(--font-mono); font-size: var(--text-xs); }
+.calc-swap { align-self: end; display: grid; place-items: center; height: 39px; color: var(--asas-blue); font-size: var(--text-lg); }
+.calc-input-wrap { position: relative; display: block; }
+.calculator-body .calc-input-wrap input { padding-right: 82px; font-variant-numeric: tabular-nums; }
+.calc-unit { position: absolute; top: 50%; right: var(--space-3); transform: translateY(-50%); color: var(--text-faint); font-family: var(--font-mono); font-size: var(--text-xs); pointer-events: none; }
+.calc-two-pane { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(250px, 1fr); gap: var(--space-5); align-items: stretch; }
+.calc-controls, .calc-results { padding: var(--space-4); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.calc-controls { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-4); }
+.calc-field-grid { display: grid; gap: var(--space-3); width: 100%; }
+.calc-field-grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.calc-field-grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.calc-results { display: flex; flex-direction: column; justify-content: center; min-width: 0; }
+.calc-results-title { margin-bottom: var(--space-3); color: var(--ink-800); font-family: var(--font-display); font-size: var(--text-sm); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.calc-empty { color: var(--text-faint); font-size: var(--text-sm); }
+.calc-readout { display: grid; grid-template-columns: 1fr auto; align-items: baseline; column-gap: var(--space-2); }
+.calc-readout > span { grid-column: 1 / -1; color: var(--text-muted); font-size: var(--text-sm); font-weight: 700; }
+.calc-readout output { color: var(--asas-navy); font-family: var(--font-display); font-size: 44px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.calc-readout small { color: var(--text-faint); font-family: var(--font-mono); font-size: var(--text-sm); }
+.calc-error { width: 100%; padding: var(--space-2) var(--space-3); background: var(--danger-100); border-left: 3px solid var(--danger-500); color: var(--danger-700); font-size: var(--text-sm); font-weight: 700; }
+.calc-resource-plots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); margin-top: var(--space-3); }
+.calc-resource-plots:empty { display: none; }
+.calc-resource-plots img { display: block; width: 100%; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.calculator-body .ra-results-panel .field-row { margin-bottom: var(--space-2); }
+
+@media (max-width: 840px) {
+  .calc-two-pane { grid-template-columns: minmax(0, 1fr); }
+  .calc-conversion-row { grid-template-columns: minmax(0, 1fr) 28px minmax(0, 1fr); }
+  .calc-row-label { grid-column: 1 / -1; }
+  .calc-field-grid.cols-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .calculator-intro, .calculator-card > summary, .calculator-body { padding-left: var(--space-3); padding-right: var(--space-3); }
+  .calculator-summary-copy small { display: none; }
+  .calc-conversion-row, .calc-field-grid.cols-2, .calc-field-grid.cols-3 { grid-template-columns: minmax(0, 1fr); }
+  .calc-swap { display: none; }
+  .calc-resource-plots { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* =========================================================================
+   Business Plan Execution
+   ========================================================================= */
+/* This tab has no chrome of its own any more. The band and the board are the
+   MATURATION components (.lead-controls, .lead-filter-row, .lead-kpi-row,
+   .pipeline-board.lead-board, the .lf-* / .kpi-* / .lead-* families) — Card R2
+   deleted this tab's private copies. The DETAIL page is the maturation detail
+   shell (.detail-shell.detail-shell-lead, .component-rail + .rail-stage-lead +
+   .component-item, .editor-head, .check-label / .radio-group / .folder-card /
+   .save-state, and the Lead Summary card's .ls-*) — Card R3 deleted this tab's
+   copies of those too.
+
+   What is left below is this tab's own FORMS (the BP steps' field grids, which
+   have no counterpart on a lead page) plus the glue where the two pages
+   genuinely differ: five filters and four KPI groups in the band instead of
+   three and three, and a form body that is a vertical stack rather than the
+   lead pages' 3-column #dynamic-fields grid. */
+.bpe-detail-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+.bpe-detail-controls { display: flex; align-items: center; gap: var(--space-3); flex: 0 0 auto; margin-left: auto; }
+/* Inside the cluster the house select chrome keeps its size but gives up its
+   own margin-left: auto -- the wrapper already did the pushing. */
+.bpe-detail-controls .editor-assignee { margin-left: 0; }
+/* The data notice sits between the band and the board inside a PADDED panel
+   now (it used to line an edge-to-edge one), so it is a bordered strip of its
+   own rather than a full-bleed rule. */
+.bpe-data-notice {
+  margin-bottom: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--warning-500);
+  border-radius: var(--radius-sm);
+  background: var(--warning-100);
+  color: var(--warning-700);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.bpe-detail-view { padding-bottom: var(--space-6); }
+/* The page's one back control needs NO rule of its own: it sits in the rail
+   head, in the house .back-to-board chrome, and the record name below it
+   carries the same standoff the maturation detail page uses. */
+/* The rail's stage eyebrow, under the well name. Scoped to .rail-head: the
+   house's own `.rail-head p` (a bare subtitle) would otherwise outrank a lone
+   class and repaint this faint gray at the wrong size. */
+.rail-head .bpe-rail-eyebrow {
+  color: var(--asas-blue);
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+/* The step's workflow status, beside the editor title. The glyph carries the
+   state and the token only reinforces it. */
+.bpe-detail-status { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--text-muted); font-size: var(--text-xs); font-weight: 700; }
+.bpe-detail-status .lucide { width: 16px; height: 16px; }
+.bpe-detail-status.state-green { color: var(--success-700); }
+.bpe-detail-status.state-gray { color: var(--gray-500); }
+.bpe-detail-status.state-orange { color: var(--warning-700); }
+.bpe-detail-status.state-empty { color: var(--text-muted); }
+.bpe-form-section { margin-bottom: var(--space-5); }
+.bpe-form-section h3, .bpe-flow-heading h3 { margin: 0 0 var(--space-3); color: var(--ink-800); font-size: var(--text-base); }
+.bpe-field, .bpe-formation-block label, .bpe-pay-row label, .bpe-flow-stage label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+.bpe-field > span, .bpe-formation-block label > span, .bpe-pay-row label > span, .bpe-flow-stage label > span { min-height: 15px; overflow-wrap: anywhere; }
+.bpe-field > .bpe-heading-label-spacer { display: block; }
+.bpe-field b, .bpe-flow-stage label b { margin-left: 2px; color: var(--danger-600); }
+.bpe-field input, .bpe-field select, .bpe-formation-block input, .bpe-formation-block select, .bpe-flow-stage input, .bpe-flow-stage select { width: 100%; min-width: 0; }
+.bpe-field input[readonly], .bpe-field input:disabled, .bpe-field select:disabled, .bpe-flow-stage.is-locked input, .bpe-flow-stage.is-locked select { background: var(--gray-100); color: var(--text-faint); }
+.bpe-field [aria-invalid="true"] { border-color: var(--danger-600); box-shadow: 0 0 0 1px var(--danger-600); }
+.bpe-field-error { margin: var(--space-2) 0 0; color: var(--danger-700); font-size: var(--text-xs); font-weight: 700; }
+.bpe-gate-depth { display: grid; grid-template-columns: repeat(4, minmax(125px, 1fr)); gap: var(--space-2); }
+.bpe-gate-logging { display: grid; grid-template-columns: 1.35fr 1.15fr 1.15fr .62fr .7fr .7fr; gap: var(--space-2); }
+.bpe-gate-coring { display: grid; grid-template-columns: 1.35fr 1.15fr 1.15fr; gap: var(--space-2); }
+.bpe-override-reason { max-width: 430px; margin-top: var(--space-2); }
+.bpe-pair { display: grid; grid-template-columns: repeat(2, minmax(120px, 220px)); gap: var(--space-3); }
+.bpe-trio { display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: var(--space-3); }
+.bpe-liquid-fields { margin: var(--space-3) 0 var(--space-5); }
+/* The BP forms are a vertical stack, not the 3-column dynamic grid, so the
+   house checkbox card and radio group need a stacking rhythm here (the grid
+   supplies it with grid-column: 1 / -1 on a lead page). */
+.bpe-detail-form .check-label, .bpe-detail-form .radio-group { margin: var(--space-3) 0; max-width: 800px; }
+/* A step the WORKFLOW ticked, not the user: present, true, and plainly not
+   yours to change. */
+.check-label.is-system { color: var(--text-faint); }
+/* The textarea's own floor and resize behaviour come from base.css. */
+.bpe-comments { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-5); color: var(--text-muted); font-size: var(--text-xs); font-weight: 700; }
+/* The house .folder-card carries the row; only its standoff from the comments
+   field above it is this page's own. */
+.bpe-detail-form .folder-card { margin-top: var(--space-4); }
+.bpe-detail-form .folder-card .icon-btn .lucide { width: 17px; height: 17px; }
+.bpe-save-line { display: flex; align-items: center; gap: var(--space-3); margin-top: var(--space-3); color: var(--text-faint); font-size: var(--text-xs); }
+.bpe-save-line #bpe-retry-save { padding: 3px 9px; font-size: var(--text-xs); }
+.bpe-approval-row { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-5); padding-top: var(--space-4); border-top: 1px solid var(--border); }
+.bpe-branch-note, .bpe-external-link { margin: var(--space-3) 0; padding: var(--space-3); border-left: 3px solid var(--warning-500); background: var(--warning-100); color: var(--warning-700); font-size: var(--text-sm); }
+.bpe-external-link a { color: var(--asas-blue); font-weight: 700; }
+
+.bpe-formation-block, .bpe-flow-stage { margin-bottom: var(--space-4); padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-sunken); }
+.bpe-formation-block > header, .bpe-flow-stage > header, .bpe-pay-heading, .bpe-flow-heading { display: flex; align-items: end; gap: var(--space-2); }
+.bpe-formation-block > header > label { width: min(280px, calc(100% - 42px)); }
+.bpe-formation-block > header > button { margin-left: auto; }
+.bpe-formation-envelope { display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: var(--space-3); margin-top: var(--space-3); }
+.bpe-pay-heading { align-items: center; margin: var(--space-4) 0 var(--space-2); }
+.bpe-pay-heading h4 { margin: 0; color: var(--ink-800); font-size: var(--text-sm); }
+.bpe-pay-heading button { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; }
+.bpe-pay-heading .lucide { width: 15px; height: 15px; }
+.bpe-pay-row { display: grid; grid-template-columns: repeat(7, minmax(82px, 1fr)) 32px; align-items: end; gap: 6px; padding: var(--space-2) 0; border-top: 1px solid var(--border); }
+.bpe-inline-empty { padding: var(--space-3); color: var(--text-faint); font-size: var(--text-xs); text-align: center; }
+#bpe-add-formation { display: inline-flex; align-items: center; gap: 5px; margin-bottom: var(--space-3); }
+#bpe-add-formation .lucide { width: 16px; height: 16px; }
+.bpe-flow-heading { align-items: center; margin-bottom: var(--space-3); }
+.bpe-flow-heading h3 { margin: 0; }
+.bpe-flow-heading button { margin-left: auto; }
+.bpe-flow-stage > header { align-items: center; margin-bottom: var(--space-3); }
+.bpe-flow-stage h4 { margin: 0; color: var(--ink-800); font-size: var(--text-base); }
+.bpe-flow-grid { display: grid; grid-template-columns: repeat(5, minmax(105px, 1fr)); gap: var(--space-3); }
+.bpe-detail-loading { min-height: 300px; display: grid; place-items: center; color: var(--text-muted); }
+
+/* -------------------------------------------------------------------------
+   The band's two rows. Both are maturation components carrying one more
+   control than the maturation board has, and BOTH rules must sit after those
+   components' base rules -- which is why they are here rather than up in the
+   filter/KPI sections.
+   ------------------------------------------------------------------------- */
+/* This band's thirds are NOT equal. The maturation band divides in three so
+   each third sits over its board column; here the filter zone holds five
+   controls whose values are short ("All Fields", "2026") and the KPI zone
+   holds four groups instead of three, so the row cedes width to the KPIs and
+   column alignment gives way to fitting both on one line. */
+.lead-controls-bp { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.55fr); }
+/* FIVE filters and no Add New Lead control beside them, so this row takes the
+   band's first two thirds and grids five trigger tracks plus the Clear one. */
+.bpe-filter-row {
+  grid-column: 1 / 3;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
+}
+/* FOUR KPI groups on ONE line, in a band third sized for three. The width
+   comes from both ends: the band above gives this third more of its own
+   (.lead-controls-bp), and the groups themselves are a size smaller than the
+   maturation board's -- one step down the type scale, smaller glyphs, tighter
+   gaps. The OGIP tile keeps its separator, because on a shared line it divides
+   the numbers again. Wrap stays declared as the SAFETY NET for the band widths
+   between the 1100px stack and 1280px, where the third is at its narrowest. */
+.lead-kpi-row-bp {
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-2);
+}
+.lead-kpi-row-bp .kpi-tile, .lead-kpi-row-bp .kpi-donut-group { gap: var(--space-2); }
+.lead-kpi-row-bp .kpi-value { font-size: var(--text-lg); }
+.lead-kpi-row-bp .kpi-icon .lucide { width: 22px; height: 22px; }
+.lead-kpi-row-bp .kpi-donut { width: 46px; height: 46px; }
+.lead-kpi-row-bp .kpi-donut-value { font-size: var(--text-sm); }
+.lead-kpi-row-bp .kpi-tile-ogip { padding-left: var(--space-2); }
+/* The donut group: the ring already prints its own percentage, so the group
+   carries only the label -- in the same .kpi-label the tiles use, laid out the
+   same way (glyph-sized thing on the left, text beside it). */
+.kpi-donut-group { display: flex; flex: none; align-items: center; gap: var(--space-3); }
+
+/* The Well Summary's fact rows: label left, value right, one hairline under
+   each -- the original panel's <dl> geometry, re-expressed in the card's own
+   type tokens (display-font values, faint xs labels). */
+.bpe-summary-facts { margin-top: var(--space-3); }
+.bpe-summary-facts > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: baseline;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+.bpe-summary-facts dt { color: var(--text-muted); font-size: var(--text-xs); font-weight: 700; }
+.bpe-summary-facts dd {
+  min-width: 0;
+  margin: 0;
+  font-family: var(--font-display);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-sm);
+  font-weight: 800;
+  color: var(--ink-900);
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+/* The Well Summary's tracked-item list. The rows are the board's own dot +
+   label pair; in a ~270px rail they WRAP rather than truncate, which is the
+   one place this list differs from the card's. */
+.ls-items { display: flex; flex-direction: column; gap: 6px; }
+.ls-items .lead-item { align-items: flex-start; white-space: normal; }
+.ls-items .lead-dot { margin-top: 1px; }
+
+/* =========================================================================
+   Business Plan Execution — responsive.
+
+   These blocks live at the END of the section, after every rule they override.
+   The house breakpoints (1100 / 640) sit far earlier in this file, and a
+   .bpe-* override placed up there loses to its own base rule down here on
+   source order alone -- silently, since the specificities match.
+   ========================================================================= */
+@media (max-width: 1100px) {
+  /* The band stacks (house rule on .lead-controls, which this tab's uneven
+     thirds would otherwise outrank on source order), so the filter row gives
+     up its two-thirds span -- spanning to a second line would conjure the
+     column back. */
+  .lead-controls-bp { grid-template-columns: 1fr; }
+  .bpe-filter-row { grid-column: auto; }
+  /* The detail shell is already single-column (house rule), but the two widest
+     form rows still out-measure it: the six-track Logging Program row and the
+     eight-track Pay Interval row each drop to a coarser grid. Everything else
+     fits the full-width editor and waits for 640. */
+  .bpe-gate-logging { grid-template-columns: repeat(3, minmax(120px, 1fr)); }
+  .bpe-pay-row { grid-template-columns: repeat(4, minmax(90px, 1fr)); }
+}
+@media (max-width: 640px) {
+  /* The filter row re-grids into a 2-column stack, mirroring what
+     .lead-filter-row does at this width. */
+  .bpe-filter-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* Every step form collapses to one column, the editor head's two controls
+     stack under the step title instead of squeezing it out of the row, and the
+     approval buttons take the full width like every other stacked control. */
+  .bpe-gate-depth, .bpe-gate-logging, .bpe-gate-coring, .bpe-pair, .bpe-trio,
+  .bpe-formation-envelope, .bpe-pay-row, .bpe-flow-grid { grid-template-columns: minmax(0, 1fr); }
+  .bpe-pay-row { padding-bottom: var(--space-3); }
+  .bpe-detail-form .editor-head { flex-wrap: wrap; }
+  .bpe-detail-controls { flex-basis: 100%; flex-wrap: wrap; margin-left: 0; }
+  .bpe-approval-row { justify-content: stretch; flex-direction: column; }
+  .bpe-approval-row button { width: 100%; }
 }

@@ -14,7 +14,13 @@ from __future__ import annotations
 
 from conftest import create_project, get_tasks
 
-PROSPECT_STAGES = {"Lead Identification", "Risking", "Segmentation", "Pre-Well Delivery"}
+PROSPECT_STAGES = {"Lead Assessment", "Risk Analysis", "Pre-Well Delivery"}
+
+# Creation auto-assignment: on an ANONYMOUS creation the configured rule steps
+# arrive In Progress (SSV -> Tahira, every Pre-Well Delivery step ->
+# Saad/Salem); the creator-default tier is inert ("Web User" is not a user).
+# By sequence_no: 4 = Seismic Signature Validation, 6-9 = Pre-Well Delivery.
+AUTO_ASSIGNED_FRESH_SEQS = {4, 6, 7, 8, 9}
 
 
 def _assign(client, task_id, assignee, revision, cascade=False):
@@ -83,7 +89,7 @@ def test_submit_approve_flow_advances_project(client):
     assert approved["actual_start"] is not None
 
     project = client.get(f"/api/projects/{pid}").get_json()
-    assert project["current_task"] == "Thickness Estimation"
+    assert project["current_task"] == "Reservoir CoS"
 
 
 def test_return_sends_ready_back_to_in_progress(client):
@@ -202,6 +208,23 @@ def test_only_supervisor_can_set_priority(client):
     assert get_tasks(client, pid)[0]["priority"] == "High"
 
 
+def test_only_supervisor_can_set_lead_priority(client):
+    """The lead-level PATCH /api/projects/<id>/priority carries the same
+    supervisor gate as the legacy per-task endpoint."""
+    pid = create_project(client, "ROLES-LEAD-PRIORITY-1")
+
+    for name in ("Employee", "Staff Member"):
+        _login(client, name)
+        resp = client.patch(f"/api/projects/{pid}/priority", json={"priority": "High"})
+        assert resp.status_code == 403
+
+    _login(client, "Supervisor")
+    resp = client.patch(f"/api/projects/{pid}/priority", json={"priority": "High"})
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True, "priority": "High"}
+    assert client.get(f"/api/projects/{pid}").get_json()["priority"] == "High"
+
+
 def test_save_cannot_bypass_the_priority_gate(client):
     """A non-supervisor's Save keeps the stored priority, whatever it sends."""
     pid = create_project(client, "ROLES-PRIORITY-2")
@@ -266,33 +289,37 @@ def test_assign_cascade_covers_subsequent_not_assigned_prospect_steps_only(clien
     by_seq = {t["sequence_no"]: t for t in tasks}
 
     # Pre-existing work that the cascade must never touch:
-    # step 5 Approved, step 6 In Progress and assigned to Employee.
+    # step 5 Approved, step 6 In Progress and REASSIGNED to Employee (it was
+    # born In Progress on a creation auto-assignee). Steps 4 and 7-9 keep their
+    # creation auto-assignment -- also In Progress, also never cascade targets.
     resp = client.patch(f"/api/tasks/{by_seq[5]['task_id']}", json={
         "status": "Approved", "revision": by_seq[5]["revision"],
     })
     assert resp.status_code == 200
     _assign(client, by_seq[6]["task_id"], "Employee", by_seq[6]["revision"])
 
-    # Assign step 3 with cascade: steps 3..12 (the prospect pipeline since the
-    # v18 renumbering) that are still Not Assigned all go In Progress with the
-    # same assignee.
-    _assign(client, by_seq[3]["task_id"], "Staff Member", by_seq[3]["revision"], cascade=True)
+    # Assign step 1 with cascade: steps 1..9 that are still Not Assigned
+    # (1, 2, 3 -- the rest are already busy) all go In Progress with the same
+    # assignee.
+    _assign(client, by_seq[1]["task_id"], "Staff Member", by_seq[1]["revision"], cascade=True)
 
     after = {t["sequence_no"]: t for t in get_tasks(client, pid)}
-    # Steps before the target are untouched.
-    for seq in (1, 2):
-        assert after[seq]["status"] == "Not Assigned"
-        assert after[seq]["assigned_to"] is None
     # Target + subsequent Not Assigned prospect steps cascade.
-    for seq in (3, 4, 7, 8, 9, 10, 11, 12):
+    for seq in (1, 2, 3):
         assert after[seq]["status"] == "In Progress", seq
         assert after[seq]["assigned_to"] == "Staff Member", seq
         assert after[seq]["revision"] == by_seq[seq]["revision"] + 1, seq
-    # Pre-existing Approved / In Progress rows are never touched.
+    # Pre-existing Approved / In Progress rows are never touched -- including
+    # the creation auto-assigned ones.
     assert after[5]["status"] == "Approved"
     assert after[5]["assigned_to"] is None
     assert after[6]["status"] == "In Progress"
     assert after[6]["assigned_to"] == "Employee"
+    assert after[4]["assigned_to"] == "Tahira"
+    for seq in (7, 8, 9):
+        assert after[seq]["status"] == "In Progress", seq
+        assert after[seq]["assigned_to"] in {"Saad", "Salem"}, seq
+        assert after[seq]["revision"] == by_seq[seq]["revision"], seq
     # BP-stage tasks are outside a prospect's applicable pipeline.
     for seq, task in after.items():
         if task["stage_group"] not in PROSPECT_STAGES:
@@ -303,10 +330,14 @@ def test_assign_cascade_covers_subsequent_not_assigned_prospect_steps_only(clien
 def test_assign_without_cascade_touches_only_the_target(client):
     pid = create_project(client, "CASCADE-2")
     tasks = get_tasks(client, pid)
+    before = {t["task_id"]: t["assigned_to"] for t in tasks}
     _assign(client, tasks[2]["task_id"], "Employee", tasks[2]["revision"], cascade=False)
     after = get_tasks(client, pid)
-    changed = [t for t in after if t["assigned_to"]]
+    # Relative to the creation state (which already carries the auto-assigned
+    # rule steps), the ONLY changed assignment is the target's.
+    changed = [t for t in after if t["assigned_to"] != before[t["task_id"]]]
     assert [t["task_id"] for t in changed] == [tasks[2]["task_id"]]
+    assert changed[0]["assigned_to"] == "Employee"
 
 
 def test_assign_cascade_for_bp_project_stays_in_bp_stages(client):
@@ -315,7 +346,7 @@ def test_assign_cascade_for_bp_project_stays_in_bp_stages(client):
         business_plan_enabled=True, business_plan_year=2028,
     )
     tasks = get_tasks(client, pid)
-    # All 31 rows seed Not Assigned; the BP pipeline scopes the cascade to
+    # All 24 rows seed Not Assigned; the BP pipeline scopes the cascade to
     # BP-stage tasks. Anchor on the first BP-stage task explicitly.
     first_bp = next(t for t in tasks if t["stage_group"] not in PROSPECT_STAGES)
     _assign(client, first_bp["task_id"], "Employee", first_bp["revision"], cascade=True)

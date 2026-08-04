@@ -1,13 +1,98 @@
-import { byId, all, esc, isFilled, msg, fmtNum } from '../dom.js';
+import { byId, all, esc, isFilled, truthy, msg, fmtNum } from '../dom.js';
+import { ICONS } from '../icons.js';
 import { API } from '../api.js';
-import { currentUserName, currentProjectPipeline, isCurrentPipelineView, Store, resetSelection } from '../state.js';
+import { currentUserName, currentRole, currentProjectPipeline, isCurrentPipelineView, Store, resetSelection } from '../state.js';
 import { activateTab } from '../navigation.js';
-import { BP_STAGES, PROSPECT_STAGES, DONE, SEISMIC_BLOCKS, FLOWBACK_RATE_FIELDS } from '../schema.js';
+import { BP_STAGES, PROSPECT_STAGES, STATUSES, DONE, SEISMIC_BLOCKS, FLOWBACK_RATE_FIELDS } from '../schema.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { canTransitionPhase, promoteProject, recallProject } from './transitions.js';
-import { loadComponent, LATEST_PIIP_SOURCES } from './detail-form.js';
+import { loadComponent, LATEST_PIIP_SOURCES, POST_DRILL_PIIP_SOURCES, LEAD_PIIP_SOURCES, copyText } from './detail-form.js';
+// Item A: keep the focused control (and its as-typed value/caret) alive across
+// the post-save re-render this module's refresh performs. Runtime-only cycle
+// (autosave.js -> detail-form.js -> here), same guarantee as the others above.
+import { captureEditorFocus, restoreEditorFocus } from './autosave.js';
 import { refreshAllBoards } from './pipeline.js';
 import { refreshAudit } from './audit.js';
+// Card 4B: the two task rows the consolidated Staking Letters page claims.
+// Imported (not restated) so the sidebar's merged entry and the page that
+// opens for it can never disagree about which steps are the package. The
+// import is circular with staking-letters.js (it imports
+// refreshAfterRecordChange from here), which is safe: both sides touch the
+// other's bindings only inside functions called long after module evaluation.
+import { STAKING_LETTER_STEPS } from './staking-letters.js';
+// Card 2A: the shared Lead Summary block. It is PURE -- this module resolves
+// every value out of Store and hands it one plain object (see leadSummaryData).
+import { leadSummaryHtml, wireLeadSummary, closeLeadSummaryMenu } from './lead-summary.js';
+// The board's own completion arithmetic, imported rather than re-derived: the
+// Lead Summary progress bar and the board KPI donut must read one formula over
+// one dataset (the lead's 12 tracked items).
+import { completedItemCount, TRACKED_ITEM_COUNT } from './lead-kpis.js';
+
+// A LEAD detail page is the redesigned Card 2A shell (single back control, big
+// name, three-stage sidebar, wide Lead Summary). EVERY branch below guards on
+// this, because two shells are deliberately out of scope for it:
+//   - a BP WELL's detail page keeps its original shell, untouched;
+//   - a REFERENCE view (either record seen through the opposite pipeline) keeps
+//     the original shell too -- its "← Back to <current pipeline>" control is
+//     the only way out of a reference view, and the single Card 2A back control
+//     does not replace it.
+function isLeadView() {
+  return currentProjectPipeline() === 'prospect' && isCurrentPipelineView();
+}
+
+// Same glyphs the board columns use, so a stage reads identically on both
+// surfaces. Keyed by the STORED stage group, which since v5 is the board
+// column itself -- there is no display mapping left to mirror.
+var LEAD_STAGE_ICONS = {
+  'Lead Assessment': 'clipboard-check',
+  'Risk Analysis': 'gauge',
+  'Pre-Well Delivery': 'rig'
+};
+
+/* -------------------------------------------------------------------------
+   Lead-level priority — ONE chip for the whole record
+
+   Priority is a stored lead/well attribute (projects.priority), not a per-step
+   value: the chip sits next to the record name in the shell header for BOTH
+   shells (lead and BP well), renders from Store.project.priority (Low when
+   unset — the creation default), and only a supervisor can cycle it
+   Low → Medium → High → Low (anonymous dev mode acts as supervisor, matching
+   the backend's current_role()). Everyone else sees a static, disabled chip.
+   ------------------------------------------------------------------------- */
+
+var LEAD_PRIORITY_CYCLE = { Low: 'Medium', Medium: 'High', High: 'Low' };
+
+// Exported so the cycle order is pinned by a test, not just by the handler.
+export function nextLeadPriority(current) {
+  return LEAD_PRIORITY_CYCLE[current || 'Low'] || 'Low';
+}
+
+function canSetLeadPriority() {
+  return currentRole() === 'supervisor';
+}
+
+export function renderLeadPriorityChip() {
+  var chip = byId('lead-priority-chip');
+  if (!chip) return;
+  var value = (Store.project && Store.project.priority) || 'Low';
+  var editable = canSetLeadPriority();
+  chip.disabled = !editable;
+  chip.textContent = value;
+  chip.className = 'priority lead-priority-chip priority-' + String(value).toLowerCase() +
+    (editable ? '' : ' lead-priority-chip-static');
+  chip.title = 'Priority: ' + value + (editable ? ' — click to change' : ' — set by a supervisor');
+}
+
+// PATCH the record's stored priority, then run the standard record refresh so
+// the chip, sidebar, summary and every board re-render from the new payload.
+// Wired once in main.js (the chip is static markup in index.html).
+export function cycleLeadPriorityChip() {
+  if (!Store.projectId || !Store.project || !canSetLeadPriority()) return Promise.resolve();
+  var next = nextLeadPriority(Store.project.priority);
+  return API.projectPriority(Store.projectId, { priority: next, changed_by: currentUserName() })
+    .then(function () { return refreshAfterRecordChange('Priority set to ' + next + '.'); })
+    .catch(function (error) { msg(error.message, 'error'); });
+}
 
 export function tasksForPipeline(pipeline) {
   // Prefer the authoritative stage lists from /api/meta (Store.meta); the
@@ -48,18 +133,19 @@ export function openDetail(projectId, pipeline) {
     Store.pipeline = currentProjectPipeline();
     activateTab(Store.pipeline);
     renderDetail();
-    // The detail shell is the page's last visible section, so aligning its
-    // TOP under the sticky header is often unreachable (not enough document
-    // below it) and the scroll stalls partway. Scroll to the document bottom
-    // instead: the shell fills the viewport from below. loadComponent fills
-    // the form fields ASYNCHRONOUSLY (fetches fields + folder info), which
-    // grows the document after the scroll target would otherwise be computed
-    // -- so wait for that render to settle (Promise.resolve tolerates
-    // loadComponent returning undefined when there's no task) and scroll on
-    // the next frame, once the grown document's height is final.
+    // Land the detail shell's TOP just under the sticky chrome: the shell
+    // scrolls into view block-start, and .detail-shell's scroll-margin-top
+    // (components.css) is sized to clear the sticky header + tabs, so the
+    // page opens reading the shell from its head. loadComponent fills the
+    // form fields ASYNCHRONOUSLY (fetches fields + folder info), which grows
+    // the document after the scroll target would otherwise be computed -- so
+    // wait for that render to settle (Promise.resolve tolerates loadComponent
+    // returning undefined when there's no task) and scroll on the next frame,
+    // once the grown document's height is final. Same variant
+    // switchPipelineView uses, so opening and switching land identically.
     Promise.resolve(loadComponent(chooseInitialTask(tasksForPipeline(Store.pipeline)))).then(function () {
       requestAnimationFrame(function () {
-        window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
+        byId('detail-shell').scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
     });
   }).catch(function (error) { msg(error.message, 'error'); });
@@ -69,9 +155,8 @@ export function openDetail(projectId, pipeline) {
 // sneak in. Keys match the stage_group values from workflow.py / /api/meta;
 // unknown stages fall back to a plain bullet.
 var STAGE_ICONS = {
-  'Lead Identification': '\u25CE',      // ◎ bullseye
-  'Risking': '\u2696\uFE0E',             // ⚖ scales
-  'Segmentation': '\u25A6',             // ▦ grid
+  'Lead Assessment': '\u25CE',          // ◎ bullseye
+  'Risk Analysis': '\u2696\uFE0E',       // ⚖ scales
   'Pre-Well Delivery': '\u26F3\uFE0E',   // ⛳ flag
   'Well Delivery': '\u2692\uFE0E',       // ⚒ hammer and pick
   'Post-Drilling': '\u26CF\uFE0E',       // ⛏ pick
@@ -92,7 +177,8 @@ function syncStageOpenState() {
   all('.rail-stage-head').forEach(function (head) {
     var isOpen = head.getAttribute('data-stage') === openStage;
     head.classList.toggle('open', isOpen);
-    head.setAttribute('aria-expanded', String(isOpen));
+    if (head.hasAttribute('data-task-id')) head.setAttribute('aria-current', isOpen ? 'step' : 'false');
+    else head.setAttribute('aria-expanded', String(isOpen));
   });
   all('.rail-stage-body').forEach(function (body) {
     body.classList.toggle('collapsed', body.getAttribute('data-stage') !== openStage);
@@ -104,9 +190,219 @@ function syncStageOpenState() {
 // picked, so the default-open stage is set here rather than at render time).
 export function revealTaskStage(task) {
   if (!task) return;
+  // Both rails are keyed by the stored stage group (v5 made the prospect
+  // groups the three sidebar headings).
   openStage = task.stage_group;
   openStageProjectId = Store.projectId;
   syncStageOpenState();
+  syncActiveStage();
+  syncMergedRowActive(task);
+}
+
+// A merged rail row (Card 4B's "Staking Letters") stands for several task
+// rows and lists their ids in data-task-ids. detail-form's own active toggle
+// matches only the button's primary data-task-id, so when the loaded task is
+// one of the OTHER rows the entry answers for (e.g. Well Site Location is the
+// project's current task), re-assert the highlight here -- this runs right
+// after that toggle inside loadComponent.
+function syncMergedRowActive(task) {
+  all('.component-item[data-task-ids]').forEach(function (button) {
+    var ids = (button.getAttribute('data-task-ids') || '').split(',').map(Number);
+    if (ids.indexOf(task.task_id) >= 0) button.classList.add('active');
+  });
+}
+
+// The lead sidebar marks its OPEN stage as the active one (navy accent +
+// underline). Applied in place, alongside syncStageOpenState, so toggling a
+// stage never re-renders the list.
+function syncActiveStage() {
+  all('.rail-stage-lead').forEach(function (stage) {
+    stage.classList.toggle('is-active', stage.getAttribute('data-stage') === openStage);
+  });
+}
+
+/* -------------------------------------------------------------------------
+   Card 2A — the three-stage LEAD sidebar
+
+   Exactly three rows: LEAD ASSESSMENT / RISK ANALYSIS / PRE-WELL DELIVERY,
+   each with the x/4 counter of the lead's TRACKED ITEMS (derived server-side,
+   the same twelve the board cards and the KPI donut read) and a chevron
+   (down = expanded, right = collapsed).
+
+   Under an expanded stage sit that stage's REAL steps. Since v5 that is a
+   straight 1:1 listing: each tracked item names exactly ONE stored step in its
+   `steps` list, and the item's own stage IS that step's stored stage group, so
+   nothing is regrouped, faked or dimmed here any more. Two details survive:
+     * the step name still comes off the item (`steps[0]`) rather than being
+       re-derived, so the server stays the single source of the mapping;
+     * a step a record does not actually carry -- a legacy row a migration
+       could not reach -- still shows its name, dimmed and unclickable, instead
+       of vanishing from the workflow.
+   Any prospect task row no tracked item names (there is none today) is
+   appended to its own stage, so the sidebar can never hide a real step.
+
+   Card 4B EXCEPTION: "Approval to Stake" and "Well Site Location" are two
+   letters in ONE staking package, and both already open the same consolidated
+   Staking Letters page. So the sidebar shows them as ONE entry -- "Staking
+   Letters", in Approval to Stake's slot, clicking through to exactly what
+   clicking Approval to Stake opened -- while the stage's x/4 counter (and the
+   board card) keep counting the two tracked items separately. The merged
+   entry wears the LEAST-advanced of the two statuses, so it reads completed
+   only when BOTH letters are, consistent with the counter. See
+   mergeStakingRows below.
+   ------------------------------------------------------------------------- */
+
+// [{ stage, done, total, rows: [{ task | label }] }] in board order, built from
+// the server's tracked_items plus the project's own task rows.
+export function leadStageGroups(trackedItems, tasks) {
+  var items = trackedItems || [];
+  var taskByName = {};
+  (tasks || []).forEach(function (task) { taskByName[task.task_name] = task; });
+  var order = [];
+  var byStage = {};
+  items.forEach(function (item) {
+    var stage = item.stage;
+    if (!byStage[stage]) { byStage[stage] = { stage: stage, done: 0, total: 0, rows: [] }; order.push(stage); }
+    var group = byStage[stage];
+    group.total += 1;
+    if (item.status === 'Completed') group.done += 1;
+    (item.steps || []).forEach(function (name) {
+      var task = taskByName[name];
+      group.rows.push({ label: name, task: task || null });
+      if (task) task._leadRailPlaced = true;
+    });
+  });
+  // v7 turns Lead Assessment into one real workflow row while retaining four
+  // board checkpoints. Those checkpoint entries only drive done/total here;
+  // the stage heading itself is the one navigation target, with no sub-rows.
+  var assessmentGroup = byStage['Lead Assessment'];
+  if (assessmentGroup) {
+    var preferred = ['Lead Assessment', 'Resource Assessment', 'Area Definition',
+                     'Thickness Estimation', 'GRV Inputs'];
+    assessmentGroup.task = null;
+    for (var p = 0; p < preferred.length && !assessmentGroup.task; p += 1) {
+      assessmentGroup.task = taskByName[preferred[p]] || null;
+    }
+    assessmentGroup.rows = [];
+    assessmentGroup.single = true;
+    (tasks || []).forEach(function (task) {
+      if (task.stage_group === 'Lead Assessment') task._leadRailPlaced = true;
+    });
+  }
+  // Task rows no tracked item names keep their place in the workflow: appended
+  // to their own stage, so the sidebar never loses a real step.
+  (tasks || []).forEach(function (task) {
+    if (task._leadRailPlaced) { delete task._leadRailPlaced; return; }
+    var stage = task.stage_group;
+    if (!byStage[stage]) { byStage[stage] = { stage: stage, done: 0, total: 0, rows: [] }; order.push(stage); }
+    byStage[stage].rows.push({ label: task.task_name, task: task });
+  });
+  if (byStage['Lead Assessment'] && !byStage['Lead Assessment'].single) {
+    assessmentGroup = byStage['Lead Assessment'];
+    assessmentGroup.task = taskByName['Lead Assessment'] || taskByName['Resource Assessment'] ||
+      taskByName['Area Definition'] || taskByName['Thickness Estimation'] || taskByName['GRV Inputs'] || null;
+    assessmentGroup.rows = [];
+    assessmentGroup.single = true;
+  }
+  return order.map(function (stage) { return mergeStakingRows(byStage[stage]); });
+}
+
+// A task status's position on the 4-state ladder (Not Assigned -> In Progress
+// -> Ready -> Approved). Unknown statuses rank least-advanced, so a merged
+// entry can never read further along than its data supports.
+function statusRank(status) {
+  var order = (Store.meta && Store.meta.statuses) || STATUSES;
+  var rank = order.indexOf(String(status || 'Not Assigned'));
+  return rank < 0 ? 0 : rank;
+}
+
+// Card 4B: collapse the two staking task rows into ONE "Staking Letters"
+// entry, in place, in Approval to Stake's slot. The merged row's `task` is
+// the Approval to Stake task -- clicking it does exactly what clicking that
+// row did (loadComponent -> the consolidated page) -- and `tasks` carries
+// both underlying rows so the active highlight can answer for either (see
+// syncMergedRowActive). Its status is the LEAST-advanced of the two, so the
+// glyph reads completed only when BOTH letters are, the same way the stage
+// counter treats them as two items. Rows numbered after the absorbed slot in
+// THIS stage slide down by one so the stage reads consecutively; no other
+// stage is renumbered. Defensive: if either row is missing or dimmed (a
+// legacy record a migration could not reach), nothing merges and both rows
+// render as they are.
+function mergeStakingRows(group) {
+  var first = -1;
+  var second = -1;
+  group.rows.forEach(function (row, index) {
+    if (!row.task) return;
+    if (row.task.task_name === STAKING_LETTER_STEPS[0]) first = index;
+    else if (row.task.task_name === STAKING_LETTER_STEPS[1]) second = index;
+  });
+  if (first < 0 || second < 0) return group;
+  var primary = group.rows[first].task;
+  var partner = group.rows[second].task;
+  var laggard = statusRank(partner.status) < statusRank(primary.status) ? partner : primary;
+  group.rows[first] = {
+    label: 'Staking Letters',
+    task: primary,
+    tasks: [primary, partner],
+    status: laggard.status,
+    num: Math.min(Number(primary.sequence_no), Number(partner.sequence_no))
+  };
+  group.rows.splice(second, 1);
+  var absorbed = Math.max(Number(primary.sequence_no), Number(partner.sequence_no));
+  group.rows.forEach(function (row) {
+    if (row.task && Number(row.task.sequence_no) > absorbed) row.num = Number(row.task.sequence_no) - 1;
+  });
+  return group;
+}
+
+function leadRailRowHtml(row) {
+  if (!row.task) {
+    // Defensive only: every tracked item has a real step since v5, so this
+    // renders solely for a record missing a row the workflow says it should
+    // have (a legacy row a migration could not reach).
+    return '<div class="component-item component-item-future"' +
+      ' title="This step is not on this record." aria-disabled="true">' +
+      '<span class="component-num" aria-hidden="true">·</span><b>' + esc(row.label) + '</b></div>';
+  }
+  // A merged row (Card 4B) overrides the status and slot number it renders
+  // under; a plain row reads both straight off its task. `data-task-ids`
+  // lists every task a merged row answers for, so the active highlight can
+  // match whichever of them is actually loaded (syncMergedRowActive).
+  var slug = String((row.status || row.task.status) || 'Not Assigned').toLowerCase().replace(/\s+/g, '-');
+  var num = row.num != null ? row.num : row.task.sequence_no;
+  var idsAttr = row.tasks
+    ? ' data-task-ids="' + esc(row.tasks.map(function (task) { return task.task_id; }).join(',')) + '"'
+    : '';
+  return '<button type="button" class="component-item status-' + slug + '" data-task-id="' + row.task.task_id + '"' + idsAttr + '>' +
+    '<span class="component-num">' + esc(num) + '</span><b>' + esc(row.label) + '</b></button>';
+}
+
+function renderLeadRail(tasks) {
+  var groups = leadStageGroups((Store.project || {}).tracked_items, tasks);
+  byId('component-list').innerHTML = groups.map(function (group) {
+    var isOpen = group.stage === openStage;
+    var icon = ICONS[LEAD_STAGE_ICONS[group.stage]] || '';
+    if (group.single) {
+      var enabled = !!group.task;
+      return '<div class="rail-stage rail-stage-lead rail-stage-single' + (isOpen ? ' is-active' : '') + '" data-stage="' + esc(group.stage) + '">' +
+        (enabled ? '<button type="button" class="rail-stage-head' + (isOpen ? ' open' : '') + '" data-stage="' + esc(group.stage) +
+          '" data-task-id="' + group.task.task_id + '" aria-current="' + (isOpen ? 'step' : 'false') + '">' :
+          '<div class="rail-stage-head" aria-disabled="true">') +
+        '<span class="stage-icon" aria-hidden="true">' + icon + '</span>' +
+        '<span class="rail-stage-name">' + esc(group.stage) + '</span>' +
+        '<span class="rail-stage-count">' + group.done + '/' + group.total + '</span>' +
+        (enabled ? '</button>' : '</div>') + '</div>';
+    }
+    return '<div class="rail-stage rail-stage-lead' + (isOpen ? ' is-active' : '') + '" data-stage="' + esc(group.stage) + '">' +
+      '<button type="button" class="rail-stage-head' + (isOpen ? ' open' : '') + '" data-stage="' + esc(group.stage) +
+      '" aria-expanded="' + isOpen + '">' +
+      '<span class="stage-icon" aria-hidden="true">' + icon + '</span>' +
+      '<span class="rail-stage-name">' + esc(group.stage) + '</span>' +
+      '<span class="rail-stage-count">' + group.done + '/' + group.total + '</span>' +
+      '<span class="rail-stage-chevron" aria-hidden="true"></span></button>' +
+      '<div class="rail-stage-body' + (isOpen ? '' : ' collapsed') + '" data-stage="' + esc(group.stage) + '">' +
+      group.rows.map(leadRailRowHtml).join('') + '</div></div>';
+  }).join('') || '<div class="empty-state">No components in this pipeline.</div>';
 }
 
 export function renderDetail() {
@@ -117,9 +413,24 @@ export function renderDetail() {
   var otherPipeline = Store.pipeline === 'bp' ? 'prospect' : 'bp';
   var otherLabel = otherPipeline === 'bp' ? 'Business Plan Execution' : 'Prospect Maturation';
   var isReference = !isCurrentPipelineView();
+  var leadView = isLeadView();
   byId('detail-name').textContent = Store.project.project_name || 'Lead / Well';
+  // The chip ships hidden in index.html (no record selected yet); the render
+  // rewrites its className wholesale, which is also what reveals it.
+  renderLeadPriorityChip();
   byId('detail-subtitle').textContent = viewLabel + (isReference ? ' · Reference view' : ' · Current phase');
   byId('back-to-overview').textContent = '← Back to ' + currentLabel;
+  /* Card 2A shell swap. The LEAD page shows one outlined back control and an
+     enlarged lead name; the "Prospect Maturation · Current phase" subtitle and
+     the visible "Edit all project fields" link are gone (the latter is
+     relocated into the Lead Summary gear as "Edit All Inputs" and is clicked
+     through this still-wired button). The BP well page and every reference
+     view keep the original two controls, subtitle and link. */
+  byId('detail-shell').classList.toggle('detail-shell-lead', leadView);
+  byId('back-to-board').classList.toggle('hidden', !leadView);
+  byId('rail-nav').classList.toggle('hidden', leadView);
+  byId('detail-subtitle').classList.toggle('hidden', leadView);
+  byId('open-project-editor').classList.toggle('hidden', leadView);
   var switchButton = byId('switch-pipeline-view');
   switchButton.textContent = isReference ? '← Back to ' + currentLabel : 'View ' + otherLabel + ' →';
   switchButton.setAttribute('aria-label', switchButton.textContent + ' for ' + (Store.project.project_name || 'this record'));
@@ -132,6 +443,13 @@ export function renderDetail() {
   // Accordion state is per-project: a fresh selection starts fully collapsed
   // (revealTaskStage opens the selected task's stage right after this render).
   if (Store.projectId !== openStageProjectId) { openStage = null; openStageProjectId = Store.projectId; }
+  if (leadView) {
+    renderLeadRail(tasks);
+    wireRailHandlers();
+    renderRightPanel(tasks);
+    return;
+  }
+  // ---- BP well / reference view: the original stage rail, untouched --------
   // Tasks arrive ordered by sequence_no, so a new stage group begins wherever
   // stage_group changes between consecutive items.
   var groups = [];
@@ -157,23 +475,37 @@ export function renderDetail() {
       '<span class="rail-stage-chevron" aria-hidden="true"></span></button>' +
       '<div class="rail-stage-body' + (isOpen ? '' : ' collapsed') + '" data-stage="' + esc(group.stage) + '">' + items + '</div></div>';
   }).join('') || '<div class="empty-state">No components in this pipeline.</div>';
+  wireRailHandlers();
+  renderRightPanel(tasks);
+}
+
+// Stage headers toggle in place; component rows load their step. Shared by the
+// lead sidebar and the BP rail -- both render the same class contract, so one
+// wiring pass serves either. (`.component-item-future` rows are <div>s with no
+// data-task-id, so they are inert by construction.)
+function wireRailHandlers() {
   all('.rail-stage-head').forEach(function (head) {
     head.addEventListener('click', function () {
+      if (head.hasAttribute('data-task-id')) {
+        var taskId = Number(head.getAttribute('data-task-id'));
+        loadComponent(Store.tasks.find(function (task) { return task.task_id === taskId; }));
+        return;
+      }
       var stage = head.getAttribute('data-stage');
       // Toggle: clicking the open stage collapses it; else open it (and the
       // single-open sync closes whichever was open before).
       openStage = (openStage === stage) ? null : stage;
       openStageProjectId = Store.projectId;
       syncStageOpenState();
+      syncActiveStage();
     });
   });
-  all('.component-item').forEach(function (button) {
+  all('.component-item[data-task-id]').forEach(function (button) {
     button.addEventListener('click', function () {
       var taskId = Number(button.getAttribute('data-task-id'));
       loadComponent(Store.tasks.find(function (task) { return task.task_id === taskId; }));
     });
   });
-  renderRightPanel(tasks);
 }
 
 // Review the same record's other phase without changing its persisted phase.
@@ -209,6 +541,33 @@ function blockForAr(map, ar) {
   }
   return '';
 }
+/* Ordered task-name ladders for the lead-phase field map, and the tiny reader
+   over them. A plain `fields['<step>']` lookup is no longer enough, for two
+   independent reasons -- both about buckets that still answer to a PRE-v5 name:
+     * the v5 MERGE created a new "Trap and Seal CoS" row; a lead scored before
+       it still holds trap_cos_pct / seal_cos_pct under the now-retired
+       "Trap CoS" / "Seal CoS" buckets (the backend field map is
+       retired-inclusive, so they are on the payload);
+     * lead_summary_snapshots froze their {task_name: {key: value}} JSON at
+       PROMOTION time and are never rewritten -- they are a historical record --
+       so a well promoted before v5 carries the pre-RENAME bucket names for
+       ever, and leadFieldSource() merges exactly that map with the live one.
+   Surviving name first, legacy second: first non-blank wins, so re-entering a
+   value on the current step always supersedes the frozen/retired one. */
+var AREA_STEPS = ['Lead Assessment', 'Area Definition', 'Reservoir Area Definition'];
+var THICKNESS_STEPS = ['Lead Assessment', 'Thickness Estimation'];
+var TRAP_STEPS = ['Trap and Seal CoS', 'Trap CoS'];
+var SEAL_STEPS = ['Trap and Seal CoS', 'Seal CoS'];
+
+export function fieldFrom(map, taskNames, key) {
+  var source = map || {};
+  for (var i = 0; i < taskNames.length; i += 1) {
+    var value = (source[taskNames[i]] || {})[key];
+    if (isFilled(value)) return value;
+  }
+  return '';
+}
+
 // Primary Reservoir CoS row, split into its percent and a "Block · AR n"
 // reference. The primary is the FIRST non-empty row (the global first-row
 // semantic — backend Total CoS and the portfolio read the same row). Prefer the
@@ -225,9 +584,12 @@ export function reservoirCosPrimary(fieldMap) {
     var parts = [];
     if (isFilled(block)) parts.push(block);
     if (isFilled(row.seismic_volume_ar_number)) parts.push('AR ' + row.seismic_volume_ar_number);
-    return { pct: String(row.reservoir_cos_pct), ref: parts.join(' · ') };
+    // `block` / `ar` are the same two values `ref` joins, kept separate for the
+    // Card 2A Lead Summary footer, which lays them out itself ("Block A | AR-n").
+    return { pct: String(row.reservoir_cos_pct), ref: parts.join(' · '),
+             block: block || '', ar: row.seismic_volume_ar_number || '' };
   }
-  return { pct: '', ref: '' };
+  return { pct: '', ref: '', block: '', ar: '' };
 }
 // Legacy one-string form ("Block · AR n: NN%"), kept for back-compat callers.
 export function reservoirCosSummary(fieldMap) {
@@ -250,6 +612,27 @@ function gasTrio(sources, fieldMap) {
     return { p90: fields[prefix + '_gas_p90'], mean: fields[meanKey], p10: fields[prefix + '_gas_p10'] };
   }
   return { p90: '', mean: '', p10: '' };
+}
+
+// The liquid (condensate) trio, or NULL when the lead has none.
+//
+// `<prefix>_has_liquid` IS the saved "this was a Condensate scenario" marker:
+// the calculator writes it '1' exactly when the run produced condensate, i.e.
+// when the selected scenario's resource_type is condensate (see
+// views/resource-calculator.js buildLeadApplyFields), and '' otherwise. So this
+// reads SAVED DATA, never the scenario dropdown's current position. Same source
+// ladder and same precedence as gasTrio, so gas and liquid can only ever come
+// from a step the lead actually recorded; null hides the section outright.
+function liquidTrio(sources, fieldMap) {
+  var sourceMap = fieldMap || Store.allFields;
+  for (var i = 0; i < sources.length; i += 1) {
+    var fields = sourceMap[sources[i][0]] || {};
+    var prefix = sources[i][1].replace(/_gas_mean$/, '');
+    if (!truthy(fields[prefix + '_has_liquid'])) continue;
+    return { p90: fields[prefix + '_liquid_p90'], mean: fields[prefix + '_liquid_mean'],
+             p10: fields[prefix + '_liquid_p10'] };
+  }
+  return null;
 }
 
 // "Actual" formation data resolves across phases newest-first: a formation's
@@ -292,13 +675,14 @@ function sarhFluidAtPhase(phase) {
   return '';
 }
 // "tight" is DERIVED, never a default: the formation row must EXIST (it was
-// penetrated/logged in a BP step) AND read as non-pay — fluid 'Dry', or a blank
-// fluid with zero pay. A missing row (no BP data) is NOT tight; it renders as a
-// dash. Generic across formations so any barren reservoir can read "tight".
+// penetrated/logged in a BP step) AND read as non-pay — fluid 'Dry Hole' (or
+// its pre-v10 spelling 'Dry'), or a blank fluid with zero pay. A missing row
+// (no BP data) is NOT tight; it renders as a dash. Generic across formations so
+// any barren reservoir can read "tight".
 function formationIsTight(row) {
   if (!row) return false;
   var fluid = String(row.fluid || '').trim();
-  if (fluid === 'Dry') return true;
+  if (fluid === 'Dry' || fluid === 'Dry Hole') return true;
   return fluid === '' && (row.pay_ft === 0 || String(row.pay_ft).trim() === '0');
 }
 // One compact reservoir line: formation name + its filled metrics (thickness,
@@ -353,6 +737,51 @@ function wireFolds() {
   });
 }
 
+// Folders fold: one row per WELL_OVERVIEW_DIRECTORY_MAP section key (see
+// folders.get_section_folder_link). Rendered synchronously as a loading
+// placeholder -- the summary card itself never waits on the network -- then
+// filled in by wireFolderLinks() once each lazy fetch resolves. Mirrors the
+// component-folder card's glyph/path/copy-button markup (renderComponentFolder
+// in detail-form.js) so both folder-link styles read as one pattern.
+function folderRowHtml(sectionKey) {
+  return '<div class="folder-card" data-folder-key="' + esc(sectionKey) + '">' +
+    '<span class="folder-glyph" aria-hidden="true">📁</span>' +
+    '<span class="folder-path" id="summary-folder-path-' + esc(sectionKey) + '">Loading…</span>' +
+    '<button type="button" class="icon-btn" id="summary-folder-copy-' + esc(sectionKey) +
+    '" title="Copy folder link" aria-label="Copy folder link" disabled>⧉</button></div>';
+}
+function foldersHtml(sectionKeys) {
+  return '<div class="summary-folders">' + sectionKeys.map(folderRowHtml).join('') + '</div>';
+}
+// Fetches each section's folder link after the card is already on screen and
+// fills the placeholder row in place. A 404/failure (unmounted share, unknown
+// section) degrades to a quiet inline message -- never a thrown console error
+// -- and a stale response for a project the user has since navigated away
+// from is dropped rather than overwriting the now-current card.
+function wireFolderLinks(sectionKeys) {
+  var forProjectId = Store.projectId;
+  sectionKeys.forEach(function (sectionKey) {
+    API.sectionFolder(forProjectId, sectionKey).then(function (info) {
+      if (Store.projectId !== forProjectId) return;
+      var pathEl = byId('summary-folder-path-' + sectionKey);
+      var copyBtn = byId('summary-folder-copy-' + sectionKey);
+      if (!pathEl) return;
+      var path = (info && info.unc_path) || '';
+      var label = (info && info.section) || sectionKey;
+      pathEl.textContent = label + ': ' + (path || 'Not configured.');
+      pathEl.title = path || '';
+      if (copyBtn && path) {
+        copyBtn.disabled = false;
+        copyBtn.addEventListener('click', function () { copyText(path); });
+      }
+    }).catch(function () {
+      if (Store.projectId !== forProjectId) return;
+      var pathEl = byId('summary-folder-path-' + sectionKey);
+      if (pathEl) pathEl.textContent = 'Folder link unavailable.';
+    });
+  });
+}
+
 function numOrNull(value) {
   if (!isFilled(value)) return null;
   var n = Number(value);
@@ -399,11 +828,11 @@ function statCluster(label, cols, context) {
     contextHtml + '</div>';
 }
 
-// The lead phase's own PIIP mean sources (the tail of LATEST_PIIP_SOURCES,
-// which leads with the two post-drill assessments). Used wherever a LEAD value
-// is wanted from a drilled well: Prediction vs Actual's predicted mean and the
-// well card's Lead Summary fold, neither of which may read post-drill numbers.
-var LEAD_PIIP_SOURCES = LATEST_PIIP_SOURCES.slice(2);
+// LEAD_PIIP_SOURCES (the lead half of LATEST_PIIP_SOURCES) and
+// POST_DRILL_PIIP_SOURCES (the post-drill half, merged steps first and their
+// pre-v4 retired twins right behind) are imported from detail-form.js by name
+// rather than sliced out by index -- the two halves changed length when the v4
+// step merges added the legacy fallback entries.
 
 // The lead-phase field map as seen from the well card: the snapshot frozen at
 // promotion wins field by field, with the live lead tasks (which stay active
@@ -441,11 +870,11 @@ function leadMetricsHtml(fieldMap, gasSources) {
       { label: 'Mean', value: trio.mean },
       { label: 'P10', value: trio.p10 }
     ]) +
-    metricRow('Reservoir Thickness (ft)', (fieldMap['Thickness Estimation'] || {}).reservoir_thickness_ft) +
+    metricRow('Reservoir Thickness (ft)', fieldFrom(fieldMap, THICKNESS_STEPS, 'reservoir_thickness_ft')) +
     statCluster('Chance of Success (%)', [
       { label: 'Res', value: resCos.pct },
-      { label: 'Trap', value: (fieldMap['Trap CoS'] || {}).trap_cos_pct },
-      { label: 'Seal', value: (fieldMap['Seal CoS'] || {}).seal_cos_pct },
+      { label: 'Trap', value: fieldFrom(fieldMap, TRAP_STEPS, 'trap_cos_pct') },
+      { label: 'Seal', value: fieldFrom(fieldMap, SEAL_STEPS, 'seal_cos_pct') },
       { label: 'Total', value: (Store.overview || {}).derisking }
     ], resCos.ref) +
     '</div>';
@@ -490,7 +919,75 @@ function wireSummarySettings() {
   });
 }
 
+/* Card 2A: resolve the shared Lead Summary's ONE data object out of Store.
+   Everything the component renders is decided here; leadSummaryHtml itself
+   reads no state. Kept exported so a test can assert the SHAPE without the
+   markup. */
+export function leadSummaryData() {
+  var fields = Store.allFields || {};
+  var resCos = reservoirCosPrimary(fields);
+  var thickness = fields['Lead Assessment'] || fields['Thickness Estimation'] || {};
+  return {
+    // The lead's twelve TRACKED ITEMS, derived server-side and already on the
+    // /detail payload's project row (get_project runs the same annotation the
+    // board rows get). Counted with the board's own helper, so the card's
+    // "NN% n / 12" and the board donut can never disagree. A record without
+    // tracked items (a BP well) simply reads 0 / 12.
+    progress: {
+      completed: completedItemCount(Store.project || {}),
+      total: TRACKED_ITEM_COUNT
+    },
+    gas: gasTrio(LATEST_PIIP_SOURCES, fields),
+    liquid: liquidTrio(LATEST_PIIP_SOURCES, fields),
+    // The FINAL calculated thicknesses in feet. The two-way TWT (ms) inputs the
+    // Card 2B form will carry are a different pair of keys entirely and are
+    // deliberately never read here.
+    thickness: {
+      formation: thickness.formation_thickness_ft,
+      reservoir: thickness.reservoir_thickness_ft
+    },
+    area: {
+      p90: fieldFrom(fields, AREA_STEPS, 'p90_area_km2'),
+      p10: fieldFrom(fields, AREA_STEPS, 'p10_area_km2')
+    },
+    cos: {
+      reservoir: resCos.pct,
+      trap: fieldFrom(fields, TRAP_STEPS, 'trap_cos_pct'),
+      seal: fieldFrom(fields, SEAL_STEPS, 'seal_cos_pct'),
+      // Derived at read time (Reservoir x Trap x Seal) and delivered by
+      // /detail's overview -- never recomputed on the client.
+      total: (Store.overview || {}).derisking
+    },
+    block: resCos.block,
+    ar: resCos.ar,
+    canManage: isCurrentPipelineView()
+  };
+}
+
 export function renderRightPanel(tasks) {
+  var staticHead = byId('summary-card-head');
+  if (isLeadView()) {
+    /* ---- Card 2A: the shared LEAD SUMMARY component ----------------------
+       It renders its own header + gear, so the card's static header is hidden
+       here; it is restored for the well card below. The three gear items are
+       exactly Edit All Inputs / Rename Lead / Delete Lead -- "Edit All Inputs"
+       triggers the SAME #open-project-editor action the (now hidden) rail link
+       used to expose, clicked through rather than imported so this module does
+       not take a circular dependency on views/project-editor.js. */
+    if (staticHead) staticHead.classList.add('hidden');
+    byId('lead-summary').innerHTML = leadSummaryHtml(leadSummaryData());
+    wireLeadSummary({
+      onEditAll: function () {
+        var button = byId('open-project-editor');
+        if (button) button.click();
+      },
+      onRename: renameSelectedProject,
+      onDelete: deleteSelectedProject
+    });
+    return;
+  }
+  if (staticHead) staticHead.classList.remove('hidden');
+  closeLeadSummaryMenu();
   // `tasks` is already scoped to the operating pipeline's stages (see
   // tasksForPipeline), so every row counts toward progress.
   var completed = tasks.filter(function (task) { return DONE[task.status]; }).length;
@@ -523,7 +1020,7 @@ export function renderRightPanel(tasks) {
     var sarh = deduped['SARH'] ? deduped['SARH'].row : null;
     // Post-Drill Gas: source-consistent P90/Mean/P10 from resource_update else
     // post_drill (the drilled results only). Mean feeds Prediction vs Actual.
-    var postDrillTrio = gasTrio(LATEST_PIIP_SOURCES.slice(0, 2));
+    var postDrillTrio = gasTrio(POST_DRILL_PIIP_SOURCES);
     var meanPostDrill = postDrillTrio.mean;
     var prognosis = (Store.allFields['Well Proposal'] || {}).sarh_formation_prognosis_pre_drill;
     // SARH top prefers the formation row; legacy wells stored the top at step
@@ -532,7 +1029,7 @@ export function renderRightPanel(tasks) {
     if (!isFilled(topSarh)) {
       topSarh = firstFilledValue([
         (Store.allFields['Final Log Analysis'] || {}).final_top_reservoir_tvdss_ft,
-        (Store.allFields['Quicklook Logs Interpretation'] || {}).quicklook_top_reservoir_tvdss_ft
+        (Store.allFields['Quicklook Logs'] || {}).quicklook_top_reservoir_tvdss_ft
       ]);
     }
     var metricsHtml = '<div class="summary-metrics">' +
@@ -561,14 +1058,18 @@ export function renderRightPanel(tasks) {
     // Well fluid ladder (newest authority first), matching the backend: SARH's
     // final-phase formation fluid, then legacy final_fluid_type, the two
     // resource assessments' fluid, SARH's quicklook-phase fluid, then legacy
-    // quicklook_fluid_type.
+    // quicklook_fluid_type. Each resource-assessment rung is read from the
+    // step that owns it since the v4 merges (SAD Update / SAD Model) with the
+    // retired step it absorbed right behind it, for wells written before.
     var fluid = firstFilledValue([
       sarhFluidAtPhase('final'),
       (Store.allFields['Final Log Analysis'] || {}).final_fluid_type,
+      (Store.allFields['SAD Update'] || {}).resource_update_fluid_type,
       (Store.allFields['Resource Assessment Update'] || {}).resource_update_fluid_type,
+      (Store.allFields['SAD Model'] || {}).post_drill_fluid_type,
       (Store.allFields['Post-Drilling Resource Assessment'] || {}).post_drill_fluid_type,
       sarhFluidAtPhase('quicklook'),
-      (Store.allFields['Quicklook Logs Interpretation'] || {}).quicklook_fluid_type
+      (Store.allFields['Quicklook Logs'] || {}).quicklook_fluid_type
     ]);
     var flowEntry = FLOWBACK_RATE_FIELDS[fluid] || FLOWBACK_RATE_FIELDS['Gas'];
     // Primary flowback values are stage #1 -- the first non-empty row of the
@@ -594,8 +1095,8 @@ export function renderRightPanel(tasks) {
     // Prediction vs Actual: predicted values read the frozen lead snapshot,
     // falling back to live fields where the plan allows.
     var snap = (Store.leadSummary && Store.leadSummary.fields) || {};
-    var predThickness = (snap['Thickness Estimation'] || {}).reservoir_thickness_ft;
-    if (!isFilled(predThickness)) predThickness = (Store.allFields['Thickness Estimation'] || {}).reservoir_thickness_ft;
+    var predThickness = fieldFrom(snap, THICKNESS_STEPS, 'reservoir_thickness_ft');
+    if (!isFilled(predThickness)) predThickness = fieldFrom(Store.allFields, THICKNESS_STEPS, 'reservoir_thickness_ft');
     var predMean = '';
     for (var si = 0; si < LEAD_PIIP_SOURCES.length && !isFilled(predMean); si += 1) predMean = (snap[LEAD_PIIP_SOURCES[si][0]] || {})[LEAD_PIIP_SOURCES[si][1]] || '';
     for (var li = 0; li < LEAD_PIIP_SOURCES.length && !isFilled(predMean); li += 1) predMean = (Store.allFields[LEAD_PIIP_SOURCES[li][0]] || {})[LEAD_PIIP_SOURCES[li][1]] || '';
@@ -617,27 +1118,51 @@ export function renderRightPanel(tasks) {
     var leadHtml = foldSection('lead', 'Lead Summary',
       leadMetricsHtml(leadFieldSource(), LEAD_PIIP_SOURCES) + capturedNote);
 
-    bodyHtml = metricsHtml + reservoirsHtml + flowbackHtml + pvaHtml + leadHtml;
+    // Folder links: the well's own shared folders (Well/MTR/PDA), not the
+    // lead's -- those already live inside the folded Lead Summary above via
+    // the pipeline itself, and get_section_folder_link resolves them from
+    // config.WELL_OVERVIEW_DIRECTORY_MAP by these same keys.
+    var folderSectionKeys = ['well', 'mtr', 'pda'];
+    var foldersFoldHtml = foldSection('folders', 'Folders', foldersHtml(folderSectionKeys));
+
+    bodyHtml = metricsHtml + reservoirsHtml + flowbackHtml + pvaHtml + leadHtml + foldersFoldHtml;
   } else {
     // ---- Lead card ----------------------------------------------------------
     // Res CoS is the primary first-row percent; its "Block · AR n" reference
     // rides along as the cluster's quiet context line (no bulky <small> label).
-    bodyHtml = leadMetricsHtml(Store.allFields, LATEST_PIIP_SOURCES);
+    var folderSectionKeys = ['lead'];
+    var foldersFoldHtml = foldSection('folders', 'Folders', foldersHtml(folderSectionKeys));
+    bodyHtml = leadMetricsHtml(Store.allFields, LATEST_PIIP_SOURCES) + foldersFoldHtml;
   }
-  // Popover: what the compact card dropped but still needs a home -- the Active
-  // Well flag, the phase move, and rename/delete. The phase button is
-  // supervisor-only (canTransitionPhase) and, like every action in here, is
-  // withheld from the reference view; transitions.js owns the confirm + PATCH.
-  var phaseButtonHtml = '';
-  if (canTransitionPhase() && !referenceOnly) {
-    phaseButtonHtml = '<div class="summary-popover-actions">' + (isBP
-      ? '<button id="summary-phase-action" type="button" class="ghost danger-outline">Recall to Lead Phase…</button>'
-      : '<button id="summary-phase-action" type="button" class="ghost">Promote to BP Well…</button>') + '</div>';
+  /* Popover: what the compact card dropped but still needs a home -- the Active
+     Well flag, the phase move, and rename/delete. The phase button is
+     supervisor-only (canTransitionPhase) and, like every action in here, is
+     withheld from the reference view; transitions.js owns the confirm + PATCH.
+
+     Card 2A RELOCATION: the Active Well checkbox and the phase move are WELL
+     concerns, so they now render only in this (well / reference) popover --
+     the redesigned Lead Summary gear carries exactly three lead actions and
+     neither of these. Nothing was removed from the app: for a BP well both
+     controls are exactly where they were, and for a LEAD both remain reachable
+     through "Edit All Inputs" -> the all-fields editor's Properties card
+     (its Active Well checkbox and its supervisor-gated "Promote to BP Well…"
+     phase row), plus this popover whenever the lead is opened through the
+     Business Plan Execution reference view. */
+  var relocatedHtml = '';
+  if (viewingBP) {
+    var phaseButtonHtml = '';
+    if (canTransitionPhase() && !referenceOnly) {
+      phaseButtonHtml = '<div class="summary-popover-actions">' + (isBP
+        ? '<button id="summary-phase-action" type="button" class="ghost danger-outline">Recall to Lead Phase…</button>'
+        : '<button id="summary-phase-action" type="button" class="ghost">Promote to BP Well…</button>') + '</div>';
+    }
+    relocatedHtml =
+      '<label class="summary-popover-check"><input id="summary-active-flag" type="checkbox" ' +
+      (isActive ? 'checked' : '') + '> Active Well</label>' + phaseButtonHtml;
   }
   var popoverHtml =
     '<div id="summary-settings" class="summary-popover hidden" role="dialog" aria-label="Manage ' + recordKind.toLowerCase() + '">' +
-    '<label class="summary-popover-check"><input id="summary-active-flag" type="checkbox" ' + (isActive ? 'checked' : '') + '> Active Well</label>' +
-    phaseButtonHtml +
+    relocatedHtml +
     '<div class="summary-popover-actions"><button id="rename-record" type="button" class="ghost">Rename ' + recordKind + '</button><button id="delete-record" type="button" class="danger">Delete ' + recordKind + '</button></div></div>';
 
   byId('summary-title').textContent = viewingBP ? 'Well Summary' : 'Lead Summary';
@@ -678,22 +1203,32 @@ export function renderRightPanel(tasks) {
   // Prediction-vs-Actual / Lead Summary folds (well card only; the lead card
   // renders none, so this is a no-op there).
   wireFolds();
+  wireFolderLinks(folderSectionKeys);
   wireSummarySettings();
 }
 export function refreshAfterRecordChange(message) {
   return API.detail(Store.projectId)
     .then(function (detail) {
       var currentTaskId = Store.task && Store.task.task_id;
+      // Item A: an auto-save lands here mid-typing. Snapshot the focused form
+      // control before the re-render replaces it, restore it after -- a no-op
+      // for every non-form flow (transition, rename, priority) that also
+      // refreshes through here.
+      var focusSnapshot = captureEditorFocus();
       Store.project = detail.project || {};
       Store.tasks = detail.tasks || [];
       Store.allFields = detail.fields || {};
       Store.leadSummary = detail.lead_summary || null;
-    Store.overview = detail.overview || null;
-    Store.formations = detail.formations || [];
+      Store.overview = detail.overview || null;
+      Store.formations = detail.formations || [];
       renderDetail();
-      loadComponent(Store.tasks.find(function (task) { return task.task_id === currentTaskId; }) || chooseInitialTask(tasksForPipeline(Store.pipeline)));
-      refreshAllBoards();
-      if (message) msg(message, 'success');
+      var nextTask = Store.tasks.find(function (task) { return task.task_id === currentTaskId; }) ||
+        chooseInitialTask(tasksForPipeline(Store.pipeline));
+      return Promise.resolve(loadComponent(nextTask)).then(function () {
+        restoreEditorFocus(focusSnapshot);
+        refreshAllBoards();
+        if (message) msg(message, 'success');
+      });
     });
 }
 export async function renameSelectedProject() {

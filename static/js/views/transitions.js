@@ -4,11 +4,18 @@ import { currentRole } from '../state.js';
 import { DONE } from '../schema.js';
 import { confirmDialog } from '../dialog.js';
 
+var BP_YEAR_MAX = 2035;
+
 // Phase transitions: the ONLY way a record moves between the lead maturation
 // pipeline and the Business Plan execution pipeline. Both helpers confirm via
 // dialog, then PATCH /flags with business_plan_enabled — the one backend path
 // that runs the full promote/recall side effects (snapshot, stage switch) and
 // 403s non-supervisors. Callers own the post-transition refresh + messaging.
+//
+// Promotion never targets a past year (backend-enforced too, current-year
+// through BP_YEAR_MAX): only Excel imports may land historical BP years, via
+// a separate backend path. The BP board's own year filter is unrelated and
+// still browses the full 1999-2035 history (business-plan.js — untouched).
 
 export function canTransitionPhase() {
   return currentRole() === 'supervisor';
@@ -22,8 +29,11 @@ export function canTransitionPhase() {
 export function promoteProject(project, prospectTasks, changedBy) {
   var tasks = prospectTasks || [];
   var approved = tasks.filter(function (task) { return DONE[task.status]; }).length;
-  var year = Number(project.business_plan_year || new Date().getFullYear());
-  if (year < 2026 || year > 2040) year = 2026;
+  var currentYear = new Date().getFullYear();
+  var year = Number(project.business_plan_year || currentYear);
+  if (year < currentYear || year > BP_YEAR_MAX) {
+    year = currentYear;
+  }
   var lines = [];
   if (tasks.length) {
     lines.push(approved + ' of ' + tasks.length + ' prospect steps approved.');
@@ -31,13 +41,13 @@ export function promoteProject(project, prospectTasks, changedBy) {
       lines.push('Promoting now switches this record to the Well Delivery stages before maturation is complete.');
     }
   }
-  lines.push('The record switches to the BP execution stages, a Lead Summary snapshot is captured, and the well appears in the Portfolio.');
+  lines.push('The record switches to the BP execution stages, a Lead Summary snapshot is captured, and the well appears in Business Plan Execution for the selected year.');
   return confirmDialog({
     title: 'Promote to BP Well',
     message: lines.join('\n'),
     confirmLabel: 'Promote',
     selectLabel: 'Business Plan Year',
-    selectOptions: range(2026, 2040),
+    selectOptions: range(currentYear, BP_YEAR_MAX),
     selectValue: String(year)
   }).then(function (selectedYear) {
     if (selectedYear === null) return null;
@@ -45,6 +55,9 @@ export function promoteProject(project, prospectTasks, changedBy) {
       business_plan_enabled: true,
       business_plan_year: selectedYear,
       changed_by: changedBy
+    }).then(function (result) {
+      result.business_plan_year = Number(selectedYear);
+      return result;
     });
   });
 }

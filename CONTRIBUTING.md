@@ -26,8 +26,12 @@ Recipes for the changes you will actually be asked to make. Read
    `models.py` PLUS a guarded, append-only `(version, fn)` step in
    `migrations.py` with `LATEST_SCHEMA_VERSION` bumped (recipe 5). Never edit
    a shipped step — append a new numbered one.
-5. **Every behavior change lands with a test** in the same change. The suite is
-   the contract: `.venv/bin/pytest tests/ -q`.
+5. **Every behavior change lands with a test** in the same change. There are
+   TWO required suites and both are the contract: the backend
+   `.venv/bin/pytest tests/ -q` (532 tests) and the front-end harness
+   `.venv/bin/python run_frontend_tests.py` (416 tests). A front-end change
+   lands with a `static/tests/test-*.js` test, registered in
+   `static/tests/runner.html`.
 6. **Domain function conventions:** `session` is always the first argument,
    `changed_by` the last; validation failures `raise ValueError("user-facing
    message.")` — never return an error dict, never catch-and-400 in a route.
@@ -61,11 +65,12 @@ for the workflow — there is no templates table.
 5. **Renaming** a component pre-deployment is the same edit — change the name
    in the tuple (and in `schema.js`, `_OVERVIEW_READ_SOURCES` and
    `COMPONENT_FILE_SECTIONS` if it appears there), then regenerate the dev DB.
-6. Tests: the task-count pins must move with you — the `31` counts in
+6. Tests: the task-count pins must move with you — the `27` counts in
    `tests/test_workflow_lifecycle.py`
-   (`test_new_prospect_project_has_31_tasks_all_not_assigned`,
-   `test_new_bp_project_seeds_all_31_tasks_not_assigned`) and
-   `tests/test_bootstrap.py` (`test_new_project_gets_31_active_tasks`), plus
+   (`test_new_prospect_project_has_27_tasks_all_not_assigned`,
+   `test_new_bp_project_seeds_all_27_tasks_not_assigned`) and
+   `tests/test_bootstrap.py` (`test_new_project_gets_27_active_tasks`,
+   `test_new_project_materializes_the_v5_template`), plus
    the completion-percent arithmetic tests if the new step lands in a
    Prospect stage.
 
@@ -100,14 +105,17 @@ You DO need backend work when:
 ## Recipe 3: Change a CoS formula
 
 1. Edit the pure function in `cos.py` (`calculate_seal_cos`,
-   `calculate_reservoir_cos_rows`, `calculate_presence_cos`, or
-   `segment_class`). Keep the module free of DB/Flask imports.
+   `calculate_trap_cos`, `calculate_reservoir_cos_rows`,
+   `calculate_presence_cos`, or `segment_class`). Keep the module free of
+   DB/Flask imports.
 2. Update the pinned expectations in `tests/test_cos.py` — they encode the
    formula, so they MUST change with it (deliberately).
 3. Know which kind of value you changed. The Total Chance of Success
    (`calculate_presence_cos`, wrapped by `total_cos_from_fields`) is computed
-   at read time, so every project shows the new formula immediately. Seal CoS
-   and Reservoir CoS results are STORED at save time (`seal_cos_pct`,
+   at read time, so every project shows the new formula immediately. Seal CoS,
+   Trap CoS and Reservoir CoS results are STORED at save time (`seal_cos_pct`,
+   `trap_cos_pct` via `_apply_trap_cos_calculation` in `workflow/lifecycle.py`,
+   called from both `save_task` and `save_task_dynamic_fields`, and
    `reservoir_cos_rows`): existing rows keep the old number until re-saved.
    Pre-deployment, regenerating the dev `.db` is the reset; in production this
    would need a numbered migration recomputing stored values.
@@ -166,10 +174,21 @@ lead/well data and upgrade **in place** at startup:
 ## Recipe 6: Run and debug locally
 
 ```bash
-.venv/bin/pytest tests/ -q                 # the whole suite
+.venv/bin/pytest tests/ -q                 # the whole backend suite (532 tests)
 .venv/bin/pytest tests/ -q -k "promotion"  # just tests matching a keyword
+.venv/bin/python run_frontend_tests.py     # the front-end harness (416 tests)
 python main.py                             # live server on 127.0.0.1:8020
 ```
+
+- The front-end harness is a real suite, not a smoke check: 18
+  `static/tests/test-*.js` modules run by `static/tests/harness.js` through
+  `static/tests/runner.html`. `run_frontend_tests.py` boots the app on port
+  8021 against a scratch database (never `pipeline_tracker.db`), drives
+  headless Firefox at the runner and prints a report; exit 0 = all passed,
+  1 = failures, 2 = harness/timeout trouble. Add a module by creating
+  `static/tests/test-<thing>.js` AND registering it in the import list in
+  `static/tests/runner.html` — an unregistered file simply never runs. To
+  watch it in a browser: `.venv/bin/python run_frontend_tests.py --browser open`.
 
 - Unexpected 500s: the traceback is on the server's stderr —
   `handle_unexpected_error` in `main.py` logs via `app.logger.exception`

@@ -1,11 +1,29 @@
 import { byId, all, esc, isFilled, truthy, msg } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName, currentRole, canManageAssignments, isCurrentPipelineView, Store } from '../state.js';
-import { SCHEMA, FORMATIONS, FORMATION_METRICS, SEISMIC_BLOCKS, validateStepFields } from '../schema.js';
+import { SCHEMA, FORMATIONS, FORMATION_METRICS, FLUID_TYPES, SEISMIC_BLOCKS, CHECKBOX_SUBMIT_STEPS, validateStepFields, submitBlockedMessage } from '../schema.js';
+import { calculateTrapCos, calculateSealCos } from '../cos-rules.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { renderDetail, renderRightPanel, chooseInitialTask, tasksForPipeline, parseRepeatableRows, refreshAfterRecordChange, revealTaskStage } from './detail.js';
 import { refreshAllBoards } from './pipeline.js';
 import { renderResourceCalculator, teardownResourceCalculator } from './resource-calculator.js';
+// Card 2B: the consolidated Lead Assessment workspace, which REPLACES the
+// generic per-step form for that stage's four steps on a lead page.
+import {
+  isLeadAssessmentStep, leadAssessmentActive, renderLeadAssessment,
+  saveLeadAssessment, teardownLeadAssessment
+} from './lead-assessment.js';
+// Card 4B: the consolidated Staking Letters workspace -- the same arrangement
+// one stage later, for Pre-Well Delivery's two letter steps.
+import {
+  isStakingLetterStep, stakingLettersActive, renderStakingLetters,
+  saveStakingLetters, teardownStakingLetters
+} from './staking-letters.js';
+// Item A: prospect step pages auto-save. The controller lives in autosave.js;
+// this module only (a) tells it when the mounted task changed and (b) keeps
+// the focused control alive across the post-save re-render. Runtime-only
+// cycle (autosave.js imports saveComponent back), same as detail.js's.
+import { syncAutoSaveContext, captureEditorFocus, restoreEditorFocus } from './autosave.js';
 
 export function ensureUsers() {
   if (Store.users) return Promise.resolve(Store.users);
@@ -20,47 +38,43 @@ function renderStatusChip(status) {
   if (!chip) return;
   var value = status || 'Not Assigned';
   chip.textContent = value;
-  chip.className = 'status editor-status-chip ' + String(value).toLowerCase().replace(/\s+/g, '-');
+  // Card 2A: a LEAD detail page carries no separate status badge beside the
+  // step title -- its header is the assignee select, and
+  // a fresh lead's badge only ever read "NOT ASSIGNED". The BP well page keeps
+  // it. The class is rewritten wholesale on every render, so the visibility has
+  // to be re-decided here rather than toggled once elsewhere.
+  var shell = byId('detail-shell');
+  var leadPage = !!shell && shell.classList.contains('detail-shell-lead');
+  chip.className = 'status editor-status-chip ' + String(value).toLowerCase().replace(/\s+/g, '-') +
+    (leadPage ? ' hidden' : '');
 }
 
-var PRIORITY_CYCLE = { Low: 'Medium', Medium: 'High', High: 'Low' };
+// Priority is a LEAD/WELL-LEVEL attribute since the ASAS redesign: the ONE
+// chip lives in the detail shell header (views/detail.js renderLeadPriorityChip
+// / cycleLeadPriorityChip), so the step editor header carries no per-step
+// priority control any more.
 
-// Only supervisors set priority (anonymous dev mode acts as supervisor,
-// matching the backend's current_role()); everyone else sees a read-only chip.
-function canSetPriority() {
-  return currentRole() === 'supervisor';
+// KI-002: whether the assignee control is interactive is a ROLE decision
+// (plus "am I looking at this record's own pipeline"), never a side effect of
+// some other sweep over the form. Both renderAssigneeSelect (async, resolves
+// after /api/users) and setComponentReferenceMode (sync, runs twice per
+// component load -- the second time after the fields request) call this ONE
+// function, so whichever lands last still leaves the employee's control
+// disabled instead of a dead, unauthorized dropdown.
+function syncAssigneeGate(referenceOnly) {
+  var select = byId('assigned-to');
+  if (!select) return;
+  var reference = referenceOnly === undefined ? !isCurrentPipelineView() : !!referenceOnly;
+  select.disabled = !canManageAssignments() || reference;
 }
 
-function renderPriorityChip(task) {
-  var chip = byId('component-priority-chip');
-  if (!chip) return;
-  var value = task.priority || 'Medium';
-  var currentView = isCurrentPipelineView();
-  var editable = canSetPriority() && currentView;
-  chip.disabled = !editable;
-  chip.textContent = value;
-  chip.className = 'priority editor-priority-chip priority-' + String(value).toLowerCase() +
-    (editable ? '' : ' editor-priority-chip-static');
-  chip.title = 'Priority: ' + value + (editable
-    ? ' — click to change'
-    : (currentView ? ' — set by a supervisor' : ' — reference view'));
-}
-
-// Cycles Low -> Medium -> High -> Low via the dedicated priority endpoint
-// (PATCH /api/tasks/<id>/priority; no revision check server-side), then
-// refreshes so the chip and boards adopt the new value + task revision.
-export function cyclePriorityChip() {
-  if (!Store.task || !canSetPriority() || !isCurrentPipelineView()) return;
-  var next = PRIORITY_CYCLE[Store.task.priority || 'Medium'] || 'Medium';
-  API.priority(Store.task.task_id, { priority: next, changed_by: currentUserName() })
-    .then(function () { return refreshAfterRecordChange('Priority set to ' + next + '.'); })
-    .catch(function (error) { msg(error.message, 'error'); });
-}
-
-function renderAssigneeSelect(task) {
+function renderAssigneeSelect(task, load) {
   var select = byId('assigned-to');
   if (!select) return;
   ensureUsers().then(function (users) {
+    // Component loads are asynchronous. Never let a users response for the
+    // previous component repaint the shared assignee control after navigation.
+    if (!componentLoadIsCurrent(load)) return;
     var current = task.assigned_to || '';
     var names = users.map(function (user) { return user.name; });
     // Keep a legacy/deactivated assignee visible even if no longer selectable
@@ -72,20 +86,140 @@ function renderAssigneeSelect(task) {
     select.value = current;
     // Only supervisors/staff assign (anonymous dev mode acts as supervisor,
     // matching the backend's current_role()).
-    select.disabled = !canManageAssignments() || !isCurrentPipelineView();
+    syncAssigneeGate();
   });
 }
 
-function renderActionButtons(task) {
+// ---------------------------------------------------------------------------
+// The action row
+// ---------------------------------------------------------------------------
+// Three shared buttons (#return-component / #submit-component /
+// #approve-component) plus the form's own Save. They are ONE set of nodes
+// reused by every step, so anything a per-step override changes -- label,
+// classes, disabled -- has to be restored before the next step renders:
+// actionButtonDefaults captures the markup's own values once, and
+// resetActionButtons puts them back on every render. That is what lets an
+// override be a small declarative function instead of a growing if-soup.
+
+var ACTION_BUTTON_IDS = ['return-component', 'submit-component', 'approve-component'];
+var actionButtonDefaults = null;
+
+function actionButtons() {
+  if (!actionButtonDefaults) actionButtonDefaults = {};
+  var buttons = {};
+  ACTION_BUTTON_IDS.forEach(function (id) {
+    var button = byId(id);
+    buttons[id] = button;
+    // Captured from the MARKUP, once, the first time the button is really
+    // there -- never from a render that may already have overridden it.
+    if (button && !actionButtonDefaults[id]) {
+      actionButtonDefaults[id] = {
+        text: button.textContent,
+        title: button.title,
+        className: button.className.replace(/\s*\bhidden\b/g, '')
+      };
+    }
+  });
+  return buttons;
+}
+
+// Back to the markup's own label/classes, hidden and enabled. Every render
+// starts here, so a step with no override is never shown another step's
+// relabelled button.
+function resetActionButtons(buttons) {
+  ACTION_BUTTON_IDS.forEach(function (id) {
+    var button = buttons[id];
+    var defaults = actionButtonDefaults[id];
+    if (!button || !defaults) return;
+    button.textContent = defaults.text;
+    button.title = defaults.title;
+    button.className = defaults.className + ' hidden';
+    button.disabled = false;
+  });
+}
+
+// Show one transition button with an optional relabel / restyle. `enabled`
+// false leaves it visible but disabled (the supervisor's Approved button on a
+// step nobody has submitted yet), with `title` explaining why.
+function showActionButton(button, options) {
+  if (!button) return;
+  options = options || {};
+  if (options.text) button.textContent = options.text;
+  if (options.className) button.className = options.className;
+  button.classList.remove('hidden');
+  button.disabled = options.enabled === false;
+  if (options.title) button.title = options.title;
+}
+
+// PER-STEP ACTION ROWS: task_name -> a function that lays out the row for that
+// step, given the same context the generic renderer computes. A step absent
+// from this map gets the generic lifecycle row below, unchanged.
+//
+// Card 3D, "Segmentation Slides": the deliverable's review gate.
+//   - EMPLOYEE (anyone who is not a supervisor): Save Updates ONLY. There is no
+//     Submit button because SAVING with the confirmation ticked IS the
+//     submission (schema.js CHECKBOX_SUBMIT_STEPS, server-side
+//     lifecycle.apply_checkbox_submission), and Approve/Return are a
+//     supervisor's decisions -- showing either here would be an invitation to a
+//     403.
+//   - SUPERVISOR: Save Updates, Approved and Return side by side. Both
+//     transitions need the step to be Ready (the server refuses otherwise), so
+//     on a step nobody has submitted they render disabled rather than vanishing
+//     -- the review controls are the point of the page for a supervisor, and a
+//     row that changes shape underneath them reads as a bug.
+var SPECIAL_ACTION_ROWS = {
+  'Segmentation Slides': function (context) {
+    var pending = context.status === 'Ready';
+    if (context.role !== 'supervisor') return;
+    showActionButton(context.buttons['approve-component'], {
+      text: 'Approved',
+      className: 'ghost success-outline',
+      enabled: context.editable && pending,
+      title: pending ? 'Approve the segmentation slides' : 'Available once the slides are submitted for review'
+    });
+    showActionButton(context.buttons['return-component'], {
+      text: 'Return',
+      enabled: context.editable && pending,
+      title: pending ? 'Send the slides back for update' : 'Available once the slides are submitted for review'
+    });
+  }
+};
+
+// Exported for the harness: the action row is a role/status decision, and the
+// only honest way to test "an employee never sees Approve/Return" is to render
+// it and look.
+export function renderActionButtons(task) {
   var status = task.status || 'Not Assigned';
   var role = currentRole();
   var manage = canManageAssignments();
   var editable = isCurrentPipelineView();
   var isAssignee = !!(Store.user && Store.user.name &&
     String(Store.user.name).toLowerCase() === String(task.assigned_to || '').toLowerCase());
-  var submitButton = byId('submit-component');
-  var approveButton = byId('approve-component');
-  var returnButton = byId('return-component');
+  var buttons = actionButtons();
+  resetActionButtons(buttons);
+  // ITEM A: prospect step pages have no Save button -- persistence is the
+  // auto-save controller's job (views/autosave.js). The BP well shell keeps
+  // its explicit button. Gated on the VIEWED pipeline, so a reference view of
+  // prospect steps reads the same as a live one: prospect pages simply carry
+  // no Save button.
+  var prospectView = Store.pipeline === 'prospect';
+  var saveButton = byId('save-component');
+  if (saveButton) saveButton.classList.toggle('hidden', prospectView);
+  var special = SPECIAL_ACTION_ROWS[task.task_name];
+  if (special) {
+    special({ task: task, status: status, role: role, editable: editable,
+              isAssignee: isAssignee, buttons: buttons });
+    return;
+  }
+  // ITEM A3: with the server auto-approving prospect saves, the lifecycle
+  // buttons (Submit / Approve / Return) are furniture on every prospect step
+  // except Segmentation Slides (whose SPECIAL_ACTION_ROWS entry above keeps
+  // its checkbox-submit + supervisor review row). resetActionButtons has
+  // already hidden all three; the assignee control is untouched.
+  if (prospectView) return;
+  var submitButton = buttons['submit-component'];
+  var approveButton = buttons['approve-component'];
+  var returnButton = buttons['return-component'];
   if (submitButton) submitButton.classList.toggle('hidden', !(editable && status === 'In Progress' && (manage || isAssignee)));
   if (approveButton) approveButton.classList.toggle('hidden', !(editable && status === 'Ready' && role === 'supervisor'));
   // A supervisor may return any Ready component; everyone else may return
@@ -94,39 +228,165 @@ function renderActionButtons(task) {
     !(editable && status === 'Ready' && (role === 'supervisor' || isAssignee)));
 }
 
-function setComponentReferenceMode(referenceOnly) {
+export function setComponentReferenceMode(referenceOnly) {
   var form = byId('component-form');
   if (!form) return;
-  all('input, select, textarea', form).forEach(function (control) { control.disabled = referenceOnly; });
-  all('.add-repeatable-row, .remove-repeatable-row, .formation-remove', form).forEach(function (button) {
+  // The sweep only touches the controls this mode OWNS. The assignee select is
+  // gated by role (KI-002) and is re-applied explicitly below, so leaving
+  // reference mode restores its role-based state instead of blanket-enabling
+  // it. (It also sits OUTSIDE #component-form today -- the guard is here so a
+  // future markup move cannot silently re-open the hole.)
+  all('input, select, textarea', form).forEach(function (control) {
+    if (control.id === 'assigned-to') return;
+    control.disabled = referenceOnly;
+  });
+  all('.add-repeatable-row, .remove-repeatable-row, .formation-remove, .pay-interval-add, .pay-interval-remove', form).forEach(function (button) {
     button.disabled = referenceOnly;
   });
   var saveButton = byId('save-component');
   if (saveButton) saveButton.disabled = referenceOnly;
+  syncAssigneeGate(referenceOnly);
   form.classList.toggle('reference-only', referenceOnly);
+}
+
+// CONSOLIDATED PAGES (cards 2B and 4B). Some tracked items no longer have a
+// form each: a group of them opens ONE workspace whose sections are those
+// items, laid out the way the work is actually done. Each entry names the
+// module that owns such a page.
+//
+// The gate is deliberately narrow and identical for both: a LEAD page, the
+// record's CURRENT pipeline, and a step the page claims. A BP well, a reference
+// view and every other step fall straight through to the generic form below.
+//
+// A workspace mounts into #dynamic-fields (the generic grid's own container),
+// so the shell's comments box, folder slot and Save button sit exactly where
+// they always did and need no markup of their own. `title` is what the editor
+// head reads while it is mounted -- null means "hide the head entirely" (card
+// 2B's page IS the whole stage, so naming one step would be a lie), a string
+// means "keep the head, name the PAGE" (card 4B's two letters are one
+// deliverable called Staking Letters, and a page with no title at all reads as
+// a rendering bug).
+var CONSOLIDATED_PAGES = [
+  { claims: isLeadAssessmentStep, render: renderLeadAssessment, title: null,
+    bodyClass: 'lead-assessment-body', keepsLifecycle: true },
+  { claims: isStakingLetterStep, render: renderStakingLetters, title: 'Staking Letters',
+    bodyClass: 'staking-letters-body' }
+];
+
+// The consolidated page that claims this task, or null for the generic form.
+function consolidatedPageFor(task) {
+  var shell = byId('detail-shell');
+  if (!shell || !shell.classList.contains('detail-shell-lead') || !isCurrentPipelineView()) return null;
+  return CONSOLIDATED_PAGES.find(function (page) { return page.claims(task.task_name); }) || null;
+}
+
+// Show/hide the per-STEP furniture a consolidated page replaces. Every class it
+// touches is reset first, so switching from one workspace to the other -- or
+// away to a generic form -- never leaves the previous page's chrome behind.
+function setConsolidatedChrome(page) {
+  var root = byId('dynamic-fields');
+  if (root) {
+    CONSOLIDATED_PAGES.forEach(function (entry) {
+      root.classList.toggle(entry.bodyClass, !!page && page.bodyClass === entry.bodyClass);
+    });
+  }
+  var number = byId('component-number');
+  if (number) number.classList.toggle('hidden', !!page);
+  var title = byId('component-title');
+  // A page with its own title keeps the heading and renames it; a page without
+  // one hides it. The generic form always restores the step's own name (
+  // loadComponent writes it back before this runs).
+  if (title) {
+    title.classList.toggle('hidden', !!page && !page.title);
+    if (page && page.title) title.textContent = page.title;
+  }
+  var save = byId('save-component');
+  if (save) save.classList.toggle('save-primary', !!page);
+}
+
+// Tear down every consolidated page EXCEPT the one about to mount (or all of
+// them, when a generic form is). Each teardown is a no-op on a page that was
+// not mounted, so this stays a plain sweep rather than a bookkeeping exercise.
+function teardownOtherConsolidatedPages(page) {
+  if (!page || page.render !== renderLeadAssessment) teardownLeadAssessment();
+  if (!page || page.render !== renderStakingLetters) teardownStakingLetters();
+}
+
+// One shared detail shell hosts every component. Navigation therefore begins
+// by invalidating the previous load and removing ALL step-owned transient DOM,
+// before deciding what the next component renders. This is the invariant that
+// prevents a calculator/folder/workspace from leaking into the next step.
+// The generation token also makes late fields/folder responses harmless.
+var componentLoadGeneration = 0;
+
+function teardownResourceCalculatorSection() {
+  teardownResourceCalculator();
+  var panel = byId('resource-calculator-panel');
+  if (panel) panel.remove();
+}
+
+function beginComponentLoad(task) {
+  componentLoadGeneration += 1;
+  teardownResourceCalculatorSection();
+  var folder = byId('component-folder-card');
+  if (folder) folder.remove();
+  var root = byId('dynamic-fields');
+  if (root) root.innerHTML = '';
+  return {
+    generation: componentLoadGeneration,
+    projectId: Store.projectId,
+    taskId: task.task_id
+  };
+}
+
+export function componentLoadIsCurrent(load) {
+  return !!load && load.generation === componentLoadGeneration &&
+    Store.projectId === load.projectId && !!Store.task && Store.task.task_id === load.taskId;
 }
 
 export function loadComponent(task) {
   if (!task) return;
+  var load = beginComponentLoad(task);
   Store.task = task;
+  // Item A: navigation to a DIFFERENT task resets the auto-save controller
+  // (stale timers, queued trailing save, indicator); the post-save reload of
+  // the same task keeps all three -- syncAutoSaveContext tells them apart.
+  syncAutoSaveContext();
   setComponentReferenceMode(!isCurrentPipelineView());
   all('.component-item').forEach(function (button) { button.classList.toggle('active', Number(button.getAttribute('data-task-id')) === task.task_id); });
   revealTaskStage(task);
   byId('component-number').textContent = String(task.sequence_no || '');
   byId('component-title').textContent = task.task_name;
   renderStatusChip(task.status);
-  renderAssigneeSelect(task);
+  renderAssigneeSelect(task, load);
   renderActionButtons(task);
-  renderPriorityChip(task);
   byId('comments').placeholder = commentPlaceholder(task.task_name);
   byId('comments').value = task.comments || '';
+  var consolidated = consolidatedPageFor(task);
+  setConsolidatedChrome(consolidated);
+  teardownOtherConsolidatedPages(consolidated);
+  if (consolidated) {
+    // No per-step field fetch: the workspace reads every step's values out of
+    // Store.allFields (already on the /detail payload) and resolves its own
+    // folder row. Lead Assessment keeps the single merged row's normal
+    // lifecycle controls; Staking Letters still hides them because its two
+    // underlying task rows retain independent lifecycles.
+    if (!consolidated.keepsLifecycle) resetActionButtons(actionButtons());
+    consolidated.render(byId('dynamic-fields'), { onCopy: copyText });
+    setComponentReferenceMode(!isCurrentPipelineView());
+    renderRightPanel(tasksForPipeline(Store.pipeline));
+    return Promise.resolve();
+  }
   return Promise.all([API.fields(task.task_id), API.componentFolder(Store.projectId, task.task_id)]).then(function (results) {
+    if (!componentLoadIsCurrent(load)) return;
     renderFields(task.task_name, results[0] || {});
     renderResourceCalculatorSection(task, results[0] || {});
     renderComponentFolder(results[1] || {});
     setComponentReferenceMode(!isCurrentPipelineView());
     renderRightPanel(tasksForPipeline(Store.pipeline));
-  }).catch(function (error) { msg(error.message, 'error'); });
+  }).catch(function (error) {
+    if (componentLoadIsCurrent(load)) msg(error.message, 'error');
+  });
 }
 
 // Assignment posts immediately on select change (not deferred to Save): the
@@ -171,6 +431,17 @@ var TRANSITION_MESSAGES = {
 export function transitionComponent(action) {
   if (!Store.task) return;
   if (!isCurrentPipelineView()) return msg('Switch back to the current pipeline to change workflow status.', 'error');
+  // Submit gating (SCHEMA's REQUIRED_FIELDS_FOR_SUBMIT): a pre-check against
+  // the SAVED fields, so a blocked submit is a toast instead of a round-trip.
+  // The server runs the same rule and is the authority -- this only skips a
+  // request whose 400 we can already predict, and reads Store.allFields (what
+  // the server has) rather than the live form, so an unsaved tick correctly
+  // does not unlock it.
+  if (action === 'submit') {
+    var blocked = submitBlockedMessage(Store.task.task_name,
+                                       (Store.allFields || {})[Store.task.task_name]);
+    if (blocked) return msg(blocked, 'error');
+  }
   API.transition(Store.task.task_id, {
     action: action,
     revision: Store.task.revision,
@@ -219,20 +490,70 @@ var FORMATION_GROUPS = [
 var FORMATION_METRIC_BY_KEY = {};
 FORMATION_METRICS.forEach(function (metric) { FORMATION_METRIC_BY_KEY[metric.key] = metric; });
 
+// --- Pay intervals ---------------------------------------------------------
+// A formation keeps its envelope (top/base/thickness) above; the pay inside it
+// is described by zero or more PAY INTERVALS -- a mini repeatable table under
+// the panel, one row per interval, stored well-level in
+// project_formation_pay_intervals and PUT inside the formation row's
+// `pay_intervals` array (seq = row order). Only the two log-interpretation
+// steps capture them, so the other two phases' panels render exactly as before.
+var PAY_INTERVAL_PHASES = ['quicklook', 'final'];
+var PAY_INTERVAL_COLUMNS = [
+  { key: 'top_tvdss_ft', label: 'Top (ft)', type: 'number' },
+  { key: 'base_tvdss_ft', label: 'Base (ft)', type: 'number' },
+  { key: 'phit_pct', label: 'Phit (%)', type: 'number' },
+  { key: 'swt_pct', label: 'Swt (%)', type: 'number' },
+  { key: 'ngr_pct', label: 'NGR (%)', type: 'number' },
+  { key: 'kint_md', label: 'Kint (mD)', type: 'number' },
+  { key: 'fluid', label: 'Fluid', type: 'select', options: FLUID_TYPES }
+];
+
+function phaseHasPayIntervals(phase) { return PAY_INTERVAL_PHASES.indexOf(phase) >= 0; }
+
+// One buffer interval from a (possibly missing) saved pay-interval record.
+function makePayIntervalRow(saved) {
+  var values = {};
+  PAY_INTERVAL_COLUMNS.forEach(function (col) {
+    var stored = saved ? saved[col.key] : null;
+    values[col.key] = stored == null ? '' : String(stored);
+  });
+  return values;
+}
+
+// The intervals of one buffered formation row, ready to PUT: entirely blank
+// rows drop (an untouched freshly-added row must not become a stored all-NULL
+// interval), everything else keeps its buffer order -- the backend assigns seq
+// from exactly that order.
+function payIntervalsForSave(row) {
+  return ((row && row.intervals) || []).filter(function (interval) {
+    return PAY_INTERVAL_COLUMNS.some(function (col) { return isFilled(interval[col.key]); });
+  }).map(function (interval) {
+    var out = {};
+    PAY_INTERVAL_COLUMNS.forEach(function (col) { out[col.key] = interval[col.key]; });
+    return out;
+  });
+}
+
+function rowHasPayIntervals(row) { return payIntervalsForSave(row).length > 0; }
+
 // Custom formation names mirror the backend normalization (strip().upper(),
 // <=40 chars) so what the editor shows is what gets stored.
 function normalizeFormationName(name) {
   return String(name == null ? '' : name).trim().toUpperCase().slice(0, 40);
 }
 
-// One buffer row from a (possibly missing) saved formation record.
+// One buffer row from a (possibly missing) saved formation record. `intervals`
+// mirrors the saved row's pay_intervals (already ordered by seq server-side);
+// it is buffered for every phase but only rendered/PUT for the phases that
+// capture pay intervals.
 function makeFormationRow(name, isCustom, saved) {
   var values = {};
   FORMATION_METRICS.forEach(function (metric) {
     var stored = saved ? saved[metric.key] : null;
     values[metric.key] = stored == null ? '' : String(stored);
   });
-  return { formation: name, isCustom: isCustom, values: values };
+  var intervals = ((saved && saved.pay_intervals) || []).map(makePayIntervalRow);
+  return { formation: name, isCustom: isCustom, values: values, intervals: intervals };
 }
 
 // Seed a phase: the canonical trio always renders (in order), each filled from
@@ -252,21 +573,29 @@ function seedFormationEdits(phase) {
   formationDirty[phase] = false;
 }
 
-// Every visible row of the phase, `{ formation, ...metrics }`. A blank formation
-// name always drops. A custom (isCustom) row is kept even when metric-less --
-// the user named a new formation and the backend stores all-NULL metrics fine.
-// A canonical row with entirely blank metrics drops: that full-replacement gap
-// is the designed way to delete a canonical formation's row. Deletions overall
-// are handled by the backend's phase-scoped full replacement.
+// Every visible row of the phase, `{ formation, ...metrics }` (plus
+// `pay_intervals` on the phases that capture them). A blank formation name
+// always drops. A custom (isCustom) row is kept even when metric-less -- the
+// user named a new formation and the backend stores all-NULL metrics fine. A
+// canonical row with entirely blank metrics AND no pay intervals drops: that
+// full-replacement gap is the designed way to delete a canonical formation's
+// row (a row carrying only pay intervals therefore has to survive it).
+// Deletions overall are handled by the backend's phase-scoped full replacement.
 export function formationRowsForSave(phase) {
   var kept = [];
+  var withIntervals = phaseHasPayIntervals(phase);
   (formationEdits[phase] || []).forEach(function (row) {
     var name = normalizeFormationName(row.formation);
     if (!isFilled(name)) return;
     var hasMetrics = FORMATION_METRICS.some(function (metric) { return isFilled(row.values[metric.key]); });
-    if (!row.isCustom && !hasMetrics) return;
+    var hasIntervals = withIntervals && rowHasPayIntervals(row);
+    if (!row.isCustom && !hasMetrics && !hasIntervals) return;
     var out = { formation: name };
     FORMATION_METRICS.forEach(function (metric) { out[metric.key] = row.values[metric.key]; });
+    // Only phases that edit intervals send the key at all: its ABSENCE tells
+    // the backend to leave any stored intervals alone, so the post_drill /
+    // resource_update panels can never clear what the log steps captured.
+    if (withIntervals) out.pay_intervals = payIntervalsForSave(row);
     kept.push(out);
   });
   return kept;
@@ -281,7 +610,8 @@ export function validateFormationRows(phase) {
   var rows = formationEdits[phase] || [];
   for (var i = 0; i < rows.length; i += 1) {
     var row = rows[i];
-    var hasMetrics = FORMATION_METRICS.some(function (metric) { return isFilled(row.values[metric.key]); });
+    var hasMetrics = FORMATION_METRICS.some(function (metric) { return isFilled(row.values[metric.key]); }) ||
+      (phaseHasPayIntervals(phase) && rowHasPayIntervals(row));
     if (row.isCustom && !isFilled(normalizeFormationName(row.formation)) && hasMetrics) {
       return 'Custom formation needs a name.';
     }
@@ -353,6 +683,53 @@ function formationPanelMarkup(row, index) {
   }).join('');
 }
 
+// One pay-interval row. Reuses the repeatable sheet's grid idiom (the row is
+// display:contents and inherits the template declared once on .repeatable-rows)
+// but carries its OWN data attributes and button classes: the generic
+// repeatable machinery (getFields' [data-repeatable] harvest,
+// bindRepeatableFields' .add-repeatable-row/.remove-repeatable-row handlers)
+// must never see these -- intervals travel in the formations buffer, not in the
+// step's dynamic fields. `formationIndex` is the selected formation's buffer
+// position, `index` the interval's position within it.
+function payIntervalRowMarkup(interval, index, formationIndex) {
+  return '<div class="pay-interval-row">' + PAY_INTERVAL_COLUMNS.map(function (col) {
+    var value = interval[col.key] == null ? '' : interval[col.key];
+    var attr = 'data-pay-field="' + esc(col.key) + '" data-pay-row="' + index +
+      '" data-formation-row="' + formationIndex + '" aria-label="' + esc(col.label) + '"';
+    if (col.type === 'select') {
+      var options = (col.options || []).map(function (option) {
+        return '<option value="' + esc(option) + '" ' + (String(value) === String(option) ? 'selected' : '') +
+          '>' + esc(option || 'Select') + '</option>';
+      }).join('');
+      return '<select ' + attr + '>' + options + '</select>';
+    }
+    return '<input type="number" step="any" ' + attr + ' value="' + esc(value) + '">';
+  }).join('') + '<button type="button" class="icon-btn pay-interval-remove" data-pay-row="' + index +
+    '" title="Remove pay interval" aria-label="Remove pay interval">&#10005;</button></div>';
+}
+
+// The selected formation's pay-interval sub-table (log-interpretation phases
+// only; the other phases get ''). Rendered from the buffer, so add/remove is a
+// buffer mutation + container re-render like everything else in this panel.
+function payIntervalsMarkup(row, formationIndex, phase) {
+  if (!phaseHasPayIntervals(phase)) return '';
+  var intervals = (row && row.intervals) || [];
+  var template = PAY_INTERVAL_COLUMNS.map(function () { return 'minmax(80px, 1fr)'; }).join(' ') + ' auto';
+  var header = '<div class="repeatable-head">' + PAY_INTERVAL_COLUMNS.map(function (col) {
+    return '<span class="repeatable-col-label">' + esc(col.label) + '</span>';
+  }).join('') + '<span class="repeatable-col-label" aria-hidden="true"></span></div>';
+  var body = intervals.length
+    ? '<div class="repeatable-sheet"><div class="repeatable-rows" style="grid-template-columns:' + template + '">' +
+      header + intervals.map(function (interval, index) {
+        return payIntervalRowMarkup(interval, index, formationIndex);
+      }).join('') + '</div></div>'
+    : '<p class="pay-interval-empty">No pay intervals recorded for this formation yet.</p>';
+  return '<div class="pay-intervals">' +
+    '<div class="repeatable-heading"><b>Pay intervals</b>' +
+    '<button type="button" class="icon-btn pay-interval-add" title="Add pay interval" aria-label="Add pay interval">+</button></div>' +
+    body + '</div>';
+}
+
 // Container inner markup: heading, the formation picker (canonical trio + stored
 // customs + "Add custom formation…") with a remove button on custom formations,
 // then the selected formation's grouped panel. Rebuilt whenever the picker
@@ -372,7 +749,8 @@ function buildFormationsInner(field) {
     '<label class="formation-picker-label">Formation<select class="formation-picker" aria-label="Formation">' + pickerOptions + '</select></label>' +
     removeButton + '</div>';
   return '<div class="repeatable-heading"><b>' + esc(field.label) + '</b></div>' +
-    pickerRow + '<div class="formation-panel">' + formationPanelMarkup(row, selected) + '</div>';
+    pickerRow + '<div class="formation-panel">' + formationPanelMarkup(row, selected) + '</div>' +
+    payIntervalsMarkup(row, selected, phase);
 }
 
 function renderFormationsField(field) {
@@ -435,6 +813,45 @@ function bindFormationContainer(container) {
     picker.addEventListener('change', function () {
       if (picker.value === '__add__') { addCustomFormation(container, phase, picker); return; }
       formationSelected[phase] = Number(picker.value);
+      rerenderFormationContainer(container, phase);
+    });
+  });
+  // Pay-interval cells write through to the selected formation's own interval
+  // buffer (data-formation-row is stamped at render time, so a stale selection
+  // can never send an edit to the wrong formation).
+  all('[data-pay-field]', container).forEach(function (element) {
+    if (element.dataset.pBound) return;
+    element.dataset.pBound = 'true';
+    function sync() {
+      var formationIndex = Number(element.getAttribute('data-formation-row'));
+      var intervalIndex = Number(element.getAttribute('data-pay-row'));
+      var row = formationEdits[phase][formationIndex];
+      if (!row || !row.intervals[intervalIndex]) return;
+      row.intervals[intervalIndex][element.getAttribute('data-pay-field')] = element.value;
+      formationDirty[phase] = true;
+    }
+    element.addEventListener('input', sync);
+    element.addEventListener('change', sync);
+  });
+  all('.pay-interval-add', container).forEach(function (button) {
+    if (button.dataset.pBtnBound) return;
+    button.dataset.pBtnBound = 'true';
+    button.addEventListener('click', function () {
+      var row = formationEdits[phase][selectedFormationIndex(phase)];
+      if (!row) return;
+      row.intervals.push(makePayIntervalRow(null));
+      formationDirty[phase] = true;
+      rerenderFormationContainer(container, phase);
+    });
+  });
+  all('.pay-interval-remove', container).forEach(function (button) {
+    if (button.dataset.pBtnBound) return;
+    button.dataset.pBtnBound = 'true';
+    button.addEventListener('click', function () {
+      var row = formationEdits[phase][selectedFormationIndex(phase)];
+      if (!row) return;
+      row.intervals.splice(Number(button.getAttribute('data-pay-row')), 1);
+      formationDirty[phase] = true;
       rerenderFormationContainer(container, phase);
     });
   });
@@ -558,6 +975,59 @@ function sectionLabelMarkup(fields, startIndex, values) {
   var attr = shared ? ' data-show-if="' + esc(shared) + '"' : '';
   return '<div class="' + cls + '"' + attr + '>' + esc(section) + '</div>';
 }
+// ---------------------------------------------------------------------------
+// Live Trap / Seal CoS recompute (the "Trap and Seal CoS" step).
+//
+// The CoS percentages are plain editable inputs; on every change of a FORMULA
+// INPUT the matching CoS field is recomputed client-side (cos-rules.js, the
+// exact mirror of cos.py) and overwritten. Nothing listens on the CoS fields
+// themselves, so a manually typed value persists until an input next changes
+// -- the precedence rule, simple and predictable. The server hooks
+// (workflow/lifecycle.py) skip their own recompute when the payload carries
+// the pct explicitly, which a save from this form now always does (getFields
+// harvests both), so what the user sees is exactly what is stored.
+// ---------------------------------------------------------------------------
+
+// The Seal formula's own inputs (cos.calculate_seal_cos reads exactly these;
+// the pore-pressure gradient is a recorded rider, not a formula input, so a
+// change to it never overwrites a manually entered Seal CoS).
+var SEAL_COS_INPUT_KEYS = [
+  'seal_recent_activity_age', 'seal_dip', 'seal_azimuth_vs_shmax',
+  'seal_fault_level_confidence', 'seal_fracture_permeability'
+];
+
+function bindLiveCosCalculation(componentName, root) {
+  if (componentName !== 'Trap and Seal CoS') return;
+  function input(key) { return root.querySelector('[data-field="' + esc(key) + '"]'); }
+  // null means "not computable" (an input is missing/non-numeric): leave the
+  // field -- same contract as the server's None. '' (blank Seal form) and a
+  // computed percent both overwrite.
+  function writeCos(key, computed) {
+    var element = input(key);
+    if (element && computed !== null) element.value = computed;
+  }
+  function listen(key, recompute) {
+    var element = input(key);
+    if (!element) return;
+    element.addEventListener('input', recompute);
+    element.addEventListener('change', recompute);
+  }
+  listen('sarah_quwarah_thickness_ft', function () {
+    // The cross-task Sarah prognosis thickness (Thickness Estimation) comes
+    // from the saved field map on the /detail payload -- the same read the
+    // server's hook performs against the database.
+    writeCos('trap_cos_pct', calculateTrapCos(
+      val('Lead Assessment', 'formation_thickness_ft') || val('Thickness Estimation', 'formation_thickness_ft'),
+      (input('sarah_quwarah_thickness_ft') || {}).value
+    ));
+  });
+  SEAL_COS_INPUT_KEYS.forEach(function (key) {
+    listen(key, function () {
+      writeCos('seal_cos_pct', calculateSealCos(getFields(root)));
+    });
+  });
+}
+
 // `root` (default #dynamic-fields) is the container to render into, so the
 // project editor can drive many component grids from this one renderer.
 // `onInput` (default: the step editor's live conditional-visibility + summary
@@ -587,6 +1057,9 @@ export function renderFields(componentName, values, root, onInput) {
     }
   }
   root.innerHTML = html;
+  // Bound BEFORE the generic per-field handler so a live CoS recompute has
+  // already written its value when previewSummaryInputs harvests the form.
+  bindLiveCosCalculation(componentName, root);
   var handler = onInput || function () {
     updateConditionalVisibility(root);
     previewSummaryInputs();
@@ -603,31 +1076,56 @@ export function val(component, key) {
   var value = ((Store.allFields || {})[component] || {})[key];
   return isFilled(value) ? value : '';
 }
-// Latest mean-PIIP precedence (newest assessment first). Shared with the well
-// summary in detail.js -- keep the two lists in sync.
-export var LATEST_PIIP_SOURCES = [
-  ['Resource Assessment Update', 'resource_update_gas_mean'],
-  ['Post-Drilling Resource Assessment', 'post_drill_piip_gas_mean'],
-  ['Pre-Drilling Resource Assessment', 'pre_drill_piip_gas_mean'],
-  ['Lead Resource Assessment', 'lead_piip_gas_mean']
+// Latest mean-PIIP precedence (newest assessment first), split into its two
+// halves so callers name what they want instead of slicing by index.
+//
+// The v4 step merges moved the two post-drill assessments onto SAD Update
+// (resource_update_*) and SAD Model (post_drill_piip_*); each retired step is
+// listed straight after the step that absorbed it, holding the SAME EAV key,
+// so a well whose numbers were entered before the merge still resolves.
+// Store.allFields carries those legacy buckets because the backend field map
+// (workflow.summary.get_project_dynamic_field_map) is retired-inclusive.
+export var POST_DRILL_PIIP_SOURCES = [
+  ['SAD Update', 'resource_update_gas_mean'],
+  ['Resource Assessment Update', 'resource_update_gas_mean'],   // pre-v4 wells
+  ['SAD Model', 'post_drill_piip_gas_mean'],
+  ['Post-Drilling Resource Assessment', 'post_drill_piip_gas_mean']  // pre-v4
 ];
+// The lead phase's own mean sources -- what a LEAD value must be read from,
+// never the post-drill numbers above.
+//
+// The v5 renames ('Pre-Drilling Resource Assessment' -> 'Pre-Drilling GeoX
+// Assessment', 'Lead Resource Assessment' -> 'Resource Assessment') rewrote the
+// task rows in place, so LIVE data answers to the new names only. The old
+// spellings ride along right behind for the one map that still carries them:
+// lead_summary_snapshots froze its buckets at promotion time and is never
+// rewritten, and leadFieldSource() merges that frozen map with the live one.
+export var LEAD_PIIP_SOURCES = [
+  ['Pre-Drilling GeoX Assessment', 'pre_drill_piip_gas_mean'],
+  ['Pre-Drilling Resource Assessment', 'pre_drill_piip_gas_mean'],   // pre-v5 snapshots
+  ['Lead Assessment', 'lead_piip_gas_mean'],
+  ['Resource Assessment', 'lead_piip_gas_mean'],
+  ['Lead Resource Assessment', 'lead_piip_gas_mean']                 // pre-v5 snapshots
+];
+export var LATEST_PIIP_SOURCES = POST_DRILL_PIIP_SOURCES.concat(LEAD_PIIP_SOURCES);
 
-// Lead Resource Assessment only: the full Resource Assessment calculator
-// (views/resource-calculator.js) rendered inline, above the (now field-less
-// -- see SCHEMA) dynamic-fields grid. Same remove-and-reinsert-on-every-load
-// idiom as renderComponentFolder below, so switching to any other component
-// cleanly drops the panel; switching AWAY also tears down the calculator's
-// own render-generation state (teardownResourceCalculator) so a stray async
-// Calculate/Apply response that resolves after the panel is gone is a no-op.
+// The legacy Resource Assessment calculator host. Current v7 Lead Assessment
+// renders its calculator inside its dedicated workspace; GeoX is deliberately
+// excluded because it only records external-software results. The centralized
+// beginComponentLoad teardown above removes both this DOM and its async state
+// on EVERY navigation before the next view can mount.
 // Reference-mode disabling is handled by renderResourceCalculator itself
 // (it disables Calculate directly; every plain input is caught by the
 // generic setComponentReferenceMode sweep detail-form.js runs again right
 // after loadComponent's fields fetch resolves) -- see that function's own
 // comment for why Apply/View-plots need no special-casing there.
+var RESOURCE_CALCULATOR_STEPS = ['Resource Assessment'];
+export function stepHostsResourceCalculator(taskName) {
+  return RESOURCE_CALCULATOR_STEPS.indexOf(taskName) >= 0;
+}
 function renderResourceCalculatorSection(task, fields) {
-  var previous = byId('resource-calculator-panel');
-  if (previous) previous.remove();
-  if (task.task_name !== 'Lead Resource Assessment') { teardownResourceCalculator(); return; }
+  teardownResourceCalculatorSection();
+  if (!stepHostsResourceCalculator(task.task_name)) return;
   var panel = document.createElement('div');
   panel.id = 'resource-calculator-panel';
   panel.className = 'resource-calculator-panel';
@@ -713,17 +1211,57 @@ export function fallbackCopy(text) {
   area.remove();
   msg('Folder link copied.', 'success');
 }
-export function saveComponent(event) {
-  event.preventDefault();
-  if (!Store.task) return;
-  if (!isCurrentPipelineView()) return msg('Switch back to the current pipeline to save changes.', 'error');
+// What a completed save should say. Normally "Component saved."; on a
+// checkbox-submit step (card 3D) whose save also filed the review request --
+// the task came back Ready having not been Ready before -- it names the
+// submission, because the user clicked ONE button and two things happened.
+// Exported for the harness.
+export function savedMessage(savedTask, statusBeforeSave) {
+  var name = savedTask && savedTask.task_name;
+  if (name && CHECKBOX_SUBMIT_STEPS[name] &&
+      savedTask.status === 'Ready' && statusBeforeSave !== 'Ready') {
+    return 'Component saved and submitted for approval.';
+  }
+  return 'Component saved.';
+}
+
+// Every save path resolves the SAME outcome shape so the auto-save controller
+// (views/autosave.js) can drive its indicator without inspecting toasts:
+//   { ok: true,  state: 'saved' | 'nochange' }
+//   { ok: false, state: 'invalid' | 'error', message }
+// `options.auto` marks an auto-save: success / no-change / error toasts are
+// suppressed (the indicator speaks instead; inline errors keep rendering),
+// with ONE exception below -- a save that doubled as a checkbox-submission
+// still announces itself, because a lifecycle change is not a routine save.
+export function saveComponent(event, options) {
+  if (event && event.preventDefault) event.preventDefault();
+  options = options || {};
+  var auto = !!options.auto;
+  if (!Store.task) return Promise.resolve({ ok: false, state: 'error', message: 'No component selected.' });
+  // Cards 2B / 4B: a consolidated workspace owns its own batched save (one
+  // page, several owning tasks, one PATCH each). Checked FIRST because
+  // everything below -- getFields, validateStepFields, the single-task PATCH --
+  // is written for a one-step form and would harvest nothing from those pages'
+  // markup. Only one can ever be mounted (loadComponent tears the other down).
+  if (leadAssessmentActive()) return saveLeadAssessment(options);
+  if (stakingLettersActive()) return saveStakingLetters(options);
+  if (!isCurrentPipelineView()) {
+    var pipelineMessage = 'Switch back to the current pipeline to save changes.';
+    if (!auto) msg(pipelineMessage, 'error');
+    return Promise.resolve({ ok: false, state: 'error', message: pipelineMessage });
+  }
   var fields = getFields();
   // Generic input sanity checks (numeric/negative/max/percent, area & thickness
   // ordering, piip trio ordering -- see schema.js) run before anything hits the
   // network; same "surface the message, abort the save" shape as the formations
-  // guard right below.
+  // guard right below. An AUTO save shows the message in the save-state
+  // indicator instead of a toast -- typing through a temporarily-invalid value
+  // must not rain toasts.
   var fieldsError = validateStepFields(Store.task.task_name, fields);
-  if (fieldsError) return msg(fieldsError, 'error');
+  if (fieldsError) {
+    if (!auto) msg(fieldsError, 'error');
+    return Promise.resolve({ ok: false, state: 'invalid', message: fieldsError });
+  }
   // A component with a formations mini-sheet also PUTs the touched phase's
   // well-level rows alongside the dynamic-field save.
   var formationsField = (SCHEMA[Store.task.task_name] || []).find(function (item) { return item.type === 'formations'; });
@@ -732,16 +1270,26 @@ export function saveComponent(event) {
   // data in the phase-scoped full replacement.
   if (formationsField && formationDirty[formationsField.phase]) {
     var formationError = validateFormationRows(formationsField.phase);
-    if (formationError) return msg(formationError, 'error');
+    if (formationError) {
+      if (!auto) msg(formationError, 'error');
+      return Promise.resolve({ ok: false, state: 'invalid', message: formationError });
+    }
   }
-  var submitButton = event.target.querySelector('button[type="submit"]');
+  var submitButton = byId('save-component');
   if (submitButton) submitButton.disabled = true;
+  // Card 3D: on a checkbox-submit step the SAVE may also have asked for a
+  // review (the server does both in the one PATCH -- see
+  // lifecycle.apply_checkbox_submission). The response's task row is the
+  // post-hook one, so comparing its status with the pre-save status is how the
+  // toast knows which of the two things just happened.
+  var statusBeforeSave = Store.task.status;
+  var savedTask = null;
   // No status / assigned_to keys: Save only persists inputs. Status moves via
   // /transition and assignment via /assign; the backend preserves both when
   // the keys are absent. Priority now has its own chip/endpoint, but save_task
   // defaults an absent priority to Medium (it does not preserve it), so we echo
   // the current value to avoid clobbering it on save.
-  API.updateTask(Store.task.task_id, {
+  return API.updateTask(Store.task.task_id, {
     comments: byId('comments').value,
     priority: Store.task.priority || 'Medium',
     fields: fields,
@@ -749,7 +1297,8 @@ export function saveComponent(event) {
     changed_by: currentUserName(),
     business_plan_enabled: Number(Store.project.business_plan_enabled || 0) === 1,
     business_plan_year: Store.project.business_plan_year
-  }).then(function () {
+  }).then(function (response) {
+    savedTask = (response && response.task) || null;
     if (formationsField && formationDirty[formationsField.phase]) {
       return API.saveFormations(Store.projectId, {
         phase: formationsField.phase,
@@ -762,6 +1311,11 @@ export function saveComponent(event) {
   }).then(function () {
     return API.detail(Store.projectId);
   }).then(function (detail) {
+    // The re-render below replaces the form's DOM, which would steal focus and
+    // discard anything typed while the PATCH was in flight. Snapshot the
+    // focused control NOW (its value is the newest typing) and put it back
+    // once the fresh markup is in place -- see autosave.js.
+    var focusSnapshot = captureEditorFocus();
     var selectedTaskId = Store.task.task_id;
     Store.project = detail.project || {};
     Store.tasks = detail.tasks || [];
@@ -770,10 +1324,21 @@ export function saveComponent(event) {
     Store.overview = detail.overview || null;
     Store.formations = detail.formations || [];
     renderDetail();
-    loadComponent(Store.tasks.find(function (task) { return task.task_id === selectedTaskId; }) || chooseInitialTask(tasksForPipeline(Store.pipeline)));
-    refreshAllBoards();
-    msg('Component saved.', 'success');
-  }).catch(function (error) { msg(error.message, 'error'); }).finally(function () {
+    var nextTask = Store.tasks.find(function (task) { return task.task_id === selectedTaskId; }) ||
+      chooseInitialTask(tasksForPipeline(Store.pipeline));
+    return Promise.resolve(loadComponent(nextTask)).then(function () {
+      restoreEditorFocus(focusSnapshot);
+      refreshAllBoards();
+      var savedNote = savedMessage(savedTask, statusBeforeSave);
+      // Auto saves stay quiet -- UNLESS this save also filed a submission
+      // (card 3D): a status change the user caused deserves its toast.
+      if (!auto || savedNote !== 'Component saved.') msg(savedNote, 'success');
+      return { ok: true, state: 'saved' };
+    });
+  }).catch(function (error) {
+    if (!auto) msg(error.message, 'error');
+    return { ok: false, state: 'error', message: error.message };
+  }).finally(function () {
     if (submitButton) submitButton.disabled = false;
   });
 }

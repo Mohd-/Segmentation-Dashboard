@@ -34,6 +34,12 @@ export function msg(message, type) {
   if (!el) {
     el = document.createElement('div');
     el.id = 'app-message';
+    // The toast is the app's only success/failure announcement, so it has to
+    // reach a screen reader without stealing focus: role=status is an implicit
+    // aria-live="polite" region, and it exists BEFORE the text lands (a live
+    // region inserted already-populated is not announced).
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
     document.body.insertBefore(el, document.body.firstChild);
   }
   el.className = 'app-message ' + (type || 'info');

@@ -9,3 +9,4 @@ sqlalchemy>=1.4
 scipy>=1.11
 PyYAML>=6.0
 matplotlib>=3.8
+pyshp>=2.3

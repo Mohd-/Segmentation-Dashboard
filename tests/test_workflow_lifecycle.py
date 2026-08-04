@@ -10,36 +10,63 @@ from datetime import date
 
 from conftest import create_project, get_task_by_name, get_tasks
 
-PROSPECT_STAGES = {"Lead Identification", "Risking", "Segmentation", "Pre-Well Delivery"}
+PROSPECT_STAGES = {"Lead Assessment", "Risk Analysis", "Pre-Well Delivery"}
 
 
 # ---------------------------------------------------------------------------
 # Initial seeding
 # ---------------------------------------------------------------------------
 
-def test_new_prospect_project_has_31_tasks_all_not_assigned(client):
-    # v17 lifecycle: every step (including the first) starts Not Assigned;
-    # assignment is what moves a step to In Progress. current_task still
-    # anchors on the first step. (31 tasks since v18 removed the Presence CoS
-    # Evaluation step.)
+def _fill_assessment_checkpoints(client, pid):
+    task = get_task_by_name(client, pid, "Lead Assessment")
+    resp = client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields", json={"fields": {
+        "p90_area_km2": "1", "p10_area_km2": "2",
+        "reservoir_thickness_ft": "1", "formation_thickness_ft": "2",
+        "grv_p90_thousand_acre_ft": "1", "grv_p10_thousand_acre_ft": "2",
+        "polygons_surfaces_loaded": "1", "lead_piip_gas_mean": "1",
+    }})
+    assert resp.status_code == 200, resp.get_json()
+
+
+# The steps the creation auto-assignment rules cover for an ANONYMOUS creation
+# (config.STEP_ASSIGNMENT_RULES -> Tahira; config.PRE_WELL_ASSIGNEES ->
+# Saad/Salem on every Pre-Well Delivery step). The creator-default tier stays
+# inert here: the anonymous "Web User" actor is not an active users row.
+AUTO_ASSIGNED_FRESH_STEPS = {
+    "Seismic Signature Validation", "Moving Tolerance", "Approval to Stake",
+    "Well Site Location", "Pre-Drilling GeoX Assessment",
+}
+
+
+def test_new_prospect_project_has_24_tasks_with_only_rule_steps_assigned(client):
+    # v17 lifecycle: a step starts Not Assigned and assignment is what moves it
+    # to In Progress. Creation auto-assignment applies exactly that mechanism
+    # to the configured rule steps, so THOSE arrive In Progress with an
+    # assignee while everything else still starts Not Assigned. current_task
+    # still anchors on the first step. v7 consolidates four assessment rows
+    # into one.
     pid = create_project(client, "SEED-PROSPECT-1")
     tasks = get_tasks(client, pid)
-    assert len(tasks) == 31
+    assert len(tasks) == 24
 
     first = tasks[0]
-    assert first["task_name"] == "Reservoir Area Definition"
+    assert first["task_name"] == "Lead Assessment"
     assert first["status"] == "Not Assigned"
 
     for task in tasks[1:]:
-        assert task["status"] == "Not Assigned"
+        if task["task_name"] in AUTO_ASSIGNED_FRESH_STEPS:
+            assert task["status"] == "In Progress", task["task_name"]
+            assert task["assigned_to"], task["task_name"]
+        else:
+            assert task["status"] == "Not Assigned", task["task_name"]
 
     project = client.get(f"/api/projects/{pid}").get_json()
-    assert project["current_task"] == "Reservoir Area Definition"
+    assert project["current_task"] == "Lead Assessment"
 
 
-def test_new_bp_project_seeds_all_31_tasks_not_assigned(client):
+def test_new_bp_project_seeds_all_24_tasks_not_assigned(client):
     # Applicability is derived from pipeline_type, not stored per row: a BP
-    # project still materializes all 31 tasks Not Assigned (the prospect-stage
+    # project still materializes all 24 tasks Not Assigned (the prospect-stage
     # rows simply fall outside its operating pipeline). current_task anchors on
     # the first BP step.
     pid = create_project(
@@ -47,12 +74,14 @@ def test_new_bp_project_seeds_all_31_tasks_not_assigned(client):
         business_plan_enabled=True, business_plan_year=2027,
     )
     tasks = get_tasks(client, pid)
-    assert len(tasks) == 31
+    assert len(tasks) == 24
     for task in tasks:
         assert task["status"] == "Not Assigned", task["task_name"]
 
     gate = get_task_by_name(client, pid, "BP Execution Gate")
     assert gate is not None
+    bp_sequences = [task["sequence_no"] for task in tasks if task["stage_group"] not in PROSPECT_STAGES]
+    assert bp_sequences == list(range(13, 28)), "v7 keeps the BP sequence contract stable"
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["current_task"] == "BP Execution Gate"
 
@@ -120,12 +149,12 @@ def test_not_assigned_also_clears_actual_start(client):
 def test_approving_first_task_advances_current_task(client):
     pid = create_project(client, "ADVANCE-1")
     task = get_tasks(client, pid)[0]
-    assert task["task_name"] == "Reservoir Area Definition"
+    assert task["task_name"] == "Lead Assessment"
     client.patch(f"/api/tasks/{task['task_id']}", json={
         "status": "Approved", "revision": task["revision"],
     })
     project = client.get(f"/api/projects/{pid}").get_json()
-    assert project["current_task"] == "Thickness Estimation"
+    assert project["current_task"] == "Reservoir CoS"
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +181,7 @@ def test_optimistic_locking_stale_revision_rejected(client):
 
 def test_completion_percent_scoped_to_bp_stages_for_bp_well(client):
     # Completion is scoped to the operating pipeline's stages, not stored
-    # applicability: a BP well is measured against its 19 BP-stage tasks
+    # applicability: a BP well is measured against its 15 BP-stage tasks
     # (Well Delivery + Post-Drilling + Post-Testing), never the 12 prospect
     # rows that fall outside its pipeline.
     pid = create_project(
@@ -164,26 +193,27 @@ def test_completion_percent_scoped_to_bp_stages_for_bp_well(client):
 
     tasks = get_tasks(client, pid)
     applicable = [t for t in tasks if t["stage_group"] not in PROSPECT_STAGES]
-    assert len(applicable) == 19
+    assert len(applicable) == 15
 
     for task in applicable[:2]:
         client.patch(f"/api/tasks/{task['task_id']}", json={
             "status": "Approved", "revision": task["revision"],
         })
     resp = client.get(f"/api/projects/{pid}/completion")
-    assert resp.get_json() == {"percent": round(2 / 19 * 100, 1)}
+    assert resp.get_json() == {"percent": round(2 / 15 * 100, 1)}
 
 
 def test_completion_percent_known_arithmetic_for_prospect(client):
     # Completion is scoped to the operating pipeline's stages: a prospect is
-    # measured against its 12 Prospect-stage tasks only, not all 31 (the
-    # BP-stage tasks belong to a pipeline it has not entered).
+    # measured against 12 communicated items: four field checkpoints and eight
+    # ordinary task rows, despite having only nine prospect lifecycle rows.
     pid = create_project(client, "COMPLETION-PROSPECT-1")
     tasks = get_tasks(client, pid)
-    assert len(tasks) == 31
+    assert len(tasks) == 24
     prospect_tasks = [t for t in tasks if t["stage_group"] in PROSPECT_STAGES]
-    assert len(prospect_tasks) == 12
-    for task in prospect_tasks[:5]:
+    assert len(prospect_tasks) == 9
+    _fill_assessment_checkpoints(client, pid)  # four completed items
+    for task in prospect_tasks[1:2]:           # plus Reservoir CoS
         client.patch(f"/api/tasks/{task['task_id']}", json={
             "status": "Approved", "revision": task["revision"],
         })
@@ -197,6 +227,7 @@ def test_completion_percent_known_arithmetic_for_prospect(client):
 
 def test_approving_all_prospect_tasks_completes_project(client):
     pid = create_project(client, "COMPLETE-ALL-1")
+    _fill_assessment_checkpoints(client, pid)
     tasks = get_tasks(client, pid)
     for task in tasks:
         if task["stage_group"] in PROSPECT_STAGES and task["status"] != "Approved":
@@ -208,10 +239,11 @@ def test_approving_all_prospect_tasks_completes_project(client):
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["overall_status"] == "Completed"
     # A completed project anchors on the final (highest-sequence) task of its
-    # OWN pipeline: "Approval to Stake" / Pre-Well Delivery for a prospect
-    # (a completed BP well anchors on PDA / Post-Testing), and completion
-    # percent reads 100% because it is scoped to the pipeline's own stages.
-    assert project["current_task"] == "Approval to Stake"
+    # OWN pipeline: "Pre-Drilling GeoX Assessment" / Pre-Well Delivery for a
+    # prospect (a completed BP well anchors on PDA / Post-Testing), and
+    # completion percent reads 100% because it is scoped to the pipeline's own
+    # stages.
+    assert project["current_task"] == "Pre-Drilling GeoX Assessment"
     assert project["current_stage"] == "Pre-Well Delivery"
 
     completion = client.get(f"/api/projects/{pid}/completion").get_json()
@@ -244,35 +276,112 @@ def test_approving_all_bp_tasks_completes_bp_well_anchored_on_pda(client):
 # Derived board pointers (no stored current_stage/task/owner/overall_status)
 # ---------------------------------------------------------------------------
 
-def test_derived_pointers_track_first_open_task_of_half_approved_prospect(client):
-    # Approve steps 1-3 (all of Lead Identification) and assign step 4: the
-    # derived pointers must land on step 4 (Seismic Signature Validation /
-    # Risking) and carry its assignee, on both the single-project read and the
-    # board row.
+def test_derived_pointers_track_first_open_task_after_assessment(client):
+    # Approve the one Lead Assessment lifecycle and assign Reservoir CoS: the derived
+    # pointers must land on Reservoir CoS / Risk Analysis and carry its
+    # assignee, on both the single-project read and the board row.
     pid = create_project(client, "DERIVED-POINTERS-1")
     tasks = get_tasks(client, pid)
-    for task in tasks[:3]:
-        resp = client.patch(f"/api/tasks/{task['task_id']}", json={
-            "status": "Approved", "revision": task["revision"],
-        })
-        assert resp.status_code == 200, resp.get_json()
-    step4 = get_tasks(client, pid)[3]
-    resp = client.post(f"/api/tasks/{step4['task_id']}/assign", json={
-        "assignee": "Employee", "cascade": False, "revision": step4["revision"],
+    resp = client.patch(f"/api/tasks/{tasks[0]['task_id']}", json={
+        "status": "Approved", "revision": tasks[0]["revision"],
+    })
+    assert resp.status_code == 200, resp.get_json()
+    reservoir = get_tasks(client, pid)[1]
+    resp = client.post(f"/api/tasks/{reservoir['task_id']}/assign", json={
+        "assignee": "Employee", "cascade": False, "revision": reservoir["revision"],
     })
     assert resp.status_code == 200, resp.get_json()
 
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["overall_status"] == "In Progress"
-    assert project["current_task"] == "Seismic Signature Validation"
-    assert project["current_stage"] == "Risking"
+    assert project["current_task"] == "Reservoir CoS"
+    assert project["current_stage"] == "Risk Analysis"
     assert project["current_owner"] == "Employee"
 
     row = next(r for r in client.get("/api/projects").get_json() if r["project_id"] == pid)
-    assert row["current_task"] == "Seismic Signature Validation"
-    assert row["current_stage"] == "Risking"
+    assert row["current_task"] == "Reservoir CoS"
+    assert row["current_stage"] == "Risk Analysis"
     assert row["current_owner"] == "Employee"
     assert row["overall_status"] == "In Progress"
+
+
+# ---------------------------------------------------------------------------
+# Submit gating (workflow.constants.REQUIRED_FIELDS_FOR_SUBMIT)
+# ---------------------------------------------------------------------------
+
+def _assign_and_ready(client, pid, task_name):
+    """Assign a step to Employee so it sits In Progress; return the fresh row."""
+    task = get_task_by_name(client, pid, task_name)
+    return client.post(f"/api/tasks/{task['task_id']}/assign", json={
+        "assignee": "Employee", "cascade": False, "revision": task["revision"],
+    }).get_json()["task"]
+
+
+def _submit(client, task):
+    return client.post(f"/api/tasks/{task['task_id']}/transition",
+                       json={"action": "submit", "revision": task["revision"]})
+
+
+def _bp_project(client, name):
+    return create_project(client, name, pipeline_type="bp",
+                          business_plan_enabled=True, business_plan_year=2029)
+
+
+def test_submit_is_blocked_until_both_sad_update_checkboxes_are_checked(client):
+    """SAD Update absorbed two sign-offs (the merged-away "SAD Update" and
+    "Executive Summary Final" steps) and may not be submitted until BOTH are
+    ticked. The server is the authority: the request 400s with the unmet
+    boxes named, and only unlocks once both fields hold a truthy value."""
+    pid = _bp_project(client, "GATE-SAD-1")
+    task = _assign_and_ready(client, pid, "SAD Update")
+
+    resp = _submit(client, task)
+    assert resp.status_code == 400, resp.get_json()
+    message = resp.get_json()["detail"]
+    assert "SAD Update" in message and "Final Executive Summary" in message
+    # Refused, not half-applied.
+    assert get_task_by_name(client, pid, "SAD Update")["status"] == "In Progress"
+
+    # One box is not enough, and the message narrows to what is still missing.
+    client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
+                 json={"fields": {"sad_update_done": "1"}})
+    task = get_task_by_name(client, pid, "SAD Update")
+    resp = _submit(client, task)
+    assert resp.status_code == 400
+    assert "Final Executive Summary" in resp.get_json()["detail"]
+
+    client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
+                 json={"fields": {"final_exec_summary_done": "1"}})
+    task = get_task_by_name(client, pid, "SAD Update")
+    resp = _submit(client, task)
+    assert resp.status_code == 200, resp.get_json()
+    assert get_task_by_name(client, pid, "SAD Update")["status"] == "Ready"
+
+
+def test_submit_gate_rejects_a_falsy_checkbox_value(client):
+    """An unticked checkbox saves as '' (or '0'), which must not pass the gate
+    -- truthiness matches the app's '1'/'true'/'yes'/'on' vocabulary."""
+    pid = _bp_project(client, "GATE-SAD-2")
+    task = _assign_and_ready(client, pid, "SAD Update")
+    client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
+                 json={"fields": {"sad_update_done": "1", "final_exec_summary_done": "0"}})
+    task = get_task_by_name(client, pid, "SAD Update")
+    assert _submit(client, task).status_code == 400
+
+    client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
+                 json={"fields": {"final_exec_summary_done": "yes"}})
+    task = get_task_by_name(client, pid, "SAD Update")
+    assert _submit(client, task).status_code == 200
+
+
+def test_submit_gate_leaves_ungated_steps_alone(client):
+    """The gate is declarative and empty for every other step: a neighbouring
+    BP step with no REQUIRED_FIELDS_FOR_SUBMIT entry submits with no fields at
+    all."""
+    pid = _bp_project(client, "GATE-SAD-3")
+    task = _assign_and_ready(client, pid, "SAD Model")
+    assert _submit(client, task).status_code == 200
+    assert get_task_by_name(client, pid, "SAD Model")["status"] == "Ready"
 
 
 def test_transition_approve_completes_and_reopen_clears_completed_at(client):
@@ -288,7 +397,7 @@ def test_transition_approve_completes_and_reopen_clears_completed_at(client):
         })
         assert resp.status_code == 200, resp.get_json()
     last = get_tasks(client, pid)[prospect[-1]["sequence_no"] - 1]
-    assert last["task_name"] == "Approval to Stake"
+    assert last["task_name"] == "Pre-Drilling GeoX Assessment"
     assigned = client.post(f"/api/tasks/{last['task_id']}/assign", json={
         "assignee": "Employee", "cascade": False, "revision": last["revision"],
     }).get_json()["task"]
@@ -303,7 +412,7 @@ def test_transition_approve_completes_and_reopen_clears_completed_at(client):
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["overall_status"] == "Completed"
     assert project["completed_at"]  # stamped by the completing transition
-    assert project["current_task"] == "Approval to Stake"
+    assert project["current_task"] == "Pre-Drilling GeoX Assessment"
     assert project["current_stage"] == "Pre-Well Delivery"
     assert project["current_owner"] is None
 
@@ -327,7 +436,7 @@ def test_transition_approve_completes_and_reopen_clears_completed_at(client):
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["overall_status"] == "In Progress"
     assert project["completed_at"] is None
-    assert project["current_task"] == "Approval to Stake"
+    assert project["current_task"] == "Pre-Drilling GeoX Assessment"
 
 
 def test_owner_filter_matches_derived_owner(client):
@@ -374,12 +483,12 @@ def test_prospect_completion_fallback_anchors_on_prospect_not_pda(client):
     pid = create_project(client, "FALLBACK-PROSPECT-1")
     _deactivate_stage_tasks(
         client.db_path, pid,
-        ["Lead Identification", "Risking", "Segmentation", "Pre-Well Delivery"],
+        ["Lead Assessment", "Risk Analysis", "Pre-Well Delivery"],
     )
 
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["overall_status"] == "Completed"
-    assert project["current_task"] == "Approval to Stake"
+    assert project["current_task"] == "Pre-Drilling GeoX Assessment"
     assert project["current_stage"] == "Pre-Well Delivery"
     assert project["current_task"] != "PDA"
     assert project["current_stage"] != "Post-Testing"

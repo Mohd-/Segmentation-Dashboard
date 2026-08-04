@@ -14,9 +14,7 @@ of what belongs in it.
 
 - **models.py** — SQLAlchemy `declarative_base` table definitions: THE single
   authoritative schema (there is no separate production schema to mirror).
-  Applied via `create_all` on every bootstrap. Pre-deployment, a schema change
-  is an edit here plus deleting the dev `.db` file — no migration. No queries,
-  no business logic.
+  Applied via `create_all` on every bootstrap. No queries, no business logic.
 
 - **db.py** — engine creation (SQLite pragmas, WAL), the session factory,
   Flask per-request session (`get_session` bound to `flask.g`), the one-time
@@ -35,10 +33,13 @@ of what belongs in it.
   public API via `__init__.py` re-exports). Every function takes a `session`
   first; no Flask imports. Modules, bottom of the dependency graph first:
   - `constants.py` — statuses, stages, `applicable_stages()`,
-    `PIPELINE_TEMPLATES` (the single source of truth for the 31-step
+    `PIPELINE_TEMPLATES` (the single source of truth for the 27-step
     workflow), formation vocabulary, `StaleRevisionError`.
   - `history.py` — the append-only `task_history` writer (`log_task_event`).
   - `users.py` — login identity lookups.
+  - `notifications.py` — who a transition tells (the fan-out policy) and the
+    per-recipient bell feed. Its writer runs inside `transition_task`'s own
+    transaction; every read is scoped by the caller's own name.
   - `projects.py` — project CRUD + the derived board state
     (`_annotate_derived_state`).
   - `lifecycle.py` — task reads/saves, assignment, submit/approve/return.
@@ -46,7 +47,8 @@ of what belongs in it.
   - `formations.py` — well-level formation data.
   - `summary.py` — the computed overview + Total Chance of Success reads.
 
-- **cos.py** — pure Chance-of-Success math (Reservoir/Seal/Presence CoS,
+- **cos.py** — pure Chance-of-Success math (`calculate_reservoir_cos_rows`,
+  `calculate_trap_cos`, `calculate_seal_cos`, `calculate_presence_cos`,
   `segment_class`) and the cached RF-model loader. No SQLAlchemy or Flask
   imports — values in, values out.
 
@@ -58,6 +60,22 @@ of what belongs in it.
 
 - **export_excel.py** — the styled Excel workbook export; layout only, metrics
   come from reporting/workflow.
+
+- **portfolio_export.py** — row composers for the Portfolio-wide analysis and
+  staking-options sheets (`get_portfolio_export_rows`,
+  `get_staking_export_rows`). Rows only: no writes, no workbook styling, and
+  no table behind either sheet — both are derived at export time.
+
+- **resource_calc.py** — the Resource Assessment calculator adapter: maps the
+  pop-up calculator's field names and method labels onto `resource_engine`'s
+  request, and translates the engine's validation errors into `ValueError`
+  (→ HTTP 400). Same charter as cos.py — no Flask, no database.
+
+- **resource_engine/** — the vendored probabilistic PIIP Monte Carlo engine
+  (copied from the resource-assessment repo so there is no pip
+  cross-dependency): scenario config, distributions, volumetrics, simulation
+  and the exceedance plots. Deterministic (fixed seed/iterations). Treat as
+  third-party code — change it upstream, re-vendor here.
 
 - **helpers.py** — small pure date/number utilities shared by the above.
   Nothing that touches the database or Flask.
@@ -101,11 +119,15 @@ else → generic 500 + server-side log.
   stored completion fact is `completed_at`, a historical timestamp kept in
   sync by `_sync_completed_at` (`workflow/projects.py`) from every write that
   can change completeness (save, transition, promotion/demotion).
-- **project_tasks** — the per-project instances of the 31-step workflow
+- **project_tasks** — the per-project instances of the 27-step workflow
   ("components" in the UI), materialized straight from
   `workflow.PIPELINE_TEMPLATES` at creation (there is no templates table).
-  `UNIQUE(project_id, task_name)`; retired components would stay as
-  `is_active = 0` rows so their inputs and history survive.
+  `UNIQUE(project_id, task_name)`; retired components stay as `is_active = 0`
+  rows so their inputs and history survive. Seven names are retired today
+  (`workflow.constants.RETIRED_TASK_NAMES`): from v4, `URED Update`,
+  `Post-Drilling Resource Assessment`, `Resource Assessment Update` and
+  `Executive Summary Final`; from v5, `Trap CoS`, `Seal CoS` and
+  `Well Creation`.
 - **task_dynamic_fields** — key/value inputs attached to a task (the component
   form data). This EAV table is why most new inputs need no schema change.
 - **task_history** — append-only audit trail of every change (`changed_by`,
@@ -120,6 +142,17 @@ else → generic 500 + server-side log.
   (formation × phase), edited via the mini-sheet on the logs components.
   Measurement columns are REAL; the API coerces input to float and rejects
   junk with a 400 naming the field.
+- **project_formation_pay_intervals** — zero or more pay sub-intervals per
+  formation (own top/base plus petrophysical averages), keyed by the same
+  (project, formation, phase) triple as the parent formation row plus `seq`.
+  No FK to `project_formations`; `workflow.formations.upsert_project_formations`
+  owns the coupling and replaces a formation's intervals in the same
+  phase-scoped write.
+- **notifications** — the in-app bell feed: one row per lifecycle transition a
+  user needs to hear about, addressed by display NAME (identity is the name
+  string everywhere in this app). `task_name`/`project_name` are snapshots of
+  the moment, `project_id` stays a live FK because the row is a navigation
+  target; `read_at` NULL = unread.
 - **business_plan_commitment / app_settings** — single-row commitment totals;
   key/value settings including `schema_version`.
 
@@ -179,3 +212,22 @@ each lands with an upgrade-and-replay test (CONTRIBUTING.md recipe 5).
   rows means adding a field is a front-end-only change — no migration, no
   model edit. The few values reporting needs are composed from these rows at
   read time via `_OVERVIEW_READ_SOURCES` (see "Derive, don't store").
+- **The detail shell has TWO layouts, chosen by pipeline.** A prospect LEAD
+  opened in its own pipeline renders the Card 2A shell (one outlined "Back to
+  Segment Maturation" control, the enlarged lead name, the three-stage sidebar,
+  and the shared Lead Summary component from `static/js/views/lead-summary.js`);
+  a BP WELL — and any cross-pipeline REFERENCE view of either record — keeps
+  the original shell verbatim. `views/detail.js isLeadView()` is the single
+  guard; the markup for both lives in `static/index.html` and is toggled, so
+  neither layout can drift from the other's ids. A reference view deliberately
+  keeps the old shell because its "← Back to <pipeline>" control is the only
+  way out of reference mode.
+- **Active Well and the phase move live on the WELL side of the summary
+  panel.** The Card 2A lead gear offers exactly three lead actions (Edit All
+  Inputs / Rename Lead / Delete Lead). The Active Well flag and
+  Promote-to-BP-Well / Recall-to-Lead-Phase are well-level concerns and now
+  render only in the well (and reference-view) settings popover, supervisor-
+  gated exactly as before. Nothing became unreachable: for a BP well both are
+  where they always were, and for a lead both remain available through
+  "Edit All Inputs" → the all-fields editor's Properties card, which carries
+  the same Active Well checkbox and the same supervisor-only phase row.

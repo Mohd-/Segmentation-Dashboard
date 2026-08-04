@@ -13,7 +13,7 @@ the Python process itself, and only if you touch backend files).
 
 ```
 static/
-  index.html                 the only HTML page — a single-page app with 5 "screens"
+  index.html                 the only HTML page — a single-page app with 6 "screens"
   css/
     base.css                 design tokens (colors/spacing/etc) + page shell (header, tabs, panels, forms, buttons, tables)
     components.css            everything screen-specific (pipeline board, chips, detail panel, dialog, portfolio, audit)
@@ -21,16 +21,40 @@ static/
     dom.js                    tiny generic helpers: find elements, escape text, build a <table>, render a status/priority chip
     api.js                    every backend call lives here — one function per endpoint
     state.js                  the one object holding "what's currently on screen" + the signed-in user (currentUserName())
-    schema.js                 the data that describes each workflow component's form fields (this is the biggest lever for change — see §5)
+    schema.js                 the data that describes each workflow component's form fields (this is the biggest lever for change — see §4)
     dialog.js                 the confirm/rename popup + the sign-in dialog (replaces the browser's ugly native confirm/prompt)
-    main.js                   boots the app: wires up the tab buttons and the four static forms
+    auth.js                   api.js-free login primitives shared by the boot-time login page (main.js) and the mid-session login dialog (dialog.js)
+    icons.js                  the vendored Lucide icons inlined as SVG strings, keyed by icon name (source SVGs live in static/icons/)
+    navigation.js             activateTab(): the DOM-only "show this tab" helper — it decides nothing about what to fetch
+    main.js                   boots the app: wires up the tab buttons and the one static form (#component-form)
     views/
       pipeline.js              Prospect Maturation + Business Plan Execution tabs (the kanban-style boards)
+      lead-filters.js          the Segment Maturation filter row (Assignee/Field/Status/Priority) AND the one
+                               filtered-leads selector the board — and later the KPIs — render from
+      lead-create.js           the "+ Add New Lead" control: expand-in-place, three inline fields, Enter to
+                               create, Escape/outside-click to cancel, inline validation (no modal, no form)
+      lead-kpis.js             the three Segment Maturation KPI tiles (completion donut, Total Active Leads,
+                               Total Mean OGIP) — computed from the same filtered rowset the board renders
       detail.js                the right-hand detail panel: compact summary card, rename/delete, BP/Active flags
       detail-form.js           the middle detail panel: the component form itself, dynamic fields, repeatable rows
+      lead-summary.js          the shared Lead Summary card (header + gear, progress bar, five sections, footer)
+                               rendered on every detailed LEAD page — pure: it reads no app state, callers hand it one object
+      lead-assessment.js       the consolidated Lead Assessment workspace: one page whose four numbered sections
+                               are the four Lead Assessment steps (they keep their four rail rows and statuses)
+      staking-letters.js       the consolidated Staking Letters page: the three checkboxes behind
+                               "Approval to Stake" + "Well Site Location"
+      resource-calculator.js   the Resource Assessment PIIP calculator rendered inline in that step's body
+                               (Calculate → POST /api/tasks/<id>/resource-assessment → Apply to Lead)
+      transitions.js           the ONLY way a record moves between the lead and BP pipelines — confirm, then
+                               PATCH /flags (supervisor-gated server-side)
+      header-menus.js          the header's two dropdowns: the notification bell (feed, unread count, mark-as-read)
+                               and the gear menu
       project-editor.js         the secondary "all fields" editor opened from pipeline detail
       portfolio.js              Portfolio tab
+      portfolio-analysis.js     the Portfolio Analysis widgets: the resource progress bar and the CoS/OGIP cross plot
       audit.js                  Audit Trail tab
+  icons/                     the pristine Lucide SVG downloads — the source of truth icons.js is inlined from
+  tests/                     the front-end test suite: harness.js, runner.html and the test-*.js modules (see §10)
 ```
 
 Nothing here is a "component framework" — there's no JSX, no virtual DOM, no reactivity system.
@@ -42,7 +66,8 @@ pattern repeats everywhere; once you've read one `render` function you've basica
 
 There's no router and no client-side page framework. It works like this:
 
-1. `index.html` has five `<section class="tab">` blocks (one per tab) plus the shared
+1. `index.html` has six `<section class="tab">` blocks (one per tab — prospect, portfolio,
+   bp, map, audit, calculator) plus the shared
    `#detail-shell` panel, all sitting in the DOM at once. CSS just shows/hides them
    (`.tab { display: none } .tab.active { display: block }`).
 2. `main.js`'s `showTab(name)` toggles which section has `.active`, then calls that tab's
@@ -115,7 +140,7 @@ Field object reference (`detail-form.js`'s `renderFields()` is what reads these)
 |---|---|
 | `key` | the field's storage key — must be unique within that component, becomes the payload key sent to the backend |
 | `label` | the visible field label |
-| `type` | `number` \| `text` \| `checkbox` \| `select` \| `repeatable` \| `formations` \| `link` \| `summary` — controls which input renders (`formations` renders the well-level formation mini-sheet; see `renderFormationsField()`) |
+| `type` | `number` \| `text` \| `checkbox` \| `radio` \| `select` \| `repeatable` \| `formations` \| `link` — controls which input renders (`formations` renders the well-level formation mini-sheet; see `renderFormationsField()`) |
 | `options` | for `type: 'select'`, the dropdown choices |
 | `columns` | for `type: 'repeatable'`, the column definitions of each row (see `Reservoir CoS` in schema.js for a full example) |
 | `readonly` | true for a calculated/backend-computed value — renders as a read-only output, not an input |
@@ -134,10 +159,14 @@ paragraph.
 
 That summary card is deliberately small: a completion progress bar, the latest P90/P10 gas
 figures, the Reservoir / Trap / Seal CoS values, and a gear popover holding the BP / Active
-flags, BP year, and Rename / Archive. To surface a new value there (or in the backend-composed
+flags, BP year, and Rename / Delete. (A LEAD is different: its gear — in `views/lead-summary.js`
+— holds exactly three items, Edit All Inputs / Rename Lead / Delete Lead.) To surface a new
+value there (or in the backend-composed
 `overview` the detail payload returns — the "Total CoS" style read-time values), edit
-`views/detail.js`'s `renderRightPanel()` and add a `metricRow('Label', value, 'Component Name')`
-line following the existing ones (the `overview` values themselves are backend-composed).
+`views/detail.js`'s `renderRightPanel()` and add a `metricRow('Label', value, 'note')`
+line following the existing ones — the third argument is an optional display note rendered
+small under the label (a unit, a source hint), not a component name (the `overview` values
+themselves are backend-composed).
 
 ## 5. Adding a whole new tab
 
@@ -209,7 +238,22 @@ first — this guide, and the front-end code it describes, is a separate layer f
 
 ## 10. Quick sanity check after any change
 
-There's no test suite for the front end and no linter wired in. After a change:
+There IS a front-end test suite (no linter, though). It lives in `static/tests/`: a tiny
+zero-dependency ES-module harness (`harness.js` — `test()`, `assert.*`, `fixture()`,
+`mockFetch()`, `waitFor()`), a page that imports every test module and runs them
+(`runner.html`), and 18 `test-*.js` modules totalling 416 tests. Run it from the repo root:
+
+```bash
+.venv/bin/python run_frontend_tests.py                  # headless, prints a report
+.venv/bin/python run_frontend_tests.py --browser open   # watch it in a browser
+```
+
+The driver boots the app on port 8021 against a scratch database (never `pipeline_tracker.db`)
+and drives headless Firefox at the runner; exit 0 = all passed, 1 = failures, 2 = harness
+trouble. To add a test module, create `static/tests/test-<thing>.js` **and** register it in the
+import list in `static/tests/runner.html` — an unregistered file simply never runs.
+
+Then, after a change:
 
 1. Run `python3 main.py`, open `http://127.0.0.1:8020`.
 2. Open the browser's DevTools console (F12) and watch for red errors on page load and after
