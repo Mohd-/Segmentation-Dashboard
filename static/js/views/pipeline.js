@@ -7,6 +7,7 @@ import { openDetail } from './detail.js';
 import { refreshPortfolio } from './portfolio.js';
 import { setLeadRows } from './lead-filters.js';
 import { refreshBusinessPlan, syncBusinessPlanPromotion } from './business-plan.js';
+import { personChipsHtml, leadItemHtml } from './board-widgets.js';
 
 function prospectStages() { return (Store.meta && Store.meta.prospect_stages) || PROSPECT_STAGES; }
 function bpStages() { return (Store.meta && Store.meta.bp_stages) || BP_STAGES; }
@@ -73,14 +74,6 @@ var STAGE_HEADER_ICONS = {
   'Pre-Well Delivery': 'rig'
 };
 
-// Tracked-item status -> dot glyph + modifier class. Each status has its OWN
-// SHAPE (check / dash / empty ring), so the dots stay readable without color.
-var ITEM_DOTS = {
-  'Completed': { icon: 'circle-check', slug: 'completed' },
-  'Pending Approval': { icon: 'circle-minus', slug: 'pending' },
-  'In Progress': { icon: 'circle', slug: 'in-progress' }
-};
-
 // Card border color + column order. Unknown/absent reads Low (gray), matching
 // the server's own default.
 var PRIORITY_RANK = { High: 0, Medium: 1, Low: 2 };
@@ -107,29 +100,18 @@ function byPriority(projects) {
     .map(function (entry) { return entry.project; });
 }
 
+// Deliberately icon-less in the empty case: "Unassigned" is the absence of
+// a person, not a person named Unassigned. (personChipsHtml, board-widgets.js)
 function assigneesHtml(project) {
-  var people = project.assignees || [];
-  if (!people.length) {
-    // Deliberately icon-less: "Unassigned" is the absence of a person, not a
-    // person named Unassigned.
-    return '<span class="lead-person lead-person-empty">Unassigned</span>';
-  }
-  return people.map(function (name) {
-    return '<span class="lead-person">' +
-      '<span class="lead-person-icon" aria-hidden="true">' + ICONS.user + '</span>' +
-      '<span class="lead-person-name">' + esc(name) + '</span>' +
-      '</span>';
-  }).join('');
+  return personChipsHtml(project.assignees);
 }
 
 function trackedItemsHtml(project, stage) {
   return (project.tracked_items || []).filter(function (item) {
     return item.stage === stage;
   }).map(function (item) {
-    var dot = ITEM_DOTS[item.status] || ITEM_DOTS['In Progress'];
     return '<span class="lead-item">' +
-      '<span class="lead-dot lead-dot-' + dot.slug + '" role="img" aria-label="' + esc(item.status) +
-      '" title="' + esc(item.label + ' — ' + item.status) + '">' + ICONS[dot.icon] + '</span>' +
+      leadItemHtml(item.status, item.label) +
       '<span class="lead-item-label">' + esc(item.label) + '</span>' +
       '</span>';
   }).join('');

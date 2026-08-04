@@ -22,8 +22,8 @@
    1/12 plus one at 7/12 is 12/72 = 17%, where averaging rounded per-lead
    percentages would report 16%.
    ========================================================================= */
-import { byId, esc } from '../dom.js';
-import { ICONS } from '../icons.js';
+import { byId } from '../dom.js';
+import { kpiDonutHtml, kpiTileHtml } from './board-widgets.js';
 
 // Every prospect card carries exactly twelve tracked items (the Card 1B
 // presentation adapter, workflow/projects.py _TRACKED_ITEMS), and the
@@ -139,29 +139,11 @@ export function formatOgip(total) {
 // dash: a zero-length subpath with a round linecap renders as a DOT, which
 // would read as "a sliver of progress" on a board with nothing done.
 function donutMarkup(percent) {
-  var arc = percent > 0
-    ? '<circle class="kpi-donut-arc" cx="21" cy="21" r="15.9155"' +
-      ' stroke-dasharray="' + percent + ' ' + (100 - percent) + '"' +
-      ' transform="rotate(-90 21 21)"></circle>'
-    : '';
-  // role="img" + aria-label makes the tile one labelled object, so a screen
-  // reader hears the percentage once instead of a stray "68%" with no subject.
-  return '<div class="kpi-donut" role="img" aria-label="Dashboard completion ' + percent + '%">' +
-    '<svg class="kpi-donut-svg" viewBox="0 0 42 42" aria-hidden="true" focusable="false">' +
-      '<circle class="kpi-donut-track" cx="21" cy="21" r="15.9155"></circle>' + arc +
-    '</svg>' +
-    '<span class="kpi-donut-value" aria-hidden="true">' + percent + '%</span>' +
-    '</div>';
+  return kpiDonutHtml(percent, 'Dashboard completion ' + percent + '%');
 }
 
 function tileMarkup(value, label, modifier, icon) {
-  return '<div class="kpi-tile' + (modifier ? ' ' + modifier : '') + '">' +
-    (icon ? '<span class="kpi-icon" aria-hidden="true">' + ICONS[icon] + '</span>' : '') +
-    '<div class="kpi-tile-text">' +
-      '<b class="kpi-value">' + esc(value) + '</b>' +
-      '<small class="kpi-label">' + esc(label) + '</small>' +
-    '</div>' +
-    '</div>';
+  return kpiTileHtml(value, label, modifier, icon);
 }
 
 export function leadKpisHtml(leads) {

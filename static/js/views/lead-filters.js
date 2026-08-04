@@ -24,7 +24,7 @@
    Combination rule: AND across the three categories, OR inside Assignee.
    ========================================================================= */
 import { byId, all, esc } from '../dom.js';
-import { ICONS } from '../icons.js';
+import { placeFilterMenu, filterTriggerHtml, filterOptionHtml } from './board-widgets.js';
 
 // The sentinel for "leads nobody is assigned to". Deliberately not a name: no
 // person is called Unassigned, and the value must never collide with one.
@@ -256,28 +256,25 @@ function anyFilterActive() {
    ------------------------------------------------------------------------- */
 
 function optionMarkup(filter, option) {
-  var chosen = isChosen(filter.key, option.value);
-  // Real <button>s with checkbox/radio semantics: Space and Enter toggle them
-  // for free, and assistive tech reads the state from aria-checked.
-  return '<button type="button" class="lf-option' + (chosen ? ' is-chosen' : '') +
-    (option.strong ? ' lf-option-strong' : '') + '"' +
-    ' role="' + (filter.multi ? 'checkbox' : 'radio') + '" aria-checked="' + (chosen ? 'true' : 'false') + '"' +
-    ' data-value="' + esc(option.value) + '">' +
-    '<span class="lf-mark' + (filter.multi ? ' lf-mark-box' : ' lf-mark-dot') + '" aria-hidden="true"></span>' +
-    (option.icon
-      ? '<span class="lf-option-icon' + (option.slug ? ' lf-icon-' + option.slug : '') + '" aria-hidden="true">' + ICONS[option.icon] + '</span>'
-      : '') +
-    '<span class="lf-option-label">' + esc(option.label) + '</span>' +
-    '</button>';
+  return filterOptionHtml({
+    multi: filter.multi,
+    chosen: isChosen(filter.key, option.value),
+    value: option.value,
+    icon: option.icon,
+    slug: option.slug,
+    strong: option.strong,
+    label: option.label
+  });
 }
 
 function filterMarkup(filter) {
   return '<div class="lead-filter" data-filter="' + filter.key + '">' +
-    '<button type="button" class="lf-trigger' + (isFilterActive(filter.key) ? ' is-active' : '') + '"' +
-      ' aria-haspopup="true" aria-expanded="false" aria-label="Filter by ' + esc(filter.caption.toLowerCase()) + '">' +
-      '<span class="lf-value">' + esc(triggerLabel(filter.key)) + '</span>' +
-      '<span class="lf-caret" aria-hidden="true">' + ICONS['chevron-down'] + '</span>' +
-    '</button>' +
+    filterTriggerHtml({
+      key: filter.key,
+      caption: filter.caption,
+      label: triggerLabel(filter.key),
+      active: isFilterActive(filter.key)
+    }) +
     '<div class="lf-menu" hidden role="' + (filter.multi ? 'group' : 'radiogroup') + '"' +
       ' aria-label="' + esc(filter.caption) + '">' +
       optionsFor(filter.key).map(function (option) { return optionMarkup(filter, option); }).join('') +
@@ -294,26 +291,7 @@ function filterMarkup(filter) {
    would be cut off by the stage container the moment it grew past the row.
    ------------------------------------------------------------------------- */
 
-function placeMenu(trigger, menu) {
-  var margin = 8;
-  var rect = trigger.getBoundingClientRect();
-  menu.style.left = '0px';
-  menu.style.top = '0px';
-  menu.style.minWidth = Math.round(rect.width) + 'px';
-
-  var width = menu.offsetWidth;
-  var height = menu.offsetHeight;
-  var left = rect.left;
-  if (left + width > window.innerWidth - margin) left = window.innerWidth - width - margin;
-  left = Math.max(margin, left);
-
-  var below = rect.bottom + 4;
-  var above = rect.top - height - 4;
-  var top = (below + height > window.innerHeight - margin && above >= margin) ? above : below;
-  menu.style.left = Math.round(left) + 'px';
-  menu.style.top = Math.round(top) + 'px';
-  menu.style.maxHeight = Math.min(320, Math.max(120, window.innerHeight - top - margin)) + 'px';
-}
+var placeMenu = placeFilterMenu;
 
 /* The page-wide "one dropdown at a time" contract (added with Card 1F).
 
