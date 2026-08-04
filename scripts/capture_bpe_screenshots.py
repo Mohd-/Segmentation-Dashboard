@@ -92,6 +92,15 @@ def open_dashboard(page, url, year):
     page.wait_for_timeout(250)
 
 
+def click_rail_item(page, slug, stage):
+    """Open a rail step, expanding its stage first — the rail is a one-open
+    accordion, so items in the two folded groups are hidden."""
+    item = page.locator('.component-item[data-detail-slug="%s"]' % slug)
+    if not item.is_visible():
+        page.locator('.rail-stage-head[data-stage="%s"]' % stage).click()
+    item.click()
+
+
 def open_gate(page):
     """Open the Business Plan Gate step of the first well on the board.
 
@@ -101,12 +110,7 @@ def open_gate(page):
     """
     page.locator("#bp-pipeline .lead-card").first.click()
     page.wait_for_selector(".bpe-detail-form", state="visible")
-    # The rail is a one-open accordion: expand Pre-Drilling first when the
-    # card landed the detail on a step in another stage group.
-    gate_item = page.locator('.component-item[data-detail-slug="business-plan-gate"]')
-    if not gate_item.is_visible():
-        page.locator('.rail-stage-head[data-stage="pre_drilling"]').click()
-    gate_item.click()
+    click_rail_item(page, "business-plan-gate", "pre_drilling")
     page.wait_for_selector(".bpe-detail-form .radio-group", state="visible")
 
 
@@ -147,7 +151,7 @@ def main():
         capture(desktop, output_dir, "bpe-dashboard-desktop.png", results)
         open_gate(desktop)
         capture(desktop, output_dir, "bpe-gate-desktop.png", results)
-        desktop.locator('.component-item[data-detail-slug="flowback-results"]').click()
+        click_rail_item(desktop, "flowback-results", "post_testing")
         desktop.wait_for_selector(".bpe-flow-stage", state="visible")
         capture(desktop, output_dir, "bpe-flowback-desktop.png", results)
         desktop.close()
