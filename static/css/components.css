@@ -2953,7 +2953,8 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   .bpe-gate-depth, .bpe-gate-logging, .bpe-gate-coring, .bpe-pair, .bpe-trio,
   .bpe-formation-envelope, .bpe-pay-row, .bpe-flow-grid { grid-template-columns: minmax(0, 1fr); }
   .bpe-pay-row { padding-bottom: var(--space-3); }
-  .bpe-detail-controls { flex-wrap: wrap; margin-left: 0; }
+  .bpe-detail-form .editor-head { flex-wrap: wrap; }
+  .bpe-detail-controls { flex-basis: 100%; flex-wrap: wrap; margin-left: 0; }
   .bpe-approval-row { justify-content: stretch; flex-direction: column; }
   .bpe-approval-row button { width: 100%; }
 }
