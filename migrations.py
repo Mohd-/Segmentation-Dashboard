@@ -35,6 +35,8 @@ Postgres ``begin_write`` is a no-op and an advisory lock
 """
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import inspect
 
 import config
@@ -42,7 +44,7 @@ import db
 from helpers import utc_now_str
 from models import Base
 
-LATEST_SCHEMA_VERSION = 9
+LATEST_SCHEMA_VERSION = 10
 
 
 # ---------------------------------------------------------------------------
@@ -872,6 +874,106 @@ def _migrate_v9_project_priority(session, engine) -> None:
         """, {"priority": value, "project_id": project_id})
 
 
+def _migrate_v10_business_plan_execution(session, engine) -> None:
+    """v10: carry unambiguous legacy BPE values into the approved contracts.
+
+    This is deliberately data-only. Stable task and formation identifiers stay
+    in place; combined detail pages are a read/write projection. Ambiguous old
+    values (Condensate/Liquid fluid labels, PDA ``Booked``, and file-type
+    confirmations) are preserved untouched rather than guessed.
+    """
+    now = utc_now_str()
+    # The two old aliases have exact approved replacements.  Formation-envelope
+    # fluid is retained for compatibility even though automation now reads every
+    # Pay Interval.
+    for table in ("project_formations", "project_formation_pay_intervals"):
+        db.execute(session, f"""
+            UPDATE {table} SET fluid = CASE lower(trim(fluid))
+              WHEN 'dry' THEN 'Dry Hole'
+              WHEN 'water' THEN 'Water Bearing'
+              ELSE fluid END
+            WHERE lower(trim(fluid)) IN ('dry', 'water')
+        """)
+
+    def field_value(task_id, key):
+        row = db.fetch_one(session, """
+            SELECT field_value FROM task_dynamic_fields
+            WHERE task_id = :task_id AND field_key = :field_key
+        """, {"task_id": task_id, "field_key": key})
+        return row.get("field_value") if row else None
+
+    def insert_if_absent(task_id, key, value):
+        if value is None:
+            return
+        db.execute(session, """
+            INSERT INTO task_dynamic_fields (task_id, field_key, field_value, updated_at)
+            VALUES (:task_id, :field_key, :field_value, :now)
+            ON CONFLICT(task_id, field_key) DO NOTHING
+        """, {"task_id": task_id, "field_key": key, "field_value": str(value), "now": now})
+
+    # The retired AAP sentence explicitly represented both repositories, so a
+    # stored answer can safely seed both independent confirmations.
+    for task in db.fetch_all(session, """
+        SELECT task_id FROM project_tasks WHERE task_name = 'Aramco Picks'
+    """):
+        old = field_value(task["task_id"], "aramco_picks_loaded")
+        if old is not None:
+            insert_if_absent(task["task_id"], "aap_petrel_loaded", old)
+            insert_if_absent(task["task_id"], "aap_geoknowledge_loaded", old)
+
+    # The new Flowback confirmation is true only when both old confirmations
+    # were true. A partial legacy record remains incomplete.
+    truthy = {"1", "true", "yes", "on"}
+    for task in db.fetch_all(session, """
+        SELECT task_id FROM project_tasks WHERE task_name = 'Flowback Results'
+    """):
+        sheet = field_value(task["task_id"], "flowback_sheet")
+        slide = field_value(task["task_id"], "flowback_slide")
+        if sheet is not None or slide is not None:
+            merged = "1" if (str(sheet or "").strip().lower() in truthy
+                             and str(slide or "").strip().lower() in truthy) else "0"
+            insert_if_absent(task["task_id"], "flowback_shared_confirmed", merged)
+
+        raw_rows = field_value(task["task_id"], "flowback_stages_rows")
+        if raw_rows is None:
+            continue
+        try:
+            rows = json.loads(raw_rows)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(rows, list):
+            continue
+        global_area = field_value(task["task_id"], "flowback_dynamic_area_km2")
+        global_ogip = field_value(task["task_id"], "flowback_dynamic_ogip_bcf")
+        changed = False
+        migrated = []
+        for index, row in enumerate(rows, 1):
+            if not isinstance(row, dict):
+                migrated.append(row)
+                continue
+            mapped = {
+                "id": str(row.get("id") or row.get("_id") or f"legacy-{task['task_id']}-{index}"),
+                "formation": row.get("formation", row.get("flowback_formation", "")),
+                "top_md": row.get("top_md", row.get("flowback_top_md", "")),
+                "base_md": row.get("base_md", row.get("flowback_base_md", "")),
+                "dynamic_area_km2": row.get("dynamic_area_km2", global_area if len(rows) == 1 else ""),
+                "dynamic_ogip_bcf": row.get("dynamic_ogip_bcf", global_ogip if len(rows) == 1 else ""),
+                "gas_rate_mmscfd": row.get("gas_rate_mmscfd", row.get("flowback_gas_rate_mmscfd", "")),
+                "water_rate_bwpd": row.get("water_rate_bwpd", row.get("flowback_water_rate_bwpd", "")),
+                "liquid_rate_bpd": row.get("liquid_rate_bpd", row.get("flowback_liquid_rate_bpd", "")),
+                "choke_size_in": row.get("choke_size_in", row.get("flowback_choke_size_in", "")),
+                "fwhp_psi": row.get("fwhp_psi", row.get("flowback_fwhp_psi", "")),
+            }
+            migrated.append(mapped)
+            changed = changed or mapped != row
+        if changed:
+            db.execute(session, """
+                UPDATE task_dynamic_fields SET field_value = :value, updated_at = :now
+                WHERE task_id = :task_id AND field_key = 'flowback_stages_rows'
+            """, {"value": json.dumps(migrated, separators=(",", ":")),
+                  "now": now, "task_id": task["task_id"]})
+
+
 # List of (version, fn) dispatched by run() in ascending order against the
 # stored schema_version. Append new steps with the next integer version and
 # bump LATEST_SCHEMA_VERSION to match; never edit or remove a shipped step.
@@ -884,6 +986,7 @@ MIGRATIONS = [
     (7, _migrate_v7_lead_assessment_single_step),
     (8, _migrate_v8_repair_lead_assessment_fold),
     (9, _migrate_v9_project_priority),
+    (10, _migrate_v10_business_plan_execution),
 ]
 
 

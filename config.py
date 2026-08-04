@@ -449,3 +449,38 @@ COMPONENT_FILE_SECTIONS = {
     "URED Update", "Executive Summary Final",
     "Resource Assessment Update", "Post-Drilling Resource Assessment",
 }
+
+# Business Plan Execution configuration.  The approved year selector is fixed;
+# historical values outside it remain stored and are reported by the API as a
+# data-quality condition rather than being silently coerced.  The three
+# unresolved production values intentionally ship empty: deployment can supply
+# them without a code change, while the UI shows "Not configured" instead of a
+# fabricated destination or calculation input.
+BPE_YEAR_MIN = 1999
+BPE_YEAR_MAX = 2035
+
+
+def _env_list(name: str):
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return ()
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        value = [part.strip() for part in raw.split(",")]
+    if not isinstance(value, list):
+        return ()
+    return tuple(str(item).strip() for item in value if str(item).strip())
+
+
+# Ordered standard hole-section values for Gate Interval From/To.  No approved
+# list was supplied, so this is empty unless deployment configures it.
+BPE_HOLE_SECTIONS = _env_list("ASAS_BPE_HOLE_SECTIONS")
+
+
+def business_plan_vsp_url() -> str:
+    return os.environ.get("ASAS_BPE_VSP_URL", "").strip()
+
+
+def business_plan_structural_mtr_url() -> str:
+    return os.environ.get("ASAS_BPE_STRUCTURAL_MTR_URL", "").strip()

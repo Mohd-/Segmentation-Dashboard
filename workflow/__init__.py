@@ -132,6 +132,21 @@ from .summary import (
     total_cos_from_fields,
 )
 from .users import SYSTEM_USER, ensure_system_user, find_active_user, get_active_users
+from .business_plan import (
+    APPROVAL_DETAILS as BPE_APPROVAL_DETAILS,
+    CLASSIFICATIONS as BPE_CLASSIFICATIONS,
+    DETAILS as BPE_DETAILS,
+    FLUIDS as BPE_FLUIDS,
+    STAGES as BPE_STAGES,
+    STEP_OPTIONS as BPE_STEP_OPTIONS,
+    assign_detail as assign_bpe_detail,
+    get_dashboard as get_bpe_dashboard,
+    get_detail as get_bpe_detail,
+    save_field as save_bpe_field,
+    save_flowback_stages as save_bpe_flowback_stages,
+    save_formations as save_bpe_formations,
+    transition_approval as transition_bpe_approval,
+)
 
 __all__ = [
     # constants
@@ -184,4 +199,9 @@ __all__ = [
     "total_cos_from_fields",
     # history
     "log_task_event",
+    # approved Business Plan Execution projection
+    "BPE_APPROVAL_DETAILS", "BPE_CLASSIFICATIONS", "BPE_DETAILS", "BPE_FLUIDS",
+    "BPE_STAGES", "BPE_STEP_OPTIONS", "assign_bpe_detail", "get_bpe_dashboard",
+    "get_bpe_detail", "save_bpe_field", "save_bpe_flowback_stages",
+    "save_bpe_formations", "transition_bpe_approval",
 ]

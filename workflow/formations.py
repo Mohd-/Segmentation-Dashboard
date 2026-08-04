@@ -161,9 +161,12 @@ def auto_complete_non_prospective_steps(session, project_id):
     return completed
 
 
-# Canonical spelling lookup for the pay-interval fluid vocabulary, so 'gas' and
-# 'GAS' both store as 'Gas' instead of being rejected on a casing slip.
+# Canonical spelling lookup for current values plus historical labels that an
+# older full-row client must be able to round-trip unchanged. The BPE endpoint
+# and editor remain strict; numbered migration v10 maps stored Dry/Water rows.
 _FLUID_BY_LOWER = {value.lower(): value for value in FORMATION_FLUID_TYPES}
+_FLUID_BY_LOWER.update({"dry": "Dry", "water": "Water",
+                        "condensate": "Condensate", "liquid": "Liquid"})
 
 
 def _clean_pay_intervals(raw, formation):

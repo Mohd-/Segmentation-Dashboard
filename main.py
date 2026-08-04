@@ -793,6 +793,91 @@ def business_rows():
     return json_response(reporting.get_business_plan_rows(session))
 
 
+@app.get("/api/business-plan/dashboard")
+def business_plan_dashboard():
+    """One canonical filtered population for BPE cards, counts, and KPIs."""
+    session = db.get_session()
+    payload = workflow.get_bpe_dashboard(session, {
+        "assignee": request.args.get("assignee", "All Assignees"),
+        "field": request.args.get("field", "All Fields"),
+        "status": request.args.get("status", "All Status"),
+        "year": request.args.get("year", date.today().year),
+        "step": request.args.get("step", "business-plan-gate"),
+    })
+    payload["role"] = current_role()
+    return json_response(payload)
+
+
+@app.get("/api/business-plan/wells/<int:project_id>/steps/<detail_slug>")
+def business_plan_detail(project_id, detail_slug):
+    session = db.get_session()
+    payload = workflow.get_bpe_detail(session, project_id, detail_slug)
+    payload["role"] = current_role()
+    payload["folder"] = folders.get_component_folder_link(
+        session, project_id, payload["task"]["task_id"])
+    return json_response(payload)
+
+
+@app.patch("/api/business-plan/wells/<int:project_id>/steps/<detail_slug>/field")
+def business_plan_save_field(project_id, detail_slug):
+    session = db.get_session()
+    payload = request.get_json(silent=True) or {}
+    result = workflow.save_bpe_field(
+        session, project_id, detail_slug, payload.get("field_key", ""),
+        payload.get("value"), actor(payload), current_role(),
+        bool(payload.get("confirm_reset")), payload.get("override_reason"),
+    )
+    result["role"] = current_role()
+    return json_response({"ok": True, "detail": result})
+
+
+@app.put("/api/business-plan/wells/<int:project_id>/steps/<detail_slug>/formations")
+def business_plan_save_formations(project_id, detail_slug):
+    session = db.get_session()
+    payload = request.get_json(silent=True) or {}
+    result = workflow.save_bpe_formations(
+        session, project_id, detail_slug, payload.get("rows", []),
+        actor(payload), current_role(),
+    )
+    result["role"] = current_role()
+    return json_response({"ok": True, "detail": result})
+
+
+@app.put("/api/business-plan/wells/<int:project_id>/flowback-stages")
+def business_plan_save_flowback(project_id):
+    session = db.get_session()
+    payload = request.get_json(silent=True) or {}
+    result = workflow.save_bpe_flowback_stages(
+        session, project_id, payload.get("rows", []), actor(payload), current_role())
+    result["role"] = current_role()
+    return json_response({"ok": True, "detail": result})
+
+
+@app.post("/api/business-plan/wells/<int:project_id>/steps/<detail_slug>/transition")
+def business_plan_transition(project_id, detail_slug):
+    session = db.get_session()
+    payload = request.get_json(silent=True) or {}
+    result = workflow.transition_bpe_approval(
+        session, project_id, detail_slug, str(payload.get("action") or "").lower(),
+        actor(payload), current_role(), payload.get("comment", ""),
+    )
+    result["role"] = current_role()
+    return json_response({"ok": True, "detail": result})
+
+
+@app.post("/api/business-plan/wells/<int:project_id>/steps/<detail_slug>/assign")
+def business_plan_assign(project_id, detail_slug):
+    require_role("supervisor", "staff")
+    session = db.get_session()
+    payload = request.get_json(silent=True) or {}
+    result = workflow.assign_bpe_detail(
+        session, project_id, detail_slug, payload.get("assignee", ""),
+        actor(payload), current_role(),
+    )
+    result["role"] = current_role()
+    return json_response({"ok": True, "detail": result})
+
+
 @app.get("/api/portfolio/rows")
 def portfolio_rows():
     session = db.get_session()
