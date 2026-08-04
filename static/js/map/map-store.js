@@ -300,7 +300,14 @@ export function computeSummary(layers, wells, associations) {
        "order": ["blocks", "fields"],        // shapefile names, bottom -> top
        "visible": { "blocks": true, "__wells__": false },
        "colors":  { "blocks": "#4a9eff", "__wells__": "#e05252" },
-       "summaryCollapsed": false }
+       "summaryCollapsed": false,
+       "sidebarCollapsed": false,          // the floating layer box
+       "filtersCollapsed": false,          // its Well filters fold
+       "layersCollapsed": false }          // its Layers fold
+
+   sidebarCollapsed is TRI-STATE on read: null means "never stored", which is
+   how the view knows it may pick the default itself (collapsed on a phone).
+   The store has no matchMedia of its own — it stays browser-free.
 
    Nothing in here is authoritative about which layers EXIST — the server's
    layer list is. Names that have since disappeared are dropped on apply, and
@@ -339,7 +346,10 @@ export function normalizeState(raw) {
     order: order,
     visible: plainMap(input.visible, function (value) { return !!value; }),
     colors: plainMap(input.colors, function (value) { return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value) ? value.toLowerCase() : null; }),
-    summaryCollapsed: !!input.summaryCollapsed
+    summaryCollapsed: !!input.summaryCollapsed,
+    sidebarCollapsed: typeof input.sidebarCollapsed === 'boolean' ? input.sidebarCollapsed : null,
+    filtersCollapsed: !!input.filtersCollapsed,
+    layersCollapsed: !!input.layersCollapsed
   };
 }
 
@@ -372,6 +382,9 @@ export class LayerStore {
     this.wellsVisible = true;
     this.wellsColor = WELLS_DEFAULT_COLOR;
     this.summaryCollapsed = false;
+    this.sidebarCollapsed = false;
+    this.filtersCollapsed = false;
+    this.layersCollapsed = false;
     this.prefs = normalizeState(null);
     this._fetchLayer = fetchLayerGeometry || function () { return Promise.resolve({ features: [] }); };
     this._assoc = null;
@@ -383,6 +396,10 @@ export class LayerStore {
   applyState(state) {
     this.prefs = normalizeState(state);
     this.summaryCollapsed = this.prefs.summaryCollapsed;
+    // null = never persisted; the view may override the default for a phone.
+    this.sidebarCollapsed = this.prefs.sidebarCollapsed === null ? false : this.prefs.sidebarCollapsed;
+    this.filtersCollapsed = this.prefs.filtersCollapsed;
+    this.layersCollapsed = this.prefs.layersCollapsed;
     if (Object.prototype.hasOwnProperty.call(this.prefs.visible, WELLS_ID)) {
       this.wellsVisible = this.prefs.visible[WELLS_ID];
     }
@@ -404,7 +421,10 @@ export class LayerStore {
       order: this.order.slice(),
       visible: visible,
       colors: colors,
-      summaryCollapsed: !!this.summaryCollapsed
+      summaryCollapsed: !!this.summaryCollapsed,
+      sidebarCollapsed: !!this.sidebarCollapsed,
+      filtersCollapsed: !!this.filtersCollapsed,
+      layersCollapsed: !!this.layersCollapsed
     };
   }
 

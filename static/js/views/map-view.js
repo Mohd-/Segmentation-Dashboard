@@ -3,8 +3,10 @@
 
    One screen, four surfaces, all of them overlaid on a single canvas:
 
-     sidebar      the ORDERED layer list — visibility, color, feature count,
-                  zoom-to, and the up/down controls that ARE the draw order
+     sidebar      a floating, fully collapsible box (top-right, under the
+                  toolbox) holding the well filters and the ORDERED layer
+                  list — visibility, color, feature count, zoom-to, and the
+                  up/down controls that ARE the draw order
      summary      a floating, collapsible panel of live totals (top-left)
      toolbox      pointer / measure / clear / colors (top-right)
      tooltip      feature attributes and the well<->polygon association
@@ -149,7 +151,6 @@ var FILTER_LABELS = { field: 'Field', year: 'BP Year', status: 'Status', quadran
 
 function wellFilterHtml() {
   return '<div class="map-well-filters" aria-label="Well filters">'
-    + '<div class="map-well-filters-title">Well filters</div>'
     + MAP_FILTER_KEYS.map(function (key) {
       var selected = store.wellFilters[key] || [];
       var options = store.filterOptions(key);
@@ -202,12 +203,18 @@ function sidebarRows() {
   return rows;
 }
 
+/* Two containers, two innerHTML writes: the fold heads and the containers
+   themselves are static markup wired once, so a re-render can never touch a
+   container's attributes — which is exactly why the `hidden` collapse state
+   survives one. */
 function renderSidebar() {
+  var filters = byId('map-filter-list');
   var list = byId('map-layer-list');
-  if (!list) return;
+  if (!list || !filters) return;
   var rows = sidebarRows();
   var hasShapefiles = rows.some(function (row) { return row.layer && !row.layer.isBorders; });
-  list.innerHTML = wellFilterHtml() + rows.map(function (row, index) {
+  filters.innerHTML = wellFilterHtml();
+  list.innerHTML = rows.map(function (row, index) {
     var checkId = 'map-layer-chk-' + index;
     // A layer that was listed but could not be fetched is otherwise just an
     // empty ticked checkbox — nothing on the canvas and no reason given. The
@@ -231,9 +238,9 @@ function renderSidebar() {
       + '</span></div>';
   }).join('') + (hasShapefiles ? '' : '<p class="map-empty-hint">' + esc(EMPTY_HINT) + '</p>');
 
-  all('.map-well-filter input[type="checkbox"]', list).forEach(function (box) {
+  all('.map-well-filter input[type="checkbox"]', filters).forEach(function (box) {
     box.addEventListener('change', function () {
-      store.setWellFilters(selectionsFromSidebar(list));
+      store.setWellFilters(selectionsFromSidebar(filters));
       var count = list.querySelector('.map-layer[data-layer="' + WELLS_ID + '"] .map-layer-count');
       if (count) count.textContent = String(store.plottedWells().length);
       afterDataChange();
@@ -286,15 +293,32 @@ function renderSummary() {
   applySummaryCollapse();
 }
 
-function applySummaryCollapse() {
-  var panel = byId('map-summary');
-  var toggle = byId('map-summary-toggle');
-  var body = byId('map-summary-body');
+/* -------------------------------------------------------------------------
+   Collapse (summary panel, sidebar box, the two folds inside it)
+   ------------------------------------------------------------------------- */
+
+/* One rule for every collapsible surface here: the body is hidden with the
+   `hidden` attribute, the panel carries .is-collapsed for its −/+ glyph, and
+   a fold head additionally carries .open for its chevron. */
+function applyCollapse(panelId, toggleId, bodyId, collapsed) {
+  var panel = byId(panelId);
+  var toggle = byId(toggleId);
+  var body = byId(bodyId);
   if (!panel || !toggle || !body) return;
-  var collapsed = !!store.summaryCollapsed;
-  panel.classList.toggle('is-collapsed', collapsed);
-  body.hidden = collapsed;
+  panel.classList.toggle('is-collapsed', !!collapsed);
+  if (toggle.classList.contains('map-fold-head')) toggle.classList.toggle('open', !collapsed);
+  body.hidden = !!collapsed;
   toggle.setAttribute('aria-expanded', String(!collapsed));
+}
+
+function applySummaryCollapse() {
+  applyCollapse('map-summary', 'map-summary-toggle', 'map-summary-body', store.summaryCollapsed);
+}
+
+function applySidebarCollapse() {
+  applyCollapse('map-sidebar', 'map-sidebar-toggle', 'map-sidebar-body', store.sidebarCollapsed);
+  applyCollapse('map-filters-fold', 'map-filters-toggle', 'map-filter-list', store.filtersCollapsed);
+  applyCollapse('map-layers-fold', 'map-layers-toggle', 'map-layer-list', store.layersCollapsed);
 }
 
 /* -------------------------------------------------------------------------
@@ -394,7 +418,9 @@ export function hitIdentity(hit) {
 
 // Keep the card inside the stage (ported from the source viewer). The box is
 // passed in rather than measured here, so repositioning an unchanged tooltip
-// reads no layout at all.
+// reads no layout at all. Near the right edge the card can slide UNDER the
+// floating sidebar — deliberate, exactly as it already does under the toolbox
+// and the summary panel; the stage is the only bound that matters.
 function positionTooltip(tooltip, sx, sy, width, height) {
   var pad = 14;
   var left = sx + pad;
@@ -455,6 +481,10 @@ function afterDataChange() {
 
 function loadLayers() {
   var list = byId('map-layer-list');
+  var filters = byId('map-filter-list');
+  // The filters describe the wells of a layer set that is being replaced —
+  // blank them so a failed reload cannot leave stale checkboxes behind.
+  if (filters) filters.innerHTML = '';
   if (list) list.innerHTML = '<p class="map-empty-hint">Loading layers…</p>';
   return fetchMapLayers().then(function (meta) {
     store.setLayers(meta);
@@ -469,6 +499,7 @@ function loadLayers() {
     // A backend error body can be a whole HTML page; the sidebar shows the
     // first line of it, escaped, rather than a wall of markup.
     var detail = String((err && err.message) || 'unknown error').split('\n')[0].slice(0, 120);
+    if (filters) filters.innerHTML = '';
     if (list) list.innerHTML = '<p class="map-empty-hint">Could not load layers: ' + esc(detail) + '</p>';
   });
 }
@@ -530,6 +561,21 @@ function wire() {
     applySummaryCollapse();
     persist();
   });
+  byId('map-sidebar-toggle').addEventListener('click', function () {
+    store.sidebarCollapsed = !store.sidebarCollapsed;
+    applySidebarCollapse();
+    persist();
+  });
+  byId('map-filters-toggle').addEventListener('click', function () {
+    store.filtersCollapsed = !store.filtersCollapsed;
+    applySidebarCollapse();
+    persist();
+  });
+  byId('map-layers-toggle').addEventListener('click', function () {
+    store.layersCollapsed = !store.layersCollapsed;
+    applySidebarCollapse();
+    persist();
+  });
 
   // The floating color panel follows the app's single-open-panel discipline:
   // an outside click or Escape dismisses it. The Escape handler is scoped to
@@ -564,6 +610,13 @@ function wire() {
 function boot() {
   store = new LayerStore(fetchMapLayer);
   store.applyState(readMapState());
+  // Never persisted = first visit: the box takes up most of a phone screen,
+  // so start it closed there and expanded everywhere else.
+  if (store.prefs.sidebarCollapsed === null) {
+    try {
+      store.sidebarCollapsed = window.matchMedia('(max-width: 640px)').matches;
+    } catch (err) { /* no matchMedia — keep the expanded default */ }
+  }
   measure = new MeasureTool();
   view = new MapCanvas(byId('map-canvas'), store);
   view.measure = measure;
@@ -571,6 +624,7 @@ function boot() {
   view.resize();
   setTool(TOOL_POINTER);
   applySummaryCollapse();
+  applySidebarCollapse();
   renderSummary();
   booted = true;
   return loadLayers();

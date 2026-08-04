@@ -17,7 +17,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/css/base.css?v=10">
-  <link rel="stylesheet" href="/static/css/components.css?v=44">
+  <link rel="stylesheet" href="/static/css/components.css?v=45">
 </head>
 <body>
   <section id="login-page" class="login-page hidden">
@@ -200,23 +200,12 @@
            (a hidden canvas measures 0x0, so the view also initialises
            lazily on first activation and re-measures on every one). The
            ids here are the DOM contract map-view.js looks up by name —
-           renaming one silently detaches its handler. -->
+           renaming one silently detaches its handler. That contract now
+           includes the three collapse toggles — map-sidebar-toggle (the
+           whole floating box) and map-filters-toggle / map-layers-toggle
+           (the folds inside it); each drives the body named in its own
+           aria-controls, and their states persist in asas.map.state. -->
       <div class="panel map-panel">
-        <aside class="map-sidebar">
-          <div class="map-sidebar-head">
-            <h3>Layers</h3>
-            <span class="map-crs">UTM 37N</span>
-          </div>
-          <div class="map-sidebar-actions">
-            <button id="map-fit-all" type="button" class="ghost" title="Zoom to fit every visible layer">Fit all</button>
-            <button id="map-reload" type="button" class="ghost" title="Reload the layer list and wells from the server">Reload</button>
-          </div>
-          <!-- Ordered top -> bottom = topmost drawn first. The wells overlay
-               is pinned at the head and country borders at the foot; only
-               the shapefile rows between them carry the up/down controls. -->
-          <div id="map-layer-list" class="map-layer-list" aria-live="polite"></div>
-        </aside>
-
         <div class="map-stage">
           <canvas id="map-canvas" class="map-canvas"></canvas>
 
@@ -224,6 +213,43 @@
             <button id="map-summary-toggle" type="button" class="map-summary-toggle" aria-expanded="true" aria-controls="map-summary-body">Map summary</button>
             <div id="map-summary-body" class="map-summary-body" aria-live="polite"></div>
           </div>
+
+          <!-- The sidebar floats ON the stage like every other overlay here,
+               so the canvas keeps the full panel width and collapsing the box
+               never reflows it. -->
+          <aside id="map-sidebar" class="map-sidebar">
+            <button id="map-sidebar-toggle" type="button" class="map-sidebar-toggle"
+                    aria-expanded="true" aria-controls="map-sidebar-body">
+              <span class="map-sidebar-title">Map layers</span>
+              <span class="map-crs">UTM 37N</span>
+            </button>
+            <div id="map-sidebar-body" class="map-sidebar-body">
+              <div class="map-sidebar-actions">
+                <button id="map-fit-all" type="button" class="ghost" title="Zoom to fit every visible layer">Fit all</button>
+                <button id="map-reload" type="button" class="ghost" title="Reload the layer list and wells from the server">Reload</button>
+              </div>
+              <section id="map-filters-fold" class="map-fold">
+                <button id="map-filters-toggle" type="button" class="map-fold-head open"
+                        aria-expanded="true" aria-controls="map-filter-list">
+                  <span class="map-fold-title">Well filters</span>
+                  <span class="map-fold-chevron" aria-hidden="true"></span>
+                </button>
+                <div id="map-filter-list" class="map-filter-list" aria-live="polite"></div>
+              </section>
+              <section id="map-layers-fold" class="map-fold">
+                <button id="map-layers-toggle" type="button" class="map-fold-head open"
+                        aria-expanded="true" aria-controls="map-layer-list">
+                  <span class="map-fold-title">Layers</span>
+                  <span class="map-fold-chevron" aria-hidden="true"></span>
+                </button>
+                <!-- Ordered top -> bottom = topmost drawn first. The wells
+                     overlay is pinned at the head and country borders at the
+                     foot; only the shapefile rows between them carry the
+                     up/down controls. -->
+                <div id="map-layer-list" class="map-layer-list" aria-live="polite"></div>
+              </section>
+            </div>
+          </aside>
 
           <div class="map-toolbox" role="group" aria-label="Map tools">
             <div class="map-tool-row">
@@ -443,6 +469,6 @@
     <img id="ra-lightbox-img" alt="">
   </dialog>
 
-  <script type="module" src="/static/js/main.js?v=41"></script>
+  <script type="module" src="/static/js/main.js?v=42"></script>
 </body>
 </html>
