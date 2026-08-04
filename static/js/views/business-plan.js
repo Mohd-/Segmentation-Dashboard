@@ -2,6 +2,7 @@ import { byId, all, esc, compact, fmtNum, isFilled, msg, truthy } from '../dom.j
 import { ICONS } from '../icons.js';
 import { API } from '../api.js';
 import { Store, currentRole, currentUserName } from '../state.js';
+import { confirmDialog } from '../dialog.js';
 import {
   placeFilterMenu, filterTriggerHtml, filterOptionHtml,
   kpiDonutHtml, kpiTileHtml, personChipsHtml, leadItemHtml
@@ -1370,6 +1371,28 @@ function valueFromElement(key) {
   return element ? inputValue(element) : value(key);
 }
 
+// The tail of every field edit: buffer the draft and either save it now (a
+// tick / a pick is a finished edit) or after the typing pause. Split out of
+// the listener below because the Well Classification path has to WAIT for a
+// dialog answer first -- the queueing itself is identical either way.
+function queueFieldDraft(element, immediate, key, nextValue, payload) {
+  if (key === 'bp_gate_calculated_td_ft_md') {
+    payload.override_reason = valueFromElement('bp_gate_calculated_td_override_reason');
+  }
+  var version = ++state.saveVersion;
+  state.detail.values[key] = nextValue;
+  state.fieldDrafts[key] = {
+    context: currentContext(), version: version, queuedVersion: null, failed: false,
+    value: nextValue, payload: payload,
+    rerender: !!CONDITIONAL_FIELDS[key] || element.type === 'checkbox' || element.tagName === 'SELECT'
+  };
+  state.retryCommand = null;
+  setFeedback('Saving...', false);
+  clearTimeout(state.timers[key]);
+  if (immediate) enqueueFieldDraft(key, version);
+  else state.timers[key] = setTimeout(function () { enqueueFieldDraft(key, version); }, state.saveDelay);
+}
+
 function bindFieldInputs() {
   all('[data-bpe-field]', byId('bpe-detail-view')).forEach(function (element) {
     var immediate = element.type === 'checkbox' || element.type === 'radio' || element.tagName === 'SELECT';
@@ -1379,27 +1402,26 @@ function bindFieldInputs() {
       var previous = value(key);
       var payload = { field_key: key, value: nextValue, changed_by: currentUserName() };
       if (key === 'bp_gate_classification' && previous && previous !== nextValue) {
-        if (!window.confirm('Changing Well Classification will reset classification-driven defaults. Continue?')) {
-          renderDetail();
-          return;
-        }
-        payload.confirm_reset = true;
+        // The app dialog is ASYNC, so nothing is queued until it answers.
+        // Cancelling re-renders the form, which restores the stored
+        // classification -- the select is left showing the rejected pick
+        // otherwise. The context is captured first: a save landing while the
+        // dialog is open can replace state.detail underneath it.
+        var context = currentContext();
+        confirmDialog({
+          title: 'Change Well Classification',
+          message: 'Changing the classification from "' + previous + '" to "' + nextValue +
+            '" resets the defaults this step derives from it.\nValues that do not depend on the classification are kept.',
+          confirmLabel: 'Change'
+        }).then(function (confirmed) {
+          if (!isCurrentContext(context)) return;
+          if (!confirmed) { renderDetail(); return; }
+          payload.confirm_reset = true;
+          queueFieldDraft(element, immediate, key, nextValue, payload);
+        });
+        return;
       }
-      if (key === 'bp_gate_calculated_td_ft_md') {
-        payload.override_reason = valueFromElement('bp_gate_calculated_td_override_reason');
-      }
-      var version = ++state.saveVersion;
-      state.detail.values[key] = nextValue;
-      state.fieldDrafts[key] = {
-        context: currentContext(), version: version, queuedVersion: null, failed: false,
-        value: nextValue, payload: payload,
-        rerender: !!CONDITIONAL_FIELDS[key] || element.type === 'checkbox' || element.tagName === 'SELECT'
-      };
-      state.retryCommand = null;
-      setFeedback('Saving...', false);
-      clearTimeout(state.timers[key]);
-      if (immediate) enqueueFieldDraft(key, version);
-      else state.timers[key] = setTimeout(function () { enqueueFieldDraft(key, version); }, state.saveDelay);
+      queueFieldDraft(element, immediate, key, nextValue, payload);
     });
   });
 }
@@ -1516,18 +1538,39 @@ function bindFormationInputs() {
       saveFormationBuffer(true);
     });
   });
+  // Every removal below is confirmed through the app dialog and re-checks the
+  // context afterwards: the answer arrives asynchronously, and a row index
+  // means nothing once a different step is loaded.
   all('.bpe-remove-pay', byId('bpe-detail-view')).forEach(function (button) {
     button.addEventListener('click', function () {
-      if (!window.confirm('Remove this Pay Interval?')) return;
-      state.detail.formations[Number(button.dataset.formationIndex)].pay_intervals.splice(Number(button.dataset.payIndex), 1);
-      saveFormationBuffer(true);
+      var context = currentContext();
+      confirmDialog({
+        title: 'Remove Pay Interval',
+        message: 'Remove this pay interval? Its entered depths and properties are discarded.',
+        confirmLabel: 'Remove'
+      }).then(function (confirmed) {
+        if (!confirmed || !isCurrentContext(context)) return;
+        state.detail.formations[Number(button.dataset.formationIndex)].pay_intervals.splice(Number(button.dataset.payIndex), 1);
+        saveFormationBuffer(true);
+      });
     });
   });
   all('.bpe-remove-formation', byId('bpe-detail-view')).forEach(function (button) {
     button.addEventListener('click', function () {
-      if (!window.confirm('Remove this Formation and its Pay Intervals?')) return;
-      state.detail.formations.splice(Number(button.dataset.formationIndex), 1);
-      saveFormationBuffer(true);
+      var context = currentContext();
+      var row = (state.detail.formations || [])[Number(button.dataset.formationIndex)] || {};
+      var intervals = (row.pay_intervals || []).length;
+      confirmDialog({
+        title: 'Remove Formation',
+        message: 'Remove ' + (row.formation ? '"' + row.formation + '"' : 'this formation') + ' and its ' +
+          intervals + ' pay interval' + (intervals === 1 ? '' : 's') + '?\nEvery value entered for them is discarded.',
+        confirmLabel: 'Remove',
+        danger: true
+      }).then(function (confirmed) {
+        if (!confirmed || !isCurrentContext(context)) return;
+        state.detail.formations.splice(Number(button.dataset.formationIndex), 1);
+        saveFormationBuffer(true);
+      });
     });
   });
 }
@@ -1560,9 +1603,18 @@ function bindFlowbackInputs() {
   });
   all('.bpe-remove-flow', byId('bpe-detail-view')).forEach(function (button) {
     button.addEventListener('click', function () {
-      if (!window.confirm('Delete this Flowback stage?')) return;
-      state.detail.flowback_stages.splice(Number(button.dataset.flowIndex), 1);
-      saveFlowback(true);
+      var context = currentContext();
+      var stage = Number(button.dataset.flowIndex) + 1;
+      confirmDialog({
+        title: 'Delete Flowback Stage',
+        message: 'Delete Stage ' + stage + '? Its entered rates, pressures and depths are discarded.',
+        confirmLabel: 'Delete',
+        danger: true
+      }).then(function (confirmed) {
+        if (!confirmed || !isCurrentContext(context)) return;
+        state.detail.flowback_stages.splice(Number(button.dataset.flowIndex), 1);
+        saveFlowback(true);
+      });
     });
   });
 }

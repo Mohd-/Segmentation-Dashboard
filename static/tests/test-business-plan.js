@@ -293,6 +293,49 @@ test('business-plan serializes auto-saves and a stale response cannot replace ne
   businessPlanTestHooks().configureSaveDelay(null);
 });
 
+test('business-plan asks before a Well Classification change resets its defaults', async function () {
+  var host = fixture('<div id="bpe-main-view"></div><section id="bpe-detail-view" class="hidden"></section>');
+  var stored = detailPayload('business-plan-gate', { bp_gate_classification: 'Development' });
+  var payloads = [];
+  mockFetch(function (url, options) {
+    var path = String(url);
+    var method = (options && options.method) || 'GET';
+    if (path.indexOf('/steps/business-plan-gate/field') >= 0 && method === 'PATCH') {
+      payloads.push(JSON.parse(options.body));
+      return response({ ok: true, detail: stored });
+    }
+    if (path.indexOf('/steps/business-plan-gate') >= 0) return response(stored);
+    if (path.indexOf('/api/users') >= 0) return response([]);
+    throw new Error('Unexpected request: ' + method + ' ' + path);
+  });
+
+  function classification(option) {
+    return host.querySelector('[data-bpe-field="bp_gate_classification"][value="' + option + '"]');
+  }
+  await openBusinessPlanDetail(7, 'business-plan-gate');
+  var dialog = document.getElementById('app-dialog');
+
+  // Cancelling restores the STORED classification and saves nothing.
+  classification('Appraisal').click();
+  await waitFor(function () { return dialog.open; });
+  assert.equal(document.getElementById('app-dialog-title').textContent, 'Change Well Classification');
+  assert.match(document.getElementById('app-dialog-message').textContent,
+    /from "Development" to "Appraisal"/);
+  document.getElementById('app-dialog-cancel').click();
+  await waitFor(function () { return classification('Development').checked; });
+  assert.equal(payloads.length, 0, 'a cancelled change queues no save');
+
+  // Confirming carries confirm_reset, which is what lets the server clear the
+  // classification-driven defaults.
+  classification('Exploration').click();
+  await waitFor(function () { return dialog.open; });
+  dialog.returnValue = 'confirm';
+  dialog.close();
+  await waitFor(function () { return payloads.length === 1; });
+  assert.equal(payloads[0].value, 'Exploration');
+  assert.equal(payloads[0].confirm_reset, true);
+});
+
 test('business-plan keeps zero Flowback panels after the final stage is deleted', async function () {
   var host = fixture('<div id="bpe-main-view"></div><section id="bpe-detail-view" class="hidden"></section>');
   var detail = detailPayload('flowback-results', {});
@@ -325,15 +368,20 @@ test('business-plan keeps zero Flowback panels after the final stage is deleted'
   assert.equal(host.querySelectorAll('.bpe-flow-stage').length, 1);
   assert.equal(host.querySelector('[data-flow-field="formation"]').tagName, 'SELECT',
     'Formation remains a dropdown even when its current value is blank');
-  var originalConfirm = window.confirm;
-  window.confirm = function () { return true; };
-  try {
-    host.querySelector('.bpe-remove-flow').click();
-    await waitFor(function () { return puts.length === 1; });
-    await waitFor(function () { return host.querySelectorAll('.bpe-flow-stage').length === 0; });
-  } finally {
-    window.confirm = originalConfirm;
-  }
+  // Removals are confirmed through the app dialog (#app-dialog in
+  // runner.html), never window.confirm.
+  var dialog = document.getElementById('app-dialog');
+  host.querySelector('.bpe-remove-flow').click();
+  await waitFor(function () { return dialog.open; });
+  assert.equal(document.getElementById('app-dialog-title').textContent, 'Delete Flowback Stage');
+  assert.match(document.getElementById('app-dialog-message').textContent, /Delete Stage 1\?/);
+  assert.ok(document.getElementById('app-dialog-confirm').classList.contains('danger'));
+  // The dialog form's own confirm path: method="dialog" submit sets
+  // returnValue and closes (same simulation test-transitions.js uses).
+  dialog.returnValue = 'confirm';
+  dialog.close();
+  await waitFor(function () { return puts.length === 1; });
+  await waitFor(function () { return host.querySelectorAll('.bpe-flow-stage').length === 0; });
   assert.deepEqual(puts[0], []);
   assert.ok(host.querySelector('#bpe-add-flow'), 'the add control remains available');
 });

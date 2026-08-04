@@ -12,9 +12,13 @@ def diagnostics(page):
     return page.evaluate("""
         () => {
           const root = document.documentElement;
+          // The restyled markup (Cards R2-R4): the band is the maturation
+          // band (.lf-trigger / .kpi-tile), the board is the lead board
+          // (.lead-card), and the detail page is the maturation detail shell
+          // (.component-rail / .component-editor / .ls-card).
           const selectors = [
-            '.bpe-filter-strip label', '.bpe-kpi', '.bpe-well-card',
-            '.bpe-detail-head', '.bpe-detail-form', '.bpe-summary',
+            '#bpe-filter-row .lf-trigger', '#bpe-kpis .kpi-tile', '.lead-card',
+            '.component-editor', '.bpe-detail-form', '.ls-card',
             '.bpe-flow-grid', '.bpe-flow-stage'
           ];
           const clipped = selectors.flatMap((selector) =>
@@ -40,9 +44,10 @@ def diagnostics(page):
             };
           });
           const layout = {};
-          ['body', 'main', '#tab-bp', '#bpe-detail-view', '.bpe-detail-head',
-           '.bpe-detail-grid', '.bpe-detail-nav', '.bpe-detail-form', '.bpe-well-summary',
-           '.bpe-gate-depth', '.bpe-gate-logging', '.bpe-check'].forEach((selector) => {
+          ['body', 'main', '#tab-bp', '#bpe-filter-row', '#bpe-kpis', '#bp-pipeline',
+           '#bpe-detail-view', '.detail-shell', '.component-rail', '.bpe-detail-form',
+           '.summary-panel .ls-card', '.bpe-gate-depth', '.bpe-gate-logging',
+           '.bpe-detail-form .check-label'].forEach((selector) => {
             const element = document.querySelector(selector);
             if (!element) return;
             const rect = element.getBoundingClientRect();
@@ -66,12 +71,38 @@ def diagnostics(page):
     """)
 
 
+def select_year(page, year):
+    """Pick the Business Plan year through the VISIBLE control.
+
+    #bp-year-filter is the hidden state store now (Card R2): the year is chosen
+    from the band's trigger menu, which is also the only path a user has.
+    """
+    page.locator('.lead-filter[data-bp-filter="year"] .lf-trigger').click()
+    page.locator(
+        '.lead-filter[data-bp-filter="year"] .lf-menu .lf-option[data-value="%s"]' % year
+    ).click()
+
+
 def open_dashboard(page, url, year):
     page.goto(url, wait_until="networkidle")
     page.locator('.tabs button[data-tab="bp"]').click()
-    page.locator("#bp-year-filter").select_option(str(year))
-    page.wait_for_selector(".bpe-well-card", state="visible")
+    page.wait_for_selector("#bpe-filter-row .lf-trigger", state="visible")
+    select_year(page, year)
+    page.wait_for_selector(".lead-card", state="visible")
     page.wait_for_timeout(250)
+
+
+def open_gate(page):
+    """Open the Business Plan Gate step of the first well on the board.
+
+    A card is ONE target now (Card R2) and opens the first step the well is
+    still waiting on, which is not necessarily the gate -- so the gate is
+    reached from the detail rail, where every step is always listed.
+    """
+    page.locator(".lead-card").first.click()
+    page.wait_for_selector(".bpe-detail-form", state="visible")
+    page.locator('.component-item[data-detail-slug="business-plan-gate"]').click()
+    page.wait_for_selector(".bpe-detail-form .radio-group", state="visible")
 
 
 def capture(page, output_dir, name, results):
@@ -101,10 +132,9 @@ def main():
             "console: " + message.text) if message.type == "error" else None)
         open_dashboard(desktop, args.url, args.year)
         capture(desktop, output_dir, "bpe-dashboard-desktop.png", results)
-        desktop.locator('.bpe-tracking-item[data-step="business-plan-gate"]').first.click()
-        desktop.wait_for_selector(".bpe-detail-form", state="visible")
+        open_gate(desktop)
         capture(desktop, output_dir, "bpe-gate-desktop.png", results)
-        desktop.locator('.bpe-nav-item[data-detail-slug="flowback-results"]').click()
+        desktop.locator('.component-item[data-detail-slug="flowback-results"]').click()
         desktop.wait_for_selector(".bpe-flow-stage", state="visible")
         capture(desktop, output_dir, "bpe-flowback-desktop.png", results)
         desktop.close()
@@ -115,8 +145,7 @@ def main():
             "console: " + message.text) if message.type == "error" else None)
         open_dashboard(mobile, args.url, args.year)
         capture(mobile, output_dir, "bpe-dashboard-mobile.png", results)
-        mobile.locator('.bpe-tracking-item[data-step="business-plan-gate"]').first.click()
-        mobile.wait_for_selector(".bpe-detail-form", state="visible")
+        open_gate(mobile)
         capture(mobile, output_dir, "bpe-gate-mobile.png", results)
         mobile.close()
         browser.close()
