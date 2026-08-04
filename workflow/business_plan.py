@@ -1305,31 +1305,63 @@ def save_formations(session, project_id, detail_slug, rows, actor="Web User", ro
     task = tasks.get(DETAILS[detail_slug]["task_name"])
     if not task:
         raise ValueError("Business Plan component not found.")
-    existing_rows = {row["id"]: row for row in _formation_rows(session, project_id, phase)}
-    supplied_ids = {int(row["id"]) for row in cleaned if row.get("id") not in (None, "")}
-    if not supplied_ids.issubset(existing_rows):
-        raise ValueError("A Formation row is stale or belongs to another well.")
-    # A pre-v10 fluid label survives a save only as a REPLACE of itself: the
-    # interval must already exist and already hold that exact value. Anything
-    # else -- a new interval, or an edit that switches one interval to a
-    # retired label -- is a write of retired vocabulary and is rejected. This
-    # lives here, not in _clean_formation_payload, because it needs the stored
-    # rows; the payload cleaner stays a pure function of its argument.
-    stored_interval_fluids = {
-        int(item["id"]): str(item.get("fluid") or "")
-        for row in existing_rows.values() for item in row.get("pay_intervals", [])
-    }
-    for row in cleaned:
-        for interval in row["pay_intervals"]:
-            if interval["fluid"] not in LEGACY_FLUIDS:
-                continue
-            interval_id = int(interval["id"]) if interval.get("id") not in (None, "") else None
-            if interval_id is None or stored_interval_fluids.get(interval_id) != interval["fluid"]:
-                raise ValueError("Select a valid Pay Interval Fluid.")
     now = utc_now_str()
     correlation = str(uuid.uuid4())
     with db.write_transaction(session):
-        kept_formation_ids = set()
+        # The stored rows are read INSIDE the write transaction, not before it:
+        # every check below decides what the UPDATEs are allowed to do, so
+        # validation and writes have to see ONE snapshot. Read before the write
+        # lock and a concurrent delete turns a validated UPDATE into a silent
+        # zero-row no-op while the audit trail still records the change.
+        existing_rows = {row["id"]: row for row in _formation_rows(session, project_id, phase)}
+        supplied_ids = {int(row["id"]) for row in cleaned if row.get("id") not in (None, "")}
+        if not supplied_ids.issubset(existing_rows):
+            raise ValueError("A Formation row is stale or belongs to another well.")
+        # Formation names are unique per (project, phase) -- models.py:207 --
+        # and kept rows are renamed IN PLACE, so a target name is free only if
+        # no SURVIVING stored row still holds it. Rows the payload dropped are
+        # deleted below before any rename, so their names ARE free; a name held
+        # by a row that stays is not, even when the payload also renames that
+        # row away from it. An A<->B swap (or an A->B, B->C chain) therefore
+        # needs two saves: SQLite checks the constraint per statement, so no
+        # ordering of in-place UPDATEs can carry the swap out in one write.
+        surviving_names = {row_id: existing_rows[row_id]["formation"] for row_id in supplied_ids}
+        for row in cleaned:
+            row_id = int(row["id"]) if row.get("id") not in (None, "") else None
+            if any(name == row["formation"] and other_id != row_id
+                   for other_id, name in surviving_names.items()):
+                raise ValueError(
+                    f"Formation '{row['formation']}' already exists in this step. "
+                    "Rename or remove the other row in a separate save first.")
+        # A pre-v10 fluid label survives a save only as a REPLACE of itself: the
+        # interval must already exist and already hold that exact value. Anything
+        # else -- a new interval, or an edit that switches one interval to a
+        # retired label -- is a write of retired vocabulary and is rejected. This
+        # lives here, not in _clean_formation_payload, because it needs the stored
+        # rows; the payload cleaner stays a pure function of its argument.
+        stored_interval_fluids = {
+            int(item["id"]): str(item.get("fluid") or "")
+            for row in existing_rows.values() for item in row.get("pay_intervals", [])
+        }
+        for row in cleaned:
+            for interval in row["pay_intervals"]:
+                if interval["fluid"] not in LEGACY_FLUIDS:
+                    continue
+                interval_id = int(interval["id"]) if interval.get("id") not in (None, "") else None
+                if interval_id is None or stored_interval_fluids.get(interval_id) != interval["fluid"]:
+                    raise ValueError("Select a valid Pay Interval Fluid.")
+        # Dropped formations go FIRST, for the same reason the dropped pay
+        # intervals do below: the name they occupy is unique per (project,
+        # phase), so a kept row can only be renamed onto it once it is gone.
+        for removed_id in set(existing_rows) - supplied_ids:
+            old = existing_rows[removed_id]
+            _audit_structure(session, task, "Formation Removed", str(removed_id), None, actor, role,
+                             reason=old["formation"], correlation=correlation)
+            db.execute(session, """
+                DELETE FROM project_formation_pay_intervals
+                WHERE project_id = :project_id AND phase = :phase AND formation = :formation
+            """, {"project_id": project_id, "phase": phase, "formation": old["formation"]})
+            db.execute(session, "DELETE FROM project_formations WHERE id = :id", {"id": removed_id})
         for row in cleaned:
             row_id = int(row["id"]) if row.get("id") not in (None, "") else None
             old_row = existing_rows.get(row_id)
@@ -1364,7 +1396,6 @@ def save_formations(session, project_id, detail_slug, rows, actor="Web User", ro
                         WHERE project_id = :project_id AND phase = :phase AND formation = :old_name
                     """, {"formation": row["formation"], "project_id": project_id,
                           "phase": phase, "old_name": old_name})
-                kept_formation_ids.add(row_id)
             else:
                 result = db.execute(session, """
                     INSERT INTO project_formations (
@@ -1376,7 +1407,6 @@ def save_formations(session, project_id, detail_slug, rows, actor="Web User", ro
                     )
                 """, params)
                 row_id = int(result.lastrowid)
-                kept_formation_ids.add(row_id)
                 _audit_structure(session, task, "Formation Added", None, str(row_id), actor, role,
                                  reason=row["formation"], correlation=correlation)
                 for field_key in (
@@ -1395,7 +1425,30 @@ def save_formations(session, project_id, detail_slug, rows, actor="Web User", ro
             supplied_interval_ids = {int(item["id"]) for item in row["pay_intervals"] if item.get("id") not in (None, "")}
             if not supplied_interval_ids.issubset(old_intervals):
                 raise ValueError("A Pay Interval row is stale or belongs to another Formation.")
-            kept_interval_ids = set()
+            removed_intervals = set(old_intervals) - supplied_interval_ids
+            for interval_id in removed_intervals:
+                _audit_structure(session, task, "Pay Interval Removed", str(interval_id), None, actor, role,
+                                 reason=f"formation_id={row_id}", correlation=correlation)
+            # seq is unique per (project, formation, phase) -- models.py:257 --
+            # and SQLite enforces it statement by statement, so the renumbering
+            # below cannot walk over rows that still hold the seq it is handing
+            # out. Dropped intervals therefore go first (deleting the head of
+            # the list frees seq 1 before the survivor moves into it), and the
+            # survivors are then parked on a temporary seq no final value can
+            # take, which is what a pure reorder needs (two rows swapping seq 1
+            # and 2 collide in either order without it). ``-id`` is unique
+            # table-wide, so parking stays safe even when a formation rename
+            # moves intervals onto another name in the same save.
+            if removed_intervals:
+                db.execute(session, """
+                    DELETE FROM project_formation_pay_intervals
+                    WHERE id IN :removed AND project_id = :project_id AND phase = :phase
+                """, {"removed": list(removed_intervals), "project_id": project_id, "phase": phase})
+            if supplied_interval_ids:
+                db.execute(session, """
+                    UPDATE project_formation_pay_intervals SET seq = -id
+                    WHERE id IN :kept AND project_id = :project_id AND phase = :phase
+                """, {"kept": list(supplied_interval_ids), "project_id": project_id, "phase": phase})
             for seq, interval in enumerate(row["pay_intervals"], 1):
                 interval_id = int(interval["id"]) if interval.get("id") not in (None, "") else None
                 ip = dict(interval)
@@ -1410,7 +1463,6 @@ def save_formations(session, project_id, detail_slug, rows, actor="Web User", ro
                           updated_at = :now, updated_by = :actor
                         WHERE id = :id AND project_id = :project_id AND phase = :phase
                     """, ip)
-                    kept_interval_ids.add(interval_id)
                     old_item = old_intervals[interval_id]
                     for field_key in ("seq", "top_tvdss_ft", "base_tvdss_ft", "phit_pct",
                                       "swt_pct", "ngr_pct", "kint_md", "fluid"):
@@ -1432,7 +1484,6 @@ def save_formations(session, project_id, detail_slug, rows, actor="Web User", ro
                         )
                     """, ip)
                     interval_id = int(result.lastrowid)
-                    kept_interval_ids.add(interval_id)
                     _audit_structure(session, task, "Pay Interval Added", None, str(interval_id), actor, role,
                                      reason=f"formation_id={row_id}", correlation=correlation)
                     for field_key in ("seq", "top_tvdss_ft", "base_tvdss_ft", "phit_pct",
@@ -1444,33 +1495,6 @@ def save_formations(session, project_id, detail_slug, rows, actor="Web User", ro
                                 actor, role, reason=f"id={interval_id};field={field_key}",
                                 correlation=correlation,
                             )
-            removed_intervals = set(old_intervals) - kept_interval_ids
-            for interval_id in removed_intervals:
-                _audit_structure(session, task, "Pay Interval Removed", str(interval_id), None, actor, role,
-                                 reason=f"formation_id={row_id}", correlation=correlation)
-            if old_intervals:
-                if kept_interval_ids:
-                    db.execute(session, """
-                        DELETE FROM project_formation_pay_intervals
-                        WHERE project_id = :project_id AND phase = :phase
-                          AND formation = :formation AND id NOT IN :kept
-                    """, {"project_id": project_id, "phase": phase,
-                          "formation": row["formation"], "kept": list(kept_interval_ids)})
-                else:
-                    db.execute(session, """
-                        DELETE FROM project_formation_pay_intervals
-                        WHERE project_id = :project_id AND phase = :phase AND formation = :formation
-                    """, {"project_id": project_id, "phase": phase, "formation": row["formation"]})
-
-        for removed_id in set(existing_rows) - kept_formation_ids:
-            old = existing_rows[removed_id]
-            _audit_structure(session, task, "Formation Removed", str(removed_id), None, actor, role,
-                             reason=old["formation"], correlation=correlation)
-            db.execute(session, """
-                DELETE FROM project_formation_pay_intervals
-                WHERE project_id = :project_id AND phase = :phase AND formation = :formation
-            """, {"project_id": project_id, "phase": phase, "formation": old["formation"]})
-            db.execute(session, "DELETE FROM project_formations WHERE id = :id", {"id": removed_id})
         db.execute(session, """
             UPDATE project_tasks SET last_updated = :now, revision = revision + 1 WHERE task_id = :task_id
         """, {"now": now, "task_id": task["task_id"]})

@@ -506,6 +506,109 @@ def test_a_stored_legacy_fluid_round_trips_but_is_never_written_afresh(client):
     assert "Fluid" in switched.get_json()["detail"]
 
 
+def _interval(top, interval_id=None, fluid="Gas"):
+    return {
+        "id": interval_id, "top_tvdss_ft": top, "base_tvdss_ft": top + 50,
+        "phit_pct": 13, "swt_pct": 35, "ngr_pct": 18, "kint_md": 2.5, "fluid": fluid,
+    }
+
+
+def _named(name, intervals=None, formation_id=None):
+    row = _formation("Gas", formation_id=formation_id)
+    row["formation"] = name
+    if intervals is not None:
+        row["pay_intervals"] = intervals
+    return row
+
+
+def _seqs(response, index=0):
+    intervals = response.get_json()["detail"]["formations"][index]["pay_intervals"]
+    return [(item["id"], item["seq"]) for item in intervals]
+
+
+def test_dropping_the_first_pay_interval_renumbers_instead_of_colliding(client):
+    """seq is unique per (project, formation, phase), so the survivor can only
+    move into seq 1 once the row holding it is gone -- the delete has to happen
+    BEFORE the renumbering, not after it."""
+    project_id = _bp_project(client)
+    _confirm_quicklook_files(client, project_id)
+    created = _put_formations(client, project_id, "quicklook-logs",
+                              [_named("SARH", [_interval(1010), _interval(1100)])])
+    assert created.status_code == 200, created.get_json()
+    row = created.get_json()["detail"]["formations"][0]
+    first_id, second_id = [item["id"] for item in row["pay_intervals"]]
+    assert _seqs(created) == [(first_id, 1), (second_id, 2)]
+
+    trimmed = _put_formations(client, project_id, "quicklook-logs", [
+        _named("SARH", [_interval(1100, interval_id=second_id)], formation_id=row["id"])])
+    assert trimmed.status_code == 200, trimmed.get_json()
+    assert _seqs(trimmed) == [(second_id, 1)]
+
+
+def test_reordering_pay_intervals_swaps_seq_instead_of_colliding(client):
+    """A pure reorder collides in either direction unless the kept rows are
+    parked off the 1..n range first."""
+    project_id = _bp_project(client)
+    _confirm_quicklook_files(client, project_id)
+    created = _put_formations(client, project_id, "quicklook-logs",
+                              [_named("SARH", [_interval(1010), _interval(1100)])])
+    assert created.status_code == 200, created.get_json()
+    row = created.get_json()["detail"]["formations"][0]
+    first_id, second_id = [item["id"] for item in row["pay_intervals"]]
+
+    reordered = _put_formations(client, project_id, "quicklook-logs", [_named(
+        "SARH",
+        [_interval(1100, interval_id=second_id), _interval(1010, interval_id=first_id)],
+        formation_id=row["id"],
+    )])
+    assert reordered.status_code == 200, reordered.get_json()
+    assert _seqs(reordered) == [(second_id, 1), (first_id, 2)]
+
+
+def test_renaming_a_formation_onto_a_kept_name_is_a_400_not_a_500(client):
+    """Formation names are unique per (project, phase) and kept rows are renamed
+    IN PLACE. A payload that repeats a name is caught by the payload cleaner; a
+    payload whose names are all distinct but whose renames pass THROUGH a name a
+    surviving row still holds -- the A->B / B->C chain and the A<->B swap, which
+    no ordering of in-place UPDATEs can perform -- is the case that used to
+    reach SQLite and 500. Only a name freed in the same save may be taken."""
+    project_id = _bp_project(client)
+    _confirm_quicklook_files(client, project_id)
+    created = _put_formations(client, project_id, "quicklook-logs",
+                              [_named("SARH"), _named("QASM")])
+    assert created.status_code == 200, created.get_json()
+    sarh, qasm = created.get_json()["detail"]["formations"]
+
+    repeated = _put_formations(client, project_id, "quicklook-logs", [
+        _named("QASM", formation_id=sarh["id"]), _named("QASM", formation_id=qasm["id"])])
+    assert repeated.status_code == 400
+    assert "Duplicate formation" in repeated.get_json()["detail"]
+
+    chain = _put_formations(client, project_id, "quicklook-logs", [
+        _named("QASM", formation_id=sarh["id"]), _named("QWRH", formation_id=qasm["id"])])
+    assert chain.status_code == 400
+    assert "already exists" in chain.get_json()["detail"]
+
+    # The A<->B swap is REJECTED rather than supported: it is the only payload
+    # a two-pass rename would buy, and the pay intervals hang off the formation
+    # NAME, so carrying it out would mean shuffling those rows through a
+    # temporary name too. Two saves do it; the message says so.
+    swap = _put_formations(client, project_id, "quicklook-logs", [
+        _named("QASM", formation_id=sarh["id"]), _named("SARH", formation_id=qasm["id"])])
+    assert swap.status_code == 400
+    assert "already exists" in swap.get_json()["detail"]
+
+    unchanged = client.get(
+        f"/api/business-plan/wells/{project_id}/steps/quicklook-logs").get_json()
+    assert [row["formation"] for row in unchanged["formations"]] == ["SARH", "QASM"]
+
+    # Dropping QASM in the same save frees its name for SARH's rename.
+    freed = _put_formations(client, project_id, "quicklook-logs",
+                            [_named("QASM", formation_id=sarh["id"])])
+    assert freed.status_code == 200, freed.get_json()
+    assert [row["formation"] for row in freed.get_json()["detail"]["formations"]] == ["QASM"]
+
+
 # ---------------------------------------------------------------------------
 # The BPE transition's lifecycle safeguards (its own state machine, the SAME
 # completion stamp, notification fan-out and route-level role gate)

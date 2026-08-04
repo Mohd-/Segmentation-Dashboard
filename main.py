@@ -242,10 +242,13 @@ def require_role(*roles: str) -> None:
     Consumers: POST /api/tasks/<id>/assign (supervisor, staff), the
     approve actions of POST /api/tasks/<id>/transition (supervisor),
     business_plan_enabled changes via PATCH /api/projects/<id>/flags
-    (supervisor), PATCH /api/tasks/<id>/priority (supervisor), and
-    PATCH /api/projects/<id>/priority (supervisor). Priority is
-    also guarded on the Save path: PATCH /api/tasks/<id> passes
-    allow_priority_change so a non-supervisor's save keeps the stored value.
+    (supervisor), PATCH /api/tasks/<id>/priority (supervisor),
+    PATCH /api/projects/<id>/priority (supervisor), the approve/return/reopen
+    actions of POST /api/business-plan/wells/<id>/steps/<slug>/transition
+    (supervisor), and business_plan_enabled at creation via POST
+    /api/projects (supervisor). Priority is also guarded on the Save path:
+    PATCH /api/tasks/<id> passes allow_priority_change so a non-supervisor's
+    save keeps the stored value.
     """
     if current_role() not in roles:
         raise PermissionError("Forbidden: requires " + " or ".join(roles) + " role.")
@@ -445,6 +448,21 @@ def list_projects():
 def create_project():
     session = db.get_session()
     payload = request.get_json(silent=True) or {}
+    # A born-BP well is a promotion done at creation time, so it gets the same
+    # gates a promotion via PATCH /flags gets: supervisor-only, and the year
+    # window promotion.py enforces for a newly-enabling record (not the wider
+    # allow_historical_year floor -- import_excel is the only historical-year
+    # caller, and it creates via workflow.add_project in-process, never here).
+    if payload.get("business_plan_enabled"):
+        require_role("supervisor")
+        current_year = date.today().year
+        year_val = payload.get("business_plan_year")
+        try:
+            year_val = int(year_val)
+        except (TypeError, ValueError):
+            year_val = None
+        if year_val is None or year_val < current_year or year_val > 2035:
+            raise ValueError(f"Select a business plan year from {current_year} to 2035.")
     project_id = workflow.add_project(
         session,
         payload.get("project_name", ""),

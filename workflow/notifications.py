@@ -11,12 +11,13 @@ line and the policy can change without touching the state machine.
 TRANSACTION CONTRACT
 --------------------
 :func:`notify_transition` writes with plain ``db.execute`` and opens NO
-transaction of its own: it is called from inside ``transition_task``'s
-``db.write_transaction`` block, next to the ``task_history`` write, so the
-notification and the transition it announces commit or roll back TOGETHER. A
-transition that fails after this point (a stale revision, a failed commit)
-leaves no orphan notification, and there is no window in which the bell shows
-an event the board does not.
+transaction of its own: it is called from inside ``transition_task``'s and
+``workflow.business_plan.transition_approval``'s ``db.write_transaction``
+blocks, next to the ``task_history`` write, so the notification and the
+transition it announces commit or roll back TOGETHER. A transition that fails
+after this point (a stale revision, a failed commit) leaves no orphan
+notification, and there is no window in which the bell shows an event the
+board does not.
 
 IDENTITY
 --------

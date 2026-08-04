@@ -922,8 +922,10 @@ def _sync_completed_at(session, project_id):
     that stays stored. Rule: stamp utc_now when a write leaves the applicable
     set fully approved and the stamp is empty; clear it when a write reopens
     the set. Called from every write that can change completeness: save_task /
-    transition_task (status changes) and promotion/demotion (the applicable set
-    itself changes). No commit -- runs in the caller's transaction.
+    transition_task (status changes), promotion/demotion (the applicable set
+    itself changes), and BPE component transitions
+    (workflow.business_plan.transition_approval). No commit -- runs in the
+    caller's transaction.
     """
     project = db.fetch_one(session,
                            "SELECT pipeline_type, completed_at FROM projects WHERE project_id = :project_id",

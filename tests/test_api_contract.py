@@ -230,14 +230,25 @@ def test_create_project_still_allows_missing_coordinates(client):
     assert row["lead_y"] in (None, "")
 
 
-def test_create_project_is_not_role_gated(client):
-    """Pinning the CURRENT permission model: creation carries no require_role
-    check (unlike approve / delete / priority, which are supervisor-only). Card
-    1D preserves it exactly -- change this test only with a deliberate decision.
+def test_create_project_is_not_role_gated_unless_born_bp(client):
+    """Pinning the CURRENT permission model: plain creation carries no
+    require_role check (unlike approve / delete / priority, which are
+    supervisor-only) -- Card 1D preserves it exactly. A born-BP creation
+    (business_plan_enabled truthy) is the one exception: it is a promotion
+    done at creation time, so it gates on supervisor exactly like
+    PATCH /api/projects/<id>/flags does. Change this test only with a
+    deliberate decision.
     """
-    import main as main_module
-    import inspect
-    assert "require_role" not in inspect.getsource(main_module.create_project)
+    resp = client.post("/api/projects", json={"project_name": "ROLE-UNGATED-1"})
+    assert resp.status_code == 201
+
+    resp = client.post("/api/login", json={"name": "Employee"})
+    assert resp.status_code == 200, resp.get_json()
+    resp = client.post("/api/projects", json={
+        "project_name": "ROLE-GATED-BP-1", "business_plan_enabled": True,
+        "business_plan_year": 2026,
+    })
+    assert resp.status_code == 403
 
 
 @pytest.mark.parametrize("payload", [
@@ -1066,10 +1077,17 @@ def test_export_includes_proposed_leads_with_latest_estimates(client):
 
     ws_staking = workbook["Staking Options"]
     staking_header = [cell.value for cell in ws_staking[4]]
-    staking_names = {row[staking_header.index("Lead Name")]
-                     for row in ws_staking.iter_rows(min_row=5, max_row=ws_staking.max_row, values_only=True)}
-    assert "EXPORT-LEAD-1" in staking_names
-    assert "EXPORT-LEAD-BARE" in staking_names
+    staking_by_name = {row[staking_header.index("Lead Name")]: row
+                       for row in ws_staking.iter_rows(min_row=5, max_row=ws_staking.max_row, values_only=True)}
+    assert "EXPORT-LEAD-1" in staking_by_name
+    assert "EXPORT-LEAD-BARE" in staking_by_name
+    # A membership assert alone would pass even if the row's content were
+    # wrong: the bare lead was created with no lead_x/lead_y and has never
+    # touched the Moving Tolerance step, so its X/Y must come back blank, not
+    # some stray/junk coordinate.
+    bare_staking_row = staking_by_name["EXPORT-LEAD-BARE"]
+    assert bare_staking_row[staking_header.index("X")] in ("", None)
+    assert bare_staking_row[staking_header.index("Y")] in ("", None)
 
 
 def test_export_status_reads_sarh_formation_fluid(client):

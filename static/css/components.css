@@ -2909,7 +2909,7 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .bpe-folder-row a { display: flex; align-items: center; gap: var(--space-2); min-width: 0; color: var(--text); font-size: var(--text-xs); text-decoration: none; }
 .bpe-folder-row a > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bpe-folder-icon { display: grid; color: var(--warning-500); }
-.bpe-folder-icon .lucide { width: 20px; height: 20px; fill: var(--warning-100); }
+.bpe-folder-icon .lucide { width: 20px; height: 20px; fill: var(--warning-500); fill-opacity: .35; }
 .bpe-copy-button { display: grid; place-items: center; flex: 0 0 34px; height: 34px; margin-left: auto; padding: 0; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-sunken); color: var(--text-muted); }
 .bpe-copy-button .lucide { width: 17px; height: 17px; }
 .bpe-save-line { display: flex; align-items: center; gap: var(--space-3); min-height: 28px; margin-top: var(--space-3); color: var(--text-faint); font-size: var(--text-xs); }

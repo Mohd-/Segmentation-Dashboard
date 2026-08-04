@@ -418,7 +418,7 @@ def test_portfolio_includes_all_non_archived_records(client):
     assert bare_row["status"] == "Proposed"
 
 
-def test_portfolio_membership_includes_bp_wells_and_mature_leads(client):
+def test_portfolio_membership_includes_bp_wells_and_leads_at_every_stage(client):
     fresh_pid = create_project(client, "FRESH-PROSPECT")            # not mature
     bp_pid = create_project(client, "BP-WELL", pipeline_type="bp", **BP_KWARGS)
     lead_pid = create_project(client, "MATURE-LEAD")
@@ -496,9 +496,22 @@ def test_completed_bp_well_leaves_bp_board_but_stays_in_portfolio_and_export(cli
     readers, untouched by the board's row-skip."""
     import db as dbmod
     import portfolio_export
+    import workflow
 
-    pid = create_project(client, "HIST-1", pipeline_type="bp",
-                         business_plan_enabled=True, business_plan_year=2019)
+    # A historical business_plan_year (2019, pre-2026) is what the real
+    # importer lands: POST /api/projects now gates business_plan_enabled at
+    # creation to the same current-year..2035 promotion window (see
+    # main.create_project), so a historical BP well is created plain and
+    # promoted in-process with allow_historical_year=True, exactly like
+    # import_excel.py does -- never through the HTTP route.
+    pid = create_project(client, "HIST-1")
+    session = dbmod.new_session()
+    try:
+        workflow.update_project_flags(session, pid, business_plan_enabled=True,
+                                      business_plan_year=2019, changed_by="Import",
+                                      allow_historical_year=True)
+    finally:
+        session.close()
     _approve_all_bp_tasks(client, pid)
 
     bp_ids = [r["project_id"] for r in client.get("/api/projects?pipeline_filter=bp").get_json()]

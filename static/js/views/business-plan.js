@@ -650,7 +650,7 @@ function summaryMarkup() {
   var completed = (state.detail.stage_items || []).filter(function (item) { return item.status === 'Completed'; }).length;
   return '<aside class="bpe-well-summary"><header><h3>Well Summary</h3><button type="button" id="bpe-summary-gear" class="icon-btn" ' +
     'aria-haspopup="menu" aria-expanded="false" title="Well Summary actions">' + icon('settings') + '</button>' +
-    '<div id="bpe-summary-menu" class="bpe-summary-menu hidden" role="menu"><button type="button" id="bpe-edit-all" role="menuitem">Edit all project fields</button></div></header>' +
+    '<div id="bpe-summary-menu" class="bpe-summary-menu hidden" role="menu" aria-labelledby="bpe-summary-gear"><button type="button" id="bpe-edit-all" role="menuitem">Edit all project fields</button></div></header>' +
     '<dl><div><dt>Well</dt><dd>' + esc(state.detail.project.project_name) + '</dd></div>' +
     '<div><dt>Field</dt><dd>' + esc(state.detail.project.field || '-') + '</dd></div>' +
     '<div><dt>Business Plan Year</dt><dd>' + esc(state.detail.project.business_plan_year || '-') + '</dd></div>' +
@@ -1282,6 +1282,7 @@ function bindDetail() {
   wireBpeSummaryDismissOnce();
   var edit = byId('bpe-edit-all');
   if (edit) edit.addEventListener('click', function () {
+    closeBpeSummaryMenu();
     flushPendingSaves().then(function (saved) {
       if (!saved) return;
       var projectId = state.projectId;

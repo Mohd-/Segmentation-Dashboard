@@ -111,7 +111,7 @@ def _move_bp_to_lead_phase(session, project_id: int, changed_by: str):
 
 
 def set_business_plan(session, project_id, enabled, year=None, changed_by="Admin",
-                       allow_historical_year=False, *args, **kwargs):
+                       *args, allow_historical_year=False, **kwargs):
     """Enable/disable the Business Plan for a project (promotion / demotion)."""
     old = get_project(session, project_id)
     if not old:
@@ -120,21 +120,23 @@ def set_business_plan(session, project_id, enabled, year=None, changed_by="Admin
     year_val = None
     if enabled_int:
         year_val = int(year or old.get("business_plan_year") or 0)
-        # Floor is 1990, not 2026: this window still admits imported historical
-        # wells (drilled pre-2026) via allow_historical_year below. The promote
-        # dialog UI never offers a year outside this range either.
-        if year_val < 1990 or year_val > 2040:
-            raise ValueError("Select a business plan year from 1990 to 2040.")
         # Newly enabling a record (promotion) can't target a past year: check
         # against the stored flag, not `enabled`, so a year-only edit of an
-        # already-enabled well keeps the wider 1990-2040 window above. Excel
+        # already-enabled well keeps the wider 1990-2040 window below. Excel
         # imports legitimately enable BP wells with historical years through
-        # this same path, hence the escape hatch.
+        # this same path, hence the escape hatch. This strict window is
+        # evaluated FIRST so a newly-enabling out-of-range year gets this
+        # message, not the wide one below.
         was_enabled = bool(old.get("business_plan_enabled"))
         if not was_enabled and not allow_historical_year:
             current_year = date.today().year
             if year_val < current_year or year_val > 2035:
                 raise ValueError(f"Select a business plan year from {current_year} to 2035.")
+        # Floor is 1990, not 2026: this window still admits imported historical
+        # wells (drilled pre-2026) via allow_historical_year above. The promote
+        # dialog UI never offers a year outside this range either.
+        elif year_val < 1990 or year_val > 2040:
+            raise ValueError("Select a business plan year from 1990 to 2040.")
     with db.write_transaction(session):
         if enabled_int:
             _move_lead_to_bp_execution(session, project_id, year_val, changed_by)

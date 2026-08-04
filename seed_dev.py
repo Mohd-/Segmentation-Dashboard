@@ -647,7 +647,11 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
         # like a genuinely promoted lead's.
         workflow.update_project_flags(
             session, pid, business_plan_enabled=True, active_well_enabled=(i % 2 == 0),
-            business_plan_year=years[i % len(years)], changed_by=random.choice(supervisors))
+            business_plan_year=years[i % len(years)], changed_by=random.choice(supervisors),
+            # Seeded wells are synthetic history: the years list starts at
+            # 2026 and stays fixed, so this promotion must skip the
+            # promotion-only current-year..2035 floor once "today" moves past it.
+            allow_historical_year=True)
 
         # BP-stage lifecycle progress + inputs, AFTER promotion.
         # Windows over the 15 BP-execution steps (v4 merged four away):
