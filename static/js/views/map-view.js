@@ -28,7 +28,7 @@
       the user is on another tab.
    ========================================================================= */
 
-import { byId, all, esc } from '../dom.js';
+import { byId, all, esc, msg } from '../dom.js';
 import { ICONS } from '../icons.js';
 import {
   LayerStore, WELLS_ID, readMapState, writeMapState,
@@ -315,8 +315,18 @@ function applySummaryCollapse() {
   applyCollapse('map-summary', 'map-summary-toggle', 'map-summary-body', store.summaryCollapsed);
 }
 
+/* null means the user has never chosen: phones open with the map full-screen,
+   everything else opens expanded. The moment the toggle is used the stored
+   boolean takes over on every viewport. Resolved on every read rather than
+   written into the store, so an unrelated persist (a layer tick, a recolor)
+   cannot freeze the viewport default as if it had been chosen. */
+function sidebarCollapsedNow() {
+  if (store.sidebarCollapsed !== null) return store.sidebarCollapsed;
+  try { return window.matchMedia('(max-width: 640px)').matches; } catch (err) { return false; }
+}
+
 function applySidebarCollapse() {
-  applyCollapse('map-sidebar', 'map-sidebar-toggle', 'map-sidebar-body', store.sidebarCollapsed);
+  applyCollapse('map-sidebar', 'map-sidebar-toggle', 'map-sidebar-body', sidebarCollapsedNow());
   applyCollapse('map-filters-fold', 'map-filters-toggle', 'map-filter-list', store.filtersCollapsed);
   applyCollapse('map-layers-fold', 'map-layers-toggle', 'map-layer-list', store.layersCollapsed);
 }
@@ -501,6 +511,13 @@ function loadLayers() {
     var detail = String((err && err.message) || 'unknown error').split('\n')[0].slice(0, 120);
     if (filters) filters.innerHTML = '';
     if (list) list.innerHTML = '<p class="map-empty-hint">Could not load layers: ' + esc(detail) + '</p>';
+    /* That message sits inside two collapsible containers, and `hidden` takes
+       it out of the accessibility tree as well as the page — so the toast, not
+       the box, is the channel that reaches a user whose sidebar is closed. It
+       is why this path deliberately touches no collapse state: forcing the box
+       open would spend the "never chosen" default and discard a real fold
+       preference to say something already said. */
+    msg('Could not load map layers: ' + detail, 'error');
   });
 }
 
@@ -562,7 +579,9 @@ function wire() {
     persist();
   });
   byId('map-sidebar-toggle').addEventListener('click', function () {
-    store.sidebarCollapsed = !store.sidebarCollapsed;
+    // From the RESOLVED value: !null would be true, which on a phone (already
+    // collapsed by default) would look like a tap that did nothing.
+    store.sidebarCollapsed = !sidebarCollapsedNow();
     applySidebarCollapse();
     persist();
   });
@@ -610,13 +629,6 @@ function wire() {
 function boot() {
   store = new LayerStore(fetchMapLayer);
   store.applyState(readMapState());
-  // Never persisted = first visit: the box takes up most of a phone screen,
-  // so start it closed there and expanded everywhere else.
-  if (store.prefs.sidebarCollapsed === null) {
-    try {
-      store.sidebarCollapsed = window.matchMedia('(max-width: 640px)').matches;
-    } catch (err) { /* no matchMedia — keep the expanded default */ }
-  }
   measure = new MeasureTool();
   view = new MapCanvas(byId('map-canvas'), store);
   view.measure = measure;

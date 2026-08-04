@@ -382,7 +382,7 @@ export class LayerStore {
     this.wellsVisible = true;
     this.wellsColor = WELLS_DEFAULT_COLOR;
     this.summaryCollapsed = false;
-    this.sidebarCollapsed = false;
+    this.sidebarCollapsed = null;   // tri-state: null = the user has never chosen
     this.filtersCollapsed = false;
     this.layersCollapsed = false;
     this.prefs = normalizeState(null);
@@ -391,13 +391,15 @@ export class LayerStore {
   }
 
   // Preferences restored from localStorage. Applied by setLayers (colors and
-  // visibility) and by the constructor of the view (summary collapse), never
+  // visibility) and by the view's boot() (the four collapse flags), never
   // trusted as a list of layers in its own right.
   applyState(state) {
     this.prefs = normalizeState(state);
     this.summaryCollapsed = this.prefs.summaryCollapsed;
-    // null = never persisted; the view may override the default for a phone.
-    this.sidebarCollapsed = this.prefs.sidebarCollapsed === null ? false : this.prefs.sidebarCollapsed;
+    // Carried through AS NULL when nothing was ever stored: the view resolves
+    // that default per viewport, and toState() writes the null straight back,
+    // so an unrelated persist cannot silently freeze the choice.
+    this.sidebarCollapsed = this.prefs.sidebarCollapsed;
     this.filtersCollapsed = this.prefs.filtersCollapsed;
     this.layersCollapsed = this.prefs.layersCollapsed;
     if (Object.prototype.hasOwnProperty.call(this.prefs.visible, WELLS_ID)) {
@@ -422,7 +424,7 @@ export class LayerStore {
       visible: visible,
       colors: colors,
       summaryCollapsed: !!this.summaryCollapsed,
-      sidebarCollapsed: !!this.sidebarCollapsed,
+      sidebarCollapsed: this.sidebarCollapsed === null ? null : !!this.sidebarCollapsed,
       filtersCollapsed: !!this.filtersCollapsed,
       layersCollapsed: !!this.layersCollapsed
     };

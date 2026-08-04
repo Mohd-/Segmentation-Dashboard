@@ -7,7 +7,7 @@
 // is every rule a wrong answer would silently corrupt — which polygon a well
 // falls in, which layer draws on top, what the totals say, and whether a
 // hostile shapefile attribute can reach the DOM as markup.
-import { test, assert, fixture, mockFetch } from './harness.js';
+import { test, assert, fixture, mockFetch, waitFor } from './harness.js';
 import {
   LayerStore, WELLS_ID, MAP_STATE_KEY, PALETTE,
   pointInRings, polygonLabel, formatOgip, ogipValue, hasCoords, featureKey,
@@ -468,8 +468,32 @@ test('map: an unstored sidebar collapse reads as null, and the folds default ope
   assert.equal(normalizeState(null).filtersCollapsed, false);
   assert.equal(normalizeState(null).layersCollapsed, false);
   var store = new LayerStore();
+  assert.equal(store.sidebarCollapsed, null, 'the store default is "never chosen" too');
   store.applyState(normalizeState(null));
-  assert.equal(store.sidebarCollapsed, false, 'null resolves to expanded in the store');
+  assert.equal(store.sidebarCollapsed, null, 'applyState carries the null through');
+});
+
+/* The null has to survive every persist that is NOT the sidebar toggle. It is
+   written by seven unrelated paths (a layer tick, a reorder, a recolor, the
+   summary toggle...), and if any of them froze the viewport-derived default as
+   a stored boolean, a phone would never open full-screen again. */
+test('map: an unrelated persist leaves the unchosen sidebar collapse unchosen', function () {
+  var storage = memStorage();
+  var store = new LayerStore();
+  store.applyState(readMapState(storage));       // nothing stored yet
+  store.setLayers(layerMeta());
+  assert.equal(store.toState().sidebarCollapsed, null, 'nothing chosen, nothing to write');
+
+  store.setVisible('blocks', false);              // an unrelated change...
+  writeMapState(store.toState(), storage);        // ...and the persist it triggers
+  var reloaded = new LayerStore().applyState(readMapState(storage));
+  assert.equal(reloaded.sidebarCollapsed, null, 'still unchosen after an unrelated persist');
+  assert.equal(reloaded.toState().sidebarCollapsed, null, 'and it is written back as null');
+
+  store.sidebarCollapsed = true;                  // the toggle, the one chooser
+  writeMapState(store.toState(), storage);
+  var chosen = new LayerStore().applyState(readMapState(storage));
+  assert.equal(chosen.sidebarCollapsed, true, 'an explicit choice round-trips as a boolean');
 });
 
 test('map: a stale saved order drops vanished layers and appends unseen ones on top', function () {
@@ -1079,6 +1103,33 @@ test('map: refreshMap boots the tab — sidebar order, summary figures, toolbox 
     // so a collapsed fold stays collapsed across one.
     layerList.querySelector('.map-layer[data-layer="blocks"] .map-layer-move[data-dir="-1"]').click();
     assert.equal(document.getElementById('map-layer-list').hidden, true, 'the fold survives a re-render');
-    try { window.localStorage.removeItem(MAP_STATE_KEY); } catch (err) { /* storage may be unavailable */ }
+
+    /* A failed load writes its message into a container that may be hidden,
+       and `hidden` takes it out of the accessibility tree as well — so the
+       app's toast, which is independent of the box, is what carries the
+       failure. The collapse state is deliberately left exactly as the user
+       set it. */
+    boxToggle.click();
+    assert.equal(boxBody.hidden, true, 'collapsed, as a phone boots');
+    var savedPrefs = window.localStorage.getItem(MAP_STATE_KEY);
+    mockFetch(function () { throw new Error('network down'); });
+    document.getElementById('map-reload').click();
+    // Captured as it lands: the toast is a shared, self-clearing region that
+    // any other view booted by this suite may write to next.
+    var toasted = '';
+    return waitFor(function () {
+      var toast = document.getElementById('app-message');
+      if (!toast || !/Could not load map layers/.test(toast.textContent)) return false;
+      toasted = toast.textContent;
+      return true;
+    }).then(function () {
+      assert.match(toasted, /Could not load map layers: network down/);
+      assert.equal(boxBody.hidden, true, 'a failure does not prise the box open');
+      assert.equal(layerList.hidden, true, 'nor the fold the user closed');
+      assert.match(layerList.textContent, /Could not load layers: network down/,
+        'the explanation is waiting inside the box for anyone who expands it');
+      assert.equal(window.localStorage.getItem(MAP_STATE_KEY), savedPrefs, 'and nothing was persisted');
+      try { window.localStorage.removeItem(MAP_STATE_KEY); } catch (err) { /* storage may be unavailable */ }
+    });
   });
 });

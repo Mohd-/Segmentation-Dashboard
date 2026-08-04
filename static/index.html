@@ -217,11 +217,14 @@
           <!-- The sidebar floats ON the stage like every other overlay here,
                so the canvas keeps the full panel width and collapsing the box
                never reflows it. -->
-          <aside id="map-sidebar" class="map-sidebar">
+          <aside id="map-sidebar" class="map-sidebar" aria-label="Map layers">
             <button id="map-sidebar-toggle" type="button" class="map-sidebar-toggle"
                     aria-expanded="true" aria-controls="map-sidebar-body">
               <span class="map-sidebar-title">Map layers</span>
-              <span class="map-crs">UTM 37N</span>
+              <!-- Muted for the button's accessible name ("Map layers UTM 37N
+                   minus sign"); the projection is announced on every hover by
+                   the coordinate readout anyway. -->
+              <span class="map-crs" aria-hidden="true">UTM 37N</span>
             </button>
             <div id="map-sidebar-body" class="map-sidebar-body">
               <div class="map-sidebar-actions">
@@ -234,7 +237,10 @@
                   <span class="map-fold-title">Well filters</span>
                   <span class="map-fold-chevron" aria-hidden="true"></span>
                 </button>
-                <div id="map-filter-list" class="map-filter-list" aria-live="polite"></div>
+                <!-- Not a live region: renderSidebar rewrites the whole
+                     checklist on every activation, which would re-announce all
+                     four groups for nothing. -->
+                <div id="map-filter-list" class="map-filter-list"></div>
               </section>
               <section id="map-layers-fold" class="map-fold">
                 <button id="map-layers-toggle" type="button" class="map-fold-head open"
