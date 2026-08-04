@@ -123,7 +123,10 @@ var BP_FILTERS = [
   { key: 'field', id: 'bp-field-filter', caption: 'Field', fallback: 'All Fields' },
   { key: 'status', id: 'bp-status-filter', caption: 'Status', fallback: 'All Status' },
   { key: 'year', id: 'bp-year-filter', caption: 'Year', fallback: null },
-  { key: 'step', id: 'bp-step-filter', caption: 'BP Gate', fallback: 'business-plan-gate' }
+  // An initialism has to keep its spelling in the spoken label, or the trigger
+  // announces itself as "Filter by bp gate".
+  { key: 'step', id: 'bp-step-filter', caption: 'BP Gate', ariaCaption: 'BP Gate',
+    fallback: 'business-plan-gate' }
 ];
 
 // Status glyphs echo the card dots and the maturation menu exactly, so the
@@ -136,7 +139,6 @@ var BP_STATUS_ICONS = {
 
 var BPE_FILTER_ROOT = 'bpe-filter-row';
 var BPE_DROPDOWN_SOURCE = 'bpe';
-var openFilterKey = null;   // the filter whose menu is open (one at a time)
 
 function defaultValue(filter) {
   return filter.key === 'year' ? String(new Date().getFullYear()) : filter.fallback;
@@ -168,6 +170,7 @@ function filterGroupHtml(filter) {
     filterTriggerHtml({
       key: filter.key,
       caption: filter.caption,
+      ariaCaption: filter.ariaCaption,
       label: triggerLabel(filter, select),
       active: isFilterActive(filter, select)
     }) +
@@ -207,10 +210,24 @@ function announceOpen() {
   }));
 }
 
-// Scoped to this row: the maturation module keeps its own open key, so closing
-// its menus is ITS job (our announce above is what asks it to).
+/* WHICH menu is open is read off the DOM, never remembered in a variable.
+   views/lead-filters.js closes every .lf-menu on the page (ours included) on
+   any dismissal, and the header menus do the same through the shared event --
+   so a remembered key goes stale behind our back and the next click on that
+   trigger would "toggle closed" a menu that is already closed. The DOM cannot
+   go stale about its own hidden attribute. */
+function openBpeGroup() {
+  var host = byId(BPE_FILTER_ROOT);
+  if (!host) return null;
+  return all('.lead-filter', host).filter(function (group) {
+    var menu = group.querySelector('.lf-menu');
+    return menu && !menu.hidden;
+  })[0] || null;
+}
+
+// Scoped to this row: the maturation module keeps its own open state, so
+// closing its menus is ITS job (our announce above is what asks it to).
 function closeBpeMenus() {
-  openFilterKey = null;
   var host = byId(BPE_FILTER_ROOT);
   if (!host) return;
   all('.lf-menu', host).forEach(function (menu) { menu.hidden = true; });
@@ -230,7 +247,6 @@ function openBpeMenu(filter) {
   menu.hidden = false;
   placeFilterMenu(trigger, menu);
   trigger.setAttribute('aria-expanded', 'true');
-  openFilterKey = filter.key;
 }
 
 // One registration for the lifetime of the page: the handlers query the DOM
@@ -248,9 +264,10 @@ function wireBpeFilterDismiss() {
     closeBpeMenus();
   });
   document.addEventListener('keydown', function (event) {
-    if (event.key !== 'Escape' || !openFilterKey) return;
-    var host = byId(BPE_FILTER_ROOT);
-    var trigger = host && host.querySelector('.lead-filter[data-bp-filter="' + openFilterKey + '"] .lf-trigger');
+    if (event.key !== 'Escape') return;
+    var group = openBpeGroup();
+    if (!group) return;
+    var trigger = group.querySelector('.lf-trigger');
     closeBpeMenus();
     if (trigger) trigger.focus();
   });
@@ -276,15 +293,19 @@ function wireBpeFilterDismiss() {
 
 // A choice is a WRITE TO THE SELECT plus its own 'change' -- the existing
 // listener refreshes the dashboard, so the trigger row can never become a
-// second, competing refresh path.
+// second, competing refresh path. Focus returns to the trigger: the chosen
+// option is inside the menu we just hid, and a hidden element cannot hold it.
 function chooseFilterOption(filter, value) {
   var select = byId(filter.id);
+  var host = byId(BPE_FILTER_ROOT);
+  var trigger = host && host.querySelector('.lead-filter[data-bp-filter="' + filter.key + '"] .lf-trigger');
   closeBpeMenus();
   if (select && String(select.value) !== String(value)) {
     select.value = String(value);
     select.dispatchEvent(new Event('change', { bubbles: true }));
   }
-  renderFilterTriggers();   // immediate feedback; the refresh repaints again
+  syncBpTriggers();   // immediate feedback; the refresh repaints again
+  if (trigger) trigger.focus();
 }
 
 // Clear resets all five and refreshes ONCE, rather than dispatching five
@@ -298,16 +319,42 @@ function clearBpFilters() {
     select.value = String(defaultValue(filter));
     changed = true;
   });
-  renderFilterTriggers();
+  syncBpTriggers();
   if (changed) refreshBusinessPlan();
 }
 
 /* -------------------------------------------------------------------------
    Render
+
+   TWO passes, the same split views/lead-filters.js makes:
+
+     syncBpTriggers()        reflect the current selection onto the EXISTING
+                             controls, in place
+     renderFilterTriggers()  rebuild the row, for when the option sets change
+
+   A pick only changes what a trigger SAYS, so it syncs. Rebuilding there would
+   replace the element the user just activated, dropping keyboard focus to the
+   body mid-interaction.
    ------------------------------------------------------------------------- */
 
+function syncBpTriggers() {
+  var host = byId(BPE_FILTER_ROOT);
+  if (!host) return;
+  BP_FILTERS.forEach(function (filter) {
+    var group = host.querySelector('.lead-filter[data-bp-filter="' + filter.key + '"]');
+    var select = byId(filter.id);
+    if (!group || !select) return;
+    var trigger = group.querySelector('.lf-trigger');
+    trigger.querySelector('.lf-value').textContent = triggerLabel(filter, select);
+    trigger.classList.toggle('is-active', isFilterActive(filter, select));
+  });
+  var clear = host.querySelector('.lf-clear');
+  if (clear) clear.disabled = !anyFilterActive();
+}
+
 // Full rebuild of the row. The selection lives in the selects, so it survives
-// every rebuild -- and the row can be rebuilt as often as the data changes.
+// every rebuild -- and the row is rebuilt whenever the server hands over a new
+// set of options (initialize, renderDashboard), never on a pick.
 function renderFilterTriggers() {
   var host = byId(BPE_FILTER_ROOT);
   if (!host) return;
@@ -318,11 +365,12 @@ function renderFilterTriggers() {
   BP_FILTERS.forEach(function (filter) {
     var group = host.querySelector('.lead-filter[data-bp-filter="' + filter.key + '"]');
     if (!group) return;
+    var menu = group.querySelector('.lf-menu');
     group.querySelector('.lf-trigger').addEventListener('click', function () {
-      if (openFilterKey === filter.key) closeBpeMenus(); else openBpeMenu(filter);
+      if (!menu.hidden) closeBpeMenus(); else openBpeMenu(filter);
     });
     // Delegated, because the options are built on open.
-    group.querySelector('.lf-menu').addEventListener('click', function (event) {
+    menu.addEventListener('click', function (event) {
       var option = event.target && event.target.closest ? event.target.closest('.lf-option') : null;
       if (option) chooseFilterOption(filter, option.getAttribute('data-value'));
     });
@@ -951,6 +999,23 @@ function bodyMarkup() {
    attributes moved -- only the chrome around them.
    ========================================================================= */
 
+/* The rail badge's tint. TWO vocabularies meet here, so the mapping is
+   explicit rather than the house rail's toLowerCase(): a BP step's status is
+   the BOARD's (Completed / Pending Approval / In Progress, from the server's
+   navigation payload), while the rail's four tints are named for the TASK
+   lifecycle (components.css .component-item.status-*). A lowercased
+   'Completed' would produce a class with no rule behind it -- which is exactly
+   how all fourteen badges ended up uniform gray. */
+var RAIL_STATUS_SLUG = {
+  'Completed': 'approved',
+  'Pending Approval': 'ready',
+  'In Progress': 'in-progress'
+};
+
+function railStatusSlug(status) {
+  return RAIL_STATUS_SLUG[status] || 'not-assigned';
+}
+
 // The rail: three stage blocks, all expanded (the BP page is not an accordion
 // -- its fourteen steps fit, and a fold would hide the step you came for).
 // The block holding the open step carries .is-active, the navy accent the
@@ -964,10 +1029,12 @@ function detailNavMarkup() {
     var items = group.details.map(function (item) {
       number += 1;
       // .bpe-nav-item is carried for the click wiring and the tests; the LOOK
-      // is entirely the house .component-item (+ .active, exactly as
-      // views/detail.js marks its current component).
-      return '<button type="button" class="component-item bpe-nav-item' +
-        (item.slug === state.detailSlug ? ' active' : '') + '" data-detail-slug="' + esc(item.slug) + '">' +
+      // is entirely the house .component-item (+ status-* for the badge tint
+      // and .active for the current one, exactly as views/detail.js marks its
+      // own rail).
+      return '<button type="button" class="component-item status-' + railStatusSlug(item.status) +
+        (item.slug === state.detailSlug ? ' active' : '') + ' bpe-nav-item"' +
+        ' data-detail-slug="' + esc(item.slug) + '">' +
         '<span class="component-num">' + number + '</span><b>' + esc(item.label) + '</b></button>';
     }).join('');
     return '<div class="rail-stage rail-stage-lead' + (isActive ? ' is-active' : '') + '"' +
@@ -1510,6 +1577,36 @@ function saveFormationBuffer(rerender) {
   return enqueueStructureDraft('formations', version, rerender);
 }
 
+/* -------------------------------------------------------------------------
+   Row identity across an async confirmation
+
+   A removal is confirmed through a dialog, and a save response landing while
+   that dialog is open replaces state.detail wholesale (mergeReturnedDetail) --
+   so by the time the answer arrives, the row a click meant may sit at a
+   different index, or be gone. Each handler therefore captures a MARKER of the
+   row BEFORE opening the dialog and re-resolves it after: by stored id where
+   the row has one, else by position plus the field that identified the row on
+   screen. No match means the rows moved under the dialog, and the removal is
+   DROPPED rather than applied to a stranger.
+   ------------------------------------------------------------------------- */
+function rowMarker(row, index, field) {
+  return { index: index, id: row ? row.id : null, field: field, value: row ? row[field] : null };
+}
+
+function rowIndexFor(rows, marker) {
+  var list = rows || [];
+  if (marker.id != null) {
+    for (var i = 0; i < list.length; i += 1) {
+      if (list[i] && String(list[i].id) === String(marker.id)) return i;
+    }
+    return -1;
+  }
+  var row = list[marker.index];
+  if (!row) return -1;
+  return String(row[marker.field] == null ? '' : row[marker.field]) ===
+    String(marker.value == null ? '' : marker.value) ? marker.index : -1;
+}
+
 function bindFormationInputs() {
   all('[data-formation-field], [data-pay-field]', byId('bpe-detail-view')).forEach(function (element) {
     element.addEventListener(element.tagName === 'SELECT' ? 'change' : 'input', function () {
@@ -1538,19 +1635,29 @@ function bindFormationInputs() {
       saveFormationBuffer(true);
     });
   });
-  // Every removal below is confirmed through the app dialog and re-checks the
-  // context afterwards: the answer arrives asynchronously, and a row index
-  // means nothing once a different step is loaded.
+  // Every removal below is confirmed through the app dialog, then re-checks
+  // BOTH the context (a different step may be loaded) and the row marker (the
+  // rows may have been replaced by a save response) before it cuts anything.
   all('.bpe-remove-pay', byId('bpe-detail-view')).forEach(function (button) {
     button.addEventListener('click', function () {
       var context = currentContext();
+      var formationIndex = Number(button.dataset.formationIndex);
+      var payIndex = Number(button.dataset.payIndex);
+      var formation = (state.detail.formations || [])[formationIndex] || {};
+      var formationMark = rowMarker(formation, formationIndex, 'formation');
+      var payMark = rowMarker((formation.pay_intervals || [])[payIndex], payIndex, 'top_tvdss_ft');
       confirmDialog({
         title: 'Remove Pay Interval',
         message: 'Remove this pay interval? Its entered depths and properties are discarded.',
         confirmLabel: 'Remove'
       }).then(function (confirmed) {
         if (!confirmed || !isCurrentContext(context)) return;
-        state.detail.formations[Number(button.dataset.formationIndex)].pay_intervals.splice(Number(button.dataset.payIndex), 1);
+        var rows = state.detail.formations || [];
+        var at = rowIndexFor(rows, formationMark);
+        if (at < 0) return;
+        var payAt = rowIndexFor(rows[at].pay_intervals || [], payMark);
+        if (payAt < 0) return;
+        rows[at].pay_intervals.splice(payAt, 1);
         saveFormationBuffer(true);
       });
     });
@@ -1558,7 +1665,9 @@ function bindFormationInputs() {
   all('.bpe-remove-formation', byId('bpe-detail-view')).forEach(function (button) {
     button.addEventListener('click', function () {
       var context = currentContext();
-      var row = (state.detail.formations || [])[Number(button.dataset.formationIndex)] || {};
+      var index = Number(button.dataset.formationIndex);
+      var row = (state.detail.formations || [])[index] || {};
+      var marker = rowMarker(row, index, 'formation');
       var intervals = (row.pay_intervals || []).length;
       confirmDialog({
         title: 'Remove Formation',
@@ -1568,7 +1677,9 @@ function bindFormationInputs() {
         danger: true
       }).then(function (confirmed) {
         if (!confirmed || !isCurrentContext(context)) return;
-        state.detail.formations.splice(Number(button.dataset.formationIndex), 1);
+        var at = rowIndexFor(state.detail.formations, marker);
+        if (at < 0) return;
+        state.detail.formations.splice(at, 1);
         saveFormationBuffer(true);
       });
     });
@@ -1604,15 +1715,20 @@ function bindFlowbackInputs() {
   all('.bpe-remove-flow', byId('bpe-detail-view')).forEach(function (button) {
     button.addEventListener('click', function () {
       var context = currentContext();
-      var stage = Number(button.dataset.flowIndex) + 1;
+      var index = Number(button.dataset.flowIndex);
+      // Every flowback row carries an id (the server's, or a draft uuid from
+      // blankFlowbackStage), so this marker always resolves by identity.
+      var marker = rowMarker((state.detail.flowback_stages || [])[index], index, 'formation');
       confirmDialog({
         title: 'Delete Flowback Stage',
-        message: 'Delete Stage ' + stage + '? Its entered rates, pressures and depths are discarded.',
+        message: 'Delete Stage ' + (index + 1) + '? Its entered rates, pressures and depths are discarded.',
         confirmLabel: 'Delete',
         danger: true
       }).then(function (confirmed) {
         if (!confirmed || !isCurrentContext(context)) return;
-        state.detail.flowback_stages.splice(Number(button.dataset.flowIndex), 1);
+        var at = rowIndexFor(state.detail.flowback_stages, marker);
+        if (at < 0) return;
+        state.detail.flowback_stages.splice(at, 1);
         saveFlowback(true);
       });
     });

@@ -157,6 +157,52 @@ def test_development_classification_resets_defaults_and_system_completes_only_pr
     assert blocked.status_code == 400
 
 
+def test_navigation_carries_every_step_status_for_the_detail_rail(client):
+    project_id = _bp_project(client)
+
+    def statuses():
+        detail = client.get(
+            f"/api/business-plan/wells/{project_id}/steps/business-plan-gate").get_json()
+        assert [group["stage_key"] for group in detail["navigation"]] == [
+            "pre_drilling", "post_drilling", "post_testing"]
+        return {entry["slug"]: entry["status"]
+                for group in detail["navigation"] for entry in group["details"]}
+
+    initial = statuses()
+    assert len(initial) == 14, "every step of every stage travels with the rail"
+    assert set(initial.values()) == {"In Progress"}
+
+    # Well Letters owns THREE tracking items. Completing one never finishes the
+    # entry -- the rail must not claim a step is done because part of it is.
+    _save(client, project_id, "well-letters", "site_preparation_shared", True)
+    assert statuses()["well-letters"] == "In Progress"
+    _save(client, project_id, "well-letters", "well_proposal_shared", True)
+    _save(client, project_id, "well-letters", "approval_to_drill_shared", True)
+    assert statuses()["well-letters"] == "Completed"
+
+    # A step waiting on a supervisor is neither done nor merely in progress.
+    _raw_fields(client, project_id, "BP Execution Gate", {
+        "bp_gate_classification": "Appraisal",
+        "bp_gate_calculated_td_ft_md": "12000",
+        "bp_gate_actual_td_ft_md": "12100",
+        "bp_gate_actual_drilling_days": "31.5",
+        "bp_gate_logging_program": "Standard A",
+        "bp_gate_interval_from": "SARH",
+        "bp_gate_interval_to": "QASM",
+        "bp_gate_swc": "30",
+        "bp_gate_pressure_points": "20",
+        "bp_gate_fluid_samples": "5",
+        "bp_gate_coring_program": "No",
+        "bp_gate_slides_saved": "1",
+    })
+    submitted = client.post(
+        f"/api/business-plan/wells/{project_id}/steps/business-plan-gate/transition",
+        json={"action": "submit"},
+    )
+    assert submitted.status_code == 200, submitted.get_json()
+    assert statuses()["business-plan-gate"] == "Pending Approval"
+
+
 def test_gate_submission_requires_complete_draft_and_supervisor_approval(client):
     project_id = _bp_project(client)
     incomplete = client.post(

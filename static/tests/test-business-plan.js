@@ -28,27 +28,29 @@ function stageItems() {
   });
 }
 
+// Each navigation entry carries its own rolled-up status (workflow/
+// business_plan.py _navigation), which is what tints the rail badges.
 function navigation() {
   return [
     { stage_key: 'pre_drilling', stage_label: 'Pre-Drilling', details: [
-      { slug: 'business-plan-gate', label: 'Business Plan Execution Gate' },
-      { slug: 'well-letters', label: 'Well Letters' },
-      { slug: 'gheer-inputs', label: 'GHEER Inputs' }
+      { slug: 'business-plan-gate', label: 'Business Plan Execution Gate', status: 'In Progress' },
+      { slug: 'well-letters', label: 'Well Letters', status: 'Pending Approval' },
+      { slug: 'gheer-inputs', label: 'GHEER Inputs', status: 'Completed' }
     ] },
     { stage_key: 'post_drilling', stage_label: 'Post-Drilling', details: [
-      { slug: 'quicklook-logs', label: 'Quicklook Logs' },
-      { slug: 'aramco-approved-pics', label: 'Aramco Approved PICS' },
-      { slug: 'sad-model', label: 'SAD Model' },
-      { slug: 'summary-slides', label: 'Summary Slides' },
-      { slug: 'post-drill-learning-review', label: 'Post-Drill Learning Review' }
+      { slug: 'quicklook-logs', label: 'Quicklook Logs', status: 'In Progress' },
+      { slug: 'aramco-approved-pics', label: 'Aramco Approved PICS', status: 'In Progress' },
+      { slug: 'sad-model', label: 'SAD Model', status: 'In Progress' },
+      { slug: 'summary-slides', label: 'Summary Slides', status: 'In Progress' },
+      { slug: 'post-drill-learning-review', label: 'Post-Drill Learning Review', status: 'In Progress' }
     ] },
     { stage_key: 'post_testing', stage_label: 'Post-Testing', details: [
-      { slug: 'flowback-results', label: 'Flowback Results' },
-      { slug: 'sad-model-update', label: 'SAD Model Update' },
-      { slug: 'final-summary-slides', label: 'Final Summary Slides' },
-      { slug: 'final-log-analysis', label: 'Final Log Analysis' },
-      { slug: 'structural-mtr', label: 'Structural MTR' },
-      { slug: 'pda-booking', label: 'Post-Drilling Analysis & Reserves Booking' }
+      { slug: 'flowback-results', label: 'Flowback Results', status: 'In Progress' },
+      { slug: 'sad-model-update', label: 'SAD Model Update', status: 'In Progress' },
+      { slug: 'final-summary-slides', label: 'Final Summary Slides', status: 'In Progress' },
+      { slug: 'final-log-analysis', label: 'Final Log Analysis', status: 'In Progress' },
+      { slug: 'structural-mtr', label: 'Structural MTR', status: 'In Progress' },
+      { slug: 'pda-booking', label: 'Post-Drilling Analysis & Reserves Booking', status: 'In Progress' }
     ] }
   ];
 }
@@ -64,7 +66,7 @@ test('business-plan renders the approved dashboard and one auto-save approval de
       '<select id="bp-year-filter" hidden></select>' +
       '<select id="bp-step-filter" hidden></select>' +
       '<div id="bpe-filter-row" class="lead-filter-row bpe-filter-row"></div>' +
-      '<div id="bpe-kpis" class="lead-kpi-row"></div></div>' +
+      '<div id="bpe-kpis" class="lead-kpi-row lead-kpi-row-bp"></div></div>' +
       '<div id="bpe-data-notice" class="hidden"></div>' +
       '<div id="bp-pipeline" class="pipeline-board lead-board"></div></div>' +
       '<section id="bpe-detail-view" class="hidden"></section>'
@@ -126,6 +128,11 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   // board's own vocabulary: three .lead-column blocks, one .lead-card, its six
   // tracked items as dots.
   assert.equal(host.querySelectorAll('#bpe-filter-row .lf-trigger').length, 5);
+  // An initialism keeps its spelling in the spoken label.
+  assert.equal(host.querySelector('.lead-filter[data-bp-filter="step"] .lf-trigger')
+    .getAttribute('aria-label'), 'Filter by BP Gate');
+  assert.equal(host.querySelector('.lead-filter[data-bp-filter="field"] .lf-trigger')
+    .getAttribute('aria-label'), 'Filter by field');
   assert.equal(host.querySelectorAll('.lead-column').length, 3);
   assert.equal(host.querySelectorAll('.lead-card').length, 1);
   assert.equal(host.querySelectorAll('.lead-card .lead-dot').length, 6);
@@ -141,8 +148,16 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   var fieldMenu = host.querySelector('.lead-filter[data-bp-filter="field"] .lf-menu');
   assert.equal(fieldMenu.hidden, false);
   assert.equal(fieldMenu.querySelectorAll('.lf-option').length, 2);
+  var fieldTrigger = host.querySelector('.lead-filter[data-bp-filter="field"] .lf-trigger');
   fieldMenu.querySelectorAll('.lf-option')[1].click();
   assert.equal(host.querySelector('#bp-field-filter').value, 'MDFT');
+  // The row is SYNCED, not rebuilt: the trigger the user activated survives
+  // the pick and keeps the focus.
+  assert.equal(host.querySelector('.lead-filter[data-bp-filter="field"] .lf-trigger'), fieldTrigger,
+    'picking an option does not rebuild the row');
+  assert.equal(document.activeElement, fieldTrigger, 'focus returns to the trigger');
+  assert.equal(fieldTrigger.querySelector('.lf-value').textContent, 'MDFT');
+  assert.ok(fieldTrigger.classList.contains('is-active'));
   assert.equal(host.querySelector('.lead-filter[data-bp-filter="field"] .lf-menu').hidden, true,
     'a single choice is a finished choice');
   await waitFor(function () { return dashboardRequests.length === 2; });
@@ -184,6 +199,14 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   assert.equal(host.querySelectorAll('.rail-stage-lead.is-active').length, 1);
   assert.equal(host.querySelectorAll('.component-item.active').length, 1);
   assert.equal(host.querySelector('.component-item.active').getAttribute('data-detail-slug'), 'business-plan-gate');
+  // Each rail badge is tinted by its step's status, mapped onto the house
+  // rail's four task-lifecycle slugs (a raw 'status-completed' has no rule).
+  assert.equal(host.querySelector('[data-detail-slug="gheer-inputs"]').className,
+    'component-item status-approved bpe-nav-item');
+  assert.equal(host.querySelector('[data-detail-slug="well-letters"]').className,
+    'component-item status-ready bpe-nav-item');
+  assert.equal(host.querySelector('[data-detail-slug="business-plan-gate"]').className,
+    'component-item status-in-progress active bpe-nav-item');
   assert.equal(host.querySelectorAll('.component-editor.bpe-detail-form').length, 1);
   // Form primitives are the house ones (Well Classification is the radio
   // group; the gate's slides confirmation is the checkbox card).

@@ -17,7 +17,7 @@ def diagnostics(page):
           // (.lead-card), and the detail page is the maturation detail shell
           // (.component-rail / .component-editor / .ls-card).
           const selectors = [
-            '#bpe-filter-row .lf-trigger', '#bpe-kpis .kpi-tile', '.lead-card',
+            '#bpe-filter-row .lf-trigger', '#bpe-kpis .kpi-tile', '#bp-pipeline .lead-card',
             '.component-editor', '.bpe-detail-form', '.ls-card',
             '.bpe-flow-grid', '.bpe-flow-stage'
           ];
@@ -88,7 +88,7 @@ def open_dashboard(page, url, year):
     page.locator('.tabs button[data-tab="bp"]').click()
     page.wait_for_selector("#bpe-filter-row .lf-trigger", state="visible")
     select_year(page, year)
-    page.wait_for_selector(".lead-card", state="visible")
+    page.wait_for_selector("#bp-pipeline .lead-card", state="visible")
     page.wait_for_timeout(250)
 
 
@@ -99,7 +99,7 @@ def open_gate(page):
     still waiting on, which is not necessarily the gate -- so the gate is
     reached from the detail rail, where every step is always listed.
     """
-    page.locator(".lead-card").first.click()
+    page.locator("#bp-pipeline .lead-card").first.click()
     page.wait_for_selector(".bpe-detail-form", state="visible")
     page.locator('.component-item[data-detail-slug="business-plan-gate"]').click()
     page.wait_for_selector(".bpe-detail-form .radio-group", state="visible")
@@ -124,7 +124,15 @@ def main():
     browser_messages = []
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(channel="msedge", headless=True)
+        # Edge on Windows (original capture environment), else any installed
+        # Playwright browser so captures work cross-platform.
+        try:
+            browser = playwright.chromium.launch(channel="msedge", headless=True)
+        except Exception:
+            try:
+                browser = playwright.firefox.launch(headless=True)
+            except Exception:
+                browser = playwright.chromium.launch(headless=True)
 
         desktop = browser.new_page(viewport={"width": 1440, "height": 1000})
         desktop.on("pageerror", lambda error: browser_messages.append("pageerror: " + str(error)))

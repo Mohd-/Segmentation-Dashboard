@@ -333,15 +333,9 @@
   min-width: 0;
   gap: var(--space-2);
 }
-/* The Business Plan band's filter row. It carries FIVE filters instead of
-   three and has no Add New Lead control beside it, so it takes the band's
-   first two thirds (leaving the last third to the KPI groups, exactly as on
-   the maturation board) and grids five trigger tracks plus the Clear track.
-   Scoped to this row's own class: .lead-filter-row above is untouched. */
-.bpe-filter-row {
-  grid-column: 1 / 3;
-  grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
-}
+/* The Business Plan band's own filter row and KPI row are the same components
+   with different counts; their rules live with the rest of that tab's glue, at
+   the end of this file (they must come AFTER these base rules to win). */
 .lead-filter { position: relative; min-width: 0; }
 .lf-trigger {
   display: inline-flex;
@@ -508,16 +502,11 @@
   white-space: nowrap;
 }
 .kpi-label { font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; }
-/* The optional third line of a tile (the BP board's "Actual/Simulated"): it
-   names what the two numbers ARE, so it reads quieter than the label. */
+/* The optional third line of a tile (kpiTileHtml's `support`, today the BP
+   board's "Actual/Simulated"): it names what the two numbers ARE, so it reads
+   quieter than the label. It lives here, with the tile anatomy the shared
+   renderer emits, rather than with either board. */
 .kpi-support { font-size: var(--text-xs); color: var(--text-faint); white-space: nowrap; }
-/* The donut group: the ring already prints its own percentage, so the group
-   carries only the label — in the same .kpi-label the tiles use, laid out the
-   same way (glyph-sized thing on the left, text beside it). */
-.kpi-donut-group { display: flex; flex: none; align-items: center; gap: var(--space-3); }
-/* Four groups share the band's last third here instead of three, so the row
-   spends its width on the numbers rather than on the gaps. */
-#bpe-kpis { gap: var(--space-2); }
 /* The one warm note on the board. Decorative: the number and its label carry
    the meaning, so the hue is never the only thing saying "OGIP". */
 .kpi-icon { display: inline-flex; flex: none; align-items: center; color: var(--warning-500); }
@@ -1979,9 +1968,6 @@ button.ghost.success-outline:hover { background: var(--success-100); }
      separator on its TOP edge, since the grid gutter it replaced no longer
      divides anything side-by-side. Still a SINGLE border, never a pair. */
   .lead-controls { grid-template-columns: 1fr; }
-  /* The band is one column here, so the BP filter row gives up its two-thirds
-     span — spanning to a second line would conjure the column back. */
-  .bpe-filter-row { grid-column: auto; }
   .new-lead-button { width: auto; min-width: 176px; }
   .lead-kpi-row {
     justify-content: flex-start;
@@ -2003,12 +1989,6 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   /* Single-column collapse: sticky pinning off, panels back to natural flow. */
   .component-rail, .summary-panel { position: static; max-height: none; overflow-y: visible; }
   .dynamic-fields { grid-template-columns: 1fr; }
-  /* The BP step forms ride the same single-column shell, but their two widest
-     rows still out-measure it: the six-track Logging Program row and the
-     eight-track Pay Interval row each drop to a coarser grid. Everything else
-     already fits the full-width editor and waits for 640. */
-  .bpe-gate-logging { grid-template-columns: repeat(3, minmax(120px, 1fr)); }
-  .bpe-pay-row { grid-template-columns: repeat(4, minmax(90px, 1fr)); }
   .pe-properties-grid { grid-template-columns: 1fr; }
   /* The mini-spreadsheet keeps its single inline column template (on
      .repeatable-rows) and relies on .repeatable-sheet's own horizontal scroll
@@ -2019,7 +1999,7 @@ button.ghost.success-outline:hover { background: var(--success-100); }
      line, Status | Clear on the second. Above this width the band is already
      stacked (1100px block) and the single-line grid has the whole viewport,
      so it needs no override there. */
-  .lead-filter-row, .bpe-filter-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lead-filter-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .lf-clear { width: 100%; }
   /* The band is already stacked (1100px block); here the KPI row additionally
      wraps its tiles, and the Add New Lead button takes the full width like
@@ -2040,15 +2020,6 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   .action-row { flex-wrap: wrap; }
   .action-row button { width: 100%; }
   .action-row button:last-child { margin-left: 0; }
-  /* Every BP step form collapses to one column, the editor head's two controls
-     stack under the step title instead of squeezing it out of the row, and the
-     approval buttons take the full width like every other stacked control. */
-  .bpe-gate-depth, .bpe-gate-logging, .bpe-gate-coring, .bpe-pair, .bpe-trio,
-  .bpe-formation-envelope, .bpe-pay-row, .bpe-flow-grid { grid-template-columns: minmax(0, 1fr); }
-  .bpe-pay-row { padding-bottom: var(--space-3); }
-  .bpe-detail-controls { flex-wrap: wrap; margin-left: 0; }
-  .bpe-approval-row { justify-content: stretch; flex-direction: column; }
-  .bpe-approval-row button { width: 100%; }
   .repeatable-heading { align-items: flex-start; flex-direction: column; }
   .crossplot-filters { grid-template-columns: 1fr 1fr; }
   .portfolio-panel { overflow-x: auto; }
@@ -2824,8 +2795,10 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 /* The page's one back control, above the shell (the house .back-to-board
    chrome; only the standoff below it is this page's own). */
 #bpe-detail-view .back-to-board { margin-bottom: var(--space-3); }
-/* The rail's stage eyebrow, under the well name. */
-.bpe-rail-eyebrow {
+/* The rail's stage eyebrow, under the well name. Scoped to .rail-head: the
+   house's own `.rail-head p` (a bare subtitle) would otherwise outrank a lone
+   class and repaint this faint gray at the wrong size. */
+.rail-head .bpe-rail-eyebrow {
   color: var(--asas-blue);
   font-family: var(--font-display);
   font-size: var(--text-xs);
@@ -2885,13 +2858,6 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .bpe-branch-note, .bpe-external-link { margin: var(--space-3) 0; padding: var(--space-3); border-left: 3px solid var(--warning-500); background: var(--warning-100); color: var(--warning-700); font-size: var(--text-sm); }
 .bpe-external-link a { color: var(--asas-blue); font-weight: 700; }
 
-/* The Well Summary's tracked-item list. The rows are the board's own dot +
-   label pair; in a ~270px rail they WRAP rather than truncate, which is the
-   one place this list differs from the card's. */
-.ls-items { display: flex; flex-direction: column; gap: 6px; }
-.ls-items .lead-item { align-items: flex-start; white-space: normal; }
-.ls-items .lead-dot { margin-top: 1px; }
-
 .bpe-formation-block, .bpe-flow-stage { margin-bottom: var(--space-4); padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-sunken); }
 .bpe-formation-block > header, .bpe-flow-stage > header, .bpe-pay-heading, .bpe-flow-heading { display: flex; align-items: end; gap: var(--space-2); }
 .bpe-formation-block > header > label { width: min(280px, calc(100% - 42px)); }
@@ -2912,3 +2878,82 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .bpe-flow-stage h4 { margin: 0; color: var(--ink-800); font-size: var(--text-base); }
 .bpe-flow-grid { display: grid; grid-template-columns: repeat(5, minmax(105px, 1fr)); gap: var(--space-3); }
 .bpe-detail-loading { min-height: 300px; display: grid; place-items: center; color: var(--text-muted); }
+
+/* -------------------------------------------------------------------------
+   The band's two rows. Both are maturation components carrying one more
+   control than the maturation board has, and BOTH rules must sit after those
+   components' base rules -- which is why they are here rather than up in the
+   filter/KPI sections.
+   ------------------------------------------------------------------------- */
+/* FIVE filters and no Add New Lead control beside them, so this row takes the
+   band's first two thirds (leaving the last third to the KPIs, exactly as on
+   the maturation board) and grids five trigger tracks plus the Clear track. */
+.bpe-filter-row {
+  grid-column: 1 / 3;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
+}
+/* FOUR KPI groups in a third sized for three: the row WRAPS rather than
+   overflowing the band (every group is flex: none and cannot shrink), so the
+   OGIP tile drops to a second line under the donut. Its left border divided
+   the two number tiles when they shared a line; on a line of its own it would
+   divide nothing, so it goes with the layout that gave it meaning -- the same
+   reasoning the 420px rule applies to the maturation row. */
+.lead-kpi-row-bp {
+  flex-wrap: wrap;
+  /* Tight BETWEEN groups (the row is buying horizontal room), airier between
+     the two lines the wrap creates. */
+  gap: var(--space-3) var(--space-2);
+}
+.lead-kpi-row-bp .kpi-tile-ogip { padding-left: 0; border-left: 0; }
+/* The donut group: the ring already prints its own percentage, so the group
+   carries only the label -- in the same .kpi-label the tiles use, laid out the
+   same way (glyph-sized thing on the left, text beside it). */
+.kpi-donut-group { display: flex; flex: none; align-items: center; gap: var(--space-3); }
+
+/* The Well Summary's tracked-item list. The rows are the board's own dot +
+   label pair; in a ~270px rail they WRAP rather than truncate, which is the
+   one place this list differs from the card's. */
+.ls-items { display: flex; flex-direction: column; gap: 6px; }
+.ls-items .lead-item { align-items: flex-start; white-space: normal; }
+.ls-items .lead-dot { margin-top: 1px; }
+
+/* The rail's stage blocks never collapse here, so their heads are inert
+   <div>s: no pointer, and no hover feedback promising a press that does
+   nothing. The active block keeps its navy at rest AND on hover. */
+#bpe-detail-view .rail-stage-head { cursor: default; }
+#bpe-detail-view .rail-stage-head:hover { background: none; color: var(--text-muted); }
+#bpe-detail-view .rail-stage-lead.is-active .rail-stage-head:hover { color: var(--asas-navy); }
+
+/* =========================================================================
+   Business Plan Execution — responsive.
+
+   These blocks live at the END of the section, after every rule they override.
+   The house breakpoints (1100 / 640) sit far earlier in this file, and a
+   .bpe-* override placed up there loses to its own base rule down here on
+   source order alone -- silently, since the specificities match.
+   ========================================================================= */
+@media (max-width: 1100px) {
+  /* The band is one column here, so the filter row gives up its two-thirds
+     span -- spanning to a second line would conjure the column back. */
+  .bpe-filter-row { grid-column: auto; }
+  /* The detail shell is already single-column (house rule), but the two widest
+     form rows still out-measure it: the six-track Logging Program row and the
+     eight-track Pay Interval row each drop to a coarser grid. Everything else
+     fits the full-width editor and waits for 640. */
+  .bpe-gate-logging { grid-template-columns: repeat(3, minmax(120px, 1fr)); }
+  .bpe-pay-row { grid-template-columns: repeat(4, minmax(90px, 1fr)); }
+}
+@media (max-width: 640px) {
+  /* The filter row re-grids into a 2-column stack, mirroring what
+     .lead-filter-row does at this width. */
+  .bpe-filter-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* Every step form collapses to one column, the editor head's two controls
+     stack under the step title instead of squeezing it out of the row, and the
+     approval buttons take the full width like every other stacked control. */
+  .bpe-gate-depth, .bpe-gate-logging, .bpe-gate-coring, .bpe-pair, .bpe-trio,
+  .bpe-formation-envelope, .bpe-pay-row, .bpe-flow-grid { grid-template-columns: minmax(0, 1fr); }
+  .bpe-pay-row { padding-bottom: var(--space-3); }
+  .bpe-detail-controls { flex-wrap: wrap; margin-left: 0; }
+  .bpe-approval-row { justify-content: stretch; flex-direction: column; }
+  .bpe-approval-row button { width: 100%; }
+}

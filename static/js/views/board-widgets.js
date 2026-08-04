@@ -43,12 +43,18 @@ export function placeFilterMenu(trigger, menu) {
 // rendered into the markup) so a future caller can wire it into an id/
 // data-attribute without changing this signature; today's two boards don't
 // need it. Callers own the surrounding menu markup and the wrapping div.
+//
+// `ariaCaption` is the caption as it should be SPOKEN. The default lowercases
+// the caption, which reads right for ordinary words ("Filter by assignee") and
+// wrong for an initialism ("Filter by bp gate") -- such a caption passes its
+// own spelling instead.
 export function filterTriggerHtml(params) {
   var caption = params.caption;
   var label = params.label;
   var active = params.active;
+  var spoken = params.ariaCaption || caption.toLowerCase();
   return '<button type="button" class="lf-trigger' + (active ? ' is-active' : '') + '"' +
-    ' aria-haspopup="true" aria-expanded="false" aria-label="Filter by ' + esc(caption.toLowerCase()) + '">' +
+    ' aria-haspopup="true" aria-expanded="false" aria-label="Filter by ' + esc(spoken) + '">' +
     '<span class="lf-value">' + esc(label) + '</span>' +
     '<span class="lf-caret" aria-hidden="true">' + ICONS['chevron-down'] + '</span>' +
     '</button>';

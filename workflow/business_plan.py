@@ -776,6 +776,46 @@ def get_dashboard(session, filters=None):
     }
 
 
+def _detail_status(items):
+    """Roll one navigation entry's tracking items up into a single status.
+
+    A navigation DETAIL can own several tracking items -- Well Letters owns
+    three, Summary Slides owns two -- so its status is the same roll-up the
+    boards apply to a record: everything approved reads Completed, anything
+    waiting on a supervisor reads Pending Approval, and the rest reads In
+    Progress.  An entry with no items (there are none today) reads In Progress
+    rather than inheriting all()'s vacuous truth.
+    """
+    if items and all(item["status"] == "Completed" for item in items):
+        return "Completed"
+    if any(item["status"] == "Pending Approval" for item in items):
+        return "Pending Approval"
+    return "In Progress"
+
+
+def _navigation(effective):
+    """The detail page's step rail: every step of every stage, with its status.
+
+    The status travels WITH the entry because the rail tints each step by it;
+    deriving it in the client would mean a second copy of the roll-up rule
+    above, and the client has no per-step state for the stages it is not on.
+    """
+    groups = []
+    for stage in STAGES:
+        by_detail = {}
+        for item in effective["stages"][stage["key"]]:
+            by_detail.setdefault(item["detail_slug"], []).append(item)
+        groups.append({
+            "stage_key": stage["key"],
+            "stage_label": stage["label"],
+            "details": [
+                {"slug": slug, "label": label, "status": _detail_status(by_detail.get(slug, []))}
+                for slug, label, _task in stage["details"]
+            ],
+        })
+    return groups
+
+
 def get_detail(session, project_id, detail_slug):
     if detail_slug not in DETAILS:
         raise ValueError("Unknown Business Plan detail step.")
@@ -814,11 +854,7 @@ def get_detail(session, project_id, detail_slug):
         "sad_update_branch": effective["sad_update_branch"],
         "tracking": [dict(effective["states"][key], key=key) for key in state_keys],
         "stage_items": effective["stages"][detail["stage_key"]],
-        "navigation": [
-            {"stage_key": stage["key"], "stage_label": stage["label"],
-             "details": [{"slug": slug, "label": label} for slug, label, _task in stage["details"]]}
-            for stage in STAGES
-        ],
+        "navigation": _navigation(effective),
         "links": {
             "vsp": config.business_plan_vsp_url(),
             "structural_mtr": config.business_plan_structural_mtr_url(),
