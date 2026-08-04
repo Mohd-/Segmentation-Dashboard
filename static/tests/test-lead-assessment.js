@@ -25,7 +25,7 @@ import {
   workspaceMarkup, thicknessSectionMarkup, volumeSectionMarkup,
   structureSectionMarkup, piipSectionMarkup, earlierCommentsMarkup,
   isLeadAssessmentStep, leadAssessmentActive, renderLeadAssessment,
-  teardownLeadAssessment, readFormValues
+  teardownLeadAssessment, readFormValues, scheduleCalculation
 } from '../js/views/lead-assessment.js';
 
 // A calibrated pair for the conversion tests. Deliberately NOT the shipped
@@ -683,12 +683,14 @@ function jsonResponse(body) {
 }
 
 // Mount the page over a stubbed fetch. Returns the recorded calls so a test can
-// assert what the auto-run sent (and how often).
-function mountPage(fields, meta) {
+// assert what the auto-run sent (and how often). `respond` (optional) answers
+// /resource-assessment in place of the immediate stub -- returning a promise it
+// holds open is how a test decides WHEN the calculation lands.
+function mountPage(fields, meta, respond) {
   var calls = [];
   mockFetch(function (url, options) {
     calls.push({ url: url, body: options && options.body ? JSON.parse(options.body) : null });
-    if (url.indexOf('/resource-assessment') >= 0) return jsonResponse(RESULT);
+    if (url.indexOf('/resource-assessment') >= 0) return respond ? respond() : jsonResponse(RESULT);
     if (url.indexOf('/folders/') >= 0) return jsonResponse({ unc_path: '\\\\share\\WWWW\\WWWW-44\\Polygons__Surfaces' });
     if (url.indexOf('/dynamic-fields') >= 0) return jsonResponse({ ok: true });
     if (url.indexOf('/detail') >= 0) return jsonResponse({ project: {}, tasks: Store.tasks, fields: Store.allFields });
@@ -952,6 +954,167 @@ test('lead-assessment: teardown makes a late response a no-op', function () {
   // The debounce timer was cancelled, so nothing is even sent.
   return new Promise(function (resolve) { setTimeout(resolve, 900); }).then(function () {
     assert.equal(resourceCalls(mounted.calls).length, 0);
+  });
+});
+
+/* -------------------------------------------------------------------------
+   THE AUTO-SAVE REMOUNT
+
+   Every auto-run test above edits a grv_* key, which is why none of them ever
+   saw this: an edit to ANY key in KEY_OWNER is auto-saved, and the save
+   REMOUNTS this page (saveLeadAssessment -> refreshAfterRecordChange ->
+   loadComponent -> renderLeadAssessment). The calc debounce is 600ms and the
+   save debounce is 800ms, so the calculation is normally still in flight when
+   that happens. A scenario change touches no owned key, saves nothing and
+   never remounts — which is the ONLY reason it always produced a plot while an
+   area edit often did not.
+
+   These tests mount with an AREA pair (GRV empty, so the box model resolves)
+   and drive the remount explicitly.
+   ------------------------------------------------------------------------- */
+
+// GRV deliberately absent: with no GRV pair, resolveCalculation falls to the
+// box model, so the areas are what the auto-run reads.
+var AREA_LEAD = {
+  'Lead Assessment': {
+    p90_area_km2: '5.72', p10_area_km2: '19.09', reservoir_thickness_ft: '144.4',
+    polygons_surfaces_loaded: '1'
+  }
+};
+
+// What the shell does to this page after an auto-save: the refreshed /detail
+// carries the values that were just persisted, beginComponentLoad blanks
+// #dynamic-fields, and renderLeadAssessment mounts the SAME component again.
+// teardownLeadAssessment is NOT called — detail-form only tears down when a
+// DIFFERENT page mounts — which is exactly why a remount can race a run.
+function remountSameComponent(mounted) {
+  var body = mounted.root.querySelector('#dynamic-fields');
+  var stored = Object.assign({}, Store.allFields[PRIMARY_STEP] || {}, readFormValues(body));
+  Store.allFields = Object.assign({}, Store.allFields);
+  Store.allFields[PRIMARY_STEP] = stored;
+  body.innerHTML = '';
+  renderLeadAssessment(body, { onCopy: function () {} });
+  return body;
+}
+
+// Navigation to ANOTHER lead's Lead Assessment page: a different record, a
+// different task row, and no teardown in between (the same page is mounting).
+function remountOtherLead(mounted) {
+  var body = mounted.root.querySelector('#dynamic-fields');
+  Store.projectId = 8;
+  Store.tasks = LEAD_ASSESSMENT_STEPS.map(function (name, index) {
+    return { task_id: 200 + index, task_name: name, comments: '', priority: 'Medium', revision: 1,
+             stage_group: 'Lead Assessment', status: 'In Progress' };
+  });
+  Store.allFields = {};
+  body.innerHTML = '';
+  renderLeadAssessment(body, { onCopy: function () {} });
+  return body;
+}
+
+function plotImages(mounted) {
+  return mounted.root.querySelectorAll('.la-plot-slot img');
+}
+
+test('lead-assessment: an AREA edit drives the auto-run and lands its plot', function () {
+  var mounted = mountPage(AREA_LEAD);
+  userEdits(mounted, 'p90_area_km2', '6.25');
+  return waitFor(function () { return resourceCalls(mounted.calls).length > 0; }, 3000).then(function () {
+    assert.deepEqual(resourceCalls(mounted.calls)[0].body, {
+      scenario: DEFAULT_SCENARIO, method: 'Box Model',
+      area_p90_km2: 6.25, area_p10_km2: 19.09, thickness_p50_ft: 144.4
+    }, 'the box model runs on the areas, not on a GRV pair');
+    return waitFor(function () { return plotImages(mounted).length > 0; }, 3000);
+  }).then(function () {
+    assert.equal(plotImages(mounted)[0].getAttribute('src'), 'data:image/png;base64,GAS',
+      'and the returned figure is painted into the result block\'s plot slot');
+    teardownLeadAssessment();
+  });
+});
+
+test('lead-assessment: the auto-save REMOUNT keeps the plot the same edit just painted', function () {
+  var mounted = mountPage(AREA_LEAD);
+  userEdits(mounted, 'p90_area_km2', '6.25');
+  return waitFor(function () { return plotImages(mounted).length > 0; }, 3000).then(function () {
+    remountSameComponent(mounted);
+    // The fresh state is a fresh OBJECT, but it is the same lead's Lead
+    // Assessment: what the user can see must survive the reload.
+    assert.equal(plotImages(mounted).length, 1, 'the painted plot survives the remount');
+    assert.equal(plotImages(mounted)[0].getAttribute('src'), 'data:image/png;base64,GAS');
+    assert.equal(mounted.root.querySelector('.la-result-gas .la-result-box').textContent, '12.0',
+      'and so do the numbers it was computed with');
+    // The signature came across too, so re-touching the SAME value costs no
+    // second request — a remount must not make the page forget what it ran.
+    userEdits(mounted, 'p90_area_km2');
+    return settle(1200);
+  }).then(function () {
+    assert.equal(resourceCalls(mounted.calls).length, 1,
+      'the carried signature still short-circuits an unchanged re-run');
+    teardownLeadAssessment();
+  });
+});
+
+test('lead-assessment: a calculation that resolves AFTER the remount still paints', function () {
+  var release = null;
+  var mounted = mountPage(AREA_LEAD, null, function () {
+    return new Promise(function (resolve) { release = function () { resolve(jsonResponse(RESULT)); }; });
+  });
+  userEdits(mounted, 'p90_area_km2', '6.25');
+  return waitFor(function () { return resourceCalls(mounted.calls).length > 0 && !!release; }, 3000)
+    .then(function () {
+      // The save's reload wins the race — the common case, since the calc
+      // debounce is shorter than the save debounce.
+      remountSameComponent(mounted);
+      assert.equal(plotImages(mounted).length, 0, 'nothing has landed yet');
+      release();
+      // The answer belongs to the component, not to the render that asked for
+      // it, so the fresh mount is where it lands.
+      return waitFor(function () { return plotImages(mounted).length > 0; }, 3000);
+    }).then(function () {
+      assert.equal(plotImages(mounted)[0].getAttribute('src'), 'data:image/png;base64,GAS');
+      teardownLeadAssessment();
+    });
+});
+
+test('lead-assessment: a debounce armed BEFORE the remount still runs after it', function () {
+  var mounted = mountPage(AREA_LEAD);
+  // Inside the 600ms window: the timer is armed, the reload arrives first.
+  userEdits(mounted, 'p90_area_km2', '6.25');
+  remountSameComponent(mounted);
+  return waitFor(function () { return resourceCalls(mounted.calls).length > 0; }, 3000).then(function () {
+    assert.equal(resourceCalls(mounted.calls)[0].body.area_p90_km2, 6.25,
+      'the edit that armed the timer is still the edit that runs');
+    return waitFor(function () { return plotImages(mounted).length > 0; }, 3000);
+  }).then(function () {
+    teardownLeadAssessment();
+  });
+});
+
+/* KI-005 again, from the other side. Carrying userDirty across a remount is
+   only legitimate for the SAME component, because only there was the remount
+   caused by the user's own edit. Opening ANOTHER lead is a page VIEW, and a
+   view must still compute nothing and — above all — persist nothing. */
+test('lead-assessment: another lead\'s page starts CLEAN — no carried plots, no armed auto-run', function () {
+  var mounted = mountPage(AREA_LEAD);
+  userEdits(mounted, 'p90_area_km2', '6.25');
+  return waitFor(function () { return plotImages(mounted).length > 0; }, 3000).then(function () {
+    var before = resourceCalls(mounted.calls).length;
+    remountOtherLead(mounted);
+    assert.equal(plotImages(mounted).length, 0, 'the previous lead\'s figure does not follow it');
+    assert.equal(mounted.root.querySelector('.la-result-gas .la-result-box').textContent, '—',
+      'nor do its numbers');
+    // The interaction gate is shut: the auto-run persists, so a page the user
+    // has only LOOKED at may not fire even when asked to.
+    scheduleCalculation(0);
+    return settle(900).then(function () {
+      assert.equal(resourceCalls(mounted.calls).length, before,
+        'userDirty did not survive the switch — a view computes nothing');
+      assert.equal(fieldWriteCalls(mounted.calls).length,
+        fieldWriteCalls(mounted.calls).filter(function (call) {
+          return call.url.indexOf('/tasks/100/') >= 0;
+        }).length, 'and nothing was written onto the lead just opened');
+      teardownLeadAssessment();
+    });
   });
 });
 
