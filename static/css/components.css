@@ -655,6 +655,32 @@
   color: var(--asas-navy);
   letter-spacing: .01em;
 }
+/* Card 3F. The Pre-Drilling column's own "BP Gate" switch. It sits between the
+   title and the count, reads as a pressed/unpressed pill, and never carries
+   its state in colour alone -- aria-checked is the accessible truth and the
+   border weight is the visible one. */
+.lead-column-toggle {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 10px;
+  background: none;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: .02em;
+  cursor: pointer;
+}
+.lead-column-toggle:hover { color: var(--asas-navy); border-color: var(--asas-navy); background: none; }
+.lead-column-toggle[aria-checked="true"] {
+  border-color: var(--asas-blue);
+  background: var(--brand-100);
+  color: var(--brand-700);
+}
+
 .lead-column-count {
   flex: 0 0 auto;
   min-width: 28px;

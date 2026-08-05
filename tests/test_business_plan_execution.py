@@ -90,7 +90,11 @@ def _history(client, project_id, action_type=None):
         conn.close()
 
 
-def test_dashboard_has_approved_filters_steps_and_six_item_stage(client):
+def test_dashboard_has_approved_filters_and_six_item_stage(client):
+    """Card 3F retired the global step dropdown, so `steps` is gone from the
+    options block. It was never a step filter in spirit -- its default value
+    silently narrowed the whole board to Pre-Drilling wells, which is now the
+    Pre-Drilling column's own BP Gate toggle instead."""
     project_id = _bp_project(client)
     response = client.get(f"/api/business-plan/dashboard?year={date.today().year}")
     assert response.status_code == 200
@@ -98,12 +102,7 @@ def test_dashboard_has_approved_filters_steps_and_six_item_stage(client):
     assert body["options"]["statuses"] == [
         "All Status", "Completed", "Pending Approval", "In Progress"]
     assert body["options"]["years"] == list(range(1999, 2036))
-    assert [step["label"] for step in body["options"]["steps"]][1:] == [
-        "Business Plan Gate", "Well Proposal", "Site Preparation", "Approval to Drill",
-        "GHEER: Geophysics", "GHEER: Geomechanics", "Quicklook Logs", "AAP",
-        "SAD Model", "Executive Summary", "URED Update", "Learnings", "Flowback",
-        "SAD Update", "Final Summary", "Final Logs", "MTR", "PDA & Booking",
-    ]
+    assert "steps" not in body["options"]
     well = next(row for row in body["wells"] if row["project_id"] == project_id)
     assert well["stage_label"] == "Pre-Drilling"
     assert len(well["items"]) == 6
@@ -791,3 +790,63 @@ def test_bpe_un_approving_actions_are_supervisor_only_at_the_route(client):
     reopened = _transition(client, project_id, "reopen")
     assert reopened.status_code == 403
     assert "supervisor" in reopened.get_json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Card 3F -- what the three filters now mean
+# ---------------------------------------------------------------------------
+
+def test_status_completed_asks_about_all_eighteen_items_not_the_current_stage(client):
+    """A fresh well has exactly one item complete (the system marks PDA &
+    Booking gray on a Development classification and so on), and it is nowhere
+    near done -- so Status = Completed must not match it.
+
+    The old rule tested `any` over the current stage's SIX items, so a well
+    with one finished item in its current stage matched while seventeen others
+    were still open. This asserts the well is invisible under Completed while
+    remaining visible under All Status, which is the difference the card asks
+    for without pinning which particular items are done.
+    """
+    project_id = _bp_project(client, "BPE-COMPLETED")
+    year = date.today().year
+
+    everything = client.get(f"/api/business-plan/dashboard?year={year}").get_json()
+    assert project_id in {row["project_id"] for row in everything["wells"]}
+
+    completed = client.get(
+        f"/api/business-plan/dashboard?year={year}&status=Completed").get_json()
+    assert project_id not in {row["project_id"] for row in completed["wells"]}
+
+    well = next(row for row in everything["wells"] if row["project_id"] == project_id)
+    assert len(well["all_states"]) == 18, "all eighteen items are on the payload"
+    assert not all(item["status"] == "Completed" for item in well["all_states"].values())
+
+
+def test_all_years_shows_wells_from_every_year_at_once(client):
+    """The year filter defaults to the current year and always did. "All Years"
+    is a real option rather than a cleared filter, so it travels as the literal
+    `all` and the year comparison is skipped entirely."""
+    near = _bp_project(client, "BPE-YEAR-NEAR", year=date.today().year)
+    far = _bp_project(client, "BPE-YEAR-FAR", year=2033)
+
+    this_year = client.get(
+        f"/api/business-plan/dashboard?year={date.today().year}").get_json()
+    visible = {row["project_id"] for row in this_year["wells"]}
+    assert near in visible and far not in visible
+
+    every_year = client.get("/api/business-plan/dashboard?year=all").get_json()
+    visible = {row["project_id"] for row in every_year["wells"]}
+    assert near in visible and far in visible
+
+
+def test_a_well_reports_whether_it_is_still_at_the_business_plan_gate(client):
+    """The Pre-Drilling column's BP Gate toggle filters on this flag, so it is
+    computed server-side from the gate item's effective status rather than
+    re-derived in the browser."""
+    project_id = _bp_project(client, "BPE-GATE")
+    body = client.get(
+        f"/api/business-plan/dashboard?year={date.today().year}").get_json()
+    well = next(row for row in body["wells"] if row["project_id"] == project_id)
+    assert well["at_business_plan_gate"] is True
+    assert well["at_business_plan_gate"] == (
+        well["all_states"]["business-plan-gate"]["status"] != "Completed")

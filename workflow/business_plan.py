@@ -39,6 +39,14 @@ CLASSIFICATIONS = ("Development", "Appraisal", "Exploration")
 LOGGING_PROGRAMS = ("Standard A", "Standard B", "Optimized Standard B")
 PRIORITIES = ("Low", "Medium", "High")
 
+# Card 3F. The Business Plan Year filter's "show every year" sentinel. It is a
+# string on purpose: the year filter's other values arrive from the query
+# string as strings too, so there is one comparison and no int/str ambiguity.
+ALL_YEARS = "all"
+
+# The tracking item the Pre-Drilling column's own "BP Gate" toggle is about.
+GATE_ITEM_KEY = "business-plan-gate"
+
 
 STAGES = (
     {
@@ -118,11 +126,6 @@ DETAILS = {
 
 TASK_NAMES = tuple({task for stage in STAGES for _slug, _label, task in stage["details"]}
                    | {"Site Preparation", "Approval To Drill"})
-
-STEP_OPTIONS = tuple(
-    {"value": key, "label": label, "stage_key": stage["key"]}
-    for stage in STAGES for key, label, _detail in stage["items"]
-)
 
 ITEM_TASK_NAMES = {
     key: task_name
@@ -647,6 +650,11 @@ def _well_projection(project, tasks, fields, formations, effective):
         "completed_count": completed,
         "progress_percent": _round_whole(100 * completed / 6),
         "all_states": effective["states"],
+        # Card 3F. What the Pre-Drilling column's "BP Gate" toggle asks: is this
+        # well still sitting at the gate? Computed here so the client filters on
+        # a stated fact rather than re-deriving it from the item list.
+        "at_business_plan_gate":
+            effective["states"][GATE_ITEM_KEY]["status"] != "Completed",
         "actual_drilling_days": _number(effective["values"].get("bp_gate_actual_drilling_days")),
         "gate_approved": (tasks.get("BP Execution Gate") or {}).get("status") == "Approved",
         "successful": effective["fluid"]["successful"],
@@ -685,19 +693,27 @@ def _matches_filters(well, filters):
     field = filters.get("field", "All Fields")
     if field != "All Fields" and well["field"] != field:
         return False
-    try:
-        if int(well.get("business_plan_year") or 0) != int(filters["year"]):
+    if str(filters.get("year") or "") != ALL_YEARS:
+        try:
+            if int(well.get("business_plan_year") or 0) != int(filters["year"]):
+                return False
+        except (TypeError, ValueError):
             return False
-    except (TypeError, ValueError):
-        return False
-    step = filters.get("step", "business-plan-gate")
     status = filters.get("status", "All Status")
-    current_keys = {item["key"] for item in well["items"]}
-    if step != "all" and step not in current_keys:
-        return False
-    if status != "All Status":
-        candidates = well["items"] if step == "all" else [well["all_states"][step]]
-        if not any(item["status"] == status for item in candidates):
+    if status == "Completed":
+        # Card 3F. "Completed" means the WELL is done -- all eighteen tracking
+        # items effectively complete, however each one got there (a person, a
+        # supervisor's approval, a system rule, or not-applicable, which
+        # _effective_state has already folded into the status). It used to test
+        # `any` over the CURRENT STAGE's six items, so a well with one finished
+        # item in Post-Testing matched while fifteen items were still open.
+        if not all(item["status"] == "Completed" for item in well["all_states"].values()):
+            return False
+    elif status != "All Status":
+        # Pending Approval and In Progress stay a question about where the well
+        # is RIGHT NOW, which is its current stage -- "this well is waiting on
+        # someone" is not a claim about all eighteen items.
+        if not any(item["status"] == status for item in well["items"]):
             return False
     return True
 
@@ -708,7 +724,6 @@ def get_dashboard(session, filters=None):
     filters.setdefault("field", "All Fields")
     filters.setdefault("status", "All Status")
     filters.setdefault("year", date.today().year)
-    filters.setdefault("step", "business-plan-gate")
 
     projects = db.fetch_all(session, """
         SELECT * FROM projects
@@ -769,9 +784,12 @@ def get_dashboard(session, filters=None):
             "fields": ["All Fields"] + sorted(fields_set, key=str.lower),
             "statuses": ["All Status", "Completed", "Pending Approval", "In Progress"],
             "years": list(range(config.BPE_YEAR_MIN, config.BPE_YEAR_MAX + 1)),
-            "steps": [{"value": "all", "label": "All Steps"}] + list(STEP_OPTIONS),
         },
-        "scope": "current-stage tracking items",
+        # Card 3F retired the global step dropdown, so the population is no
+        # longer scoped to one tracking item. Status = Completed now asks about
+        # all eighteen; the other two statuses still ask about the current
+        # stage, which is where the well actually is.
+        "scope": "whole well for Completed, current stage otherwise",
         "out_of_range_years": sorted(out_of_range_years),
         "stage_counts": stage_counts,
         "kpis": {

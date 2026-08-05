@@ -74,33 +74,45 @@ function setSelect(id, values, selected) {
   element.value = String(selected);
 }
 
+// Card 3F. "All Years" is a real option, not a cleared filter, so it lives in
+// the same list as the years themselves and travels to the server as the
+// literal `all` (workflow/business_plan.py ALL_YEARS). The 1999-2035 span is
+// config.BPE_YEAR_MIN/MAX; `years` arrives from the dashboard payload, and the
+// hardcoded span is only the pre-first-fetch fallback.
+var ALL_YEARS = 'all';
+
+function yearOptions(years) {
+  var list = years && years.length ? years : (function () {
+    var span = [];
+    for (var year = 1999; year <= 2035; year += 1) span.push(year);
+    return span;
+  }());
+  return [{ value: ALL_YEARS, label: 'All Years' }].concat(list.map(function (year) {
+    return { value: String(year), label: String(year) };
+  }));
+}
+
 function currentFilters() {
   return {
     assignee: (byId('bp-assignee-filter') && byId('bp-assignee-filter').value) || 'All Assignees',
     field: (byId('bp-field-filter') && byId('bp-field-filter').value) || 'All Fields',
     status: (byId('bp-status-filter') && byId('bp-status-filter').value) || 'All Status',
-    year: (byId('bp-year-filter') && byId('bp-year-filter').value) || String(new Date().getFullYear()),
-    step: (byId('bp-step-filter') && byId('bp-step-filter').value) || 'business-plan-gate'
+    year: (byId('bp-year-filter') && byId('bp-year-filter').value) || String(new Date().getFullYear())
   };
 }
 
 function initialize() {
   if (state.initialized) return;
   state.initialized = true;
-  var years = [];
-  for (var year = 1999; year <= 2035; year += 1) years.push(String(year));
+  var years = yearOptions();
   setSelect('bp-assignee-filter', ['All Assignees', 'Unassigned'], 'All Assignees');
   setSelect('bp-field-filter', ['All Fields'], 'All Fields');
   setSelect('bp-status-filter', ['All Status', 'Completed', 'Pending Approval', 'In Progress'], 'All Status');
   setSelect('bp-year-filter', years, String(new Date().getFullYear()));
-  setSelect('bp-step-filter', [
-    { value: 'all', label: 'All Steps' },
-    { value: 'business-plan-gate', label: 'Business Plan Gate' }
-  ], 'business-plan-gate');
-  // Card BP1: this module owns all five filters -- populating them (above)
-  // AND binding their change handler, so there is exactly one fill and one
+  // Card BP1: this module owns the filters -- populating them (above) AND
+  // binding their change handler, so there is exactly one fill and one
   // listener per select, never main.js's boot() racing this initialize().
-  ['bp-assignee-filter', 'bp-field-filter', 'bp-status-filter', 'bp-year-filter', 'bp-step-filter'].forEach(function (id) {
+  ['bp-assignee-filter', 'bp-field-filter', 'bp-status-filter', 'bp-year-filter'].forEach(function (id) {
     var element = byId(id);
     if (element) element.addEventListener('change', refreshBusinessPlan);
   });
@@ -132,15 +144,6 @@ function initialize() {
 // syncBusinessPlanPromotion() resets to (Year defaults to the current year
 // instead, see defaultValue).
 var BP_FILTERS = [
-  // An initialism has to keep its spelling in the spoken label, or the trigger
-  // announces itself as "Filter by bp gate".
-  // `captionAtRest` is the maturation row's own rule (lead-filters triggerLabel):
-  // a filter sitting on its default shows the CAPTION, because the option text
-  // repeats it. Only this filter qualifies -- "All Assignees" still says more
-  // than "Assignee", and the Year's default is a real selection, not the
-  // absence of one.
-  { key: 'step', id: 'bp-step-filter', caption: 'BP Gate', ariaCaption: 'BP Gate',
-    fallback: 'business-plan-gate', captionAtRest: true },
   { key: 'field', id: 'bp-field-filter', caption: 'Field', fallback: 'All Fields' },
   { key: 'status', id: 'bp-status-filter', caption: 'Status', fallback: 'All Status' },
   { key: 'year', id: 'bp-year-filter', caption: 'Year', fallback: null },
@@ -453,8 +456,7 @@ export function syncBusinessPlanPromotion(year) {
       'bp-assignee-filter': 'All Assignees',
       'bp-field-filter': 'All Fields',
       'bp-status-filter': 'All Status',
-      'bp-year-filter': String(selectedYear),
-      'bp-step-filter': 'business-plan-gate'
+      'bp-year-filter': String(selectedYear)
     };
     Object.keys(defaults).forEach(function (id) {
       var element = byId(id);
@@ -469,8 +471,7 @@ function renderDashboard(payload, selected) {
   setSelect('bp-assignee-filter', options.assignees || [], selected.assignee);
   setSelect('bp-field-filter', options.fields || [], selected.field);
   setSelect('bp-status-filter', options.statuses || [], selected.status);
-  setSelect('bp-year-filter', (options.years || []).map(String), String(selected.year));
-  setSelect('bp-step-filter', options.steps || [], selected.step);
+  setSelect('bp-year-filter', yearOptions(options.years), String(selected.year));
   // The triggers read their labels off the selects, so they are redrawn AFTER
   // the repopulation above -- never before it.
   renderFilterTriggers();
@@ -592,11 +593,36 @@ function wellCard(well) {
     '</button>';
 }
 
+// Card 3F. The old global "BP Gate" dropdown was the Step filter wearing a
+// misleading caption: its default value quietly restricted the WHOLE board to
+// Pre-Drilling wells, so Post-Drilling and Post-Testing looked empty until you
+// found "All Steps". This replaces it with a toggle that says what it does and
+// reaches only the column it sits in -- Pre-Drilling narrowed to the wells
+// still at the gate. Selected by default, so the board opens on the same
+// working set people are used to, but the other two columns are now always
+// fully populated and the KPIs never move.
+//
+// State is module-level and client-side: the payload is unfiltered by it, so
+// toggling repaints from data already in hand without a round trip.
+var gateOnly = true;
+
+function stageRows(wells, stageKey) {
+  var rows = wells.filter(function (well) { return well.stage_key === stageKey; });
+  if (stageKey !== 'pre_drilling' || !gateOnly) return rows;
+  return rows.filter(function (well) { return well.at_business_plan_gate; });
+}
+
+function gateToggleHtml() {
+  return '<button type="button" id="bpe-gate-toggle" class="lead-column-toggle"' +
+    ' role="switch" aria-checked="' + (gateOnly ? 'true' : 'false') + '"' +
+    ' title="Show only wells still at the Business Plan Gate">BP Gate</button>';
+}
+
 function renderStageBoard(payload) {
   var wells = payload.wells || [];
   var board = byId('bp-pipeline');
   board.innerHTML = STAGE_META.map(function (stage) {
-    var rows = wells.filter(function (well) { return well.stage_key === stage.key; });
+    var rows = stageRows(wells, stage.key);
     var body = rows.length ? rows.map(wellCard).join('') :
       '<div class="pipeline-empty">No wells match these filters.</div>';
     // Plain navy headers, uniform across the three columns: the stage is named
@@ -605,11 +631,17 @@ function renderStageBoard(payload) {
       '<header>' +
         '<span class="lead-column-icon" aria-hidden="true">' + icon(stage.icon) + '</span>' +
         '<h3>' + esc(stage.label) + '</h3>' +
+        (stage.key === 'pre_drilling' ? gateToggleHtml() : '') +
         '<span class="lead-column-count">' + rows.length + '</span>' +
       '</header>' +
       '<div class="lead-cards">' + body + '</div>' +
       '</section>';
   }).join('');
+  var gateToggle = byId('bpe-gate-toggle');
+  if (gateToggle) gateToggle.addEventListener('click', function () {
+    gateOnly = !gateOnly;
+    renderStageBoard(payload);
+  });
   all('.lead-card', board).forEach(function (card) {
     card.addEventListener('click', function () {
       openBusinessPlanDetail(Number(card.dataset.projectId), card.dataset.step);

@@ -17,7 +17,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/css/base.css?v=10">
-  <link rel="stylesheet" href="/static/css/components.css?v=51">
+  <link rel="stylesheet" href="/static/css/components.css?v=52">
 </head>
 <body>
   <section id="login-page" class="login-page hidden">
@@ -147,7 +147,7 @@
              triggers and the same KPI tiles (views/board-widgets.js). -->
         <div class="lead-controls lead-controls-bp">
           <!-- THE STATE STORE, deliberately kept and deliberately hidden. The
-               five selects are the server contract (currentFilters() reads
+               four selects are the server contract (currentFilters() reads
                them, renderDashboard() repopulates them, syncBusinessPlanPromotion
                writes them); the visible triggers below only set a value and
                dispatch 'change' on the matching select. The IDS are
@@ -158,9 +158,10 @@
           <select id="bp-field-filter" hidden></select>
           <select id="bp-status-filter" hidden></select>
           <select id="bp-year-filter" hidden></select>
-          <select id="bp-step-filter" hidden></select>
-          <!-- BP Gate / Field / Status / Year / Assignee triggers + Clear,
-               built by views/business-plan.js renderFilterTriggers(). -->
+          <!-- Field / Status / Year / Assignee triggers + Clear, built by
+               views/business-plan.js renderFilterTriggers(). Card 3F retired
+               the global step dropdown; the Pre-Drilling column carries its
+               own "BP Gate" toggle instead. -->
           <div id="bpe-filter-row" class="lead-filter-row bpe-filter-row"></div>
           <!-- Rig Inventory / Rig Target / Success Rate donut / Total Mean
                OGIP, built from the SAME dashboard payload the board renders
@@ -495,6 +496,6 @@
     <img id="ra-lightbox-img" alt="">
   </dialog>
 
-  <script type="module" src="/static/js/main.js?v=49"></script>
+  <script type="module" src="/static/js/main.js?v=50"></script>
 </body>
 </html>
