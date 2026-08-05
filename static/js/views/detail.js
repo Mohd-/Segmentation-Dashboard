@@ -555,6 +555,19 @@ function blockForAr(map, ar) {
    value on the current step always supersedes the frozen/retired one. */
 var AREA_STEPS = ['Lead Assessment', 'Area Definition', 'Reservoir Area Definition'];
 var THICKNESS_STEPS = ['Lead Assessment', 'Thickness Estimation'];
+// Card 3E's Area delta. Both sides are stored as a P90/P10 PAIR with no mean
+// between them (schema.js RANGE_PAIRS), so there is no single "area" to
+// compare -- each bound is compared against its own counterpart. Ladders read
+// newest authority first, the same rule POST_DRILL_PIIP_SOURCES follows: SAD
+// Update supersedes SAD Model, and each merged step is followed by the retired
+// step it absorbed so wells written before the merge still resolve.
+var AREA_STEPS = ['Lead Assessment', 'Area Definition'];
+var SAD_AREA_SOURCES = [
+  ['SAD Update', 'sad_update_area_km2_'],
+  ['Resource Assessment Update', 'sad_update_area_km2_'],
+  ['SAD Model', 'sad_area_km2_'],
+  ['Post-Drilling Resource Assessment', 'sad_area_km2_']
+];
 var TRAP_STEPS = ['Trap and Seal CoS', 'Trap CoS'];
 var SEAL_STEPS = ['Trap and Seal CoS', 'Seal CoS'];
 
@@ -725,9 +738,13 @@ function formationPropertyRow(name, row) {
     var text = fmt2(value);
     return '<span>' + (text ? esc(text) + (suffix || '') : EM_DASH) + '</span>';
   };
+  // Card 3E: porosity and water saturation print as bare two-decimal numbers.
+  // The stored value is unchanged and unconverted -- only the % sign goes, and
+  // the column heading carries the measure. Pay thickness keeps its unit; it
+  // is a length, and the card's rule is about the two percentages.
   return '<div class="summary-props-row">' +
     '<span class="summary-props-name">' + esc(name) + '</span>' +
-    cell(row.pay_ft, ' ft') + cell(row.porosity_pct, '%') + cell(row.swt_pct, '%') +
+    cell(row.pay_ft, ' ft') + cell(row.porosity_pct) + cell(row.swt_pct) +
     '</div>';
 }
 
@@ -837,6 +854,15 @@ function pvaRow(label, predicted, actual) {
 function metricRow(label, value, note) {
   var small = note ? '<small>' + esc(note) + '</small>' : '';
   return '<div class="summary-metric"><div class="summary-metric-label"><span>' + esc(label) + '</span>' + small + '</div><div class="summary-metric-value">' + (isFilled(value) ? esc(fmtNum(value)) : '—') + '</div></div>';
+}
+
+// The same row, for values that are already display-ready strings -- a logging
+// program's name, or a number that has had its unit appended. metricRow runs
+// fmtNum over whatever it is handed, which would mangle both.
+function textRow(label, value) {
+  return '<div class="summary-metric"><div class="summary-metric-label"><span>' + esc(label) +
+    '</span></div><div class="summary-metric-value">' +
+    (isFilled(value) ? esc(value) : '—') + '</div></div>';
 }
 
 // A stat cluster: a quiet group label over a row of sub-label/value columns
@@ -1053,6 +1079,13 @@ export function renderRightPanel(tasks) {
   // wells show post-drill results per formation plus a predicted-vs-actual
   // comparison against the frozen lead snapshot.
   var bodyHtml;
+  // Which section folders the card lazily resolves after it is written. Only
+  // the LEAD card has a Folders fold; the well card's was removed (each step
+  // carries its own folder card instead). Declared here rather than inside the
+  // lead branch so the well card hands wireFolderLinks an empty list instead
+  // of `undefined` -- the latter threw, and the throw took wireSummarySettings
+  // down with it, leaving the well card's gear popover dead.
+  var folderSectionKeys = [];
   if (viewingBP) {
     // ---- Well card ----------------------------------------------------------
     var deduped = dedupeFormationsByPhase();
@@ -1078,7 +1111,35 @@ export function renderRightPanel(tasks) {
     // what the reservoir turned out to be. SARH Prognosis and Top SARH used to
     // sit here as two loose rows; they are predictions, and both already
     // appear -- against their actuals, which is the only way they mean
-    // anything -- inside the Simulated Vs Actual Delta fold below.
+    // anything -- inside the Simulated vs Actual Delta fold below.
+    // Card 3E's core well info, in the card's own order. Every row is
+    // conditional on having a value -- an unrecorded rig or logging program is
+    // absent, not a row of dashes, because the card asks for these "when
+    // values exist". All four read the Business Plan Gate, which is where the
+    // well's plan is agreed; the Actual figures win over the Calculated ones
+    // because this card reports what the well IS, not what it was budgeted at.
+    //
+    // "Drilling Rig / Gear" has NO field in this application -- there is no
+    // rig or gear input on any step -- so it can never render. The card
+    // forbids new fields, so this is reported rather than invented.
+    var gate = Store.allFields['BP Execution Gate'] || {};
+    var drillingDays = firstFilledValue([gate.bp_gate_actual_drilling_days,
+      gate.bp_gate_calculated_drilling_days]);
+    var totalDepth = firstFilledValue([gate.bp_gate_actual_td_ft_md,
+      gate.bp_gate_calculated_td_ft_md]);
+    var wellInfoRows = [
+      ['Drilling Days', isFilled(drillingDays) ? fmtNum(drillingDays) + ' days' : ''],
+      ['TD', isFilled(totalDepth) ? fmtNum(totalDepth) + ' ft MD' : ''],
+      // A logging program is a name, not a measurement, so it prints verbatim.
+      ['Logging Requirement', gate.bp_gate_logging_program]
+    ].filter(function (row) { return isFilled(row[1]); });
+    var wellInfoHtml = wellInfoRows.length
+      ? '<div class="summary-section"><div class="summary-section-title">Well Information</div>' +
+        '<div class="summary-metrics">' + wellInfoRows.map(function (row) {
+          return textRow(row[0], row[1]);
+        }).join('') + '</div></div>'
+      : '';
+
     var metricsHtml = '<div class="summary-metrics">' +
       statCluster('Gas (BCF)', [
         { label: 'P90', value: postDrillTrio.p90 },
@@ -1168,10 +1229,25 @@ export function renderRightPanel(tasks) {
     var predMean = '';
     for (var si = 0; si < LEAD_PIIP_SOURCES.length && !isFilled(predMean); si += 1) predMean = (snap[LEAD_PIIP_SOURCES[si][0]] || {})[LEAD_PIIP_SOURCES[si][1]] || '';
     for (var li = 0; li < LEAD_PIIP_SOURCES.length && !isFilled(predMean); li += 1) predMean = (Store.allFields[LEAD_PIIP_SOURCES[li][0]] || {})[LEAD_PIIP_SOURCES[li][1]] || '';
-    var pvaHtml = foldSection('pva', 'Simulated Vs Actual Delta',
+    // Card 3E adds Area. It is stored as a P90/P10 pair on BOTH sides with no
+    // mean between them, so there is no single area to compare: each bound
+    // meets its own counterpart through the existing delta mechanism. Reading
+    // one bound alone, or averaging the two into an invented mean, would both
+    // be claims the data does not make.
+    function areaBound(bound) {
+      var predicted = fieldFrom(snap, AREA_STEPS, 'p' + bound + '_area_km2');
+      if (!isFilled(predicted)) predicted = fieldFrom(Store.allFields, AREA_STEPS, 'p' + bound + '_area_km2');
+      var actual = '';
+      for (var ai = 0; ai < SAD_AREA_SOURCES.length && !isFilled(actual); ai += 1) {
+        actual = (Store.allFields[SAD_AREA_SOURCES[ai][0]] || {})[SAD_AREA_SOURCES[ai][1] + 'p' + bound] || '';
+      }
+      return pvaRow('Area P' + bound + ' (km²)', predicted, actual);
+    }
+    var pvaHtml = foldSection('pva', 'Simulated vs Actual Delta',
       '<div class="summary-pva-head-row"><span class="summary-pva-label"></span><span class="summary-pva-cell summary-pva-colhead">Predicted</span><span class="summary-pva-cell summary-pva-colhead">Actual</span><span class="summary-pva-delta"></span></div>' +
       pvaRow('Top SARH', prognosis, topSarh) +
       pvaRow('Thickness (ft)', predThickness, sarh ? sarh.thickness_ft : '') +
+      areaBound('90') + areaBound('10') +
       pvaRow('Mean (BCF)', predMean, meanPostDrill));
 
     // Lead Summary: the same card the lead phase shows, over the frozen
@@ -1186,19 +1262,19 @@ export function renderRightPanel(tasks) {
     var leadHtml = foldSection('lead', 'Lead Summary',
       leadMetricsHtml(leadFieldSource(), LEAD_PIIP_SOURCES) + capturedNote);
 
-    // The well card ends here: TWO folds, Simulated Vs Actual Delta and Lead
+    // The well card ends here: TWO folds, Simulated vs Actual Delta and Lead
     // Summary. The Folders fold is deliberately gone -- every step still
     // carries its own shared-folder card (renderComponentFolder in
     // detail-form.js), which is where a folder link is actually wanted while
     // working a step.
-    // Order: what came out of the well (volumes, then how it flowed), then
-    // what the rock is, then the two folds.
-    bodyHtml = metricsHtml + flowbackHtml + reservoirsHtml + pvaHtml + leadHtml;
+    // Order is Card 3E's own: the well's core information, then Gas, then how
+    // it flowed, then what the rock turned out to be, then the two folds.
+    bodyHtml = wellInfoHtml + metricsHtml + flowbackHtml + reservoirsHtml + pvaHtml + leadHtml;
   } else {
     // ---- Lead card ----------------------------------------------------------
     // Res CoS is the primary first-row percent; its "Block · AR n" reference
     // rides along as the cluster's quiet context line (no bulky <small> label).
-    var folderSectionKeys = ['lead'];
+    folderSectionKeys = ['lead'];
     var foldersFoldHtml = foldSection('folders', 'Folders', foldersHtml(folderSectionKeys));
     bodyHtml = leadMetricsHtml(Store.allFields, LATEST_PIIP_SOURCES) + foldersFoldHtml;
   }

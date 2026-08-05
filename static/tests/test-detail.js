@@ -7,7 +7,7 @@
 // Low → Medium → High → Low through PATCH /api/projects/<id>/priority;
 // everyone else sees a static, disabled chip.
 import { test, assert, fixture, mockFetch } from './harness.js';
-import { renderLeadPriorityChip, cycleLeadPriorityChip, nextLeadPriority, fmt2 } from '../js/views/detail.js';
+import { renderLeadPriorityChip, cycleLeadPriorityChip, nextLeadPriority, fmt2, renderRightPanel } from '../js/views/detail.js';
 import { Store } from '../js/state.js';
 
 // The chip exactly as index.html ships it (hidden until a record renders).
@@ -152,4 +152,144 @@ test('detail fmt2 leaves blanks and non-numbers to the caller', function () {
   assert.equal(fmt2(null), '');
   assert.equal(fmt2(undefined), '');
   assert.equal(fmt2('n/a'), 'n/a', 'text passes through untouched rather than becoming NaN');
+});
+
+/* ---------------------------------------------------------------------------
+   Card 3E -- the Well Summary's content contract
+   ---------------------------------------------------------------------------
+   These drive renderRightPanel over a Store shaped like a drilled BP well, so
+   they pin what the card SHOWS rather than how any one helper formats. */
+
+function mountWellCard(fields, leadSnapshot) {
+  var host = fixture(
+    '<div id="summary-card-head" class="hidden"><h3 id="summary-title"></h3>' +
+    '<button id="summary-settings-toggle"></button></div>' +
+    '<div id="lead-summary"></div>');
+  Store.user = { name: 'Supervisor', role: 'supervisor' };
+  Store.projectId = 42;
+  Store.pipeline = 'bp';
+  Store.project = { project_id: 42, project_name: 'MDFT-9', pipeline_type: 'bp',
+    business_plan_enabled: 1, business_plan_year: 2027, priority: 'Medium' };
+  Store.allFields = fields || {};
+  Store.leadSummary = leadSnapshot ? { fields: leadSnapshot } : null;
+  Store.overview = {};
+  renderRightPanel([{ status: 'Approved' }, { status: 'In Progress' }]);
+  return host;
+}
+
+function foldTitles(host) {
+  return Array.prototype.map.call(host.querySelectorAll('.summary-fold-title'),
+    function (element) { return element.textContent; });
+}
+function sectionTitles(host) {
+  return Array.prototype.map.call(host.querySelectorAll('.summary-section-title'),
+    function (element) { return element.textContent; });
+}
+function metricPairs(host, sectionTitle) {
+  var section = Array.prototype.filter.call(host.querySelectorAll('.summary-section'),
+    function (element) {
+      var title = element.querySelector('.summary-section-title');
+      return title && title.textContent === sectionTitle;
+    })[0];
+  if (!section) return null;
+  return Array.prototype.map.call(section.querySelectorAll('.summary-metric'), function (row) {
+    return [row.querySelector('.summary-metric-label span').textContent,
+      row.querySelector('.summary-metric-value').textContent];
+  });
+}
+
+test('detail the well card shows core well information from the Business Plan Gate', function () {
+  var host = mountWellCard({
+    'BP Execution Gate': {
+      bp_gate_actual_drilling_days: '31',
+      bp_gate_calculated_drilling_days: '28',
+      bp_gate_actual_td_ft_md: '12450',
+      bp_gate_logging_program: 'Optimized Standard B'
+    }
+  });
+  // ACTUAL beats CALCULATED: the card reports what the well is, not what it
+  // was budgeted at.
+  assert.deepEqual(metricPairs(host, 'Well Information'), [
+    ['Drilling Days', '31 days'],
+    ['TD', '12450 ft MD'],
+    ['Logging Requirement', 'Optimized Standard B']
+  ]);
+  // It leads the card, before Gas.
+  assert.equal(sectionTitles(host)[0], 'Well Information');
+});
+
+// The card asks for these rows "when values exist" -- so nothing entered at
+// the gate means no section at all, not a section full of dashes.
+test('detail a well with nothing entered at the gate shows no Well Information', function () {
+  var host = mountWellCard({});
+  assert.equal(metricPairs(host, 'Well Information'), null);
+  assert.equal(sectionTitles(host).indexOf('Well Information'), -1);
+});
+
+test('detail only the core values that exist get a row', function () {
+  var host = mountWellCard({ 'BP Execution Gate': { bp_gate_logging_program: 'Standard A' } });
+  assert.deepEqual(metricPairs(host, 'Well Information'),
+    [['Logging Requirement', 'Standard A']]);
+});
+
+test('detail the well card carries exactly two folds, both collapsed on arrival', function () {
+  var host = mountWellCard({});
+  assert.deepEqual(foldTitles(host), ['Simulated vs Actual Delta', 'Lead Summary']);
+  Array.prototype.forEach.call(host.querySelectorAll('.summary-fold-head'), function (head) {
+    assert.equal(head.getAttribute('aria-expanded'), 'false');
+  });
+  Array.prototype.forEach.call(host.querySelectorAll('.summary-fold-body'), function (body) {
+    assert.ok(body.classList.contains('collapsed'));
+  });
+});
+
+test('detail the delta fold compares Area bound against matching bound', function () {
+  // Area is a P90/P10 PAIR on both sides with no mean between them, so each
+  // bound meets its own counterpart. Averaging them into a single "area" would
+  // invent a number the data does not carry.
+  var host = mountWellCard({
+    'Lead Assessment': { p90_area_km2: '4', p10_area_km2: '10' },
+    'SAD Model': { sad_area_km2_p90: '5', sad_area_km2_p10: '9' }
+  });
+  var rows = Array.prototype.map.call(host.querySelectorAll('.summary-pva-row'), function (row) {
+    return [row.querySelector('.summary-pva-label').textContent,
+      row.querySelectorAll('.summary-pva-cell')[0].textContent,
+      row.querySelectorAll('.summary-pva-cell')[1].textContent,
+      row.querySelector('.summary-pva-delta').textContent];
+  });
+  var area = rows.filter(function (row) { return row[0].indexOf('Area') === 0; });
+  assert.deepEqual(area, [
+    ['Area P90 (km²)', '4', '5', 'Δ +1'],
+    ['Area P10 (km²)', '10', '9', 'Δ -1']
+  ]);
+});
+
+test('detail SAD Update supersedes SAD Model as the actual area', function () {
+  var host = mountWellCard({
+    'Lead Assessment': { p90_area_km2: '4' },
+    'SAD Model': { sad_area_km2_p90: '5' },
+    'SAD Update': { sad_update_area_km2_p90: '7' }
+  });
+  var row = Array.prototype.filter.call(host.querySelectorAll('.summary-pva-row'), function (element) {
+    var label = element.querySelector('.summary-pva-label');
+    return label && label.textContent === 'Area P90 (km²)';
+  })[0];
+  assert.equal(row.querySelectorAll('.summary-pva-cell')[1].textContent, '7');
+});
+
+test('detail porosity and water saturation print bare, to two decimals', function () {
+  // Card 3E: no % sign and no unit conversion -- the stored value, rounded at
+  // presentation only. Pay thickness keeps its unit; it is a length.
+  var host = mountWellCard({
+    'Quicklook Logs': {},
+    formations: {}
+  });
+  Store.formations = [{ formation: 'SARH', phase: 'final', pay_ft: '60.5',
+    porosity_pct: '8.523', swt_pct: '35', thickness_ft: '120' }];
+  renderRightPanel([{ status: 'Approved' }]);
+  var cells = Array.prototype.map.call(
+    host.querySelectorAll('.summary-props-row:not(.summary-props-row-empty) span'),
+    function (element) { return element.textContent; });
+  assert.deepEqual(cells, ['SARH', '60.50 ft', '8.52', '35.00'],
+    'two decimals, no percent sign, no conversion');
 });
