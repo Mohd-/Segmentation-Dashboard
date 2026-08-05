@@ -137,9 +137,25 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   assert.equal(host.querySelector('.lead-filter[data-bp-filter="year"] .lf-value').textContent, String(currentYear));
   assert.equal(host.querySelector('.lead-filter[data-bp-filter="field"] .lf-trigger')
     .getAttribute('aria-label'), 'Filter by field');
+  // Visible left-to-right order is the BP_FILTERS array, NOT the hidden select
+  // order: the step filter leads the row and the assignee filter closes it.
+  assert.deepEqual(
+    Array.prototype.map.call(host.querySelectorAll('#bpe-filter-row .lead-filter'),
+      function (group) { return group.getAttribute('data-bp-filter'); }),
+    ['step', 'field', 'status', 'year', 'assignee']);
   assert.equal(host.querySelectorAll('.lead-column').length, 3);
   assert.equal(host.querySelectorAll('.lead-card').length, 1);
   assert.equal(host.querySelectorAll('.lead-card .lead-dot').length, 6);
+  // A step the workflow closed on the user's behalf (source 'system') keeps
+  // the check glyph but drops the green, and says so when read aloud.
+  var systemDots = host.querySelectorAll('.lead-card .lead-dot-completed-system');
+  assert.equal(systemDots.length, 1, 'exactly the one system-completed item is muted');
+  assert.equal(systemDots[0].getAttribute('aria-label'), 'Completed automatically');
+  assert.equal(systemDots[0].getAttribute('title'), 'Well Proposal — Completed automatically');
+  assert.ok(systemDots[0].classList.contains('lead-dot-completed'),
+    'it is still a Completed dot -- the muting is an extra class, not a different state');
+  // Every other completed dot stays the ordinary green one.
+  assert.equal(host.querySelectorAll('.lead-card .lead-dot-completed').length, 1);
   assert.equal(host.querySelectorAll('#bpe-kpis .kpi-tile').length, 3);
   assert.equal(host.querySelectorAll('#bpe-kpis .kpi-donut').length, 1);
   assert.equal(host.querySelector('#bpe-kpis').textContent.indexOf('40/80 BCF') >= 0, true);
@@ -195,6 +211,15 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   assert.equal(host.querySelector('#bpe-back').textContent.trim(), 'Back to Business Plan Execution');
   assert.ok(host.querySelector('.component-rail .rail-head > #bpe-back'),
     'the back control sits in the rail head, where the maturation detail keeps its own');
+  // Priority is a RECORD attribute: one click-to-cycle chip beside the well
+  // name (the maturation shell's exact placement), and no per-step dropdown.
+  var chip = host.querySelector('.rail-head .detail-title-row #bpe-priority-chip');
+  assert.ok(chip, 'the priority chip sits beside the record name');
+  assert.equal(chip.textContent, 'High');
+  assert.ok(chip.classList.contains('priority-high'));
+  assert.equal(chip.disabled, false, 'a supervisor can cycle it');
+  assert.equal(host.querySelectorAll('#bpe-priority').length, 0,
+    'the old per-step priority select is gone');
   assert.equal(host.querySelectorAll('.bpe-nav-item').length, 14);
   assert.equal(host.querySelectorAll('.bpe-nav-item').length,
     new Set(Array.prototype.map.call(host.querySelectorAll('.bpe-nav-item'), function (button) { return button.textContent; })).size);

@@ -5,7 +5,8 @@ import { Store, currentRole, currentUserName } from '../state.js';
 import { confirmDialog } from '../dialog.js';
 import {
   placeFilterMenu, filterTriggerHtml, filterOptionHtml,
-  kpiDonutHtml, kpiTileHtml, personChipsHtml, leadItemHtml
+  kpiDonutHtml, kpiTileHtml, personChipsHtml, leadItemHtml,
+  priorityChipHtml, applyPriorityChip, nextLeadPriority
 } from './board-widgets.js';
 import { DROPDOWN_OPEN_EVENT } from './lead-filters.js';
 // The Well Summary wears the Lead Summary card's chrome, and borrows its one
@@ -15,7 +16,9 @@ import { EM_DASH } from './lead-summary.js';
 
 var FLUIDS = ['Gas', 'Gas over Water', 'Water Bearing', 'Dry Hole', 'Oil', 'Oil over Gas', 'Oil over Water'];
 var STAGE_META = [
-  { key: 'pre_drilling', label: 'Pre-Drilling', icon: 'clipboard-check' },
+  // The multi-step clipboard, so the BP stage reads apart from the maturation
+  // board's Lead Assessment clipboard at a glance.
+  { key: 'pre_drilling', label: 'Pre-Drilling', icon: 'clipboard-steps' },
   { key: 'post_drilling', label: 'Post-Drilling', icon: 'rig' },
   { key: 'post_testing', label: 'Post-Testing', icon: 'gauge' }
 ];
@@ -117,15 +120,15 @@ function initialize() {
    fixture without #bpe-filter-row keeps working untouched.
    ========================================================================= */
 
-// Left to right, matching the select order in index.html. `fallback` is the
-// select's default value, i.e. the one that reads as NO filter -- the same
-// literals currentFilters() falls back to and syncBusinessPlanPromotion()
-// resets to (Year defaults to the current year instead, see defaultValue).
+// THIS ARRAY IS THE VISIBLE LEFT-TO-RIGHT ORDER of the filter row; the hidden
+// selects in index.html keep their own (now different) order, which is purely
+// cosmetic because every lookup here goes through `data-bp-filter`. The step
+// filter leads and the assignee filter closes the row, per the requested swap.
+// `fallback` is the select's default value, i.e. the one that reads as NO
+// filter -- the same literals currentFilters() falls back to and
+// syncBusinessPlanPromotion() resets to (Year defaults to the current year
+// instead, see defaultValue).
 var BP_FILTERS = [
-  { key: 'assignee', id: 'bp-assignee-filter', caption: 'Assignee', fallback: 'All Assignees' },
-  { key: 'field', id: 'bp-field-filter', caption: 'Field', fallback: 'All Fields' },
-  { key: 'status', id: 'bp-status-filter', caption: 'Status', fallback: 'All Status' },
-  { key: 'year', id: 'bp-year-filter', caption: 'Year', fallback: null },
   // An initialism has to keep its spelling in the spoken label, or the trigger
   // announces itself as "Filter by bp gate".
   // `captionAtRest` is the maturation row's own rule (lead-filters triggerLabel):
@@ -134,7 +137,11 @@ var BP_FILTERS = [
   // than "Assignee", and the Year's default is a real selection, not the
   // absence of one.
   { key: 'step', id: 'bp-step-filter', caption: 'BP Gate', ariaCaption: 'BP Gate',
-    fallback: 'business-plan-gate', captionAtRest: true }
+    fallback: 'business-plan-gate', captionAtRest: true },
+  { key: 'field', id: 'bp-field-filter', caption: 'Field', fallback: 'All Fields' },
+  { key: 'status', id: 'bp-status-filter', caption: 'Status', fallback: 'All Status' },
+  { key: 'year', id: 'bp-year-filter', caption: 'Year', fallback: null },
+  { key: 'assignee', id: 'bp-assignee-filter', caption: 'Assignee', fallback: 'All Assignees' }
 ];
 
 // Status glyphs echo the card dots and the maturation menu exactly, so the
@@ -561,8 +568,11 @@ function firstIncompleteSlug(well) {
 // the dot's title always holds the full text.
 function trackedItemsHtml(well) {
   return ((well && well.items) || []).map(function (item) {
+    // item.source is the server's own 'system' | 'manual' | 'approval' marker
+    // (workflow/business_plan.py _state): a step the workflow closed on the
+    // user's behalf gets the muted check, not the green one.
     return '<span class="lead-item">' +
-      leadItemHtml(item.status, item.label) +
+      leadItemHtml(item.status, item.label, item.source) +
       '<span class="lead-item-label">' + esc(compact(item.label, 22)) + '</span>' +
       '</span>';
   }).join('');
@@ -1109,7 +1119,11 @@ function railMarkup() {
       // its own: first thing in the rail head, above the record name.
       '<button type="button" id="bpe-back" class="ghost back-to-board">' + icon('arrow-left') +
         ' <span>Back to Business Plan Execution</span></button>' +
-      '<div class="detail-title-row"><h3>' + esc(detail.project.project_name) + '</h3></div>' +
+      // The record's priority chip, in the maturation shell's exact position:
+      // beside the record name, one chip for the whole well (never per step).
+      '<div class="detail-title-row"><h3>' + esc(detail.project.project_name) + '</h3>' +
+        priorityChipHtml('bpe-priority-chip', detail.project.priority,
+                         (detail.role || currentRole()) === 'supervisor') + '</div>' +
       '<p class="bpe-rail-eyebrow">' + esc(detail.detail.stage_label) + '</p>' +
     '</div>' +
     '<div class="component-list">' + detailNavMarkup() + '</div>' +
@@ -1121,17 +1135,16 @@ function assigneeOptions() {
   return [{ value: '', label: 'Not Assigned' }].concat(users.map(function (user) { return { value: user.name, label: user.name }; }));
 }
 
-// The editor head's two controls wear the maturation editor's compact select
-// chrome (.editor-assignee). They keep their captions -- there are TWO of them
-// here, and "Supervisor / High" side by side says nothing on its own.
+// The editor head's control wears the maturation editor's compact select
+// chrome (.editor-assignee). Assignee is the only control here: priority moved
+// to the click-to-cycle chip beside the record name, because it belongs to the
+// WELL and not to the step this editor is showing -- a per-step-looking
+// dropdown invited the reading that each step carries its own priority.
 function topControlsMarkup() {
   var role = state.detail.role || currentRole();
   return '<div class="bpe-detail-controls">' +
     '<label>Assignee<select id="bpe-assignee" class="editor-assignee" ' +
-    (role === 'employee' ? 'disabled' : '') + '>' + selectOptions(assigneeOptions(), state.detail.assignee) + '</select></label>' +
-    '<label>Priority<select id="bpe-priority" class="editor-assignee" ' +
-    (role !== 'supervisor' ? 'disabled' : '') + '>' +
-    selectOptions(['Low', 'Medium', 'High'], state.detail.project.priority) + '</select></label></div>';
+    (role === 'employee' ? 'disabled' : '') + '>' + selectOptions(assigneeOptions(), state.detail.assignee) + '</select></label></div>';
 }
 
 function editorMarkup() {
@@ -1184,7 +1197,7 @@ function summaryMarkup() {
     '<section class="ls-section"><div class="ls-items">' + items.map(function (item) {
       // The board's own dot vocabulary (views/board-widgets.js), so a step's
       // state reads the same on the card and in this panel.
-      return '<span class="lead-item">' + leadItemHtml(item.status, item.label) +
+      return '<span class="lead-item">' + leadItemHtml(item.status, item.label, item.source) +
         '<span class="lead-item-label">' + esc(item.label) + '</span></span>';
     }).join('') + '</div></section>' +
     '<div id="bpe-summary-menu" class="ls-menu hidden" role="menu" aria-labelledby="bpe-summary-gear">' +
@@ -1900,17 +1913,26 @@ function bindDetail() {
       context: context, rerender: true
     });
   });
-  var priority = byId('bpe-priority');
-  if (priority) priority.addEventListener('change', function () {
+  // The chip cycles Low -> Medium -> High -> Low, exactly as the maturation
+  // shell's does. It is rendered `disabled` for anyone but a supervisor, so
+  // the click can never fire for them.
+  var priorityChipEl = byId('bpe-priority-chip');
+  if (priorityChipEl) priorityChipEl.addEventListener('click', function () {
     var context = currentContext();
-    var selected = priority.value;
+    var selected = nextLeadPriority(state.detail.project.priority);
     queueCommandSave(function () {
       return API.projectPriority(context.projectId, { priority: selected, changed_by: currentUserName() });
     }, {
       context: context,
       merge: false,
       onSuccess: function () {
-        if (isCurrentContext(context)) state.detail.project.priority = selected;
+        if (!isCurrentContext(context)) return;
+        state.detail.project.priority = selected;
+        // Repaint in place: the chip is the only thing this change moves, and
+        // a full re-render would drop the focus ring off the button just
+        // clicked.
+        applyPriorityChip(byId('bpe-priority-chip'), selected,
+                          (state.detail.role || currentRole()) === 'supervisor');
       }
     });
   });

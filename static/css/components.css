@@ -715,6 +715,11 @@
    inherited fill="none" presentation attribute on the <svg>. */
 .lead-dot-completed circle { fill: var(--success-500); }
 .lead-dot-completed path { stroke: var(--white); }
+/* Completed BY THE SYSTEM: same check glyph, muted disc. Green is reserved for
+   work somebody did. Declared after the plain rule so it wins on the elements
+   that carry both classes. */
+.lead-dot-completed-system { color: var(--text-faint); }
+.lead-dot-completed-system circle { fill: var(--text-faint); }
 .lead-dot-pending { color: var(--warning-500); }
 .lead-dot-in-progress { color: var(--border-strong); }
 
@@ -1268,6 +1273,11 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .summary-popover-check input { width: auto; }
 .summary-popover-actions { display: flex; gap: var(--space-2); margin-top: var(--space-1); }
 .summary-popover-actions button { flex: 1; min-width: 0; padding: 8px 10px; font-size: var(--text-sm); }
+/* Announced-but-unbuilt exports: stacked (the labels are long), muted, and
+   visibly inert. Separated from the live actions by a hairline so nobody
+   reads a greyed row as "temporarily unavailable". */
+.summary-popover-soon { flex-direction: column; padding-top: var(--space-2); border-top: 1px solid var(--border); }
+.summary-popover-soon button[disabled] { color: var(--text-faint); text-align: left; cursor: not-allowed; opacity: 1; }
 
 /* =========================================================================
    Card 2A — the shared LEAD SUMMARY component (views/lead-summary.js)
@@ -1622,12 +1632,27 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .portfolio-table tbody tr { cursor: default; }
 .portfolio-table tbody tr:hover { background: var(--surface); }
 /* WS7 columns: 1 Well Name, 2 Field, 3 Seismic Block, 4 Classification,
-   5 BP Year, 6 Fluid, 7 Mean OGIP (numeric), 8 Total CoS (numeric). Column
-   widths/alignment key off nth-child. The numeric body cells right-align;
-   their headers keep the menu trigger's label-left/affix-right layout. */
+   5 BP Year, 6 Fluid, 7 Mean OGIP (numeric), 8 Total CoS (numeric),
+   9 Quadrant (derived). Column widths/alignment key off nth-child. The numeric
+   body cells right-align; their headers keep the menu trigger's
+   label-left/affix-right layout. */
 .portfolio-table th:nth-child(1), .portfolio-table td:nth-child(1) { min-width: 160px; }
 .portfolio-table th:nth-child(5), .portfolio-table td:nth-child(5) { width: 90px; }
 .portfolio-table td:nth-child(7), .portfolio-table td:nth-child(8) { text-align: right; white-space: nowrap; }
+
+/* Quadrant badge: the cross plot's four cutoff classes, brought out of the
+   dialog and onto the row. Icon + word, never icon alone -- the glyphs are a
+   scanning aid, not the message. Tinted per class so the column reads as four
+   bands, using the same semantic tokens the rest of the app uses for
+   good/attention/neutral. */
+.pf-quadrant-cell { white-space: nowrap; }
+.pf-quadrant { display: inline-flex; align-items: center; gap: 6px; font-size: var(--text-sm); font-weight: 700; }
+.pf-quadrant-icon { display: inline-flex; }
+.pf-quadrant-icon .lucide { width: 16px; height: 16px; }
+.pf-quadrant-superstar { color: var(--success-600, var(--success-500)); }
+.pf-quadrant-value-hunter { color: var(--brand-700); }
+.pf-quadrant-risk-taker { color: var(--warning-500); }
+.pf-quadrant-dog { color: var(--text-faint); }
 
 /* Column menu: clicking a column title opens a pop-over combining Sort (two
    directional options) and a type-appropriate Filter. The th is the
@@ -2142,10 +2167,12 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   align-self: center;
 }
 /* One line, always — a wrapped column head ("Thickness (ft)") pushes the
-   header row taller than its twin's and breaks the side-by-side alignment. */
-.la-col-head { text-align: center; white-space: nowrap; }
+   header row taller than its twin's and breaks the side-by-side alignment.
+   Left-aligned so the head sits over the first digit of the value below it:
+   every field input in the app reads from the left edge. */
+.la-col-head { text-align: left; white-space: nowrap; }
 .la-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.la-cell input { width: 100%; text-align: center; }
+.la-cell input { width: 100%; text-align: left; }
 
 /* A DERIVED input (the far side of a configured TWT<->thickness conversion)
    must not look like something you can type into: sunken ground, muted italic

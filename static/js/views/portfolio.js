@@ -9,9 +9,9 @@ import { openDetail } from './detail.js';
 // is a hoisted function declaration and only called from event handlers, same
 // as the existing detail → pipeline → portfolio chain.
 import { refreshAllBoards } from './pipeline.js';
-import { renderResourceBar, setCrossPlotRows } from './portfolio-analysis.js';
+import { renderResourceBar, setCrossPlotRows, quadrantOf, QUADRANT_LABELS } from './portfolio-analysis.js';
 
-// Exactly the 8 analysis columns, in this order. `filter` selects the
+// Exactly the 9 analysis columns, in this order. `filter` selects the
 // column-filter control rendered in the second thead row: 'text' = substring
 // input, 'multi' = distinct-value checklist popover (multi-select; BP Year's
 // discrete values fit this, layered over the toolbar's server-side year
@@ -36,8 +36,22 @@ var COLUMNS = [
   { key: 'year', label: 'BP Year', numeric: true, filter: 'multi' },
   { key: 'status', label: 'Status', numeric: false, filter: 'multi', options: STATUS_OPTIONS },
   { key: 'mean_ogip', label: 'Mean OGIP (BCF)', numeric: true, filter: 'range' },
-  { key: 'total_cos', label: 'Total CoS (%)', numeric: true, filter: 'range' }
+  { key: 'total_cos', label: 'Total CoS (%)', numeric: true, filter: 'range' },
+  // DERIVED, not a payload field: `derive` is the read used everywhere a
+  // column value is needed (filter, sort, cell), so the cross plot's four
+  // cutoff quadrants become a first-class table column without the server
+  // learning anything about them. A record missing either measure has no
+  // quadrant ('') and reads as a dash.
+  { key: 'quadrant', label: 'Quadrant', numeric: false, filter: 'multi',
+    options: QUADRANT_LABELS, derive: quadrantOf }
 ];
+
+// Every column read goes through here so a derived column behaves exactly
+// like a stored one in filtering, sorting and rendering.
+function cellValue(row, col) {
+  var raw = col.derive ? col.derive(row) : row[col.key];
+  return raw == null ? '' : raw;
+}
 
 // Module-level state per spec: fetched once per refreshPortfolio(), then
 // sort/filter changes re-render locally without refetching.
@@ -93,10 +107,10 @@ function applyFilters(rows) {
     return COLUMNS.every(function (col) {
       var filterValue = state.filters[col.key];
       if (!col.filter || filterValue == null) return true;
-      var cellValue = String(row[col.key] == null ? '' : row[col.key]);
+      var text = String(cellValue(row, col));
       if (col.filter === 'text') {
         if (!filterValue) return true;
-        return cellValue.toLowerCase().indexOf(String(filterValue).toLowerCase()) >= 0;
+        return text.toLowerCase().indexOf(String(filterValue).toLowerCase()) >= 0;
       }
       // 'range': {min, max} strings; an unset bound doesn't constrain. Once
       // either bound is set, blank/non-numeric cells drop out (a row with no
@@ -105,31 +119,31 @@ function applyFilters(rows) {
         var hasMin = filterValue.min !== '' && isFinite(Number(filterValue.min));
         var hasMax = filterValue.max !== '' && isFinite(Number(filterValue.max));
         if (!hasMin && !hasMax) return true;
-        var numeric = Number(cellValue);
-        if (cellValue === '' || !isFinite(numeric)) return false;
+        var numeric = Number(text);
+        if (text === '' || !isFinite(numeric)) return false;
         return (!hasMin || numeric >= Number(filterValue.min)) &&
           (!hasMax || numeric <= Number(filterValue.max));
       }
       // 'multi': array of selected values; an empty/absent array = no filter.
-      return !filterValue.length || filterValue.indexOf(cellValue) >= 0;
+      return !filterValue.length || filterValue.indexOf(text) >= 0;
     });
   });
 }
 
 function compareRows(a, b, col) {
+  var av = cellValue(a, col);
+  var bv = cellValue(b, col);
   if (col.numeric) {
-    var an = Number(a[col.key]);
-    var bn = Number(b[col.key]);
-    var aBlank = a[col.key] === '' || a[col.key] == null || !isFinite(an);
-    var bBlank = b[col.key] === '' || b[col.key] == null || !isFinite(bn);
+    var an = Number(av);
+    var bn = Number(bv);
+    var aBlank = av === '' || !isFinite(an);
+    var bBlank = bv === '' || !isFinite(bn);
     if (aBlank && bBlank) return 0;
     if (aBlank) return 1;  // blanks/non-numeric always sort last, both directions
     if (bBlank) return -1;
     return (an - bn) * state.sortDir;
   }
-  var at = String(a[col.key] == null ? '' : a[col.key]);
-  var bt = String(b[col.key] == null ? '' : b[col.key]);
-  return at.localeCompare(bt) * state.sortDir;
+  return String(av).localeCompare(String(bv)) * state.sortDir;
 }
 
 function visibleRows() {
@@ -170,6 +184,27 @@ function yearCellMarkup(row) {
   return '<td>' + yearText + '</td>';
 }
 
+// Quadrant -> glyph. The icon is redundant with the label beside it (it is
+// aria-hidden); it exists so a scan down the column reads as four shapes
+// rather than four similar-length words.
+var QUADRANT_ICONS = {
+  'Super Stars': 'quadrant-superstar',
+  'Risk Takers': 'quadrant-risk-taker',
+  'Value Hunter': 'quadrant-value-hunter',
+  'Dogs': 'quadrant-dog'
+};
+
+// A record without both measures has no quadrant, and reads as a dash rather
+// than as an empty cell -- the same rule the summary cards use.
+function quadrantCellMarkup(row) {
+  var quadrant = quadrantOf(row);
+  if (!quadrant) return '<td class="pf-quadrant-cell">—</td>';
+  var key = QUADRANT_ICONS[quadrant];
+  return '<td class="pf-quadrant-cell"><span class="pf-quadrant pf-' + esc(key) + '">' +
+    '<span class="pf-quadrant-icon" aria-hidden="true">' + ICONS[key] + '</span>' +
+    esc(quadrant) + '</span></td>';
+}
+
 function rowMarkup(row) {
   return '<tr>' +
     '<td><a href="#" class="well-link" data-project-id="' + esc(row.project_id) + '" data-pipeline="' + esc(row.pipeline_type === 'bp' ? 'bp' : 'prospect') + '" title="Open in ' + (row.pipeline_type === 'bp' ? 'Business Plan Execution' : 'Prospect Maturation') + '">' + esc(row.well_name || '') + '</a></td>' +
@@ -180,6 +215,7 @@ function rowMarkup(row) {
     '<td>' + esc(row.status || '') + '</td>' +
     '<td>' + esc(fmtNum(row.mean_ogip) || '') + '</td>' +
     '<td>' + esc(fmtNum(row.total_cos) || '') + '</td>' +
+    quadrantCellMarkup(row) +
     '</tr>';
 }
 

@@ -1,12 +1,15 @@
 // Tests for static/js/views/portfolio-analysis.js — the Portfolio Analysis
 // resource summary/progress bar and the CoS/OGIP cross plot. The module's
 // only dependency is dom.js, so these tests never touch the pipeline graph.
-import { test, assert, fixture } from './harness.js';
+import { test, assert, fixture, mockFetch, waitFor } from './harness.js';
 import {
   computeResourceSummary, crossPlotPoints, renderResourceBar, renderCrossPlot,
   setCrossPlotRows, filteredCrossPlotRows, openCrossPlotDialog, initPortfolioAnalysis,
   quadrantOf, YTF_BCF_PER_FIELD
 } from '../js/views/portfolio-analysis.js';
+// The table itself lives in portfolio.js; the Quadrant column is the seam
+// between the two (a cross-plot classification rendered as a table column).
+import { refreshPortfolio } from '../js/views/portfolio.js';
 
 function sampleRows() {
   return [
@@ -186,4 +189,87 @@ test('portfolio-analysis.renderCrossPlot tooltip appears on hover', function () 
   assert.ok(root.querySelector('.pxp-dot[data-index="0"]').classList.contains('is-hover'));
   hit.dispatchEvent(new MouseEvent('mouseleave'));
   assert.equal(tooltip.hidden, true);
+});
+
+/* -------------------------------------------------------------------------
+   The Quadrant TABLE column (views/portfolio.js). The quadrant is derived per
+   row rather than stored, so these cover the three things that derivation has
+   to behave like a stored column for: the header exists in order, the cell
+   renders label + glyph, and a record missing either measure reads as a dash.
+   ------------------------------------------------------------------------- */
+
+function portfolioFixture() {
+  return fixture(
+    '<div id="portfolio-stats"></div>' +
+    '<div id="portfolio-resource-bar"></div>' +
+    '<table id="portfolio-table"></table>'
+  );
+}
+
+test('portfolio table renders a derived Quadrant column with a badge per row', async function () {
+  var host = portfolioFixture();
+  mockFetch(function (url) {
+    if (String(url).indexOf('/api/portfolio/rows') >= 0) {
+      return new Response(JSON.stringify({ rows: [
+        { project_id: 1, well_name: 'ALPHA-1', gas_field: 'ALPHA', status: 'Gas',
+          mean_ogip: 30, total_cos: 80, is_lead: 0, pipeline_type: 'bp' },
+        { project_id: 2, well_name: 'BETA-1', gas_field: 'BETA', status: 'Staked',
+          mean_ogip: 3, total_cos: 20, is_lead: 1, pipeline_type: 'prospect' },
+        { project_id: 3, well_name: 'GAMMA-1', gas_field: 'GAMMA', status: 'Proposed',
+          mean_ogip: '', total_cos: '', is_lead: 1, pipeline_type: 'prospect' }
+      ] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    throw new Error('Unexpected request: ' + url);
+  });
+
+  await refreshPortfolio();
+  await waitFor(function () { return host.querySelectorAll('#portfolio-table tbody tr').length === 3; });
+
+  var heads = Array.prototype.map.call(
+    host.querySelectorAll('#portfolio-table thead th'),
+    function (th) { return th.getAttribute('data-key'); });
+  assert.equal(heads[heads.length - 1], 'quadrant', 'Quadrant closes the column set');
+  assert.equal(heads.length, 9);
+
+  var cells = host.querySelectorAll('.pf-quadrant-cell');
+  assert.equal(cells.length, 3);
+  // High CoS + big volume, low CoS + small volume, and a row that cannot be
+  // classified at all.
+  assert.equal(cells[0].textContent.trim(), 'Super Stars');
+  assert.equal(cells[1].textContent.trim(), 'Dogs');
+  assert.equal(cells[2].textContent.trim(), '—');
+  assert.ok(cells[0].querySelector('.pf-quadrant-superstar'));
+  assert.ok(cells[0].querySelector('.pf-quadrant-icon svg'), 'the badge carries its glyph');
+  assert.equal(cells[2].querySelectorAll('.pf-quadrant').length, 0,
+    'an unclassifiable record gets a dash, not an empty badge');
+});
+
+test('portfolio Quadrant column filters and sorts like a stored column', async function () {
+  var host = portfolioFixture();
+  mockFetch(function (url) {
+    if (String(url).indexOf('/api/portfolio/rows') >= 0) {
+      return new Response(JSON.stringify({ rows: [
+        { project_id: 1, well_name: 'ALPHA-1', gas_field: 'A', status: 'Gas',
+          mean_ogip: 30, total_cos: 80, is_lead: 0, pipeline_type: 'bp' },
+        { project_id: 2, well_name: 'BETA-1', gas_field: 'B', status: 'Staked',
+          mean_ogip: 3, total_cos: 20, is_lead: 1, pipeline_type: 'prospect' }
+      ] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    throw new Error('Unexpected request: ' + url);
+  });
+
+  await refreshPortfolio();
+  await waitFor(function () { return host.querySelectorAll('#portfolio-table tbody tr').length === 2; });
+
+  var th = host.querySelector('#portfolio-table thead th[data-key="quadrant"]');
+  // The checklist offers all four quadrants whether or not the rowset has
+  // them, exactly as the Status column offers its full vocabulary.
+  var options = th.querySelectorAll('.portfolio-filter-option input[type="checkbox"]');
+  assert.equal(options.length, 4);
+  var dogs = Array.prototype.filter.call(options, function (box) { return box.value === 'Dogs'; })[0];
+  assert.ok(dogs, 'Dogs is offered');
+  dogs.checked = true;
+  dogs.dispatchEvent(new Event('change', { bubbles: true }));
+  await waitFor(function () { return host.querySelectorAll('#portfolio-table tbody tr').length === 1; });
+  assert.equal(host.querySelector('#portfolio-table tbody .pf-quadrant-cell').textContent.trim(), 'Dogs');
 });

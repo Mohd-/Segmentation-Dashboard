@@ -27,6 +27,7 @@ import { leadSummaryHtml, wireLeadSummary, closeLeadSummaryMenu } from './lead-s
 // Lead Summary progress bar and the board KPI donut must read one formula over
 // one dataset (the lead's 12 tracked items).
 import { completedItemCount, TRACKED_ITEM_COUNT } from './lead-kpis.js';
+import { applyPriorityChip, nextLeadPriority } from './board-widgets.js';
 
 // A LEAD detail page is the redesigned Card 2A shell (single back control, big
 // name, three-stage sidebar, wide Lead Summary). EVERY branch below guards on
@@ -60,27 +61,19 @@ var LEAD_STAGE_ICONS = {
    the backend's current_role()). Everyone else sees a static, disabled chip.
    ------------------------------------------------------------------------- */
 
-var LEAD_PRIORITY_CYCLE = { Low: 'Medium', Medium: 'High', High: 'Low' };
-
-// Exported so the cycle order is pinned by a test, not just by the handler.
-export function nextLeadPriority(current) {
-  return LEAD_PRIORITY_CYCLE[current || 'Low'] || 'Low';
-}
+// The vocabulary, the cycle order and the chip markup are shared with the
+// Business Plan Execution shell (views/board-widgets.js) so both sides of the
+// app present the same record-level attribute identically. Re-exported here
+// because this module has always been the chip's public face.
+export { nextLeadPriority };
 
 function canSetLeadPriority() {
   return currentRole() === 'supervisor';
 }
 
 export function renderLeadPriorityChip() {
-  var chip = byId('lead-priority-chip');
-  if (!chip) return;
-  var value = (Store.project && Store.project.priority) || 'Low';
-  var editable = canSetLeadPriority();
-  chip.disabled = !editable;
-  chip.textContent = value;
-  chip.className = 'priority lead-priority-chip priority-' + String(value).toLowerCase() +
-    (editable ? '' : ' lead-priority-chip-static');
-  chip.title = 'Priority: ' + value + (editable ? ' — click to change' : ' — set by a supervisor');
+  applyPriorityChip(byId('lead-priority-chip'),
+    (Store.project && Store.project.priority) || 'Low', canSetLeadPriority());
 }
 
 // PATCH the record's stored priority, then run the standard record refresh so
@@ -1163,6 +1156,12 @@ export function renderRightPanel(tasks) {
   var popoverHtml =
     '<div id="summary-settings" class="summary-popover hidden" role="dialog" aria-label="Manage ' + recordKind.toLowerCase() + '">' +
     relocatedHtml +
+    // Announced but not yet built. Disabled rather than hidden so the roadmap
+    // is visible where it will land, and titled so the state has a reason.
+    '<div class="summary-popover-actions summary-popover-soon">' +
+      '<button id="export-well-properties" type="button" class="ghost" disabled title="Coming soon">Export automatic Well Prop.</button>' +
+      '<button id="export-well-logs" type="button" class="ghost" disabled title="Coming soon">Export Well Logs Data</button>' +
+    '</div>' +
     '<div class="summary-popover-actions"><button id="rename-record" type="button" class="ghost">Rename ' + recordKind + '</button><button id="delete-record" type="button" class="danger">Delete ' + recordKind + '</button></div></div>';
 
   byId('summary-title').textContent = viewingBP ? 'Well Summary' : 'Lead Summary';
