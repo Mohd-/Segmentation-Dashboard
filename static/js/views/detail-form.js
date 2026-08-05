@@ -1,7 +1,7 @@
 import { byId, all, esc, isFilled, truthy, msg } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName, currentRole, canManageAssignments, isCurrentPipelineView, Store } from '../state.js';
-import { SCHEMA, FORMATIONS, FORMATION_METRICS, FLUID_TYPES, SEISMIC_BLOCKS, CHECKBOX_SUBMIT_STEPS, validateStepFields, submitBlockedMessage } from '../schema.js';
+import { SCHEMA, FORMATIONS, FORMATION_METRICS, FLUID_TYPES, SEISMIC_BLOCKS, CHECKBOX_SUBMIT_STEPS, validateStepFields, numericFieldError, submitBlockedMessage } from '../schema.js';
 import { calculateTrapCos, calculateSealCos } from '../cos-rules.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { renderDetail, renderRightPanel, chooseInitialTask, tasksForPipeline, parseRepeatableRows, refreshAfterRecordChange, revealTaskStage } from './detail.js';
@@ -606,6 +606,16 @@ export function formationRowsForSave(phase) {
 // (a) a custom row carrying metrics but no name (would silently vanish) and
 // (b) two rows normalizing to the same formation (the phase-scoped full
 // replacement would collapse/delete one, losing data).
+// The numeric rules over ONE formation cell. TVDSS depths are the only signed
+// measure (above datum reads negative) and the only ones that outrun the
+// generic 9999 cap, both of which the metric/column defs already declare --
+// this is where those declarations finally get read (they were documentation
+// only while this buffer had no numeric validation at all).
+function formationCellError(def, raw) {
+  var signed = /tvdss/.test(def.key);
+  return numericFieldError(def.label, raw, !!def.bigOk || signed, /_pct$/.test(def.key), signed);
+}
+
 export function validateFormationRows(phase) {
   var rows = formationEdits[phase] || [];
   for (var i = 0; i < rows.length; i += 1) {
@@ -614,6 +624,25 @@ export function validateFormationRows(phase) {
       (phaseHasPayIntervals(phase) && rowHasPayIntervals(row));
     if (row.isCustom && !isFilled(normalizeFormationName(row.formation)) && hasMetrics) {
       return 'Custom formation needs a name.';
+    }
+    // Same rules the plain step fields get: numeric, not negative, percentages
+    // within 100. Named per formation, because a message that only says
+    // "Porosity must not exceed 100%" is unhelpful in a four-formation sheet.
+    var name = normalizeFormationName(row.formation) || 'Formation ' + (i + 1);
+    for (var m = 0; m < FORMATION_METRICS.length; m += 1) {
+      var metric = FORMATION_METRICS[m];
+      if (metric.type !== 'number') continue;
+      var metricError = formationCellError(metric, row.values[metric.key]);
+      if (metricError) return name + ': ' + metricError;
+    }
+    var intervals = (phaseHasPayIntervals(phase) && row.intervals) || [];
+    for (var v = 0; v < intervals.length; v += 1) {
+      for (var c = 0; c < PAY_INTERVAL_COLUMNS.length; c += 1) {
+        var col = PAY_INTERVAL_COLUMNS[c];
+        if (col.type !== 'number') continue;
+        var intervalError = formationCellError(col, intervals[v][col.key]);
+        if (intervalError) return name + ' pay interval ' + (v + 1) + ': ' + intervalError;
+      }
     }
   }
   var seen = {};
@@ -672,7 +701,11 @@ function formationMetricControl(metric, row, index) {
     }).join('');
     return '<label>' + esc(metric.label) + '<select ' + attr + ' aria-label="' + esc(metric.label) + '">' + options + '</select></label>';
   }
-  return '<label>' + esc(metric.label) + '<input type="number" step="any" ' + attr + ' value="' + esc(value) + '" aria-label="' + esc(metric.label) + '"></label>';
+  // TVDSS is the one signed measure here (above datum reads negative);
+  // thickness, porosity, saturation and net-to-gross cannot be.
+  var signed = /tvdss/.test(metric.key);
+  return '<label>' + esc(metric.label) + '<input type="number" step="any"' +
+    (signed ? '' : ' min="0"') + ' ' + attr + ' value="' + esc(value) + '" aria-label="' + esc(metric.label) + '"></label>';
 }
 function formationPanelMarkup(row, index) {
   return FORMATION_GROUPS.map(function (group) {
@@ -703,7 +736,8 @@ function payIntervalRowMarkup(interval, index, formationIndex) {
       }).join('');
       return '<select ' + attr + '>' + options + '</select>';
     }
-    return '<input type="number" step="any" ' + attr + ' value="' + esc(value) + '">';
+    return '<input type="number" step="any"' + (/tvdss/.test(col.key) ? '' : ' min="0"') +
+      ' ' + attr + ' value="' + esc(value) + '">';
   }).join('') + '<button type="button" class="icon-btn pay-interval-remove" data-pay-row="' + index +
     '" title="Remove pay interval" aria-label="Remove pay interval">&#10005;</button></div>';
 }
@@ -929,7 +963,12 @@ function fieldMarkup(field, value, classes, showIfAttr) {
     // Link cards never toggle; data-show-if is intentionally omitted.
     return '<div class="summary-box' + classes + '"><p><a href="' + esc(field.value || '#') + '" target="_blank" rel="noreferrer">' + esc(field.linkText || 'New Request') + '</a></p></div>';
   }
-  return '<label class="' + classes + '"' + showIfAttr + '>' + esc(field.label) + '<input type="number" step="any" data-field="' + esc(field.key) + '" value="' + esc(value) + '"></label>';
+  // min="0" is the browser-level twin of numericFieldError's negative guard
+  // (schema.js): the ONE field that opts out is Top Formation TVDSS, which is
+  // legitimately signed above datum and carries allowNegative in the schema.
+  return '<label class="' + classes + '"' + showIfAttr + '>' + esc(field.label) +
+    '<input type="number" step="any"' + (field.allowNegative ? '' : ' min="0"') +
+    ' data-field="' + esc(field.key) + '" value="' + esc(value) + '"></label>';
 }
 // A field standing on its own (no row grouping): visibility lives on the field.
 function standaloneFieldMarkup(field, componentName, values) {
@@ -1416,7 +1455,11 @@ export function repeatableInputMarkup(field, row, rowIndex) {
       return '<select ' + attr + aria + '>' + repeatableSelectOptions(col, row, selectValue) + '</select>';
     }
     var ghost = col.placeholder ? ' placeholder="' + esc(col.placeholder) + '"' : '';
-    return '<input type="' + (col.type === 'number' ? 'number' : 'text') + '" step="any" ' + attr + aria + ghost + ' value="' + esc(value) + '">';
+    // Numeric columns get the same min="0" the standalone fields do; a column
+    // that is legitimately signed declares allowNegative, exactly as a field
+    // does (schema.js numericFieldError reads the same flag).
+    var floor = (col.type === 'number' && !col.allowNegative) ? ' min="0"' : '';
+    return '<input type="' + (col.type === 'number' ? 'number' : 'text') + '" step="any"' + floor + ' ' + attr + aria + ghost + ' value="' + esc(value) + '">';
   }).join('') + '<button type="button" class="icon-btn remove-repeatable-row" data-repeatable-key="' + esc(field.key) + '" data-repeatable-row="' + rowIndex + '" title="Remove row" aria-label="Remove row">✕</button></div>';
 }
 export function renderRepeatableField(field, value) {

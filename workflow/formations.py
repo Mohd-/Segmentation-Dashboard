@@ -171,6 +171,25 @@ _FLUID_BY_LOWER.update({"dry": "Dry Hole", "water": "Water Bearing",
                         "condensate": "Oil over Gas", "liquid": "Oil"})
 
 
+def _coerce_measurement(field, raw, context):
+    """Parse one stored measurement, refusing the values physics rules out.
+
+    Beyond "is it a number": a measurement that cannot be negative must not be
+    stored negative, and a percentage cannot exceed 100. TVDSS is the single
+    signed exception -- above datum it legitimately reads negative -- which is
+    the same exemption the client applies (schema.js allowNegative and the
+    `min` attributes the form emits). Raising here rather than storing the
+    value keeps the client-side guard from being the only thing between a
+    typo and the database.
+    """
+    value = float(raw)  # caller catches TypeError/ValueError and names the field
+    if value < 0 and "tvdss" not in field:
+        raise ValueError(f"{field} must not be negative{context}: {raw!r}.")
+    if field.endswith("_pct") and value > 100:
+        raise ValueError(f"{field} must not exceed 100%{context}: {raw!r}.")
+    return value
+
+
 def _clean_pay_intervals(raw, formation):
     """Validate/coerce one formation row's ``pay_intervals`` payload.
 
@@ -203,8 +222,10 @@ def _clean_pay_intervals(raw, formation):
                 values[field] = None
                 continue
             try:
-                values[field] = float(value)
-            except (TypeError, ValueError):
+                values[field] = _coerce_measurement(field, value, f" (pay interval, {formation})")
+            except (TypeError, ValueError) as exc:
+                if str(exc).startswith(field):
+                    raise
                 raise ValueError(
                     f"Invalid numeric value for pay interval {field} ({formation}): {value!r}.")
         cleaned.append(values)
@@ -288,8 +309,10 @@ def upsert_project_formations(session, project_id, phase, rows, changed_by="Web 
                 values[field] = None
                 continue
             try:
-                values[field] = float(raw)
-            except (TypeError, ValueError):
+                values[field] = _coerce_measurement(field, raw, f" ({formation})")
+            except (TypeError, ValueError) as exc:
+                if str(exc).startswith(field):
+                    raise
                 raise ValueError(f"Invalid numeric value for {field}: {raw!r}.")
         clean_rows.append((formation, values, intervals))
 

@@ -466,3 +466,93 @@ test('business-plan keeps zero Flowback panels after the final stage is deleted'
   assert.deepEqual(puts[0], []);
   assert.ok(host.querySelector('#bpe-add-flow'), 'the add control remains available');
 });
+
+/* This form had NO client-side numeric validation at all: a negative rate or a
+   140% saturation travelled to the server, which refused the whole sheet with
+   a message that arrived after the round trip and named a storage key rather
+   than a cell. The guard below stops the edit at the input. */
+test('business-plan refuses a negative measurement before it is queued', async function () {
+  var host = fixture('<div id="bpe-main-view"></div><section id="bpe-detail-view" class="hidden"></section>');
+  var detail = detailPayload('flowback-results', {});
+  detail.flowback_initialized = true;
+  detail.flowback_stages = [{
+    id: 'stage-1', formation: 'SARH', top_md: '1000', base_md: '1100',
+    dynamic_area_km2: '', dynamic_ogip_bcf: '', gas_rate_mmscfd: '', water_rate_bwpd: '',
+    liquid_rate_bpd: '', choke_size_in: '', fwhp_psi: ''
+  }];
+  var puts = [];
+  mockFetch(function (url, options) {
+    var path = String(url);
+    var method = (options && options.method) || 'GET';
+    if (path.indexOf('/api/business-plan/wells/7/steps/flowback-results') >= 0 && method === 'GET') {
+      return response(detail);
+    }
+    if (path.indexOf('/api/business-plan/wells/7/flowback-stages') >= 0 && method === 'PUT') {
+      puts.push(JSON.parse(options.body).rows);
+      return response({ ok: true, detail: detail });
+    }
+    if (path.indexOf('/api/users') >= 0) return response([]);
+    throw new Error('Unexpected request: ' + method + ' ' + path);
+  });
+
+  await openBusinessPlanDetail(7, 'flowback-results');
+  var rate = host.querySelector('[data-flow-field="gas_rate_mmscfd"]');
+  assert.equal(rate.getAttribute('min'), '0', 'the browser-level floor is emitted too');
+
+  rate.value = '-5';
+  rate.dispatchEvent(new Event('input', { bubbles: true }));
+  assert.ok(rate.classList.contains('bpe-invalid'), 'the offending cell is marked');
+  assert.equal(rate.getAttribute('aria-invalid'), 'true');
+  var feedback = host.querySelector('#bpe-save-feedback');
+  assert.match(feedback.textContent, /must not be negative/);
+  assert.ok(feedback.classList.contains('is-error'));
+
+  // Correcting the value clears the mark and lets the edit through.
+  rate.value = '5';
+  rate.dispatchEvent(new Event('input', { bubbles: true }));
+  assert.equal(rate.classList.contains('bpe-invalid'), false);
+  assert.equal(rate.hasAttribute('aria-invalid'), false);
+  await waitFor(function () { return puts.length === 1; });
+  assert.equal(puts[0][0].gas_rate_mmscfd, '5');
+  assert.equal(puts.length, 1, 'the refused value was never sent');
+});
+
+/* Percentages have an upper bound as well as a lower one, and TVDSS is the
+   one measure that is signed on purpose. */
+test('business-plan bounds percentages and exempts TVDSS from the negative rule', async function () {
+  var host = fixture('<div id="bpe-main-view"></div><section id="bpe-detail-view" class="hidden"></section>');
+  var detail = detailPayload('quicklook-logs', {});
+  detail.formations = [{
+    id: 1, formation: 'SARH', top_tvdss_ft: '', base_tvdss_ft: '', thickness_ft: '',
+    pay_intervals: [{ id: 11, top_tvdss_ft: '', base_tvdss_ft: '', phit_pct: '',
+      swt_pct: '', ngr_pct: '', kint_md: '', fluid: 'Gas' }]
+  }];
+  var puts = [];
+  mockFetch(function (url, options) {
+    var path = String(url);
+    var method = (options && options.method) || 'GET';
+    if (path.indexOf('/api/business-plan/wells/7/steps/quicklook-logs') >= 0 && method === 'GET') {
+      return response(detail);
+    }
+    if (path.indexOf('/formations') >= 0 && method === 'PUT') {
+      puts.push(JSON.parse(options.body).rows);
+      return response({ ok: true, detail: detail });
+    }
+    if (path.indexOf('/api/users') >= 0) return response([]);
+    throw new Error('Unexpected request: ' + method + ' ' + path);
+  });
+
+  await openBusinessPlanDetail(7, 'quicklook-logs');
+  var swt = host.querySelector('[data-pay-field="swt_pct"]');
+  swt.value = '140';
+  swt.dispatchEvent(new Event('input', { bubbles: true }));
+  assert.ok(swt.classList.contains('bpe-invalid'));
+  assert.match(host.querySelector('#bpe-save-feedback').textContent, /100%/);
+
+  // TVDSS carries no min attribute and accepts a value above datum.
+  var top = host.querySelector('[data-formation-field="top_tvdss_ft"]');
+  assert.equal(top.hasAttribute('min'), false, 'TVDSS is signed on purpose');
+  top.value = '-120';
+  top.dispatchEvent(new Event('input', { bubbles: true }));
+  assert.equal(top.classList.contains('bpe-invalid'), false);
+});

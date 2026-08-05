@@ -9,6 +9,9 @@ import {
   priorityChipHtml, applyPriorityChip, nextLeadPriority
 } from './board-widgets.js';
 import { DROPDOWN_OPEN_EVENT } from './lead-filters.js';
+// One numeric rule set for the whole app; see bpeNumericError for the one
+// argument this form passes differently.
+import { numericFieldError } from '../schema.js';
 // The Well Summary wears the Lead Summary card's chrome, and borrows its one
 // "no value recorded" glyph so the two panels cannot disagree about how an
 // empty fact looks.
@@ -902,13 +905,77 @@ function formationRowMarkup(row, formationIndex) {
     '<div class="bpe-pay-list">' + (payRows || '<div class="bpe-inline-empty">No Pay Intervals.</div>') + '</div></section>';
 }
 
+// TVDSS is the one signed measure in this form (above datum reads negative);
+// thickness, porosity, saturation, permeability and every rate cannot be.
+// Shared by both formation cells and the flowback cells below.
+function isSignedKey(key) {
+  return /tvdss/.test(key);
+}
+
+function numericFloor(key) {
+  return isSignedKey(key) ? '' : ' min="0"';
+}
+
+/* Client-side numeric validation for this whole form. Until now there was
+   none here at all: a negative porosity or a typo'd rate travelled to the
+   server, which refused it with a message the user only saw after the round
+   trip (and, for the structure sheets, as a whole-sheet failure rather than
+   against the cell).
+
+   It reuses schema.js's numericFieldError -- the same rules the maturation
+   forms enforce -- with bigOk ALWAYS on: BP figures such as a measured depth
+   in feet legitimately exceed that helper's 9999 sanity cap, which exists for
+   the maturation side's small measures. The negative and <=100% rules are the
+   ones that matter here. */
+function bpeNumericError(label, key, raw) {
+  return numericFieldError(label || key, raw, true, /_pct$/.test(key), isSignedKey(key));
+}
+
+// The visible caption of a form cell, so the message names what the user is
+// looking at rather than a storage key. Falls back to the key.
+function fieldLabel(element, key) {
+  var caption = element.closest('label');
+  var span = caption && caption.querySelector('span');
+  return span ? span.textContent.replace(/\*$/, '').trim() : key;
+}
+
+// Reject an edit before it is buffered or queued: the message lands in the
+// save-state strip (this form's only feedback channel) and the input is
+// marked, so the offending cell is findable in a long sheet.
+function rejectNumericEdit(element, message) {
+  element.classList.add('bpe-invalid');
+  element.setAttribute('aria-invalid', 'true');
+  setFeedback(message, true);
+}
+
+function clearNumericRejection(element) {
+  element.classList.remove('bpe-invalid');
+  element.removeAttribute('aria-invalid');
+}
+
+// Guard shared by the three edit paths (plain fields, formation/pay cells,
+// flowback cells). Returns true when the edit may proceed.
+function numericEditAllowed(element, key) {
+  if (element.type !== 'number') return true;
+  var error = bpeNumericError(fieldLabel(element, key), key, element.value);
+  if (error) {
+    rejectNumericEdit(element, error);
+    return false;
+  }
+  clearNumericRejection(element);
+  return true;
+}
+
 function formationEnvelopeCell(index, key, label, cellValue) {
-  return '<label><span>' + esc(label) + '</span><input type="number" data-formation-index="' + index +
+  return '<label><span>' + esc(label) + '</span><input type="number" step="any"' + numericFloor(key) +
+    ' data-formation-index="' + index +
     '" data-formation-field="' + esc(key) + '" value="' + esc(cellValue == null ? '' : cellValue) + '"></label>';
 }
 
 function formationCell(formationIndex, payIndex, key, label, cellValue, type) {
-  return '<label><span>' + esc(label) + '</span><input type="' + type + '" data-formation-index="' + formationIndex +
+  var numeric = type === 'number' ? ' step="any"' + numericFloor(key) : '';
+  return '<label><span>' + esc(label) + '</span><input type="' + type + '"' + numeric +
+    ' data-formation-index="' + formationIndex +
     '" data-pay-index="' + payIndex + '" data-pay-field="' + esc(key) + '" value="' +
     esc(cellValue == null ? '' : cellValue) + '"></label>';
 }
@@ -936,7 +1003,8 @@ function flowCell(index, key, label, required, formation) {
       '" data-flow-field="' + key + '"' + disabled + '>' + selectOptions(state.detail.formation_options || [], formation, 'Select Formation') + '</select></label>';
   }
   var row = state.detail.flowback_stages[index];
-  return '<label><span>' + esc(label) + (required ? '<b>*</b>' : '') + '</span><input type="number" data-flow-index="' + index +
+  return '<label><span>' + esc(label) + (required ? '<b>*</b>' : '') + '</span><input type="number" step="any"' +
+    numericFloor(key) + ' data-flow-index="' + index +
     '" data-flow-field="' + key + '" value="' + esc(row[key] == null ? '' : row[key]) + '"' + disabled + '></label>';
 }
 
@@ -1521,6 +1589,7 @@ function bindFieldInputs() {
     var immediate = element.type === 'checkbox' || element.type === 'radio' || element.tagName === 'SELECT';
     element.addEventListener(immediate ? 'change' : 'input', function () {
       var key = element.dataset.bpeField;
+      if (!numericEditAllowed(element, key)) return;
       var nextValue = inputValue(element);
       var previous = value(key);
       var payload = { field_key: key, value: nextValue, changed_by: currentUserName() };
@@ -1666,6 +1735,8 @@ function rowIndexFor(rows, marker) {
 function bindFormationInputs() {
   all('[data-formation-field], [data-pay-field]', byId('bpe-detail-view')).forEach(function (element) {
     element.addEventListener(element.tagName === 'SELECT' ? 'change' : 'input', function () {
+      var cellKey = element.dataset.payField || element.dataset.formationField;
+      if (!numericEditAllowed(element, cellKey)) return;
       updateFormationBuffer(element);
       var version = markStructureDraft('formations', state.detail.formations || []);
       clearTimeout(state.timers.formations);
@@ -1755,6 +1826,7 @@ function saveFlowback(rerender) {
 function bindFlowbackInputs() {
   all('[data-flow-field]', byId('bpe-detail-view')).forEach(function (element) {
     element.addEventListener(element.tagName === 'SELECT' ? 'change' : 'input', function () {
+      if (!numericEditAllowed(element, element.dataset.flowField)) return;
       updateFlowBuffer(element);
       var version = markStructureDraft('flowback', state.detail.flowback_stages || []);
       clearTimeout(state.timers.flowback);

@@ -2902,6 +2902,10 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .bpe-field b, .bpe-flow-stage label b { margin-left: 2px; color: var(--danger-600); }
 .bpe-field input, .bpe-field select, .bpe-formation-block input, .bpe-formation-block select, .bpe-flow-stage input, .bpe-flow-stage select { width: 100%; min-width: 0; }
 .bpe-field input[readonly], .bpe-field input:disabled, .bpe-field select:disabled, .bpe-flow-stage.is-locked input, .bpe-flow-stage.is-locked select { background: var(--gray-100); color: var(--text-faint); }
+/* A cell whose value was refused before it could be saved. Same red border the
+   Lead Assessment grids use (.la-invalid), because it means the same thing;
+   the reason itself is in the save-state strip, this only says WHERE. */
+.bpe-invalid { border-color: var(--danger-500); }
 .bpe-field [aria-invalid="true"] { border-color: var(--danger-600); box-shadow: 0 0 0 1px var(--danger-600); }
 .bpe-field-error { margin: var(--space-2) 0 0; color: var(--danger-700); font-size: var(--text-xs); font-weight: 700; }
 .bpe-gate-depth { display: grid; grid-template-columns: repeat(4, minmax(125px, 1fr)); gap: var(--space-2); }

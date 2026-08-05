@@ -269,13 +269,13 @@ function calculatorMarkup() {
         '</div>' +
       '</div>' +
       '<div id="ra-grv-fields" class="field-row cols-2">' +
-        '<label>GRV P90 [10&sup3; acre-ft]<input type="number" step="any" id="ra-grv-p90"></label>' +
-        '<label>GRV P10 [10&sup3; acre-ft]<input type="number" step="any" id="ra-grv-p10"></label>' +
+        '<label>GRV P90 [10&sup3; acre-ft]<input type="number" step="any" min="0" id="ra-grv-p90"></label>' +
+        '<label>GRV P10 [10&sup3; acre-ft]<input type="number" step="any" min="0" id="ra-grv-p10"></label>' +
       '</div>' +
       '<div id="ra-area-fields" class="field-row cols-3 hidden">' +
-        '<label>Area P90 [km&sup2;]<input type="number" step="any" id="ra-area-p90"></label>' +
-        '<label>Area P10 [km&sup2;]<input type="number" step="any" id="ra-area-p10"></label>' +
-        '<label>Reservoir Thickness P50 [ft]<input type="number" step="any" id="ra-thickness-p50"></label>' +
+        '<label>Area P90 [km&sup2;]<input type="number" step="any" min="0" id="ra-area-p90"></label>' +
+        '<label>Area P10 [km&sup2;]<input type="number" step="any" min="0" id="ra-area-p10"></label>' +
+        '<label>Reservoir Thickness P50 [ft]<input type="number" step="any" min="0" id="ra-thickness-p50"></label>' +
       '</div>' +
       '<p id="ra-error" class="ra-error hidden"></p>' +
       '<div class="ra-actions">' +

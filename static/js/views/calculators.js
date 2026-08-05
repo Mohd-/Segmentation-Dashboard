@@ -17,9 +17,12 @@ import { RESOURCE_SCENARIOS } from '../schema.js';
 
 var DEFAULT_SCENARIO = 'dry_gas_high_pressure';
 
+// Every calculator input is a physical magnitude, so min="0" is unconditional
+// here (callers that need a tighter floor pass their own min in `attributes`,
+// which lands after this one and wins).
 function numberField(id, label, unit, attributes) {
   return '<label for="' + id + '"><span>' + esc(label) + '</span>' +
-    '<span class="calc-input-wrap"><input id="' + id + '" type="number" step="any" ' +
+    '<span class="calc-input-wrap"><input id="' + id + '" type="number" step="any" min="0" ' +
     (attributes || '') + '><span class="calc-unit">' + esc(unit) + '</span></span></label>';
 }
 

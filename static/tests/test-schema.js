@@ -691,23 +691,47 @@ test('validateStepFields: cross-field -- Lead Assessment reservoir must not exce
   assert.equal(validateStepFields('Lead Assessment', { reservoir_thickness_ft: '40', formation_thickness_ft: '50' }), null);
 });
 
-test('validateStepFields: piip trio ordering -- P90 must not exceed Mean, Mean must not exceed P10', function () {
+test('validateStepFields: piip trio ordering -- P90 < Mean < P10, strictly', function () {
   assert.equal(validateStepFields('Pre-Drilling GeoX Assessment', { pre_drill_piip_gas_p90: '10', pre_drill_piip_gas_mean: '5' }),
-    'Gas P90 must not exceed Mean.');
+    'Gas P90 must be lower than Mean.');
   assert.equal(validateStepFields('Pre-Drilling GeoX Assessment', { pre_drill_piip_gas_mean: '20', pre_drill_piip_gas_p10: '10' }),
-    'Gas Mean must not exceed P10.');
+    'Gas Mean must be lower than P10.');
+  // A properly ordered trio still passes.
+  assert.equal(validateStepFields('Pre-Drilling GeoX Assessment', {
+    pre_drill_piip_gas_p90: '5', pre_drill_piip_gas_mean: '10', pre_drill_piip_gas_p10: '20'
+  }), null);
 });
 
-test('validateStepFields: piip trio -- equal values are permitted (manual deterministic entry)', function () {
+// Equality used to pass, on the argument that a deterministic entry may repeat
+// a value. It does not any more: three identical numbers are not a
+// distribution, and letting them through hid the commonest data-entry mistake
+// (the same figure pasted into all three cells) behind a clean save.
+test('validateStepFields: piip trio -- equal values are refused', function () {
   assert.equal(validateStepFields('Pre-Drilling GeoX Assessment', {
     pre_drill_piip_gas_p90: '10', pre_drill_piip_gas_mean: '10', pre_drill_piip_gas_p10: '10'
-  }), null);
+  }), 'Gas P90 must be lower than Mean.');
+  // ...including when only the upper pair collides.
+  assert.equal(validateStepFields('Pre-Drilling GeoX Assessment', {
+    pre_drill_piip_gas_mean: '10', pre_drill_piip_gas_p10: '10'
+  }), 'Gas Mean must be lower than P10.');
 });
 
 test('validateStepFields: piip trio -- the liquid trio is checked too, independent of the gas trio', function () {
   assert.equal(validateStepFields('Pre-Drilling GeoX Assessment', {
     pre_drill_piip_liquid_p90: '9', pre_drill_piip_liquid_mean: '3'
-  }), 'Liquid P90 must not exceed Mean.');
+  }), 'Liquid P90 must be lower than Mean.');
+});
+
+// The P90/P10 PAIRS -- resource ranges with no mean between them, so the trio
+// rule has nothing to bite on and they went unchecked entirely.
+test('validateStepFields: P90/P10 range pairs must be ordered', function () {
+  assert.equal(validateStepFields('SAD Model', { sad_grv_p90: '80', sad_grv_p10: '40' }),
+    'SAD GRV P90 must be lower than P10.');
+  assert.equal(validateStepFields('SAD Model', { sad_area_km2_p90: '12', sad_area_km2_p10: '12' }),
+    'SAD Area P90 must be lower than P10.');
+  assert.equal(validateStepFields('SAD Model', { sad_grv_p90: '40', sad_grv_p10: '80' }), null);
+  // Only one half filled is not yet an ordering claim.
+  assert.equal(validateStepFields('SAD Model', { sad_grv_p90: '40' }), null);
 });
 
 // Resource Assessment's SCHEMA entry carries no editable NUMBERS -- card 2B
@@ -724,5 +748,5 @@ test('validateStepFields: merged Lead Assessment registers the confirmation; dir
   assert.equal(confirmation.type, 'checkbox');
   assert.equal(validateStepFields('Lead Assessment', {}), null);
   assert.equal(validateStepFields('Lead Assessment', { lead_piip_gas_p90: '10', lead_piip_gas_mean: '5' }),
-    'Gas P90 must not exceed Mean.');
+    'Gas P90 must be lower than Mean.');
 });

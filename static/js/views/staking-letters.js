@@ -228,7 +228,8 @@ function checkboxMarkup(entry, values) {
 function coordinateMarkup(field, values) {
   var value = values[field.key];
   return '<div class="sl-cell">' +
-    '<input type="number" step="any" data-sl-field="' + esc(field.key) + '"' +
+    // UTM Zone 37N eastings and northings are both positive by construction.
+    '<input type="number" step="any" min="0" data-sl-field="' + esc(field.key) + '"' +
     ' value="' + esc(value == null ? '' : value) + '"' +
     ' placeholder="' + esc(field.label) + '" aria-label="' + esc(field.label) + '">' +
     '<span class="sl-field-error" data-error-for="' + esc(field.key) + '" role="alert"></span>' +

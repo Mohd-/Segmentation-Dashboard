@@ -199,6 +199,47 @@ def test_non_numeric_measurement_value_rejected(client):
     assert "porosity_pct" in resp.get_json()["detail"]
 
 
+def test_negative_measurement_rejected_except_tvdss(client):
+    """A thickness cannot be negative; a TVDSS above datum legitimately is.
+
+    The client emits min="0" on exactly the same set (schema.js allowNegative
+    / detail-form.js), so this is the server half of one rule, not a second
+    opinion.
+    """
+    pid = create_project(client, "FORM-NEG-1")
+    resp = _put(client, pid, "quicklook", [{"formation": "SARH", "thickness_ft": "-5"}])
+    assert resp.status_code == 400
+    assert "thickness_ft" in resp.get_json()["detail"]
+    assert "negative" in resp.get_json()["detail"].lower()
+
+    resp = _put(client, pid, "quicklook", [{"formation": "SARH", "top_tvdss_ft": "-120"}])
+    assert resp.status_code == 200, "TVDSS above datum is signed on purpose"
+    rows = client.get(f"/api/projects/{pid}/formations").get_json()
+    assert rows[0]["top_tvdss_ft"] == -120
+
+
+def test_percentage_measurement_cannot_exceed_100(client):
+    pid = create_project(client, "FORM-PCT-1")
+    resp = _put(client, pid, "quicklook", [{"formation": "SARH", "porosity_pct": "140"}])
+    assert resp.status_code == 400
+    assert "porosity_pct" in resp.get_json()["detail"]
+    # The boundary itself is a legal reading.
+    assert _put(client, pid, "quicklook",
+                [{"formation": "SARH", "porosity_pct": "100"}]).status_code == 200
+
+
+def test_pay_interval_measurements_run_the_same_rules(client):
+    pid = create_project(client, "PAYINT-RANGE-1")
+    resp = _put(client, pid, "quicklook",
+                [dict(SARH_ROW, pay_intervals=[dict(INTERVAL_A, kint_md="-3")])])
+    assert resp.status_code == 400
+    assert "kint_md" in resp.get_json()["detail"]
+    resp = _put(client, pid, "quicklook",
+                [dict(SARH_ROW, pay_intervals=[dict(INTERVAL_A, swt_pct="101")])])
+    assert resp.status_code == 400
+    assert "swt_pct" in resp.get_json()["detail"]
+
+
 def test_blank_measurement_value_stored_as_null(client):
     pid = create_project(client, "FORM-BLANK-1")
     resp = _put(client, pid, "quicklook", [{"formation": "SARH", "top_tvdss_ft": "  "}])

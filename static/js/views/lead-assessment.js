@@ -527,7 +527,12 @@ export function earlierComments(tasks) {
 
 function numberInput(key, value, options) {
   options = options || {};
-  return '<input type="number" step="any" data-la-field="' + esc(key) + '"' +
+  // Every measure on this page is a magnitude except Top Formation TVDSS,
+  // which reads negative above datum -- the same single exemption schema.js
+  // encodes as allowNegative and tvdssError() honours below.
+  var signed = /tvdss/.test(key);
+  return '<input type="number" step="any"' + (signed ? '' : ' min="0"') +
+    ' data-la-field="' + esc(key) + '"' +
     ' value="' + esc(value == null ? '' : value) + '"' +
     ' aria-label="' + esc(options.label || LABELS[key] || key) + '"' +
     (options.placeholder ? ' placeholder="' + esc(options.placeholder) + '"' : '') +

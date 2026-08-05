@@ -96,8 +96,9 @@ function propertiesMarkup(project) {
     '<div id="pe-phase-row" class="pe-phase-row">' + phaseRowMarkup(project) + '</div>' +
     '<div class="pe-properties-grid">' +
     '<label>Name<input id="pe-prop-name" value="' + esc(project.project_name || '') + '"></label>' +
-    '<label>Lead X<input id="pe-prop-x" type="number" step="any" value="' + esc(project.lead_x == null ? '' : project.lead_x) + '"></label>' +
-    '<label>Lead Y<input id="pe-prop-y" type="number" step="any" value="' + esc(project.lead_y == null ? '' : project.lead_y) + '"></label>' +
+    // UTM Zone 37N metres: both ordinates are positive by construction.
+    '<label>Lead X<input id="pe-prop-x" type="number" step="any" min="0" value="' + esc(project.lead_x == null ? '' : project.lead_x) + '"></label>' +
+    '<label>Lead Y<input id="pe-prop-y" type="number" step="any" min="0" value="' + esc(project.lead_y == null ? '' : project.lead_y) + '"></label>' +
     '<label class="check-label"><input id="pe-prop-active" type="checkbox" ' + (isActive ? 'checked' : '') + '> Active Well</label>' +
     '</div>' +
     '<div class="pe-properties-actions">' +
