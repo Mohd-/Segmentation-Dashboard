@@ -373,6 +373,11 @@ def meta():
         # Configured resource-assessment scenarios for the Resource
         # Assessment pop-up calculator's scenario dropdown.
         "resource_scenarios": resource_calc.scenario_options(),
+        # The petrophysical distributions each scenario runs on (porosity, Sg,
+        # NGR, geometric factor, 1/Bg), keyed by scenario id. Feeds the
+        # Calculator's Advanced settings panel, which prefills from them and
+        # may send edited copies back as `overrides` on a single run.
+        "resource_parameters": resource_calc.scenario_parameters(),
         # Card 2B, Section 1. row ("reservoir"/"formation") -> {m, b} for the
         # straight-line TWT (ms) <-> thickness (ft) conversion, from
         # config.TWT_THICKNESS_COEFFICIENTS. SHIPS EMPTY: a row with no entry
@@ -704,6 +709,15 @@ def resource_assessment(task_id):
     if task.get("task_name") not in {"Lead Assessment", "Resource Assessment"}:
         raise ValueError("Resource calculator is only available for Lead Assessment.")
     payload = request.get_json(silent=True) or {}
+    # Advanced settings are a Calculator-tab affordance only. This endpoint's
+    # results are STORED on the lead and compared across leads, so they must
+    # always come from the scenario's approved assumptions -- a stored number
+    # nobody can tell was computed on substituted inputs is worse than no
+    # number. Refused rather than ignored, so a caller is never misled.
+    if payload.get("overrides"):
+        raise ValueError(
+            "Advanced settings are available in the Calculator tab only: a lead's stored "
+            "assessment must use the scenario's approved assumptions.")
     return json_response(resource_calc.run(payload))
 
 

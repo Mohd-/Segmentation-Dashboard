@@ -36,6 +36,9 @@ from resource_engine import (
     create_exceedance_figure,
     list_scenarios,
 )
+from resource_engine.config import load_config
+from resource_engine.overrides import describe_parameters
+from resource_engine.validation import require_configured_scenario
 
 try:  # pragma: no cover - matplotlib is a hard dependency in practice
     import matplotlib.pyplot as plt
@@ -71,6 +74,32 @@ def scenario_options() -> List[Dict[str, str]]:
         for s in summaries
         if s.status == "configured"
     ]
+
+
+def scenario_parameters() -> Dict[str, List[Dict[str, Any]]]:
+    """Per-scenario petrophysical distributions, for the Advanced settings panel.
+
+    ``{scenario_id: [{name, label, unit, distribution, ...values}, ...]}`` -- the
+    approved assumptions each scenario runs on, in exactly the shape a caller
+    may send back as ``overrides``. Serving them is what makes the panel able to
+    show what a run WOULD use before anybody changes it.
+
+    Degrades to ``{}`` on a missing/broken scenarios file for the same reason
+    scenario_options does: /api/meta must not fall over with it.
+    """
+    try:
+        loaded = load_config(config.resource_scenarios_path())
+    except ConfigurationError as exc:
+        logger.warning("Resource scenario parameters are unavailable: %s", exc)
+        return {}
+    parameters: Dict[str, List[Dict[str, Any]]] = {}
+    for option in scenario_options():
+        try:
+            scenario = require_configured_scenario(loaded, option["id"])
+        except ConfigurationError:
+            continue
+        parameters[option["id"]] = describe_parameters(loaded, scenario)
+    return parameters
 
 
 def _required_number(payload: dict, key: str, label: str) -> float:
@@ -115,6 +144,13 @@ def build_request(payload: dict) -> Dict[str, Any]:
         request["area_p10_km2"] = _required_number(payload, "area_p10_km2", "Area P10 [km²]")
         request["thickness_p50_ft"] = _required_number(
             payload, "thickness_p50_ft", "Thickness P50 [ft]")
+    # Advanced settings: per-run substitutes for the scenario's petrophysical
+    # distributions. Passed straight through -- resource_engine.overrides owns
+    # every check and names the offending parameter in its message, which the
+    # engine-error translation in run() turns into a 400.
+    overrides = payload.get("overrides")
+    if overrides:
+        request["overrides"] = overrides
     return request
 
 
@@ -154,6 +190,9 @@ def run(payload: dict) -> Dict[str, Any]:
     response: Dict[str, Any] = {
         "gas": result["gas_piip"],
         "units": result["units"],
+        # Which parameters this run did NOT take from the scenario, so a caller
+        # can mark a result computed on substituted assumptions.
+        "overridden_inputs": result.get("diagnostics", {}).get("overridden_inputs", []),
         "plots": {"gas": _render_plot(result, "gas")},
     }
     if result.get("condensate_piip"):

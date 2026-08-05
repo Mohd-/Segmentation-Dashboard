@@ -10,6 +10,7 @@ from .config import load_config, resolve_shared_distribution
 from .distributions import sample_distribution
 from .exceptions import ConfigurationError
 from .models import ResourceRequest
+from .overrides import apply_override, validate_overrides
 from .validation import require_configured_scenario, require_method_configured
 from .volumetrics import area_thickness_grv_ft3, dry_gas_giip_bcf, grv_method_ft3
 
@@ -34,7 +35,15 @@ def calculate_resources(
         raise ConfigurationError("Only dry-gas and condensate scenarios are currently operational.")
 
     rng = np.random.default_rng(normalized.seed)
+    # Already checked by ResourceRequest.validate(); re-run to get the
+    # NORMALIZED form (numbers coerced, shape keys narrowed to the chosen
+    # distribution) that apply_override expects.
+    overrides = validate_overrides(normalized.overrides)
     diagnostics: dict[str, Any] = {"effective_inputs": {}, "warnings": []}
+    # Which parameters this run did NOT take from the scenario. Reported back
+    # so a result computed on substituted assumptions can never be mistaken
+    # for one computed on the approved ones.
+    diagnostics["overridden_inputs"] = sorted(overrides)
 
     if normalized.method == "grv":
         grv_distribution_type = config["method_defaults"]["grv"]["grv_distribution"]
@@ -68,7 +77,7 @@ def calculate_resources(
             rng,
         )
         factor_samples, factor_diag = sample_distribution(
-            area_cfg["geometric_factor"],
+            apply_override(area_cfg["geometric_factor"], overrides.get("geometric_factor")),
             normalized.iterations,
             rng,
         )
@@ -79,7 +88,7 @@ def calculate_resources(
     else:
         raise ConfigurationError(f"Unknown calculation method '{normalized.method}'.")
 
-    sampled_inputs = _sample_dry_gas_inputs(config, scenario, normalized.iterations, rng)
+    sampled_inputs = _sample_dry_gas_inputs(config, scenario, normalized.iterations, rng, overrides)
     diagnostics["effective_inputs"].update(sampled_inputs["diagnostics"])
     diagnostics["warnings"].extend(_collect_warnings(diagnostics["effective_inputs"]))
 
@@ -124,7 +133,16 @@ def _sample_dry_gas_inputs(
     scenario: dict[str, Any],
     iterations: int,
     rng: np.random.Generator,
+    overrides: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    """Sample the scenario's petrophysical inputs, honouring per-run overrides.
+
+    ``overrides`` is the validated mapping from resource_engine.overrides; a
+    parameter it does not name is sampled exactly as the scenario configures
+    it. trap_fill, the shrinkage factor and the condensate yield are NOT
+    overridable and are read straight from the scenario.
+    """
+    overrides = overrides or {}
     samples: dict[str, np.ndarray] = {}
     diagnostics: dict[str, Any] = {}
     inputs = {
@@ -138,6 +156,8 @@ def _sample_dry_gas_inputs(
     if scenario.get("resource_type") == "condensate":
         inputs["condensate_yield"] = scenario.get("condensate_yield")
     for name, spec in inputs.items():
+        if name in overrides:
+            spec = apply_override(spec if isinstance(spec, dict) else None, overrides[name])
         if not isinstance(spec, dict):
             raise ConfigurationError(f"Scenario input '{name}' is missing or invalid.")
         samples[name], diagnostics[name] = sample_distribution(spec, iterations, rng)

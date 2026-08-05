@@ -75,6 +75,90 @@ function scenarioOptions(scenarios) {
   }).join('');
 }
 
+/* ---------------------------------------------------------------------------
+   Advanced settings: the scenario's own petrophysical distributions
+
+   Porosity, Sg, NGR, the geometric factor and 1/Bg are the approved
+   per-scenario assumptions in config/scenarios.yaml. Until now they were
+   invisible -- a run's answer depended on five numbers the user could not see,
+   let alone question. This panel shows what the selected scenario WOULD use
+   and lets one run substitute its own values.
+
+   The rows are rendered from /api/meta's `resource_parameters`, so this file
+   never carries a second copy of the numbers. Only rows the user actually
+   CHANGED are sent: an untouched panel means the run is byte-identical to one
+   made with the panel closed, which is what makes opening it safe.
+   --------------------------------------------------------------------------- */
+
+// The three the sampler implements. Anything else is refused server-side, so
+// the select never offers it.
+var ADVANCED_DISTRIBUTIONS = ['constant', 'normal', 'lognormal'];
+
+function advancedMarkup() {
+  return '<details id="calc-advanced" class="calc-advanced">' +
+    '<summary>Advanced settings' +
+      '<span class="calc-advanced-note">Scenario assumptions — porosity, Sg, NGR, geometric factor, 1/Bg</span>' +
+      '<span class="calc-advanced-count hidden"></span></summary>' +
+    '<div id="calc-advanced-rows" class="calc-advanced-rows"></div>' +
+    '<p class="calc-guidance">Changes apply to the next run only. Nothing here is saved, and lead assessments always use the scenario as configured.</p>' +
+    '</details>';
+}
+
+// The engine reads a normal from mean+stddev when it has both, and otherwise
+// from P90/P10. The panel always speaks in percentiles -- one idea of "range"
+// across all three distributions -- so an edited normal is sent as P90/P10 and
+// the engine derives its moments. That is only ever applied to a row the user
+// edited, so a scenario configured with explicit moments keeps them untouched.
+function advancedFieldsFor(distribution) {
+  if (distribution === 'constant') return [{ key: 'value', label: 'Value' }];
+  return [{ key: 'p90', label: 'P90' }, { key: 'p10', label: 'P10' }];
+}
+
+function advancedDefaults(parameter) {
+  var distribution = parameter.distribution || 'normal';
+  var defaults = { distribution: distribution };
+  advancedFieldsFor(distribution).forEach(function (field) {
+    var raw = parameter[field.key];
+    // A normal configured with moments only still needs a percentile pair to
+    // show; the served payload carries whichever the scenario declares.
+    defaults[field.key] = raw == null ? '' : String(raw);
+  });
+  return defaults;
+}
+
+function boundsNote(parameter) {
+  var bits = [];
+  if (parameter.minimum != null) bits.push('min ' + parameter.minimum);
+  if (parameter.maximum != null) bits.push('max ' + parameter.maximum);
+  if (!bits.length) return '';
+  return '<span class="calc-adv-bounds">' + esc(bits.join(' · ')) + '</span>';
+}
+
+function advancedRowMarkup(parameter) {
+  var defaults = advancedDefaults(parameter);
+  var fields = advancedFieldsFor(defaults.distribution).map(function (field) {
+    return '<label><span>' + esc(field.label) + '</span>' +
+      '<input type="number" step="any" min="0" data-adv-field="' + esc(field.key) + '"' +
+      ' value="' + esc(defaults[field.key]) + '" aria-label="' +
+      esc(parameter.label + ' ' + field.label) + '"></label>';
+  }).join('');
+  var options = ADVANCED_DISTRIBUTIONS.map(function (name) {
+    return '<option' + (name === defaults.distribution ? ' selected' : '') + '>' + name + '</option>';
+  }).join('');
+  return '<div class="calc-adv-row" data-adv="' + esc(parameter.name) + '">' +
+    '<div class="calc-adv-head">' +
+      '<span class="calc-adv-label">' + esc(parameter.label) +
+        '<small>' + esc(parameter.unit || '') + '</small></span>' +
+      boundsNote(parameter) +
+      '<span class="calc-adv-modified hidden">modified</span>' +
+      '<button type="button" class="ghost calc-adv-reset" hidden>Reset</button>' +
+    '</div>' +
+    '<div class="calc-adv-fields">' +
+      '<label><span>Distribution</span><select data-adv-field="distribution">' + options + '</select></label>' +
+      fields +
+    '</div></div>';
+}
+
 function resourceMarkup(meta) {
   var scenarios = resourceScenarios(meta);
   var unavailable = scenarios.length === 0;
@@ -95,6 +179,7 @@ function resourceMarkup(meta) {
         numberField('calc-resource-area-p10', 'Area P10', 'km²', '') +
         numberField('calc-resource-thickness', 'Thickness P50', 'ft', '') +
       '</div>' +
+      advancedMarkup() +
       '<p id="calc-resource-error" class="calc-error hidden" role="alert"></p>' +
       '<button id="calc-resource-run" type="button"' + unavailableAttributes + '>Run simulation</button>' +
     '</div>' +
@@ -188,6 +273,22 @@ function resourceState(root) {
   };
 }
 
+// A result computed on substituted assumptions is not the scenario's answer,
+// and the panel that changed them may be collapsed by the time it lands. The
+// server reports back which parameters it actually overrode (never the
+// client's own idea of it), so the banner cannot drift from what was run.
+function renderOverrideNotice(root, result) {
+  var results = root.querySelector('#calc-resource-results');
+  var names = (result && result.overridden_inputs) || [];
+  if (!names.length) return;
+  var labels = names.map(function (name) {
+    var row = root.querySelector('.calc-adv-row[data-adv="' + name + '"] .calc-adv-label');
+    return row ? row.firstChild.textContent.trim() : name;
+  });
+  results.insertAdjacentHTML('afterbegin',
+    '<p class="calc-override-banner">Run with overridden assumptions: ' + esc(labels.join(', ')) + '</p>');
+}
+
 function renderResourcePlots(root, result) {
   var plots = root.querySelector('#calc-resource-plots');
   plots.innerHTML = '';
@@ -201,7 +302,172 @@ function renderResourcePlots(root, result) {
   });
 }
 
-function wireResources(root, renderGeneration) {
+/* The Advanced panel's live state, rebuilt whenever the scenario changes.
+   `defaults` is what the scenario configures; the controls start there, and a
+   row counts as OVERRIDDEN only once its values differ from it. */
+function advancedController(root, meta) {
+  var host = root.querySelector('#calc-advanced-rows');
+  var details = root.querySelector('#calc-advanced');
+  var parametersByScenario = (meta && meta.resource_parameters) || {};
+  var defaults = {};
+
+  function rows() { return Array.prototype.slice.call(host.querySelectorAll('.calc-adv-row')); }
+
+  function readRow(row) {
+    var spec = {};
+    Array.prototype.forEach.call(row.querySelectorAll('[data-adv-field]'), function (control) {
+      spec[control.getAttribute('data-adv-field')] = control.value;
+    });
+    return spec;
+  }
+
+  function isModified(row) {
+    var name = row.getAttribute('data-adv');
+    var current = readRow(row);
+    var base = defaults[name] || {};
+    return Object.keys(current).some(function (key) {
+      return String(current[key]) !== String(base[key] == null ? '' : base[key]);
+    });
+  }
+
+  // Re-render a row's numeric inputs when its distribution changes: a constant
+  // takes one value, the other two take a percentile pair, and leaving the old
+  // inputs behind would send fields the chosen distribution has no use for
+  // (which the server refuses by name).
+  function refreshFields(row) {
+    var name = row.getAttribute('data-adv');
+    var parameter = (currentParameters() || []).filter(function (p) { return p.name === name; })[0];
+    if (!parameter) return;
+    var distribution = row.querySelector('[data-adv-field="distribution"]').value;
+    var base = defaults[name] || {};
+    var fields = advancedFieldsFor(distribution).map(function (field) {
+      // Keep the configured value where the new shape still has that field.
+      var value = base[field.key] == null ? '' : base[field.key];
+      return '<label><span>' + esc(field.label) + '</span>' +
+        '<input type="number" step="any" min="0" data-adv-field="' + esc(field.key) + '"' +
+        ' value="' + esc(value) + '" aria-label="' + esc(parameter.label + ' ' + field.label) + '"></label>';
+    }).join('');
+    var container = row.querySelector('.calc-adv-fields');
+    var select = container.querySelector('label');
+    container.innerHTML = '';
+    container.appendChild(select);
+    container.insertAdjacentHTML('beforeend', fields);
+  }
+
+  function markRow(row) {
+    var modified = isModified(row);
+    row.classList.toggle('is-modified', modified);
+    row.querySelector('.calc-adv-modified').classList.toggle('hidden', !modified);
+    row.querySelector('.calc-adv-reset').hidden = !modified;
+  }
+
+  function sync() {
+    var modifiedCount = rows().filter(isModified).length;
+    rows().forEach(markRow);
+    if (details) details.classList.toggle('has-overrides', modifiedCount > 0);
+    var note = details && details.querySelector('.calc-advanced-count');
+    if (note) {
+      note.textContent = modifiedCount ? modifiedCount + ' overridden' : '';
+      note.classList.toggle('hidden', !modifiedCount);
+    }
+  }
+
+  function currentParameters() {
+    var selected = root.querySelector('#calc-resource-scenario');
+    return parametersByScenario[selected ? selected.value : ''] || [];
+  }
+
+  function render() {
+    var parameters = currentParameters();
+    defaults = {};
+    parameters.forEach(function (parameter) { defaults[parameter.name] = advancedDefaults(parameter); });
+    host.innerHTML = parameters.length
+      ? parameters.map(advancedRowMarkup).join('')
+      : '<p class="calc-empty">This scenario publishes no adjustable parameters.</p>';
+    applyMethodVisibility();
+    sync();
+  }
+
+  // The geometric factor only participates in the Box Model, so it is hidden
+  // (not disabled and not sent) while GRV is the selected method.
+  function applyMethodVisibility() {
+    var methodSelect = root.querySelector('#calc-resource-method');
+    var boxModel = methodSelect && methodSelect.value === 'Box Model';
+    currentParameters().forEach(function (parameter) {
+      if (parameter.method !== 'area_thickness') return;
+      var row = host.querySelector('.calc-adv-row[data-adv="' + parameter.name + '"]');
+      if (row) row.classList.toggle('hidden', !boxModel);
+    });
+  }
+
+  // Only MODIFIED, visible rows travel. An untouched panel sends nothing, so
+  // the run is identical to one made with the panel never opened.
+  function payload() {
+    var overrides = {};
+    rows().forEach(function (row) {
+      if (row.classList.contains('hidden') || !isModified(row)) return;
+      var spec = readRow(row);
+      var entry = { distribution: spec.distribution };
+      Object.keys(spec).forEach(function (key) {
+        if (key !== 'distribution' && spec[key] !== '') entry[key] = Number(spec[key]);
+      });
+      overrides[row.getAttribute('data-adv')] = entry;
+    });
+    return Object.keys(overrides).length ? overrides : null;
+  }
+
+  // Client-side sanity so the common mistakes are named before a round trip;
+  // resource_engine/overrides.py remains the authority.
+  function validate() {
+    var message = null;
+    rows().forEach(function (row) {
+      if (message || row.classList.contains('hidden') || !isModified(row)) return;
+      var label = row.querySelector('.calc-adv-label').firstChild.textContent.trim();
+      var spec = readRow(row);
+      var numbers = {};
+      Object.keys(spec).forEach(function (key) {
+        if (key === 'distribution') return;
+        if (spec[key] === '') { message = message || (label + ': ' + key.toUpperCase() + ' is required.'); return; }
+        var parsed = Number(spec[key]);
+        if (isNaN(parsed)) { message = message || (label + ': ' + key.toUpperCase() + ' must be numeric.'); return; }
+        if (parsed < 0) { message = message || (label + ': ' + key.toUpperCase() + ' must not be negative.'); return; }
+        numbers[key] = parsed;
+      });
+      if (!message && numbers.p90 != null && numbers.p10 != null && numbers.p90 >= numbers.p10) {
+        message = label + ': P90 must be lower than P10.';
+      }
+    });
+    return message;
+  }
+
+  host.addEventListener('change', function (event) {
+    var control = event.target;
+    if (control.getAttribute && control.getAttribute('data-adv-field') === 'distribution') {
+      refreshFields(control.closest('.calc-adv-row'));
+    }
+    sync();
+  });
+  host.addEventListener('input', sync);
+  host.addEventListener('click', function (event) {
+    var reset = event.target.closest && event.target.closest('.calc-adv-reset');
+    if (!reset) return;
+    var row = reset.closest('.calc-adv-row');
+    var name = row.getAttribute('data-adv');
+    var base = defaults[name] || {};
+    row.querySelector('[data-adv-field="distribution"]').value = base.distribution;
+    refreshFields(row);
+    Object.keys(base).forEach(function (key) {
+      var control = row.querySelector('[data-adv-field="' + key + '"]');
+      if (control) control.value = base[key];
+    });
+    sync();
+  });
+
+  render();
+  return { render: render, payload: payload, validate: validate, applyMethodVisibility: applyMethodVisibility };
+}
+
+function wireResources(root, renderGeneration, meta) {
   var method = root.querySelector('#calc-resource-method');
   var scenario = root.querySelector('#calc-resource-scenario');
   var button = root.querySelector('#calc-resource-run');
@@ -230,11 +496,18 @@ function wireResources(root, renderGeneration) {
     button.textContent = 'Run simulation';
   }
 
+  var advanced = advancedController(root, meta);
+
   method.addEventListener('change', function () {
     var grv = method.value === 'GRV';
     root.querySelector('#calc-resource-grv').classList.toggle('hidden', !grv);
     root.querySelector('#calc-resource-box').classList.toggle('hidden', grv);
+    advanced.applyMethodVisibility();
   });
+  // A different scenario means different approved assumptions, so the panel is
+  // rebuilt from that scenario's own values -- and any override in flight is
+  // dropped with the rows it belonged to.
+  scenario.addEventListener('change', function () { advanced.render(); });
   var controls = root.querySelector('.calculator-card[data-calculator="resources"] .calc-controls');
   controls.addEventListener('input', invalidate);
   controls.addEventListener('change', invalidate);
@@ -243,6 +516,7 @@ function wireResources(root, renderGeneration) {
     if (button.disabled) return;
     var state = resourceState(root);
     var error = state.scenario ? validateResourceInputs(state) : 'A resource scenario must be selected.';
+    if (!error) error = advanced.validate();
     requestGeneration += 1;
     var requestId = requestGeneration;
     clearResults();
@@ -251,19 +525,26 @@ function wireResources(root, renderGeneration) {
       return;
     }
     showError(root, 'calc-resource-error', '');
-    var snapshot = JSON.stringify(state);
+    var overrides = advanced.payload();
+    // The staleness guard covers the advanced rows too: editing one after
+    // pressing Run must discard the in-flight answer, not label it.
+    var snapshot = JSON.stringify([state, overrides]);
+    var currentSnapshot = function () {
+      return JSON.stringify([resourceState(root), advanced.payload()]);
+    };
     button.disabled = true;
     button.textContent = 'Running…';
     setBusy(resultsRegion, true);
-    API.calculatorResources(buildCalculatePayload(state)).then(function (result) {
-      if (!renderIsCurrent() || requestId !== requestGeneration ||
-          snapshot !== JSON.stringify(resourceState(root))) return;
+    var body = buildCalculatePayload(state);
+    if (overrides) body.overrides = overrides;
+    API.calculatorResources(body).then(function (result) {
+      if (!renderIsCurrent() || requestId !== requestGeneration || snapshot !== currentSnapshot()) return;
       results.className = 'ra-results-panel';
       results.innerHTML = buildResultsMarkup(resultsFromCalculation(result));
+      renderOverrideNotice(root, result);
       renderResourcePlots(root, result);
     }).catch(function (requestError) {
-      if (!renderIsCurrent() || requestId !== requestGeneration ||
-          snapshot !== JSON.stringify(resourceState(root))) return;
+      if (!renderIsCurrent() || requestId !== requestGeneration || snapshot !== currentSnapshot()) return;
       clearResults();
       showError(root, 'calc-resource-error', requestError.message);
     }).finally(function () {
@@ -431,7 +712,7 @@ export function initCalculators(container) {
   root.__calculatorRenderGeneration = renderGeneration;
   root.innerHTML = calculatorMarkup(meta);
   wireTwt(root, meta);
-  wireResources(root, renderGeneration);
+  wireResources(root, renderGeneration, meta);
   wireReservoir(root, renderGeneration);
   wireTrap(root);
   wireSeal(root);
