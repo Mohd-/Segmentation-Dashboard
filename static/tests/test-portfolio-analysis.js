@@ -96,12 +96,17 @@ test('portfolio-analysis.renderResourceBar renders the estimate + proportional s
   assert.match(keys[0].textContent, /Discovered/);
   // Each key also says how MANY records make up its volume.
   assert.match(keys[0].textContent, /1 segment · 2 wells/);
-  assert.match(keys[1].textContent, /Undiscovered · Staked/);
+  // Staked and Proposed drop the "Undiscovered · " prefix: they share the pink
+  // family in the bar, and four keys have to fit ONE row or the card grows as
+  // tall as the picture tiles beside it.
+  assert.match(keys[1].textContent, /Staked/);
   assert.match(keys[1].textContent, /1 well/);
-  assert.match(keys[2].textContent, /Undiscovered · Proposed/);
+  assert.match(keys[2].textContent, /Proposed/);
   assert.match(keys[2].textContent, /1 segment/);
   assert.match(keys[3].textContent, /Yet to Find/);
-  assert.match(keys[3].textContent, /3 fields in the current selection/);
+  assert.match(keys[3].textContent, /3 fields/);
+  // The full sense of each key stays in its tooltip.
+  assert.match(keys[1].getAttribute('title'), /Staked records in the current selection/);
   assert.equal(root.querySelectorAll('.prb-overrun').length, 0);
 });
 
@@ -252,16 +257,16 @@ function portfolioFixture() {
   );
 }
 
-test('portfolio table renders a derived Quadrant column with a badge per row', async function () {
+test('portfolio table marks each row with its quadrant beside the name', async function () {
   var host = portfolioFixture();
   mockFetch(function (url) {
     if (String(url).indexOf('/api/portfolio/rows') >= 0) {
       return new Response(JSON.stringify({ rows: [
-        { project_id: 1, well_name: 'ALPHA-1', gas_field: 'ALPHA', status: 'Gas',
+        { project_id: 1, well_name: 'ALPHA-1', lead_name: 'ALPHA-1', gas_field: 'ALPHA', status: 'Gas',
           mean_ogip: 30, total_cos: 80, is_lead: 0, pipeline_type: 'bp' },
-        { project_id: 2, well_name: 'BETA-1', gas_field: 'BETA', status: 'Staked',
+        { project_id: 2, well_name: 'BETA-1', lead_name: 'BETA-1', gas_field: 'BETA', status: 'Staked',
           mean_ogip: 3, total_cos: 20, is_lead: 1, pipeline_type: 'prospect' },
-        { project_id: 3, well_name: 'GAMMA-1', gas_field: 'GAMMA', status: 'Proposed',
+        { project_id: 3, well_name: 'GAMMA-1', lead_name: 'GAMMA-1', gas_field: 'GAMMA', status: 'Proposed',
           mean_ogip: '', total_cos: '', is_lead: 1, pipeline_type: 'prospect' }
       ] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
@@ -271,35 +276,38 @@ test('portfolio table renders a derived Quadrant column with a badge per row', a
   await refreshPortfolio();
   await waitFor(function () { return host.querySelectorAll('#portfolio-table tbody tr').length === 3; });
 
+  // The quadrant is NOT a column: it is a property of the record, so it rides
+  // in the name cell rather than repeating one of four words down the page.
   var heads = Array.prototype.map.call(
     host.querySelectorAll('#portfolio-table thead th'),
     function (th) { return th.getAttribute('data-key'); });
-  assert.equal(heads[heads.length - 1], 'quadrant', 'Quadrant closes the column set');
-  assert.deepEqual(heads, ['well_name', 'staked_well_name', 'gas_field', 'seismic_block',
-    'classification', 'year', 'status', 'mean_ogip', 'total_cos', 'quadrant']);
+  assert.deepEqual(heads, ['well_name', 'gas_field', 'seismic_block', 'classification',
+    'year', 'status', 'mean_ogip', 'total_cos']);
 
-  var cells = host.querySelectorAll('.pf-quadrant-cell');
-  assert.equal(cells.length, 3);
-  // High CoS + big volume, low CoS + small volume, and a row that cannot be
-  // classified at all.
-  assert.equal(cells[0].textContent.trim(), 'Super Stars');
-  assert.equal(cells[1].textContent.trim(), 'Dogs');
-  assert.equal(cells[2].textContent.trim(), '—');
-  assert.ok(cells[0].querySelector('.pf-quadrant-superstar'));
-  assert.ok(cells[0].querySelector('.pf-quadrant-icon svg'), 'the badge carries its glyph');
-  assert.equal(cells[2].querySelectorAll('.pf-quadrant').length, 0,
-    'an unclassifiable record gets a dash, not an empty badge');
+  var marks = host.querySelectorAll('#portfolio-table tbody .pf-quadrant');
+  assert.equal(marks.length, 2, 'the row with neither measure gets no mark at all');
+  assert.equal(marks[0].getAttribute('aria-label'), 'Super Stars');
+  assert.equal(marks[0].getAttribute('title'), 'Super Stars');
+  assert.ok(marks[0].classList.contains('pf-quadrant-superstar'));
+  assert.ok(marks[0].querySelector('svg'), 'the mark carries its glyph');
+  assert.equal(marks[1].getAttribute('aria-label'), 'Dogs');
+  // An unclassifiable record is not a fifth class -- it simply has no mark.
+  var rows = host.querySelectorAll('#portfolio-table tbody tr');
+  assert.equal(rows[2].querySelectorAll('.pf-quadrant').length, 0);
 });
 
-test('portfolio Quadrant column filters and sorts like a stored column', async function () {
+test('portfolio names a record by its well name and keeps the lead beneath', async function () {
   var host = portfolioFixture();
   mockFetch(function (url) {
     if (String(url).indexOf('/api/portfolio/rows') >= 0) {
       return new Response(JSON.stringify({ rows: [
-        { project_id: 1, well_name: 'ALPHA-1', gas_field: 'A', status: 'Gas',
-          mean_ogip: 30, total_cos: 80, is_lead: 0, pipeline_type: 'bp' },
-        { project_id: 2, well_name: 'BETA-1', gas_field: 'B', status: 'Staked',
-          mean_ogip: 3, total_cos: 20, is_lead: 1, pipeline_type: 'prospect' }
+        // Staked: known here by its well name, matured as a differently named lead.
+        { project_id: 1, well_name: 'ALPHA-1ST1', lead_name: 'ALPHA-1', gas_field: 'ALPHA',
+          status: 'Staked', mean_ogip: 30, total_cos: 80, is_lead: 0, pipeline_type: 'bp' },
+        // Unstaked: the well name falls back to the lead name, so there is
+        // nothing to repeat underneath.
+        { project_id: 2, well_name: 'BETA-1', lead_name: 'BETA-1', gas_field: 'BETA',
+          status: 'Proposed', mean_ogip: 3, total_cos: 20, is_lead: 1, pipeline_type: 'prospect' }
       ] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
     throw new Error('Unexpected request: ' + url);
@@ -308,17 +316,13 @@ test('portfolio Quadrant column filters and sorts like a stored column', async f
   await refreshPortfolio();
   await waitFor(function () { return host.querySelectorAll('#portfolio-table tbody tr').length === 2; });
 
-  var th = host.querySelector('#portfolio-table thead th[data-key="quadrant"]');
-  // The checklist offers all four quadrants whether or not the rowset has
-  // them, exactly as the Status column offers its full vocabulary.
-  var options = th.querySelectorAll('.portfolio-filter-option input[type="checkbox"]');
-  assert.equal(options.length, 4);
-  var dogs = Array.prototype.filter.call(options, function (box) { return box.value === 'Dogs'; })[0];
-  assert.ok(dogs, 'Dogs is offered');
-  dogs.checked = true;
-  dogs.dispatchEvent(new Event('change', { bubbles: true }));
-  await waitFor(function () { return host.querySelectorAll('#portfolio-table tbody tr').length === 1; });
-  assert.equal(host.querySelector('#portfolio-table tbody .pf-quadrant-cell').textContent.trim(), 'Dogs');
+  var rows = host.querySelectorAll('#portfolio-table tbody tr');
+  assert.equal(rows[0].querySelector('.well-link').textContent, 'ALPHA-1ST1');
+  assert.equal(rows[0].querySelector('.pf-lead-name').textContent, 'ALPHA-1',
+    'the lead it was matured under, so the pairing is on the row');
+  assert.equal(rows[1].querySelector('.well-link').textContent, 'BETA-1');
+  assert.equal(rows[1].querySelectorAll('.pf-lead-name').length, 0,
+    'no second line when the two names are the same');
 });
 
 /* ---------------------------------------------------------------------------

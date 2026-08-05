@@ -34,6 +34,7 @@ import config
 import db
 import folders
 import reporting
+import workflow
 
 # ---------------------------------------------------------------------------
 # Column headers (shared with export_excel.py so a zero-row export still
@@ -54,14 +55,15 @@ PORTFOLIO_EXPORT_COLUMNS: List[str] = [
     "Most Recent Age of Fault", "Dip", "Azimuth vs SHmax", "Fault LoC", "FPPM",
     "Seal CoS (%)", "Pore Pressure Gradient (psi/ft)",
     "Gas Rate (MMSCFD)", "Water Rate (BWPD)", "Condensate Rate (BPD)", "Choke Size (in)", "WHP (psi)",
-    # APPENDED, not inserted beside "Well Name" where it reads best: this
-    # sheet's column POSITIONS are a contract for external consumers (pinned
-    # by tests/test_api_contract.py), so a new column goes on the end.
-    # "Well Name" is the RECORD's name -- the same value the Staking sheet
-    # calls "Lead Name", because staking never renames a record. "Staked Well
-    # Name" is the separate name captured at Well Site Location, blank until
-    # the well is staked; together they are the lead <-> well map.
-    "Staked Well Name",
+    # "Well Name" is the name the record is KNOWN BY as a well: the staked
+    # name once it has one, the lead name until then
+    # (workflow.display_record_name). "Lead Name" carries the Segment
+    # Maturation name alongside it, so the pairing survives the export.
+    #
+    # APPENDED rather than placed beside "Well Name" where it reads best: this
+    # sheet's column POSITIONS are a contract for external consumers, pinned by
+    # tests/test_api_contract.py.
+    "Lead Name",
 ]
 
 STAKING_EXPORT_COLUMNS: List[str] = [
@@ -372,8 +374,9 @@ def get_portfolio_export_rows(session) -> List[dict]:
         rows.append({
             "X": _first_filled(fields.get("staking_well_x"), xy.get("lead_x")),
             "Y": _first_filled(fields.get("staking_well_y"), xy.get("lead_y")),
-            "Well Name": item["project_name"],
-            "Staked Well Name": _first_filled(fields.get("staked_well_name")),
+            "Well Name": workflow.display_record_name(
+                item["project_name"], fields.get("staked_well_name")),
+            "Lead Name": item["project_name"],
             "BP Year": item.get("year") or "",
             "Classification": classification,
             "Field": field_name,

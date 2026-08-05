@@ -494,13 +494,16 @@ def get_portfolio_rows(session, year="All", activity="All"):
                                   fields.get("post_drill_piip_gas_mean"),
                                   fields.get("pre_drill_piip_gas_mean"),
                                   fields.get("lead_piip_gas_mean"))
+        staked_name = fields.get("staked_well_name") or ""
         row = {
             "project_id": item["project_id"],
-            "well_name": item["project_name"],
-            # The record's own name is the lead name and stays the identity;
-            # the staked well name is an additional label, blank until the
-            # well is staked. Together they ARE the lead <-> well map.
-            "staked_well_name": fields.get("staked_well_name") or "",
+            # OUTSIDE Segment Maturation a record is known by its staked well
+            # name once it has one (workflow.display_record_name). The lead
+            # name travels alongside rather than being replaced, so the
+            # lead <-> well pairing is always recoverable from a row.
+            "well_name": workflow.display_record_name(item["project_name"], staked_name),
+            "lead_name": item["project_name"],
+            "staked_well_name": staked_name,
             "gas_field": folders.parse_field_and_well(item["project_name"])[0],
             "seismic_block": config.AR_TO_SEISMIC_BLOCK.get(ar_number, ar_number) if ar_number else "",
             "classification": _first_filled(fields.get("bp_gate_classification"),

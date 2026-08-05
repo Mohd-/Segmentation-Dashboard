@@ -16,7 +16,9 @@ import config
 import db
 from helpers import today_str, utc_now_str
 
-from .constants import FORMATIONS, StaleRevisionError
+from .constants import (
+    FORMATIONS, STAKED_WELL_NAME_FIELD, StaleRevisionError, display_record_name,
+)
 from .history import log_task_event
 from .notifications import notify_transition
 from .projects import _sync_completed_at
@@ -620,9 +622,17 @@ def _well_projection(project, tasks, fields, formations, effective):
     items = effective["stages"][current["key"]]
     completed = sum(1 for item in items if item["status"] == "Completed")
     assignees = _assignees(tasks)
+    # From Business Plan Execution onwards a record is known by the name it was
+    # STAKED under; the lead name it was matured under travels alongside so the
+    # pairing stays recoverable (see workflow.display_record_name). `field` is
+    # still derived from the LEAD name -- the field is where the segment is, and
+    # a staked name is not guaranteed to carry the same prefix.
+    staked_name = _value(fields, "Well Site Location", STAKED_WELL_NAME_FIELD)
     return {
         "project_id": project["project_id"],
-        "project_name": project["project_name"],
+        "project_name": display_record_name(project["project_name"], staked_name),
+        "lead_name": project["project_name"],
+        "staked_well_name": staked_name or "",
         "field": _field_from_name(project["project_name"]),
         "business_plan_year": project.get("business_plan_year"),
         "priority": project.get("priority") if project.get("priority") in PRIORITIES else "Low",
@@ -837,7 +847,12 @@ def get_detail(session, project_id, detail_slug):
     return {
         "project": {
             "project_id": project["project_id"],
-            "project_name": project["project_name"],
+            # Same rule as the board: the staked well name once there is one,
+            # with the lead name carried alongside.
+            "project_name": display_record_name(
+                project["project_name"], _value(fields, "Well Site Location", STAKED_WELL_NAME_FIELD)),
+            "lead_name": project["project_name"],
+            "staked_well_name": _value(fields, "Well Site Location", STAKED_WELL_NAME_FIELD) or "",
             "field": _field_from_name(project["project_name"]),
             "business_plan_year": project.get("business_plan_year"),
             "priority": project.get("priority") if project.get("priority") in PRIORITIES else "Low",

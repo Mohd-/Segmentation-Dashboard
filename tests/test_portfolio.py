@@ -562,28 +562,50 @@ def test_year_floor_is_strict_on_promotion_but_wide_on_edits(client):
 
 
 # ---------------------------------------------------------------------------
-# Staked well name -- the lead <-> well map
+# Staked well name -- what a record is CALLED, and where
 # ---------------------------------------------------------------------------
-# Staking does NOT rename a record: projects.project_name is the one name
-# column and only the explicit rename endpoint writes it. The name a well is
-# staked under is a separate value captured at Well Site Location, and until
-# now nothing read it back -- so no surface anywhere paired the two.
+# Staking does not RENAME the record: projects.project_name stays the lead name
+# and only the explicit rename endpoint writes it. What staking does is decide
+# the name the record is known by as a well. Outside Segment Maturation -- here
+# in the Portfolio, and from BP Execution onwards -- that staked name is the
+# well name; the lead name travels alongside so the pairing stays recoverable.
 
-def test_staked_well_name_rides_beside_the_record_name(client):
+def test_staking_sets_the_portfolio_well_name_without_renaming_the_lead(client):
     pid = create_project(client, "STAKE-MAP-1", **BP_KWARGS)
     row = _row_for(client, pid)
-    assert row["well_name"] == "STAKE-MAP-1"
-    assert row["staked_well_name"] == "", "blank until the well is staked"
+    assert row["well_name"] == "STAKE-MAP-1", "falls back to the lead name while unstaked"
+    assert row["staked_well_name"] == ""
+    assert row["lead_name"] == "STAKE-MAP-1"
 
     _save_fields(client, pid, "Well Site Location", {"staked_well_name": "STAKE-MAP-1ST2"})
     row = _row_for(client, pid)
+    # The Portfolio now calls it by its well name...
+    assert row["well_name"] == "STAKE-MAP-1ST2"
     assert row["staked_well_name"] == "STAKE-MAP-1ST2"
-    # The record's own name is untouched: the pair is the point, not a rename.
-    assert row["well_name"] == "STAKE-MAP-1"
+    # ...while the lead name is still carried, and the RECORD is not renamed.
+    assert row["lead_name"] == "STAKE-MAP-1"
     assert client.get(f"/api/projects/{pid}/detail").get_json()["project"]["project_name"] == "STAKE-MAP-1"
 
 
-def test_staked_well_name_reaches_both_export_sheets(client):
+def test_business_plan_execution_calls_a_staked_record_by_its_well_name(client):
+    pid = create_project(client, "STAKE-BPE-1", **BP_KWARGS)
+    _save_fields(client, pid, "Well Site Location", {"staked_well_name": "STAKE-BPE-1ST1"})
+
+    # BP_KWARGS puts the well in 2027; the dashboard defaults to the current year.
+    wells = client.get("/api/business-plan/dashboard?year=2027").get_json()["wells"]
+    well = next(w for w in wells if w["project_id"] == pid)
+    assert well["project_name"] == "STAKE-BPE-1ST1"
+    assert well["lead_name"] == "STAKE-BPE-1"
+    # The FIELD still comes from the lead name: the field is where the segment
+    # is, and a staked name need not carry the same prefix.
+    assert well["field"] == "STAKE"
+
+    detail = client.get(f"/api/business-plan/wells/{pid}/steps/business-plan-gate").get_json()
+    assert detail["project"]["project_name"] == "STAKE-BPE-1ST1"
+    assert detail["project"]["lead_name"] == "STAKE-BPE-1"
+
+
+def test_export_names_a_staked_record_by_its_well_name_and_keeps_the_lead(client):
     import io
 
     import openpyxl
@@ -597,16 +619,22 @@ def test_staked_well_name_reaches_both_export_sheets(client):
     assert resp.status_code == 200
     workbook = openpyxl.load_workbook(io.BytesIO(resp.data))
 
-    for sheet, name_column in (("Portfolio Export", "Well Name"), ("Staking Options", "Lead Name")):
-        worksheet = workbook[sheet]
-        header = [cell.value for cell in worksheet[4]]
-        assert "Staked Well Name" in header, sheet
-        rows = [r for r in worksheet.iter_rows(min_row=5, max_row=worksheet.max_row, values_only=True)
-                if r[header.index(name_column)] == "STAKE-XL-1"]
-        assert len(rows) == 1, sheet
-        assert rows[0][header.index("Staked Well Name")] == "STAKE-XL-1ST1", sheet
+    portfolio = workbook["Portfolio Export"]
+    header = [cell.value for cell in portfolio[4]]
+    rows = [r for r in portfolio.iter_rows(min_row=5, max_row=portfolio.max_row, values_only=True)
+            if r[header.index("Lead Name")] == "STAKE-XL-1"]
+    assert len(rows) == 1
+    # Known by its well name, paired with the lead it came from.
+    assert rows[0][header.index("Well Name")] == "STAKE-XL-1ST1"
+
+    staking = workbook["Staking Options"]
+    staking_header = [cell.value for cell in staking[4]]
+    staking_rows = [r for r in staking.iter_rows(min_row=5, max_row=staking.max_row, values_only=True)
+                    if r[staking_header.index("Lead Name")] == "STAKE-XL-1"]
+    assert len(staking_rows) == 1
+    assert staking_rows[0][staking_header.index("Staked Well Name")] == "STAKE-XL-1ST1"
 
     # The Portfolio sheet's historical column POSITIONS are a contract for
     # external consumers, so the new column is appended, never inserted.
-    assert portfolio_export.PORTFOLIO_EXPORT_COLUMNS[-1] == "Staked Well Name"
+    assert portfolio_export.PORTFOLIO_EXPORT_COLUMNS[-1] == "Lead Name"
     assert portfolio_export.PORTFOLIO_EXPORT_COLUMNS[:3] == ["X", "Y", "Well Name"]

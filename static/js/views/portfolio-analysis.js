@@ -99,20 +99,22 @@ export function renderResourceBar(rows) {
   var element = byId('portfolio-resource-bar');
   if (!element) return;
   var summary = computeResourceSummary(rows);
-  var fieldsPhrase = summary.fieldCount + ' field' + (summary.fieldCount === 1 ? '' : 's') +
-    ' in the current selection';
+  var fieldsShort = summary.fieldCount + ' field' + (summary.fieldCount === 1 ? '' : 's');
+  var fieldsPhrase = fieldsShort + ' in the current selection';
   var stages = [
     { slug: 'discovered', label: 'Discovered', value: summary.discovered.bcf,
       counts: countsLabel(summary.discovered),
       hint: 'Sum of Mean OGIP over Gas and Gas over Water records in the current selection' },
-    { slug: 'staked', label: 'Undiscovered · Staked', value: summary.staked.bcf,
+    { slug: 'staked', label: 'Staked', value: summary.staked.bcf,
       counts: countsLabel(summary.staked),
       hint: 'Sum of Mean OGIP over Staked records in the current selection' },
-    { slug: 'proposed', label: 'Undiscovered · Proposed', value: summary.proposed.bcf,
+    { slug: 'proposed', label: 'Proposed', value: summary.proposed.bcf,
       counts: countsLabel(summary.proposed),
       hint: 'Sum of Mean OGIP over Proposed records in the current selection' },
     { slug: 'ytf', label: 'Yet to Find', value: summary.ytf,
-      counts: fieldsPhrase,
+      // The short form: this line sits in a quarter-width column, and the
+      // full phrase is already under the title and in the tooltip.
+      counts: fieldsShort,
       hint: YTF_BCF_PER_FIELD + ' BCF × ' + fieldsPhrase + ', less the ' +
         fmtBcf(summary.accounted) + ' BCF already discovered or booked as potential' }
   ];
@@ -126,6 +128,11 @@ export function renderResourceBar(rows) {
     return '<div class="prb-seg prb-' + stage.slug + '" style="flex:' + stage.value + ' 1 0%" title="' + esc(stage.hint) + '"></div>';
   }).join('');
   if (!segments) segments = '<div class="prb-seg prb-empty"></div>';
+  // Staked and Proposed drop the "Undiscovered · " prefix: they share the
+  // pink family in the bar, which already groups them, and the full sense is
+  // in each key's tooltip. Four keys have to sit in ONE row here -- a wrapped
+  // legend is what made this card as tall as the picture tiles beside it,
+  // and the bar is three short lines of content, not a panel.
   var legend = stages.map(function (stage) {
     return '<div class="prb-key" title="' + esc(stage.hint) + '">' +
       '<b><span class="prb-swatch prb-' + stage.slug + '"></span>' + esc(fmtBcf(stage.value)) + ' BCF</b>' +

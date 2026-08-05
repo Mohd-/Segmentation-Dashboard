@@ -407,7 +407,13 @@ export function renderDetail() {
   var otherLabel = otherPipeline === 'bp' ? 'Business Plan Execution' : 'Prospect Maturation';
   var isReference = !isCurrentPipelineView();
   var leadView = isLeadView();
-  byId('detail-name').textContent = Store.project.project_name || 'Lead / Well';
+  // WHAT THIS RECORD IS CALLED HERE. Segment Maturation always shows the lead
+  // name -- that is the pipeline the segment is being matured in, and renaming
+  // it mid-pipeline because a well name was chosen would lose the thread. The
+  // Business Plan view shows the name it was STAKED under once there is one
+  // (workflow.display_record_name is the server's twin of this rule); the lead
+  // name is not lost, it moves to the summary card's phase row.
+  byId('detail-name').textContent = displayRecordName() || 'Lead / Well';
   // The chip ships hidden in index.html (no record selected yet); the render
   // rewrites its className wholesale, which is also what reveals it.
   renderLeadPriorityChip();
@@ -678,6 +684,20 @@ function formationIsTight(row) {
   if (fluid === 'Dry' || fluid === 'Dry Hole') return true;
   return fluid === '' && (row.pay_ft === 0 || String(row.pay_ft).trim() === '0');
 }
+// The staked well name, or '' -- captured at Well Site Location and read back
+// from the record's own fields (the same value the server resolves from).
+export function stakedWellName() {
+  return (Store.allFields['Well Site Location'] || {}).staked_well_name || '';
+}
+
+// The name to show for the record in the CURRENT view. See renderDetail.
+export function displayRecordName() {
+  var leadName = (Store.project && Store.project.project_name) || '';
+  if (Store.pipeline !== 'bp') return leadName;
+  var staked = String(stakedWellName()).trim();
+  return staked || leadName;
+}
+
 /* Reservoir Properties uses TWO decimals, not fmtNum's one: a water saturation
    or a porosity is read to the hundredth (0.92, 21.35) and rounding it to one
    place throws away a digit that matters. Percentages stay percentages -- the
@@ -1016,14 +1036,15 @@ export function renderRightPanel(tasks) {
   // itself is a gear-popover action (see popoverHtml) -- rare, irreversible
   // without a counter-move, and supervisor-only, so it stays off the card face.
   //
-  // The STAKED WELL NAME rides here too, when there is one. Staking does not
-  // rename a record -- the card's title is still the lead name -- so this was
-  // the one value that made the pairing visible nowhere at all: it is captured
-  // at Well Site Location and, until now, read back by nothing.
-  var stakedName = (Store.allFields['Well Site Location'] || {}).staked_well_name;
-  var stakedHtml = isFilled(stakedName)
-    ? '<span class="summary-phase-well" title="Staked well name — the lead keeps its own name">' +
-      esc(stakedName) + '</span>'
+  // The OTHER name rides here, opposite the phase. A BP well is titled by the
+  // name it was STAKED under, so this carries the lead it was matured as --
+  // the only place that pairing is visible once the title has changed. Shown
+  // only when the two names actually differ.
+  var leadName = (Store.project && Store.project.project_name) || '';
+  var staked = String(stakedWellName()).trim();
+  var stakedHtml = (viewingBP && staked && staked !== leadName)
+    ? '<span class="summary-phase-well" title="Lead name in Segment Maturation">' +
+      esc(leadName) + '</span>'
     : '';
   var phaseHtml = '<div class="summary-phase"><span class="summary-phase-label">' +
     (isBP ? 'BP Well · ' + esc(Store.project.business_plan_year || year) : 'Lead') +

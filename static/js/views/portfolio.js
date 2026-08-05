@@ -9,9 +9,9 @@ import { openDetail } from './detail.js';
 // is a hoisted function declaration and only called from event handlers, same
 // as the existing detail → pipeline → portfolio chain.
 import { refreshAllBoards } from './pipeline.js';
-import { renderResourceBar, setCrossPlotRows, quadrantOf, QUADRANT_LABELS } from './portfolio-analysis.js';
+import { renderResourceBar, setCrossPlotRows, quadrantOf } from './portfolio-analysis.js';
 
-// Exactly the 9 analysis columns, in this order. `filter` selects the
+// Exactly the 8 analysis columns, in this order. `filter` selects the
 // column-filter control rendered in the second thead row: 'text' = substring
 // input, 'multi' = distinct-value checklist popover (multi-select; BP Year's
 // discrete values fit this, layered over the toolbar's server-side year
@@ -29,26 +29,25 @@ var STATUS_OPTIONS = FLUID_TYPES.filter(function (value) { return value !== ''; 
   .concat(['Proposed', 'Staked']);
 
 var COLUMNS = [
-  { key: 'well_name', label: 'Lead / Well Name', numeric: false, filter: 'text' },
-  // The name the well was STAKED under, which is a separate value from the
-  // record's own name -- staking never renames a record. Side by side, these
-  // two columns are the lead <-> staked-well map; blank until staking.
-  { key: 'staked_well_name', label: 'Staked Well Name', numeric: false, filter: 'text' },
+  // `well_name` is the name the record is KNOWN BY here: the staked well name
+  // once it has one, the lead name until then (workflow.display_record_name).
+  // The lead name is not a column of its own -- it appears under the well name
+  // only on the rows where the two differ, which is the whole lead <-> well
+  // map without a column that repeats the other one on every other row.
+  { key: 'well_name', label: 'Well Name', numeric: false, filter: 'text' },
   { key: 'gas_field', label: 'Field', numeric: false, filter: 'multi' },
   { key: 'seismic_block', label: 'Seismic Block', numeric: false, filter: 'text' },
   { key: 'classification', label: 'Classification', numeric: false, filter: 'multi' },
   { key: 'year', label: 'BP Year', numeric: true, filter: 'multi' },
   { key: 'status', label: 'Status', numeric: false, filter: 'multi', options: STATUS_OPTIONS },
   { key: 'mean_ogip', label: 'Mean OGIP (BCF)', numeric: true, filter: 'range' },
-  { key: 'total_cos', label: 'Total CoS (%)', numeric: true, filter: 'range' },
-  // DERIVED, not a payload field: `derive` is the read used everywhere a
-  // column value is needed (filter, sort, cell), so the cross plot's four
-  // cutoff quadrants become a first-class table column without the server
-  // learning anything about them. A record missing either measure has no
-  // quadrant ('') and reads as a dash.
-  { key: 'quadrant', label: 'Quadrant', numeric: false, filter: 'multi',
-    options: QUADRANT_LABELS, derive: quadrantOf }
+  { key: 'total_cos', label: 'Total CoS (%)', numeric: true, filter: 'range' }
 ];
+
+// The cross plot's four cutoff quadrants are NOT a column: they are a property
+// of the record, so the glyph rides in the name cell rather than taking a
+// column's worth of width to repeat one of four words down the page. The
+// dialog's Quadrant checklist remains the place to filter by them.
 
 // Every column read goes through here so a derived column behaves exactly
 // like a stored one in filtering, sorting and rendering.
@@ -213,9 +212,6 @@ function yearCellMarkup(row) {
   return '<td>' + yearText + '</td>';
 }
 
-// Quadrant -> glyph. The icon is redundant with the label beside it (it is
-// aria-hidden); it exists so a scan down the column reads as four shapes
-// rather than four similar-length words.
 var QUADRANT_ICONS = {
   'Super Stars': 'quadrant-superstar',
   'Risk Takers': 'quadrant-risk-taker',
@@ -223,21 +219,42 @@ var QUADRANT_ICONS = {
   'Dogs': 'quadrant-dog'
 };
 
-// A record without both measures has no quadrant, and reads as a dash rather
-// than as an empty cell -- the same rule the summary cards use.
-function quadrantCellMarkup(row) {
+// The quadrant mark that sits beside a record's name. Icon only -- the word is
+// carried by the title and the accessible label, because four names repeated
+// down a column is what made this a column in the first place. A record
+// missing either measure has no quadrant and gets no mark at all (an absent
+// classification is not a fifth class).
+function quadrantMarkMarkup(row) {
   var quadrant = quadrantOf(row);
-  if (!quadrant) return '<td class="pf-quadrant-cell">—</td>';
+  if (!quadrant) return '';
   var key = QUADRANT_ICONS[quadrant];
-  return '<td class="pf-quadrant-cell"><span class="pf-quadrant pf-' + esc(key) + '">' +
-    '<span class="pf-quadrant-icon" aria-hidden="true">' + ICONS[key] + '</span>' +
-    esc(quadrant) + '</span></td>';
+  return '<span class="pf-quadrant pf-' + esc(key) + '" role="img"' +
+    ' title="' + esc(quadrant) + '" aria-label="' + esc(quadrant) + '">' + ICONS[key] + '</span>';
+}
+
+/* The name cell: the quadrant mark, the name the record is known by, and --
+   only when staking gave it a different one -- the lead name it was matured
+   under, quietly beneath. That second line is the lead <-> well map, and it
+   costs nothing on the rows where the two names are the same. */
+function nameCellMarkup(row) {
+  var toBP = row.pipeline_type === 'bp';
+  var leadName = row.lead_name || '';
+  var showsLead = isFilled(leadName) && leadName !== row.well_name;
+  return '<td class="pf-name-cell">' +
+    quadrantMarkMarkup(row) +
+    '<span class="pf-name">' +
+      '<a href="#" class="well-link" data-project-id="' + esc(row.project_id) + '"' +
+      ' data-pipeline="' + (toBP ? 'bp' : 'prospect') + '"' +
+      ' title="Open in ' + (toBP ? 'Business Plan Execution' : 'Segment Maturation') + '">' +
+      esc(row.well_name || '') + '</a>' +
+      (showsLead ? '<small class="pf-lead-name" title="Lead name in Segment Maturation">' +
+        esc(leadName) + '</small>' : '') +
+    '</span></td>';
 }
 
 function rowMarkup(row) {
   return '<tr>' +
-    '<td><a href="#" class="well-link" data-project-id="' + esc(row.project_id) + '" data-pipeline="' + esc(row.pipeline_type === 'bp' ? 'bp' : 'prospect') + '" title="Open in ' + (row.pipeline_type === 'bp' ? 'Business Plan Execution' : 'Prospect Maturation') + '">' + esc(row.well_name || '') + '</a></td>' +
-    '<td>' + (isFilled(row.staked_well_name) ? esc(row.staked_well_name) : '<span class="pf-unstaked">—</span>') + '</td>' +
+    nameCellMarkup(row) +
     '<td>' + esc(row.gas_field || '') + '</td>' +
     '<td>' + esc(row.seismic_block || '') + '</td>' +
     '<td>' + esc(row.classification || '') + '</td>' +
@@ -245,7 +262,6 @@ function rowMarkup(row) {
     '<td>' + esc(row.status || '') + '</td>' +
     '<td>' + esc(fmtNum(row.mean_ogip) || '') + '</td>' +
     '<td>' + esc(fmtNum(row.total_cos) || '') + '</td>' +
-    quadrantCellMarkup(row) +
     '</tr>';
 }
 

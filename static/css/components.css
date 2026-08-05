@@ -1556,7 +1556,11 @@ button.ghost.success-outline:hover { background: var(--success-100); }
    longer has to carry the row on its own) and the tiles take the space the
    boxes used, which is what makes a plot legible at this size. */
 .portfolio-overview { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: stretch; margin: 0 0 var(--space-4); }
-.portfolio-resource-card { position: relative; flex: 1 1 380px; min-width: 300px; padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-sunken); }
+/* align-self keeps the bar SLIM: the two picture tiles set the row's height,
+   and stretching the bar to match them would inflate a control that is three
+   short lines tall into a half-empty panel. It sits at its natural height at
+   the top of the row instead. */
+.portfolio-resource-card { align-self: flex-start; position: relative; flex: 1 1 440px; min-width: 300px; padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-sunken); }
 
 /* The two tiles share one anatomy: a small header (title + either a hint or
    its actions) over a body that fills the rest. Both are interactive surfaces,
@@ -1634,13 +1638,14 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .prb-staked { background: var(--viz-res-2); }
 .prb-proposed { background: var(--viz-res-2b); }
 .prb-ytf { background: var(--viz-res-3); }
-/* Four keys, and each now carries a value, a name and a record count -- too
-   much for one nowrap row in the narrowed card. A wrapping grid keeps every
-   label whole (an ellipsis on "Undiscovered · Staked" leaves it unreadable)
-   and reflows to two columns rather than clipping. */
-.prb-legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: var(--space-2) var(--space-3); margin-top: 6px; }
+/* Four keys in ONE row: the whole point of this card is to be a slim readout,
+   and a legend that wraps to two rows made it as tall as the picture tiles
+   beside it. Equal columns rather than auto-fit, so it stays one row and the
+   labels shorten instead of the grid reflowing; it only drops to two columns
+   when the card itself is genuinely narrow (see the breakpoint below). */
+.prb-legend { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-2); margin-top: 6px; }
 .prb-key { min-width: 0; text-align: left; overflow-wrap: anywhere; }
-.prb-key b { display: block; font-family: var(--font-display); font-variant-numeric: tabular-nums; color: var(--text); font-size: var(--text-base); }
+.prb-key b { display: block; font-family: var(--font-display); font-variant-numeric: tabular-nums; color: var(--text); font-size: var(--text-sm); }
 .prb-key small { display: block; color: var(--text-muted); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .05em; font-family: var(--font-display); font-weight: 700; }
 /* How MANY records make up the volume above -- the count the two deleted
    stat boxes used to carry, now said per category. */
@@ -1691,28 +1696,28 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .pxp-tooltip b { display: block; color: var(--text); }
 .portfolio-table tbody tr { cursor: default; }
 .portfolio-table tbody tr:hover { background: var(--surface); }
-/* Columns: 1 Lead / Well Name, 2 Staked Well Name, 3 Field, 4 Seismic Block,
-   5 Classification, 6 BP Year, 7 Status, 8 Mean OGIP (numeric),
-   9 Total CoS (numeric), 10 Quadrant (derived). Column widths/alignment key
-   off nth-child, so these indices move whenever a column is inserted. The
-   numeric body cells right-align; their headers keep the menu trigger's
-   label-left/affix-right layout. */
-.portfolio-table th:nth-child(1), .portfolio-table td:nth-child(1) { min-width: 160px; }
-.portfolio-table th:nth-child(2), .portfolio-table td:nth-child(2) { min-width: 130px; }
-.portfolio-table th:nth-child(6), .portfolio-table td:nth-child(6) { width: 90px; }
-.portfolio-table td:nth-child(8), .portfolio-table td:nth-child(9) { text-align: right; white-space: nowrap; }
-/* An unstaked record is not missing data -- it simply has no well name yet. */
-.pf-unstaked { color: var(--text-faint); }
+/* Columns: 1 Well Name, 2 Field, 3 Seismic Block, 4 Classification,
+   5 BP Year, 6 Status, 7 Mean OGIP (numeric), 8 Total CoS (numeric). Column
+   widths/alignment key off nth-child, so these indices move whenever a column
+   is inserted. The numeric body cells right-align; their headers keep the menu
+   trigger's label-left/affix-right layout. */
+.portfolio-table th:nth-child(1), .portfolio-table td:nth-child(1) { min-width: 190px; }
+.portfolio-table th:nth-child(5), .portfolio-table td:nth-child(5) { width: 90px; }
+.portfolio-table td:nth-child(7), .portfolio-table td:nth-child(8) { text-align: right; white-space: nowrap; }
 
-/* Quadrant badge: the cross plot's four cutoff classes, brought out of the
-   dialog and onto the row. Icon + word, never icon alone -- the glyphs are a
-   scanning aid, not the message. Tinted per class so the column reads as four
-   bands, using the same semantic tokens the rest of the app uses for
-   good/attention/neutral. */
-.pf-quadrant-cell { white-space: nowrap; }
-.pf-quadrant { display: inline-flex; align-items: center; gap: 6px; font-size: var(--text-sm); font-weight: 700; }
-.pf-quadrant-icon { display: inline-flex; }
-.pf-quadrant-icon .lucide { width: 16px; height: 16px; }
+/* Name cell: quadrant mark, the name the record is known by, and the lead name
+   underneath on the rows where staking gave it a different one. */
+.pf-name-cell { display: flex; align-items: baseline; gap: 6px; }
+.pf-name { display: flex; flex-direction: column; min-width: 0; }
+.pf-lead-name { color: var(--text-faint); font-size: var(--text-xs); overflow-wrap: anywhere; }
+
+/* Quadrant mark: the cross plot's four cutoff classes, shown beside the record
+   name rather than as a column of four repeating words. Icon only -- the class
+   name is in the title and the accessible label. Tinted per class with the
+   same semantic tokens the rest of the app uses for good/attention/neutral, so
+   the marks are still distinguishable at a glance. */
+.pf-quadrant { display: inline-flex; flex: 0 0 auto; align-self: center; }
+.pf-quadrant .lucide { width: 16px; height: 16px; }
 .pf-quadrant-superstar { color: var(--success-600, var(--success-500)); }
 .pf-quadrant-value-hunter { color: var(--brand-700); }
 .pf-quadrant-risk-taker { color: var(--warning-500); }
@@ -2132,6 +2137,10 @@ button.ghost.success-outline:hover { background: var(--success-100); }
      so it needs no override there. */
   .lead-filter-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .lf-clear { width: 100%; }
+  /* The resource legend's four keys give up on one row here: at phone width a
+     quarter-column is narrower than "Discovered", and a 2x2 is legible where a
+     1x4 is a column of broken words. */
+  .prb-legend { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   /* The band is already stacked (1100px block); here the KPI row additionally
      wraps its tiles, and the Add New Lead button takes the full width like
      every other stacked control. Its top-edge separator carries down. */

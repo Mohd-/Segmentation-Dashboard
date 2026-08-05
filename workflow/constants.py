@@ -102,6 +102,33 @@ def formations() -> list:
 
 FORMATIONS = formations()
 FORMATION_PHASES = ["quicklook", "post_drill", "final", "resource_update"]
+
+# ---------------------------------------------------------------------------
+# What a record is CALLED, and where
+# ---------------------------------------------------------------------------
+# A record keeps ONE identity for its whole life -- projects.project_name, the
+# lead name -- and staking does not rename it. What staking does is give the
+# record the name it will be known by as a WELL, captured at Well Site Location
+# in the `staked_well_name` dynamic field.
+#
+# So the same record answers to two names depending on where you are looking:
+#
+#   Segment Maturation   the LEAD name, always. This is the pipeline where the
+#                        segment is being matured; renaming it mid-pipeline
+#                        because a well name was chosen would lose the thread.
+#   Everywhere else      the STAKED WELL name once there is one -- Business
+#                        Plan Execution, Portfolio Analysis, the exports --
+#                        falling back to the lead name while it is unstaked.
+#
+# Both names travel together on every payload that carries either, so the
+# lead <-> well pairing is always recoverable.
+STAKED_WELL_NAME_FIELD = "staked_well_name"
+
+
+def display_record_name(project_name, staked_well_name=None):
+    """The name a record is known by OUTSIDE Segment Maturation."""
+    staked = str(staked_well_name or "").strip()
+    return staked or str(project_name or "")
 FORMATION_VALUE_FIELDS = [
     "top_tvdss_ft", "base_tvdss_ft", "thickness_ft", "porosity_pct",
     "swt_pct", "pay_ft", "ngr_pct", "fluid",
