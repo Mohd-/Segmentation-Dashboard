@@ -785,3 +785,128 @@ test('business-plan the BP Gate toggle narrows only the Pre-Drilling column', as
   assert.equal(host.querySelector('#bpe-kpis').textContent, kpisBefore,
     'global KPIs are not a function of this toggle');
 });
+
+// ---------------------------------------------------------------------------
+// Card 3T -- Coring Formations is a checkbox dropdown
+// ---------------------------------------------------------------------------
+//
+// The VALUE was always a JSON array; only the control was wrong. A native
+// <select multiple> needs Ctrl-click for a second pick, which nothing else in
+// this application asks for.
+
+function gateDetailWithCoring(selected, options) {
+  var detail = detailPayload('business-plan-gate', {
+    bp_gate_coring_program: 'Yes',
+    bp_gate_coring_formations: selected
+  });
+  detail.formation_options = options || ['SARH', 'QASM', 'QWRH'];
+  return detail;
+}
+
+function mountGate(detail, onPatch) {
+  var host = fixture('<div id="bpe-main-view"></div><section id="bpe-detail-view" class="hidden"></section>');
+  resetBusinessPlanState();
+  mockFetch(function (url, options) {
+    var path = String(url);
+    var method = (options && options.method) || 'GET';
+    if (path.indexOf('/field') >= 0 && method === 'PATCH') {
+      if (onPatch) onPatch(JSON.parse(options.body));
+      return response({ ok: true, detail: detail });
+    }
+    if (path.indexOf('/steps/business-plan-gate') >= 0 && method === 'GET') return response(detail);
+    if (path.indexOf('/api/users') >= 0) return response([]);
+    throw new Error('Unexpected request: ' + method + ' ' + path);
+  });
+  return host;
+}
+
+function coringOptionLabels(host) {
+  return Array.prototype.map.call(host.querySelectorAll('#bpe-coring-menu .lf-option'),
+    function (option) {
+      return [option.getAttribute('data-value'), option.getAttribute('aria-checked')];
+    });
+}
+
+test('business-plan Coring Formations opens a checkbox list and multi-selects', async function () {
+  var patches = [];
+  var host = mountGate(gateDetailWithCoring([]), function (body) { patches.push(body.value); });
+  await openBusinessPlanDetail(7, 'business-plan-gate');
+
+  var trigger = host.querySelector('#bpe-coring-trigger');
+  var menu = host.querySelector('#bpe-coring-menu');
+  assert.ok(trigger, 'the native select is gone');
+  assert.equal(host.querySelector('select[data-bpe-field="bp_gate_coring_formations"]'), null);
+  assert.equal(trigger.getAttribute('aria-labelledby'), 'bpe-coring-label');
+  assert.equal(host.querySelector('#bpe-coring-label').textContent.replace('*', ''), 'Coring Formations');
+  assert.equal(trigger.querySelector('.lf-value').textContent, 'None selected');
+  assert.equal(menu.hidden, true, 'C: closed on arrival');
+  assert.equal(menu.getAttribute('role'), 'listbox');
+  assert.equal(menu.getAttribute('aria-multiselectable'), 'true');
+
+  trigger.click();
+  assert.equal(host.querySelector('#bpe-coring-trigger'), trigger, 'the form was not re-rendered');
+  assert.equal(trigger.getAttribute('aria-expanded'), 'true', 'handler ran to completion');
+  assert.equal(menu.querySelectorAll('.lf-option').length, 3, 'options were rendered');
+  assert.equal(menu.hidden, false);
+  // Checkboxes, not radios -- the mark is what says "you may pick several".
+  assert.equal(menu.querySelector('.lf-option').getAttribute('role'), 'checkbox');
+  assert.ok(menu.querySelector('.lf-mark-box'));
+  assert.deepEqual(coringOptionLabels(host),
+    [['SARH', 'false'], ['QASM', 'false'], ['QWRH', 'false']]);
+
+  // Clicking an option selects it WITHOUT closing -- three formations should
+  // be three clicks, not three trips through the trigger.
+  menu.querySelector('[data-value="SARH"]').click();
+  assert.equal(host.querySelector('#bpe-coring-menu').hidden, false, 'B: menu stays open across a toggle');
+  menu = host.querySelector('#bpe-coring-menu');
+  menu.querySelector('[data-value="QWRH"]').click();
+  assert.deepEqual(coringOptionLabels(host),
+    [['SARH', 'true'], ['QASM', 'false'], ['QWRH', 'true']]);
+  assert.equal(host.querySelector('#bpe-coring-trigger .lf-value').textContent, '2 Formations');
+
+  await waitFor(function () { return patches.length === 2; });
+  assert.deepEqual(patches, [['SARH'], ['SARH', 'QWRH']], 'the whole array is saved each time');
+});
+
+test('business-plan clicking a selected Coring Formation deselects it', async function () {
+  var patches = [];
+  var host = mountGate(gateDetailWithCoring(['SARH', 'QASM']),
+    function (body) { patches.push(body.value); });
+  await openBusinessPlanDetail(7, 'business-plan-gate');
+
+  assert.equal(host.querySelector('#bpe-coring-trigger .lf-value').textContent, '2 Formations');
+  host.querySelector('#bpe-coring-trigger').click();
+  host.querySelector('#bpe-coring-menu [data-value="SARH"]').click();
+  assert.deepEqual(coringOptionLabels(host),
+    [['SARH', 'false'], ['QASM', 'true'], ['QWRH', 'false']]);
+  // One left, so the trigger shows the value itself -- the Assignee filter's
+  // own convention.
+  assert.equal(host.querySelector('#bpe-coring-trigger .lf-value').textContent, 'QASM');
+  await waitFor(function () { return patches.length === 1; });
+  assert.deepEqual(patches[0], ['QASM']);
+});
+
+test('business-plan a stored formation no longer offered stays listed and stays checked', async function () {
+  // Dropping a name from config/lists.yaml must not silently unpick a well
+  // that was planned around it.
+  var host = mountGate(gateDetailWithCoring(['UNAYZAH', 'SARH'], ['SARH', 'QASM']));
+  await openBusinessPlanDetail(7, 'business-plan-gate');
+  host.querySelector('#bpe-coring-trigger').click();
+  assert.deepEqual(coringOptionLabels(host),
+    [['SARH', 'true'], ['QASM', 'false'], ['UNAYZAH', 'true']],
+    'the retired value follows the offered ones rather than vanishing');
+});
+
+test('business-plan Coring Formations is disabled when the Coring Program is No', async function () {
+  var detail = detailPayload('business-plan-gate', {
+    bp_gate_coring_program: 'No', bp_gate_coring_formations: ['SARH']
+  });
+  detail.formation_options = ['SARH', 'QASM'];
+  var host = mountGate(detail);
+  await openBusinessPlanDetail(7, 'business-plan-gate');
+  var trigger = host.querySelector('#bpe-coring-trigger');
+  assert.equal(trigger.disabled, true);
+  // The historical selection is preserved, not cleared -- it is still what the
+  // well was planned with.
+  assert.equal(trigger.querySelector('.lf-value').textContent, 'SARH');
+});

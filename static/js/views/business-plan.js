@@ -238,22 +238,36 @@ function announceOpen() {
    so a remembered key goes stale behind our back and the next click on that
    trigger would "toggle closed" a menu that is already closed. The DOM cannot
    go stale about its own hidden attribute. */
-function openBpeGroup() {
-  var host = byId(BPE_FILTER_ROOT);
-  if (!host) return null;
-  return all('.lead-filter', host).filter(function (group) {
-    var menu = group.querySelector('.lf-menu');
-    return menu && !menu.hidden;
-  })[0] || null;
+// Two roots carry menus built from this chrome: the dashboard's filter row and
+// the detail editor (Card 3T's Coring Formations). Both obey the same
+// one-dropdown-at-a-time contract, so both are swept together.
+var BPE_MENU_ROOTS = [BPE_FILTER_ROOT, 'bpe-detail-view'];
+
+function bpeMenuHosts() {
+  return BPE_MENU_ROOTS.map(byId).filter(Boolean);
 }
 
-// Scoped to this row: the maturation module keeps its own open state, so
+function openBpeMenuElement() {
+  var found = null;
+  bpeMenuHosts().forEach(function (host) {
+    if (found) return;
+    found = all('.lf-menu', host).filter(function (menu) { return !menu.hidden; })[0] || null;
+  });
+  return found;
+}
+
+function openBpeGroup() {
+  var menu = openBpeMenuElement();
+  return menu ? menu.parentNode : null;
+}
+
+// Scoped to OUR roots: the maturation module keeps its own open state, so
 // closing its menus is ITS job (our announce above is what asks it to).
 function closeBpeMenus() {
-  var host = byId(BPE_FILTER_ROOT);
-  if (!host) return;
-  all('.lf-menu', host).forEach(function (menu) { menu.hidden = true; });
-  all('.lf-trigger', host).forEach(function (trigger) { trigger.setAttribute('aria-expanded', 'false'); });
+  bpeMenuHosts().forEach(function (host) {
+    all('.lf-menu', host).forEach(function (menu) { menu.hidden = true; });
+    all('.lf-trigger', host).forEach(function (trigger) { trigger.setAttribute('aria-expanded', 'false'); });
+  });
 }
 
 function openBpeMenu(filter) {
@@ -777,6 +791,59 @@ function commonTail(options) {
     approvalMarkup();
 }
 
+/* -------------------------------------------------------------------------
+   Card 3T -- Coring Formations as a checkbox dropdown
+
+   The value has ALWAYS been a JSON array; only the control was wrong. A native
+   <select multiple> requires Ctrl-click to pick a second formation, which is a
+   convention most people do not know and none of the rest of this application
+   uses. This is the app's own dropdown -- the same .lf-trigger / .lf-menu /
+   .lf-option chrome as the board filters, with .lf-mark-box checkboxes -- so
+   the interaction is the one already learned on the Assignee filter.
+
+   Stored values that are no longer offered (a formation dropped from
+   config/lists.yaml after a well was planned) stay listed and stay checked:
+   removing an option from the picker must not silently unpick a well's data.
+   ------------------------------------------------------------------------- */
+
+var CORING_FIELD = 'bp_gate_coring_formations';
+
+// Everything on offer, plus anything already stored that is not, in that order.
+function coringOptions(formations, selected) {
+  return formations.concat(selected.filter(function (name) {
+    return formations.indexOf(name) < 0;
+  }));
+}
+
+// The closed control, following the Assignee filter's convention exactly:
+// nothing chosen reads as such, one chosen shows the value itself, several
+// show a count.
+function coringSummary(selected) {
+  if (!selected.length) return 'None selected';
+  if (selected.length === 1) return selected[0];
+  return selected.length + ' Formations';
+}
+
+function coringFormationsMarkup(formations, selected, coring) {
+  var options = coringOptions(formations, selected);
+  return '<div class="bpe-field bpe-coring-formations">' +
+    '<span id="bpe-coring-label">Coring Formations' +
+      (coring ? '<b aria-hidden="true">*</b>' : '') + '</span>' +
+    '<button type="button" id="bpe-coring-trigger" class="lf-trigger' +
+      (selected.length ? ' is-active' : '') + '"' +
+      ' aria-haspopup="listbox" aria-expanded="false" aria-labelledby="bpe-coring-label"' +
+      (coring ? '' : ' disabled') + '>' +
+      '<span class="lf-value">' + esc(coringSummary(selected)) + '</span>' +
+      '<span class="lf-caret" aria-hidden="true">' + ICONS['chevron-down'] + '</span>' +
+    '</button>' +
+    '<div id="bpe-coring-menu" class="lf-menu" hidden role="listbox" aria-multiselectable="true"' +
+      ' aria-labelledby="bpe-coring-label"></div>' +
+    '<small class="bpe-field-hint">' +
+      (coring ? esc(options.length + ' available — pick one or more.')
+              : 'Enabled when Coring Program is Yes.') +
+    '</small></div>';
+}
+
 function gateForm() {
   var classification = value('bp_gate_classification');
   var formations = state.detail.formation_options || [];
@@ -823,19 +890,7 @@ function gateForm() {
       required: true, placeholder: 'Select', headingLabel: true
     }) +
     textInput('bp_gate_coring_thickness_ft', 'Coring Thickness (ft)', { type: 'number', required: coring, disabled: !coring }) +
-    // Multi-select, and it always was -- the value is stored as a JSON array.
-    // It only READ as single-select: with no `size` a <select multiple> is
-    // browser-sized to about four rows and looks like a tall dropdown. An
-    // explicit size (bounded, so a long formation list scrolls rather than
-    // pushing the form around) plus a hint that names the interaction and
-    // echoes the current count makes it self-describing.
-    '<label class="bpe-field bpe-coring-formations"><span>Coring Formations' + (coring ? '<b aria-hidden="true">*</b>' : '') +
-    '</span><select multiple size="' + Math.min(Math.max(formations.length, 4), 8) + '"' +
-    ' data-bpe-field="bp_gate_coring_formations" ' + (!coring ? 'disabled' : '') + '>' +
-    formations.map(function (formation) { return '<option ' + (selectedCoring.indexOf(formation) >= 0 ? 'selected' : '') + '>' + esc(formation) + '</option>'; }).join('') +
-    '</select><small class="bpe-field-hint">Select one or more — hold Ctrl (⌘ on Mac) to pick several. ' +
-    (selectedCoring.length ? esc(selectedCoring.length + ' selected') : 'None selected') +
-    '</small></label></div></div>' +
+    coringFormationsMarkup(formations, selectedCoring, coring) + '</div></div>' +
     checkbox('bp_gate_slides_saved', 'Business Plan Execution Gate slides are saved in the shared folder.') +
     commonTail();
 }
@@ -1688,6 +1743,78 @@ function queueFieldDraft(element, immediate, key, nextValue, payload) {
   else state.timers[key] = setTimeout(function () { enqueueFieldDraft(key, version); }, state.saveDelay);
 }
 
+/* Card 3T's dropdown, wired.
+
+   A toggle writes the whole array through the ordinary field-draft path, so it
+   auto-saves exactly like every other control on the page and never submits
+   anything for approval. The menu STAYS OPEN across toggles -- picking three
+   formations should be three clicks, not three round trips through the
+   trigger -- and only the option's own mark and the closed summary are
+   repainted, because re-rendering the form would tear the open menu down. */
+function coringSelection() {
+  var raw = value(CORING_FIELD);
+  if (Array.isArray(raw)) return raw.slice();
+  try { return JSON.parse(raw || '[]'); } catch (error) { return []; }
+}
+
+function renderCoringMenu() {
+  var menu = byId('bpe-coring-menu');
+  if (!menu) return;
+  var selected = coringSelection();
+  var options = coringOptions(state.detail.formation_options || [], selected);
+  menu.innerHTML = options.map(function (name) {
+    return filterOptionHtml({
+      multi: true,
+      chosen: selected.indexOf(name) >= 0,
+      value: name,
+      strong: false,
+      label: name
+    });
+  }).join('');
+  all('.lf-option', menu).forEach(function (option) {
+    option.addEventListener('click', function () {
+      toggleCoringFormation(option, option.getAttribute('data-value'));
+    });
+  });
+}
+
+function toggleCoringFormation(option, name) {
+  var selected = coringSelection();
+  var at = selected.indexOf(name);
+  var chosen = at < 0;
+  if (chosen) selected.push(name);
+  else selected.splice(at, 1);
+  var trigger = byId('bpe-coring-trigger');
+  queueFieldDraft(trigger, true, CORING_FIELD, selected,
+    { field_key: CORING_FIELD, value: selected, changed_by: currentUserName() });
+  // Update the CLICKED option in place rather than re-rendering the list.
+  // Re-rendering would detach the button the click came from, and the
+  // page-wide dismissal decides "was this click inside a menu?" by walking up
+  // from event.target -- a detached node has no ancestors, so the menu the
+  // user is still working in would be dismissed out from under them.
+  option.classList.toggle('is-chosen', chosen);
+  option.setAttribute('aria-checked', chosen ? 'true' : 'false');
+  if (trigger) {
+    trigger.querySelector('.lf-value').textContent = coringSummary(selected);
+    trigger.classList.toggle('is-active', selected.length > 0);
+  }
+}
+
+function bindCoringFormations() {
+  var trigger = byId('bpe-coring-trigger');
+  if (!trigger) return;
+  trigger.addEventListener('click', function () {
+    var menu = byId('bpe-coring-menu');
+    if (!menu.hidden) { closeBpeMenus(); return; }
+    closeBpeMenus();
+    renderCoringMenu();
+    announceOpen();   // the one-dropdown-at-a-time contract
+    menu.hidden = false;
+    placeFilterMenu(trigger, menu);
+    trigger.setAttribute('aria-expanded', 'true');
+  });
+}
+
 function bindFieldInputs() {
   all('[data-bpe-field]', byId('bpe-detail-view')).forEach(function (element) {
     var immediate = element.type === 'checkbox' || element.type === 'radio' || element.tagName === 'SELECT';
@@ -2067,6 +2194,7 @@ function bindDetail() {
     button.addEventListener('click', function () { openBusinessPlanDetail(state.projectId, button.dataset.detailSlug); });
   });
   bindFieldInputs();
+  bindCoringFormations();
   bindFormationInputs();
   bindFlowbackInputs();
   var retry = byId('bpe-retry-save');
