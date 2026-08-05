@@ -483,6 +483,17 @@ def _env_list(name: str):
 # default, so a deployment that never touches it behaves exactly as before.
 
 
+def uploads_dir() -> Path:
+    """Directory for user-uploaded images (see uploads.py).
+
+    A sibling of the map data directory under data/, so a deployment that
+    already points data/ at a share gets this with it. Created on first write,
+    never at import -- the tests re-point it per case.
+    """
+    raw = os.environ.get("SEGMENT_TRACKER_UPLOADS_DIR", str(BASE_DIR / "data" / "uploads"))
+    return Path(raw).expanduser().resolve()
+
+
 def user_lists_path() -> Path:
     """Path to the user-maintained pick lists (config/lists.yaml)."""
     raw = os.environ.get("SEGMENT_TRACKER_LISTS_PATH", str(BASE_DIR / "config" / "lists.yaml"))

@@ -59,23 +59,37 @@ function cellValue(row, col) {
 
 // Module-level state per spec: fetched once per refreshPortfolio(), then
 // sort/filter changes re-render locally without refetching.
-var state = { rows: [], sortKey: null, sortDir: 1, filters: {} };
+//
+// `sortChain` is an ORDERED list of {key, dir}: the first entry decides, and
+// each later one breaks the ties the ones before it leave. One column was
+// never enough here -- "biggest volumes, grouped by field" is two -- and a
+// chain says exactly that instead of making the user sort twice and hope the
+// second pass is stable.
+var state = { rows: [], sortChain: [], filters: {} };
 
-// Stats follow the VISIBLE rowset (server + column filters applied) instead
-// of the fetch payload's server-computed summary, using the same is_lead
-// split reporting.get_portfolio_rows uses for its summary object
-// (business_plan_wells / leads).
-function renderPortfolioStats(rows) {
-  var element = byId('portfolio-stats');
-  if (!element) return;
-  var bpWells = 0;
-  var leads = 0;
-  rows.forEach(function (row) {
-    if (row.is_lead) leads += 1; else bpWells += 1;
-  });
-  element.innerHTML =
-    '<div class="portfolio-stat"><small>Business Plan Wells</small><b>' + esc(bpWells) + '</b></div>' +
-    '<div class="portfolio-stat"><small>Leads</small><b>' + esc(leads) + '</b></div>';
+function sortIndex(key) {
+  for (var i = 0; i < state.sortChain.length; i += 1) {
+    if (state.sortChain[i].key === key) return i;
+  }
+  return -1;
+}
+
+function sortEntry(key) {
+  var index = sortIndex(key);
+  return index < 0 ? null : state.sortChain[index];
+}
+
+/* Picking a direction APPENDS the column to the chain, or re-points it if it
+   is already there; picking the direction it already has REMOVES it. So one
+   control both adds and drops a level, and a column can never appear twice. */
+function toggleSort(key, dir) {
+  var entry = sortEntry(key);
+  if (entry && entry.dir === dir) {
+    state.sortChain = state.sortChain.filter(function (item) { return item.key !== key; });
+    return;
+  }
+  if (entry) { entry.dir = dir; return; }
+  state.sortChain.push({ key: key, dir: dir });
 }
 
 function distinctValues(key) {
@@ -134,7 +148,7 @@ function applyFilters(rows) {
   });
 }
 
-function compareRows(a, b, col) {
+function compareRows(a, b, col, dir) {
   var av = cellValue(a, col);
   var bv = cellValue(b, col);
   if (col.numeric) {
@@ -145,18 +159,29 @@ function compareRows(a, b, col) {
     if (aBlank && bBlank) return 0;
     if (aBlank) return 1;  // blanks/non-numeric always sort last, both directions
     if (bBlank) return -1;
-    return (an - bn) * state.sortDir;
+    return (an - bn) * dir;
   }
-  return String(av).localeCompare(String(bv)) * state.sortDir;
+  return String(av).localeCompare(String(bv)) * dir;
+}
+
+// Walk the chain and return the FIRST non-zero comparison; every level keeps
+// its own column's blanks-last and numeric/lexical rules unchanged.
+function compareByChain(a, b) {
+  for (var i = 0; i < state.sortChain.length; i += 1) {
+    var entry = state.sortChain[i];
+    var col = colByKey(entry.key);
+    if (!col) continue;
+    var result = compareRows(a, b, col, entry.dir);
+    if (result !== 0) return result;
+  }
+  return 0;
 }
 
 function visibleRows() {
   var rows = applyFilters(state.rows);
-  if (!state.sortKey) return rows;
-  var col = COLUMNS.filter(function (c) { return c.key === state.sortKey; })[0];
-  if (!col) return rows;
+  if (!state.sortChain.length) return rows;
   var sorted = rows.slice();
-  sorted.sort(function (a, b) { return compareRows(a, b, col); });
+  sorted.sort(compareByChain);
   return sorted;
 }
 
@@ -265,10 +290,11 @@ function renderBody(table) {
       }).catch(function (error) { msg(error.message, 'error'); });
     });
   });
-  renderPortfolioStats(rows);
-  // The resource bar tracks the same visible rowset as the stats, so the
-  // column filters re-scope it. (The cross plot dialog does NOT: it has its
-  // own selects over the full rowset -- see portfolio-analysis.js.)
+  // The resource bar tracks the VISIBLE rowset, so every column filter
+  // re-scopes it -- including the per-category segment/well counts in its
+  // legend, which is where the two deleted stat boxes' numbers went. (The
+  // cross plot does NOT: it has its own filters over the full rowset -- see
+  // portfolio-analysis.js.)
   renderResourceBar(rows);
 }
 
@@ -285,7 +311,8 @@ function sortLabels(col) {
 }
 
 function isSortActive(col, dir) {
-  return state.sortKey === col.key && state.sortDir === dir;
+  var entry = sortEntry(col.key);
+  return !!entry && entry.dir === dir;
 }
 
 function isFilledBound(value) { return value !== '' && value != null; }
@@ -331,9 +358,20 @@ function filterGroupMarkup(col) {
 // One column header: a title button that opens a pop-over combining Sort
 // (two directional options) and Filter (type-appropriate). The menu is placed
 // against the viewport when opened so table/panel overflow cannot clip it.
+// The header's sort mark: the column's RANK in the chain plus its arrow, so a
+// three-level sort is readable from the header row alone rather than only from
+// the strip below the table.
+function sortMarkHtml(key) {
+  var index = sortIndex(key);
+  if (index < 0) return '';
+  var entry = state.sortChain[index];
+  return '<span class="pf-sort-rank">' + (index + 1) + '</span>' +
+    (entry.dir === 1 ? ICONS['chevron-up'] : ICONS['chevron-down']);
+}
+
 function columnHeaderMarkup(col) {
   var labels = sortLabels(col);
-  var sortMark = state.sortKey === col.key ? (state.sortDir === 1 ? ICONS['chevron-up'] : ICONS['chevron-down']) : '';
+  var sortMark = sortMarkHtml(col.key);
   var filtered = columnIsFiltered(col);
   return '<th data-key="' + col.key + '" aria-sort="none">' +
     '<button type="button" class="pf-col-trigger" aria-haspopup="true" aria-expanded="false">' +
@@ -420,18 +458,82 @@ function refreshHeaderState(table) {
   all('th[data-key]', table).forEach(function (th) {
     var key = th.getAttribute('data-key');
     var col = colByKey(key);
-    var isSorted = key === state.sortKey;
-    th.classList.toggle('sorted-asc', isSorted && state.sortDir === 1);
-    th.classList.toggle('sorted-desc', isSorted && state.sortDir === -1);
-    th.setAttribute('aria-sort', isSorted ? (state.sortDir === 1 ? 'ascending' : 'descending') : 'none');
+    var entry = sortEntry(key);
+    th.classList.toggle('sorted-asc', !!entry && entry.dir === 1);
+    th.classList.toggle('sorted-desc', !!entry && entry.dir === -1);
+    // aria-sort is per-column and has no notion of rank; the chain's order is
+    // spoken by the "Sorted by" strip, which is a live region.
+    th.setAttribute('aria-sort', entry ? (entry.dir === 1 ? 'ascending' : 'descending') : 'none');
     var sortMark = th.querySelector('.pf-sort-mark');
-    if (sortMark) sortMark.innerHTML = isSorted ? (state.sortDir === 1 ? ICONS['chevron-up'] : ICONS['chevron-down']) : '';
+    if (sortMark) sortMark.innerHTML = sortMarkHtml(key);
     all('.pf-sort-opt', th).forEach(function (opt) {
-      opt.classList.toggle('is-active', isSorted && Number(opt.getAttribute('data-dir')) === state.sortDir);
+      opt.classList.toggle('is-active', !!entry && Number(opt.getAttribute('data-dir')) === entry.dir);
     });
     var filtered = col && columnIsFiltered(col);
     var filterMark = th.querySelector('.pf-filter-mark');
     if (filterMark) filterMark.classList.toggle('is-on', !!filtered);
+  });
+}
+
+/* The "Sorted by" strip above the table: the chain in order, each level
+   removable on the spot, plus Clear all. The header marks say WHICH columns
+   sort and in which direction; this says in what ORDER, which is the part a
+   per-column mark cannot show. It renders nothing at all when there is no
+   sort, so an unsorted table gains no chrome. Lives in a container the page
+   owns (#portfolio-sort-strip), created next to the table on first use. */
+function sortStripHost(table) {
+  // Scoped to THIS table's parent, not looked up by id document-wide: a
+  // re-mounted panel leaves the old strip detached from the new table, and a
+  // global lookup would keep rendering levels into the orphan.
+  var existing = table.parentNode.querySelector('#portfolio-sort-strip');
+  if (existing) return existing;
+  var host = document.createElement('div');
+  host.id = 'portfolio-sort-strip';
+  host.className = 'pf-sort-strip';
+  host.setAttribute('role', 'status');
+  host.setAttribute('aria-live', 'polite');
+  table.parentNode.insertBefore(host, table);
+  return host;
+}
+
+function renderSortStrip(table) {
+  var host = sortStripHost(table);
+  if (!state.sortChain.length) {
+    host.innerHTML = '';
+    host.hidden = true;
+    return;
+  }
+  host.hidden = false;
+  var levels = state.sortChain.map(function (entry, index) {
+    var col = colByKey(entry.key);
+    if (!col) return '';
+    var labels = sortLabels(col);
+    var direction = entry.dir === 1 ? labels.asc : labels.desc;
+    return '<button type="button" class="pf-sort-level" data-sort-key="' + esc(entry.key) + '"' +
+      ' title="Remove this sort level"' +
+      ' aria-label="' + esc('Sort level ' + (index + 1) + ': ' + col.label + ', ' + direction +
+        '. Activate to remove.') + '">' +
+      '<span class="pf-sort-rank" aria-hidden="true">' + (index + 1) + '</span>' +
+      esc(col.label) + ' <small>' + esc(direction) + '</small>' +
+      '<span class="pf-sort-drop" aria-hidden="true">' + ICONS.x + '</span></button>';
+  }).join('');
+  host.innerHTML = '<span class="pf-sort-strip-label">Sorted by</span>' + levels +
+    '<button type="button" id="portfolio-clear-sort" class="ghost pf-sort-clear">Clear all</button>';
+
+  all('.pf-sort-level', host).forEach(function (button) {
+    button.addEventListener('click', function () {
+      var key = button.getAttribute('data-sort-key');
+      state.sortChain = state.sortChain.filter(function (item) { return item.key !== key; });
+      refreshHeaderState(table);
+      renderSortStrip(table);
+      renderBody(table);
+    });
+  });
+  byId('portfolio-clear-sort').addEventListener('click', function () {
+    state.sortChain = [];
+    refreshHeaderState(table);
+    renderSortStrip(table);
+    renderBody(table);
   });
 }
 
@@ -458,13 +560,13 @@ function renderHead(table) {
         trigger.setAttribute('aria-expanded', 'true');
       }
     });
-    // Sort options: pick a direction, or click the active one again to clear.
+    // Sort options: pick a direction to add the column to the chain (or
+    // re-point it); pick the direction it already has to drop it out.
     all('.pf-sort-opt', th).forEach(function (opt) {
       opt.addEventListener('click', function () {
-        var dir = Number(opt.getAttribute('data-dir'));
-        if (state.sortKey === key && state.sortDir === dir) { state.sortKey = null; state.sortDir = 1; }
-        else { state.sortKey = key; state.sortDir = dir; }
+        toggleSort(key, Number(opt.getAttribute('data-dir')));
         refreshHeaderState(table);
+        renderSortStrip(table);
         renderBody(table);
       });
     });
@@ -512,13 +614,17 @@ function renderHead(table) {
   });
   wirePortfolioDismiss();
   refreshHeaderState(table);
+  renderSortStrip(table);
 }
 
 export function refreshPortfolio() {
   // Always the unfiltered fetch: the toolbar selects are gone, so scoping is
   // entirely client-side via the column-menu filters (BP Year and Status are
   // both 'multi' columns, replacing the old year/activity selects).
-  API.portfolioRows({ year: 'All', activity: 'All' }).then(function (payload) {
+  // The promise is RETURNED (it was not before) so a caller can wait for the
+  // table rather than poll for it; every existing call site ignores it, which
+  // is unchanged behaviour.
+  return API.portfolioRows({ year: 'All', activity: 'All' }).then(function (payload) {
     state.rows = (payload && payload.rows) || [];
     state.filters = {};
     // The cross plot dialog filters the full rowset independently of the

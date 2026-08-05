@@ -17,7 +17,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/css/base.css?v=10">
-  <link rel="stylesheet" href="/static/css/components.css?v=48">
+  <link rel="stylesheet" href="/static/css/components.css?v=49">
 </head>
 <body>
   <section id="login-page" class="login-page hidden">
@@ -175,16 +175,34 @@
 
     <section id="tab-portfolio" class="tab" role="tabpanel">
       <div class="panel portfolio-panel">
-        <!-- Overview row: the two stat boxes plus the resource progress bar
-             filling the remaining width. Filtering happens via the table's
-             column menus (no toolbar selects); the bar and stats re-render
-             with the visible rowset on every filter change
-             (views/portfolio-analysis.js). The card chrome and the cross-plot
-             trigger are static; only #portfolio-resource-bar re-renders. -->
+        <!-- Overview row: two picture tiles (the cross plot, and the
+             user-uploaded waterfall) beside the resource bar. The two stat
+             boxes that used to open the row are gone -- their counts now sit
+             in the bar's own legend, per category, which is where the
+             question "how many, of what?" is actually asked.
+
+             Filtering happens via the table's column menus (no toolbar
+             selects); the bar re-renders with the visible rowset on every
+             filter change (views/portfolio-analysis.js). The tile chrome is
+             static; only the two bodies and the bar re-render. -->
         <div class="portfolio-overview">
-          <div id="portfolio-stats" class="portfolio-stats" aria-live="polite"></div>
+          <!-- Cross plot: a reduced-scale render of the SAME plot the dialog
+               shows, so clicking it enlarges rather than navigates. -->
+          <button type="button" id="open-crossplot" class="portfolio-tile portfolio-tile-plot">
+            <span class="portfolio-tile-head"><span class="portfolio-tile-title">Cross plot</span>
+              <span class="portfolio-tile-hint">Click to enlarge</span></span>
+            <span id="portfolio-crossplot-thumb" class="portfolio-tile-body"></span>
+          </button>
+          <!-- Waterfall: uploaded by a user (there is one per portfolio, not
+               one per record), so the tile is BOTH the viewer and the drop
+               zone. views/portfolio-waterfall.js owns it. -->
+          <div id="portfolio-waterfall" class="portfolio-tile portfolio-tile-waterfall">
+            <span class="portfolio-tile-head"><span class="portfolio-tile-title">Waterfall</span>
+              <span id="portfolio-waterfall-actions" class="portfolio-tile-actions"></span></span>
+            <div id="portfolio-waterfall-body" class="portfolio-tile-body" aria-live="polite"></div>
+            <input id="portfolio-waterfall-file" type="file" accept="image/png,image/jpeg,image/svg+xml" hidden>
+          </div>
           <div class="portfolio-resource-card">
-            <button type="button" id="open-crossplot" class="prc-crossplot-link"><svg aria-hidden="true" focusable="false" class="lucide lucide-chart-scatter" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/> <circle cx="18.5" cy="5.5" r=".5" fill="currentColor"/> <circle cx="11.5" cy="11.5" r=".5" fill="currentColor"/> <circle cx="7.5" cy="16.5" r=".5" fill="currentColor"/> <circle cx="17.5" cy="14.5" r=".5" fill="currentColor"/> <path d="M3 3v16a2 2 0 0 0 2 2h16"/> </svg> View cross plot…</button>
             <div id="portfolio-resource-bar" class="portfolio-resource-bar" aria-live="polite"></div>
           </div>
         </div>
@@ -477,6 +495,6 @@
     <img id="ra-lightbox-img" alt="">
   </dialog>
 
-  <script type="module" src="/static/js/main.js?v=46"></script>
+  <script type="module" src="/static/js/main.js?v=47"></script>
 </body>
 </html>

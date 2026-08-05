@@ -56,9 +56,13 @@
      spec: rgb(255,0,0) / rgb(255,204,216) / rgb(217,217,217)); the pale
      fills rely on the value+label text under each segment, never on the
      fill alone. Same hexes in both themes. --viz-dot is the cross-plot
-     series color, validated per mode against the panel surface. */
+     series color, validated per mode against the panel surface.
+     --viz-res-2b splits the pink undiscovered band in two, Staked (the
+     approved --viz-res-2) over Proposed (a lighter tint of it), so the two
+     read as one family with the nearer-to-drilling half the stronger. */
   --viz-res-1: #ff0000;
   --viz-res-2: #ffccd8;
+  --viz-res-2b: #ffe6ec;
   --viz-res-3: #d9d9d9;
   --viz-dot: #12879a;
 

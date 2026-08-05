@@ -51,6 +51,7 @@ import folders
 import map_layers
 import reporting
 import resource_calc
+import uploads
 import workflow
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -926,6 +927,45 @@ def business_plan_assign(project_id, detail_slug):
 def portfolio_rows():
     session = db.get_session()
     return json_response(reporting.get_portfolio_rows(session, request.args.get("year", "All"), request.args.get("activity", "All")))
+
+
+# ---------------------------------------------------------------------------
+# Portfolio waterfall diagram -- the app's only user-uploaded file
+# ---------------------------------------------------------------------------
+# ONE image for the whole portfolio, shared by everyone, so there is no id in
+# any of these paths. uploads.py owns every rule (type sniffed from the bytes,
+# size cap, our own stored name); this layer only moves bytes.
+
+@app.get("/api/portfolio/waterfall")
+def portfolio_waterfall_image():
+    """Serve the stored diagram, or 404 when none has been uploaded."""
+    session = db.get_session()
+    record = uploads.get_waterfall(session)
+    if not record:
+        return json_response({"detail": "No waterfall diagram has been uploaded."}, 404)
+    # download_name is OURS, not anything the uploader supplied.
+    return send_file(str(record["path"]), mimetype=record["content_type"],
+                     download_name="portfolio-waterfall." + record["extension"])
+
+
+@app.post("/api/portfolio/waterfall")
+def portfolio_waterfall_upload():
+    """Replace the portfolio's waterfall diagram (multipart 'file' part)."""
+    require_role("supervisor", "staff")
+    session = db.get_session()
+    uploaded = request.files.get("file")
+    if uploaded is None:
+        raise ValueError("Choose an image to upload.")
+    # actor() works on the form dict exactly as it does on a JSON body: a
+    # logged-in session name always wins over anything the client sent.
+    return json_response(uploads.save_waterfall(session, uploaded.read(), actor(request.form)))
+
+
+@app.delete("/api/portfolio/waterfall")
+def portfolio_waterfall_delete():
+    require_role("supervisor", "staff")
+    session = db.get_session()
+    return json_response(uploads.delete_waterfall(session))
 
 
 @app.get("/api/activity")

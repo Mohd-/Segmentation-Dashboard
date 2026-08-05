@@ -111,5 +111,14 @@ export var API = {
   portfolioRows: function (query) {
     var qs = new URLSearchParams(query || {}).toString();
     return api('/api/portfolio/rows' + (qs ? '?' + qs : ''));
+  },
+  // The one multipart call in the app: NO Content-Type header, because the
+  // browser has to set it itself with the multipart boundary. jsonOptions is
+  // deliberately not used here for that reason.
+  uploadPortfolioWaterfall: function (formData) {
+    return api('/api/portfolio/waterfall', { method: 'POST', body: formData });
+  },
+  deletePortfolioWaterfall: function () {
+    return api('/api/portfolio/waterfall', { method: 'DELETE' });
   }
 };
