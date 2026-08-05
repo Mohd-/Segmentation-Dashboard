@@ -13,7 +13,13 @@ function handleResponse(response) {
   var contentType = response.headers.get('content-type') || '';
   if (!response.ok) {
     return (contentType.indexOf('json') >= 0 ? response.json() : response.text()).then(function (payload) {
-      throw new Error(typeof payload === 'string' ? payload : (payload.detail || payload.message || JSON.stringify(payload)));
+      var error = new Error(typeof payload === 'string' ? payload : (payload.detail || payload.message || JSON.stringify(payload)));
+      // Callers need to tell "the server READ this and refused it" (4xx --
+      // fix the form) from "the request never landed" (network or 5xx --
+      // try again). A rejected fetch throws with no status at all, which is
+      // the same signal by absence.
+      error.status = response.status;
+      throw error;
     });
   }
   return contentType.indexOf('json') >= 0 ? response.json() : response;

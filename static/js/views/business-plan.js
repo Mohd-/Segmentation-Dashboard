@@ -1432,7 +1432,11 @@ function ensureUsers() {
 
 // The house .save-state indicator's three moods. The TEXTS are the contract
 // (the save engine and the tests read them); the classes only color them.
-function setFeedback(text, error) {
+// `retryable` decides whether the Retry button comes with the error. It is
+// false when the server READ the request and refused it: re-sending the same
+// payload would be refused again, and the fix is in the form. Defaults to
+// true so every existing caller keeps the transport-failure behaviour.
+function setFeedback(text, error, retryable) {
   var feedback = byId('bpe-save-feedback');
   if (!feedback) return;
   feedback.textContent = text || '';
@@ -1440,7 +1444,7 @@ function setFeedback(text, error) {
   feedback.classList.toggle('is-saving', !error && text === 'Saving...');
   feedback.classList.toggle('is-saved', !error && text === 'Saved');
   var retry = byId('bpe-retry-save');
-  if (retry) retry.classList.toggle('hidden', !error);
+  if (retry) retry.classList.toggle('hidden', !error || retryable === false);
 }
 
 function copyRows(rows) {
@@ -1465,9 +1469,18 @@ function hasCurrentDrafts() {
     draftIsCurrent(state.structureDrafts.formations) || draftIsCurrent(state.structureDrafts.flowback);
 }
 
+// Only UNSAVED DATA blocks navigation, and this is the predicate that says so.
+//
+// It used to answer true for `state.retryCommand` as well, which is what froze
+// the page after a rejected Submit for Approval: a refused transition changes
+// nothing and leaves nothing unsaved, but every navigation entry point gates
+// on flushPendingSaves(), so the back button, the rail, other wells' cards and
+// even re-clicking Submit all became silent no-ops until the user happened to
+// edit a field (which clears retryCommand as a side effect). A failed field or
+// structure draft is different -- the user's typing really is only in the
+// browser -- so those still hold the page.
 function hasFailedCurrentDrafts() {
-  return !!(state.retryCommand && isCurrentContext(state.retryCommand.context)) ||
-    Object.keys(state.fieldDrafts).some(function (key) {
+  return Object.keys(state.fieldDrafts).some(function (key) {
     var draft = state.fieldDrafts[key];
     return draftIsCurrent(draft) && draft.failed;
   }) || ['formations', 'flowback'].some(function (key) {
@@ -1529,13 +1542,24 @@ function queueSave(work, options) {
   }).catch(function (error) {
     if (options.onFailure) options.onFailure(error);
     if (isCurrentContext(context)) {
-      setFeedback('Save failed', true);
+      if (options.failureText) setFeedback(options.failureText(error), true, isRetryable(error));
+      else setFeedback('Save failed', true);
       msg(error.message, 'error');
     }
     return null;
   });
   state.saveQueue = job;
   return job;
+}
+
+// A 4xx means the server read the request and refused it -- the approval
+// validators in workflow/business_plan.py _approval_errors, say, or a stale
+// revision. Sending the identical payload again cannot help. Anything else
+// (a rejected fetch, which carries no status, or a 5xx) is a transport
+// problem, where Retry is exactly the right offer.
+function isRetryable(error) {
+  var status = error && error.status;
+  return !(status >= 400 && status < 500);
 }
 
 function queueCommandSave(work, options) {
@@ -1552,8 +1576,16 @@ function queueCommandSave(work, options) {
         if (originalSuccess) originalSuccess(response);
       },
       onFailure: function (error) {
-        state.retryCommand = { context: context, run: run };
+        // Only arm Retry for a transport failure. A refusal leaves nothing
+        // pending, so there is nothing to re-send -- and arming it would put
+        // a button on screen whose only effect is to be refused again.
+        state.retryCommand = isRetryable(error) ? { context: context, run: run } : null;
         if (originalFailure) originalFailure(error);
+      },
+      // The command did not save anything, so "Save failed" would be a lie
+      // about the user's data as well as unhelpful about the actual problem.
+      failureText: options.failureText || function (error) {
+        return isRetryable(error) ? 'Save failed' : (error.message || 'Refused');
       }
     });
     return queueSave(work, commandOptions);

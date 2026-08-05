@@ -3101,7 +3101,11 @@ button.ghost.success-outline:hover { background: var(--success-100); }
    field above it is this page's own. */
 .bpe-detail-form .folder-card { margin-top: var(--space-4); }
 .bpe-detail-form .folder-card .icon-btn .lucide { width: 17px; height: 17px; }
-.bpe-save-line { display: flex; align-items: center; gap: var(--space-3); margin-top: var(--space-3); color: var(--text-faint); font-size: var(--text-xs); }
+/* A refused submission puts the server's reason here, and that can be several
+   sentences (one per unmet requirement), so the line wraps rather than
+   stretching the editor column. */
+.bpe-save-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin-top: var(--space-3); color: var(--text-faint); font-size: var(--text-xs); }
+.bpe-save-line #bpe-save-feedback.is-error { flex: 1 1 240px; min-width: 0; }
 .bpe-save-line #bpe-retry-save { padding: 3px 9px; font-size: var(--text-xs); }
 .bpe-approval-row { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-5); padding-top: var(--space-4); border-top: 1px solid var(--border); }
 .bpe-branch-note, .bpe-external-link { margin: var(--space-3) 0; padding: var(--space-3); border-left: 3px solid var(--warning-500); background: var(--warning-100); color: var(--warning-700); font-size: var(--text-sm); }

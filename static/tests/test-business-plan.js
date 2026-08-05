@@ -556,3 +556,144 @@ test('business-plan bounds percentages and exempts TVDSS from the negative rule'
   top.dispatchEvent(new Event('input', { bubbles: true }));
   assert.equal(top.classList.contains('bpe-invalid'), false);
 });
+
+// ---------------------------------------------------------------------------
+// A refused approval must not trap the user on the step (the "BPE 6" bug)
+// ---------------------------------------------------------------------------
+//
+// Every navigation entry point -- the back button, the rail, another well's
+// card, and Submit itself -- goes through flushPendingSaves(), which refuses
+// to let go while something is unsaved. A REFUSED transition saves nothing and
+// leaves nothing pending, so it must not hold the page; a FAILED field draft
+// is the user's own typing and must.
+
+// Tests before these leave a pending formation draft on purpose (they type
+// into a cell and assert the inline validation without ever flushing). That
+// draft is module state, and it would fire its PUT into whichever mock is
+// installed next -- so start from a clean slate rather than teaching every
+// mock below to answer for someone else's step.
+function resetBusinessPlanState() {
+  var state = businessPlanTestHooks().state;
+  Object.keys(state.timers).forEach(function (key) {
+    clearTimeout(state.timers[key]);
+    delete state.timers[key];
+  });
+  state.fieldDrafts = {};
+  state.structureDrafts = { formations: null, flowback: null };
+  state.retryCommand = null;
+  state.detail = null;
+}
+
+function errorResponse(status, detail) {
+  return new Response(JSON.stringify({ detail: detail }), {
+    status: status,
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
+
+test('business-plan a refused Submit for Approval shows why and leaves navigation working', async function () {
+  var host = fixture('<div id="bpe-main-view"></div><section id="bpe-detail-view" class="hidden"></section>');
+  resetBusinessPlanState();
+  var loads = [];
+  var refusal = 'Well Classification is required. Logging Program is required.';
+  mockFetch(function (url, options) {
+    var path = String(url);
+    var method = (options && options.method) || 'GET';
+    if (/\/steps\/[^/]+\/transition/.test(path) && method === 'POST') {
+      return errorResponse(400, refusal);
+    }
+    var match = path.match(/\/steps\/([a-z-]+)(\?|$)/);
+    if (match && method === 'GET') {
+      loads.push(match[1]);
+      return response(detailPayload(match[1], {}));
+    }
+    if (path.indexOf('/api/users') >= 0) return response([]);
+    throw new Error('Unexpected request: ' + method + ' ' + path);
+  });
+
+  await openBusinessPlanDetail(7, 'business-plan-gate');
+  assert.deepEqual(loads, ['business-plan-gate']);
+
+  host.querySelector('[data-bpe-transition="submit"]').click();
+  await waitFor(function () {
+    return host.querySelector('#bpe-save-feedback').classList.contains('is-error');
+  });
+  // The server's own reason, not a generic "Save failed" -- nothing failed to
+  // save, the submission was refused.
+  assert.equal(host.querySelector('#bpe-save-feedback').textContent, refusal);
+  // No Retry: re-sending the identical payload would be refused identically.
+  assert.equal(host.querySelector('#bpe-retry-save').classList.contains('hidden'), true);
+
+  // THE BUG: this click used to be a silent no-op.
+  host.querySelector('[data-detail-slug="gheer-inputs"]').click();
+  await waitFor(function () { return loads.length === 2; });
+  assert.deepEqual(loads, ['business-plan-gate', 'gheer-inputs'],
+    'the rail still navigates after a refused submission');
+});
+
+test('business-plan a failed field save DOES still hold the page', async function () {
+  var host = fixture('<div id="bpe-main-view"></div><section id="bpe-detail-view" class="hidden"></section>');
+  resetBusinessPlanState();
+  var loads = [];
+  mockFetch(function (url, options) {
+    var path = String(url);
+    var method = (options && options.method) || 'GET';
+    if (path.indexOf('/field') >= 0 && method === 'PATCH') throw new Error('network down');
+    var match = path.match(/\/steps\/([a-z-]+)(\?|$)/);
+    if (match && method === 'GET') {
+      loads.push(match[1]);
+      return response(detailPayload(match[1], {}));
+    }
+    if (path.indexOf('/api/users') >= 0) return response([]);
+    throw new Error('Unexpected request: ' + method + ' ' + path);
+  });
+
+  await openBusinessPlanDetail(7, 'business-plan-gate');
+  var program = host.querySelector('[data-bpe-field="bp_gate_logging_program"]');
+  program.value = 'Standard A';
+  program.dispatchEvent(new Event('change', { bubbles: true }));
+  await waitFor(function () {
+    return host.querySelector('#bpe-save-feedback').textContent === 'Save failed';
+  });
+  // Retry IS offered here: the request never landed, so sending it again is
+  // exactly the right move.
+  assert.equal(host.querySelector('#bpe-retry-save').classList.contains('hidden'), false);
+
+  host.querySelector('[data-detail-slug="gheer-inputs"]').click();
+  await new Promise(function (resolve) { setTimeout(resolve, 60); });
+  assert.deepEqual(loads, ['business-plan-gate'],
+    'unsaved typing still blocks navigation -- leaving would discard it');
+});
+
+test('business-plan a transition that never reached the server offers Retry and still lets go', async function () {
+  var host = fixture('<div id="bpe-main-view"></div><section id="bpe-detail-view" class="hidden"></section>');
+  resetBusinessPlanState();
+  var loads = [];
+  mockFetch(function (url, options) {
+    var path = String(url);
+    var method = (options && options.method) || 'GET';
+    if (/\/steps\/[^/]+\/transition/.test(path) && method === 'POST') throw new Error('network down');
+    var match = path.match(/\/steps\/([a-z-]+)(\?|$)/);
+    if (match && method === 'GET') {
+      loads.push(match[1]);
+      return response(detailPayload(match[1], {}));
+    }
+    if (path.indexOf('/api/users') >= 0) return response([]);
+    throw new Error('Unexpected request: ' + method + ' ' + path);
+  });
+
+  await openBusinessPlanDetail(7, 'business-plan-gate');
+  host.querySelector('[data-bpe-transition="submit"]').click();
+  await waitFor(function () {
+    return host.querySelector('#bpe-save-feedback').textContent === 'Save failed';
+  });
+  // The request never landed, so re-sending it is the right offer -- unlike a
+  // refusal, where the payload itself is the problem.
+  assert.equal(host.querySelector('#bpe-retry-save').classList.contains('hidden'), false);
+
+  // But a transition that did not happen leaves NOTHING unsaved, so it must
+  // not hold the page hostage the way a failed field draft does.
+  host.querySelector('[data-detail-slug="gheer-inputs"]').click();
+  await waitFor(function () { return loads.length === 2; });
+  assert.deepEqual(loads, ['business-plan-gate', 'gheer-inputs']);
+});
