@@ -174,16 +174,20 @@ _FLUID_BY_LOWER.update({"dry": "Dry Hole", "water": "Water Bearing",
 def _coerce_measurement(field, raw, context):
     """Parse one stored measurement, refusing the values physics rules out.
 
-    Beyond "is it a number": a measurement that cannot be negative must not be
-    stored negative, and a percentage cannot exceed 100. TVDSS is the single
-    signed exception -- above datum it legitimately reads negative -- which is
-    the same exemption the client applies (schema.js allowNegative and the
-    `min` attributes the form emits). Raising here rather than storing the
-    value keeps the client-side guard from being the only thing between a
-    typo and the database.
+    Beyond "is it a number": no measurement is stored negative, and a
+    percentage cannot exceed 100. Raising here rather than storing the value
+    keeps the client-side guard from being the only thing between a typo and
+    the database.
+
+    Card 3H removed the TVDSS exemption. A horizon above the datum still reads
+    negative in the field, but ASAS stores the MAGNITUDE: migration v11
+    converted the values already stored and recorded each prior signed value as
+    an Audit Trail event. Units and datum meaning are unchanged -- only the
+    sign representation moved -- and the client applies the same rule
+    (schema.js no longer passes allowNegative for these keys).
     """
     value = float(raw)  # caller catches TypeError/ValueError and names the field
-    if value < 0 and "tvdss" not in field:
+    if value < 0:
         raise ValueError(f"{field} must not be negative{context}: {raw!r}.")
     if field.endswith("_pct") and value > 100:
         raise ValueError(f"{field} must not exceed 100%{context}: {raw!r}.")

@@ -274,14 +274,19 @@ test('lead-assessment: an unusable value reports ITSELF, not the ordering it als
   assert.equal(errors.p10_area_km2, undefined);
 });
 
-test('lead-assessment: the TVDSS is numeric-parse ONLY — negatives and zero are fine', function () {
-  assert.equal(tvdssError('-6500'), null, 'a subsea depth is negative');
+// Card 3H. The TVDSS used to be numeric-parse only -- it was the page's one
+// signed measure. It is now a magnitude like the rest, so a negative is
+// refused; zero and large depths still pass, and it still gates nothing.
+test('lead-assessment: the TVDSS is a magnitude, and still gates nothing', function () {
+  assert.equal(tvdssError('-6500'), 'Top Formation TVDSS must not be negative.');
   assert.equal(tvdssError('0'), null);
   assert.equal(tvdssError('12000'), null, 'and it is exempt from the generic 9999 cap');
-  assert.equal(tvdssError(''), null);
+  assert.equal(tvdssError(''), null, 'blank is not an error -- the field is optional');
   assert.equal(tvdssError('deep'), 'Top Formation TVDSS must be numeric.');
   assert.equal(validateLeadAssessment(goodValues({ top_formation_tvdss_ft: 'deep' })).top_formation_tvdss_ft,
     MESSAGES.tvdss);
+  assert.equal(validateLeadAssessment(goodValues({ top_formation_tvdss_ft: '-10' })).top_formation_tvdss_ft,
+    MESSAGES.tvdssNegative);
 });
 
 test('lead-assessment: firstError reads the page in layout order', function () {

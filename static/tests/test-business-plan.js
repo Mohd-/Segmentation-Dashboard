@@ -514,7 +514,7 @@ test('business-plan refuses a negative measurement before it is queued', async f
 
 /* Percentages have an upper bound as well as a lower one, and TVDSS is the
    one measure that is signed on purpose. */
-test('business-plan bounds percentages and exempts TVDSS from the negative rule', async function () {
+test('business-plan bounds percentages and refuses a negative TVDSS', async function () {
   var host = fixture('<div id="bpe-main-view"></div><section id="bpe-detail-view" class="hidden"></section>');
   var detail = detailPayload('quicklook-logs', {});
   detail.formations = [{
@@ -544,10 +544,15 @@ test('business-plan bounds percentages and exempts TVDSS from the negative rule'
   assert.ok(swt.classList.contains('bpe-invalid'));
   assert.match(host.querySelector('#bpe-save-feedback').textContent, /100%/);
 
-  // TVDSS carries no min attribute and accepts a value above datum.
+  // Card 3H: TVDSS is a magnitude now, so it carries the same floor as every
+  // other measurement on the sheet.
   var top = host.querySelector('[data-formation-field="top_tvdss_ft"]');
-  assert.equal(top.hasAttribute('min'), false, 'TVDSS is signed on purpose');
+  assert.equal(top.getAttribute('min'), '0', 'no field here is signed any more');
   top.value = '-120';
+  top.dispatchEvent(new Event('input', { bubbles: true }));
+  assert.ok(top.classList.contains('bpe-invalid'));
+  // A real depth still passes, including one past the generic 9999 cap.
+  top.value = '11500';
   top.dispatchEvent(new Event('input', { bubbles: true }));
   assert.equal(top.classList.contains('bpe-invalid'), false);
 });

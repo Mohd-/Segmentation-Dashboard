@@ -113,6 +113,9 @@ export var MESSAGES = {
   // The TVDSS is the one exception: numeric parse only, sign and magnitude free
   // (a subsea depth is legitimately negative on some datums).
   tvdss: 'Top Formation TVDSS must be numeric.',
+  // Card 3H. Depths are stored as magnitudes; a horizon above the datum still
+  // reads negative in the field, but the value recorded here is its depth.
+  tvdssNegative: 'Top Formation TVDSS must not be negative.',
   // Ordering. Rejected on EQUALITY too, in both directions -- a pair whose two
   // sides are the same number is a mis-entry, not a degenerate distribution --
   // and never silently swapped: swapping would quietly rewrite what the user
@@ -169,11 +172,13 @@ export function numberError(key, raw) {
   return null;
 }
 
-// Section 3's TVDSS: numeric parse only. No positivity rule (see MESSAGES),
-// no completion effect.
+// Section 3's TVDSS. Card 3H made it a magnitude like every other measure, so
+// it now refuses a negative as well as a non-number. Still no completion
+// effect -- it is reference information, not a gate.
 export function tvdssError(raw) {
   if (!isFilled(raw)) return null;
-  return isNaN(Number(raw)) ? MESSAGES.tvdss : null;
+  if (isNaN(Number(raw))) return MESSAGES.tvdss;
+  return Number(raw) < 0 ? MESSAGES.tvdssNegative : null;
 }
 
 // Both sides filled, both individually valid, and hi strictly greater than lo?
@@ -527,11 +532,10 @@ export function earlierComments(tasks) {
 
 function numberInput(key, value, options) {
   options = options || {};
-  // Every measure on this page is a magnitude except Top Formation TVDSS,
-  // which reads negative above datum -- the same single exemption schema.js
-  // encodes as allowNegative and tvdssError() honours below.
-  var signed = /tvdss/.test(key);
-  return '<input type="number" step="any"' + (signed ? '' : ' min="0"') +
+  // Card 3H: every measure on this page is a magnitude, Top Formation TVDSS
+  // included. It used to be the one exemption; migration v11 converted the
+  // stored values and kept each prior signed one in the Audit Trail.
+  return '<input type="number" step="any" min="0"' +
     ' data-la-field="' + esc(key) + '"' +
     ' value="' + esc(value == null ? '' : value) + '"' +
     ' aria-label="' + esc(options.label || LABELS[key] || key) + '"' +

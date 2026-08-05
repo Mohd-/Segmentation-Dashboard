@@ -952,12 +952,12 @@ function formationRowMarkup(row, formationIndex) {
 // TVDSS is the one signed measure in this form (above datum reads negative);
 // thickness, porosity, saturation, permeability and every rate cannot be.
 // Shared by both formation cells and the flowback cells below.
-function isSignedKey(key) {
-  return /tvdss/.test(key);
-}
-
-function numericFloor(key) {
-  return isSignedKey(key) ? '' : ' min="0"';
+// Card 3H: no numeric field on a BPE form is signed any more. TVDSS used to be
+// the one exemption -- above datum it reads negative -- but ASAS now stores the
+// magnitude, so every numeric input here carries the same floor. Kept as a
+// function because three call sites read better saying WHY there is a min.
+function numericFloor() {
+  return ' min="0"';
 }
 
 /* Client-side numeric validation for this whole form. Until now there was
@@ -972,7 +972,7 @@ function numericFloor(key) {
    the maturation side's small measures. The negative and <=100% rules are the
    ones that matter here. */
 function bpeNumericError(label, key, raw) {
-  return numericFieldError(label || key, raw, true, /_pct$/.test(key), isSignedKey(key));
+  return numericFieldError(label || key, raw, true, /_pct$/.test(key), false);
 }
 
 // The visible caption of a form cell, so the message names what the user is
@@ -1011,13 +1011,13 @@ function numericEditAllowed(element, key) {
 }
 
 function formationEnvelopeCell(index, key, label, cellValue) {
-  return '<label><span>' + esc(label) + '</span><input type="number" step="any"' + numericFloor(key) +
+  return '<label><span>' + esc(label) + '</span><input type="number" step="any"' + numericFloor() +
     ' data-formation-index="' + index +
     '" data-formation-field="' + esc(key) + '" value="' + esc(cellValue == null ? '' : cellValue) + '"></label>';
 }
 
 function formationCell(formationIndex, payIndex, key, label, cellValue, type) {
-  var numeric = type === 'number' ? ' step="any"' + numericFloor(key) : '';
+  var numeric = type === 'number' ? ' step="any"' + numericFloor() : '';
   return '<label><span>' + esc(label) + '</span><input type="' + type + '"' + numeric +
     ' data-formation-index="' + formationIndex +
     '" data-pay-index="' + payIndex + '" data-pay-field="' + esc(key) + '" value="' +
@@ -1076,7 +1076,7 @@ function flowCell(index, key, label, required, formation) {
   }
   var row = state.detail.flowback_stages[index];
   return '<label><span>' + esc(label) + (required ? '<b>*</b>' : '') + '</span><input type="number" step="any"' +
-    numericFloor(key) + ' data-flow-index="' + index +
+    numericFloor() + ' data-flow-index="' + index +
     '" data-flow-field="' + key + '" value="' + esc(row[key] == null ? '' : row[key]) + '"' + disabled + '></label>';
 }
 

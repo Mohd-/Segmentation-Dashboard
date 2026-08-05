@@ -199,12 +199,17 @@ def test_non_numeric_measurement_value_rejected(client):
     assert "porosity_pct" in resp.get_json()["detail"]
 
 
-def test_negative_measurement_rejected_except_tvdss(client):
-    """A thickness cannot be negative; a TVDSS above datum legitimately is.
+def test_no_measurement_may_be_stored_negative(client):
+    """Card 3H removed the last exemption.
 
-    The client emits min="0" on exactly the same set (schema.js allowNegative
-    / detail-form.js), so this is the server half of one rule, not a second
-    opinion.
+    TVDSS used to be allowed through signed, because a horizon above the datum
+    legitimately reads negative in the field. ASAS now stores the MAGNITUDE:
+    migration v11 converted the values already in the database and recorded
+    each prior signed value as an Audit Trail event, so nothing is lost and
+    nothing new can arrive signed.
+
+    The client emits min="0" on the same set, so this is the server half of one
+    rule, not a second opinion.
     """
     pid = create_project(client, "FORM-NEG-1")
     resp = _put(client, pid, "quicklook", [{"formation": "SARH", "thickness_ft": "-5"}])
@@ -213,9 +218,14 @@ def test_negative_measurement_rejected_except_tvdss(client):
     assert "negative" in resp.get_json()["detail"].lower()
 
     resp = _put(client, pid, "quicklook", [{"formation": "SARH", "top_tvdss_ft": "-120"}])
-    assert resp.status_code == 200, "TVDSS above datum is signed on purpose"
+    assert resp.status_code == 400, "a depth is stored as a magnitude"
+    assert "top_tvdss_ft" in resp.get_json()["detail"]
+
+    # The magnitude itself is of course fine.
+    assert _put(client, pid, "quicklook",
+                [{"formation": "SARH", "top_tvdss_ft": "120"}]).status_code == 200
     rows = client.get(f"/api/projects/{pid}/formations").get_json()
-    assert rows[0]["top_tvdss_ft"] == -120
+    assert rows[0]["top_tvdss_ft"] == 120
 
 
 def test_percentage_measurement_cannot_exceed_100(client):

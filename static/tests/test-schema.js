@@ -634,8 +634,17 @@ test('validateStepFields: bigOk-flagged fields are exempt from the 9999 cap', fu
   assert.equal(validateStepFields('Moving Tolerance', { staking_well_x: '650000' }), null);
 });
 
-test('validateStepFields: Lead Assessment TVDSS accepts a negative subsea depth', function () {
-  assert.equal(validateStepFields('Lead Assessment', { top_formation_tvdss_ft: '-6500' }), null);
+// Card 3H reversed this. TVDSS used to be the one field carrying
+// allowNegative, because a horizon above the datum reads negative in the
+// field; ASAS now stores the MAGNITUDE, and migration v11 converted what was
+// already stored while keeping each prior signed value in the Audit Trail.
+test('validateStepFields: Lead Assessment TVDSS is a magnitude, not a signed depth', function () {
+  assert.equal(validateStepFields('Lead Assessment', { top_formation_tvdss_ft: '-6500' }),
+    'Top Formation TVDSS (ft) must not be negative.');
+  assert.equal(validateStepFields('Lead Assessment', { top_formation_tvdss_ft: '6500' }), null);
+  // bigOk survives the change: a depth runs past four digits, which the
+  // generic 9999 sanity cap would otherwise refuse. That is a separate rule.
+  assert.equal(validateStepFields('Lead Assessment', { top_formation_tvdss_ft: '12000' }), null);
 });
 
 test('validateStepFields: (d) numericFieldError rejects an out-of-range percentage', function () {

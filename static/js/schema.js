@@ -223,7 +223,10 @@ export var SCHEMA = {
     { key: 'grv_p10_thousand_acre_ft', label: 'GRV (10³ acre.ft) P10', type: 'number', bigOk: true, row: 'lead_grv' },
     // Reference information, not a checkpoint completion gate. TVDSS may be
     // negative; the dedicated Lead Assessment validator applies parse-only.
-    { key: 'top_formation_tvdss_ft', label: 'Top Formation TVDSS (ft)', type: 'number', bigOk: true, allowNegative: true, section: 'Structure' },
+    // Card 3H made TVDSS a magnitude like every other measure, so allowNegative
+    // is gone. bigOk stays: a depth runs past four digits, which the generic
+    // 9999 sanity cap would otherwise refuse.
+    { key: 'top_formation_tvdss_ft', label: 'Top Formation TVDSS (ft)', type: 'number', bigOk: true, section: 'Structure' },
     // PIIP output keys remain intentionally unregistered because the auto-run
     // writes them directly; this confirmation is the editable checkpoint input.
     { key: 'polygons_surfaces_loaded', label: 'Polygons and surfaces are placed in the shared folder', type: 'checkbox', section: 'Resource Assessment' }

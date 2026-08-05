@@ -613,8 +613,11 @@ export function formationRowsForSave(phase) {
 // this is where those declarations finally get read (they were documentation
 // only while this buffer had no numeric validation at all).
 function formationCellError(def, raw) {
-  var signed = /tvdss/.test(def.key);
-  return numericFieldError(def.label, raw, !!def.bigOk || signed, /_pct$/.test(def.key), signed);
+  // Card 3H: TVDSS is stored as a magnitude like every other measure here, so
+  // nothing on this sheet is signed. It keeps `bigOk` though -- a depth runs
+  // past four digits, which the generic 9999 sanity cap would otherwise refuse.
+  var isDepth = /tvdss/.test(def.key);
+  return numericFieldError(def.label, raw, !!def.bigOk || isDepth, /_pct$/.test(def.key), false);
 }
 
 export function validateFormationRows(phase) {
@@ -702,11 +705,10 @@ function formationMetricControl(metric, row, index) {
     }).join('');
     return '<label>' + esc(metric.label) + '<select ' + attr + ' aria-label="' + esc(metric.label) + '">' + options + '</select></label>';
   }
-  // TVDSS is the one signed measure here (above datum reads negative);
-  // thickness, porosity, saturation and net-to-gross cannot be.
-  var signed = /tvdss/.test(metric.key);
-  return '<label>' + esc(metric.label) + '<input type="number" step="any"' +
-    (signed ? '' : ' min="0"') + ' ' + attr + ' value="' + esc(value) + '" aria-label="' + esc(metric.label) + '"></label>';
+  // Card 3H: every measure here is a magnitude, TVDSS included -- above datum
+  // still reads negative in the field, but ASAS stores the depth's magnitude.
+  return '<label>' + esc(metric.label) + '<input type="number" step="any" min="0" ' +
+    attr + ' value="' + esc(value) + '" aria-label="' + esc(metric.label) + '"></label>';
 }
 function formationPanelMarkup(row, index) {
   return FORMATION_GROUPS.map(function (group) {
