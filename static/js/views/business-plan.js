@@ -791,10 +791,19 @@ function gateForm() {
       required: true, placeholder: 'Select', headingLabel: true
     }) +
     textInput('bp_gate_coring_thickness_ft', 'Coring Thickness (ft)', { type: 'number', required: coring, disabled: !coring }) +
-    '<label class="bpe-field"><span>Coring Formations' + (coring ? '<b aria-hidden="true">*</b>' : '') +
-    '</span><select multiple data-bpe-field="bp_gate_coring_formations" ' + (!coring ? 'disabled' : '') + '>' +
+    // Multi-select, and it always was -- the value is stored as a JSON array.
+    // It only READ as single-select: with no `size` a <select multiple> is
+    // browser-sized to about four rows and looks like a tall dropdown. An
+    // explicit size (bounded, so a long formation list scrolls rather than
+    // pushing the form around) plus a hint that names the interaction and
+    // echoes the current count makes it self-describing.
+    '<label class="bpe-field bpe-coring-formations"><span>Coring Formations' + (coring ? '<b aria-hidden="true">*</b>' : '') +
+    '</span><select multiple size="' + Math.min(Math.max(formations.length, 4), 8) + '"' +
+    ' data-bpe-field="bp_gate_coring_formations" ' + (!coring ? 'disabled' : '') + '>' +
     formations.map(function (formation) { return '<option ' + (selectedCoring.indexOf(formation) >= 0 ? 'selected' : '') + '>' + esc(formation) + '</option>'; }).join('') +
-    '</select></label></div></div>' +
+    '</select><small class="bpe-field-hint">Select one or more — hold Ctrl (⌘ on Mac) to pick several. ' +
+    (selectedCoring.length ? esc(selectedCoring.length + ' selected') : 'None selected') +
+    '</small></label></div></div>' +
     checkbox('bp_gate_slides_saved', 'Business Plan Execution Gate slides are saved in the shared folder.') +
     commonTail();
 }

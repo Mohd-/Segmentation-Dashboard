@@ -12,6 +12,7 @@ import json
 import openpyxl
 import pytest
 
+import config
 import portfolio_export
 from conftest import create_project, get_task_by_name, get_tasks, raw_sqlite_connect
 
@@ -35,6 +36,50 @@ def test_health_ok(client):
 # ---------------------------------------------------------------------------
 # /api/meta
 # ---------------------------------------------------------------------------
+
+def test_meta_serves_the_user_maintained_pick_lists(client, tmp_path, monkeypatch):
+    """Formations and wellbore sizes come from config/lists.yaml, not code.
+
+    The client's schema.js copy is a boot fallback, so this endpoint has to be
+    the one that reflects an edit to that file. Both lists also fall back
+    cleanly when the file is absent -- a deployment that never writes one must
+    behave exactly as it did before the file existed.
+    """
+    body = client.get("/api/meta").get_json()
+    assert body["formations"] == list(config.formations())
+    assert body["hole_sections"] == list(config.hole_sections())
+    # Hole sections used to be empty (env-var only, and nobody set it), which
+    # is why the BP Gate's interval dropdowns offered formations alone.
+    assert body["hole_sections"], "the shipped list is no longer empty"
+
+    lists_file = tmp_path / "lists.yaml"
+    lists_file.write_text("formations:\n  - ZETA\n  - ETA\nhole_sections:\n  - 9.5in Section\n",
+                          encoding="utf-8")
+    monkeypatch.setenv("SEGMENT_TRACKER_LISTS_PATH", str(lists_file))
+    body = client.get("/api/meta").get_json()
+    assert body["formations"] == ["ZETA", "ETA"]
+    assert body["hole_sections"] == ["9.5in Section"]
+
+    # An absent file is not an error; it is "use the built-in defaults".
+    monkeypatch.setenv("SEGMENT_TRACKER_LISTS_PATH", str(tmp_path / "nope.yaml"))
+    body = client.get("/api/meta").get_json()
+    assert body["formations"] == list(config.DEFAULT_FORMATIONS)
+    assert body["hole_sections"] == []
+
+
+def test_user_list_survives_a_malformed_file(tmp_path, monkeypatch):
+    """A hand-edited YAML that does not parse must not take the app down."""
+    bad = tmp_path / "lists.yaml"
+    bad.write_text("formations: [unclosed\n", encoding="utf-8")
+    monkeypatch.setenv("SEGMENT_TRACKER_LISTS_PATH", str(bad))
+    assert config.formations() == config.DEFAULT_FORMATIONS
+    # A key of the wrong shape falls back the same way.
+    bad.write_text("formations: SARH\n", encoding="utf-8")
+    assert config.formations() == config.DEFAULT_FORMATIONS
+    # Blanks and duplicates are cleaned rather than reaching a dropdown.
+    bad.write_text("formations:\n  - SARH\n  - '  '\n  - SARH\n  - QASM\n", encoding="utf-8")
+    assert config.formations() == ("SARH", "QASM")
+
 
 def test_meta_shape_matches_workflow_constants(client):
     import workflow

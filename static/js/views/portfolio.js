@@ -1,4 +1,4 @@
-import { byId, all, esc, msg, fmtNum } from '../dom.js';
+import { byId, all, esc, msg, fmtNum, isFilled } from '../dom.js';
 import { ICONS } from '../icons.js';
 import { API } from '../api.js';
 import { FLUID_TYPES } from '../schema.js';
@@ -29,7 +29,11 @@ var STATUS_OPTIONS = FLUID_TYPES.filter(function (value) { return value !== ''; 
   .concat(['Proposed', 'Staked']);
 
 var COLUMNS = [
-  { key: 'well_name', label: 'Well Name', numeric: false, filter: 'text' },
+  { key: 'well_name', label: 'Lead / Well Name', numeric: false, filter: 'text' },
+  // The name the well was STAKED under, which is a separate value from the
+  // record's own name -- staking never renames a record. Side by side, these
+  // two columns are the lead <-> staked-well map; blank until staking.
+  { key: 'staked_well_name', label: 'Staked Well Name', numeric: false, filter: 'text' },
   { key: 'gas_field', label: 'Field', numeric: false, filter: 'multi' },
   { key: 'seismic_block', label: 'Seismic Block', numeric: false, filter: 'text' },
   { key: 'classification', label: 'Classification', numeric: false, filter: 'multi' },
@@ -208,6 +212,7 @@ function quadrantCellMarkup(row) {
 function rowMarkup(row) {
   return '<tr>' +
     '<td><a href="#" class="well-link" data-project-id="' + esc(row.project_id) + '" data-pipeline="' + esc(row.pipeline_type === 'bp' ? 'bp' : 'prospect') + '" title="Open in ' + (row.pipeline_type === 'bp' ? 'Business Plan Execution' : 'Prospect Maturation') + '">' + esc(row.well_name || '') + '</a></td>' +
+    '<td>' + (isFilled(row.staked_well_name) ? esc(row.staked_well_name) : '<span class="pf-unstaked">—</span>') + '</td>' +
     '<td>' + esc(row.gas_field || '') + '</td>' +
     '<td>' + esc(row.seismic_block || '') + '</td>' +
     '<td>' + esc(row.classification || '') + '</td>' +

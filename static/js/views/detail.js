@@ -22,7 +22,7 @@ import { refreshAudit } from './audit.js';
 import { STAKING_LETTER_STEPS } from './staking-letters.js';
 // Card 2A: the shared Lead Summary block. It is PURE -- this module resolves
 // every value out of Store and hands it one plain object (see leadSummaryData).
-import { leadSummaryHtml, wireLeadSummary, closeLeadSummaryMenu } from './lead-summary.js';
+import { leadSummaryHtml, wireLeadSummary, closeLeadSummaryMenu, EM_DASH } from './lead-summary.js';
 // The board's own completion arithmetic, imported rather than re-derived: the
 // Lead Summary progress bar and the board KPI donut must read one formula over
 // one dataset (the lead's 12 tracked items).
@@ -678,22 +678,37 @@ function formationIsTight(row) {
   if (fluid === 'Dry' || fluid === 'Dry Hole') return true;
   return fluid === '' && (row.pay_ft === 0 || String(row.pay_ft).trim() === '0');
 }
-// One compact reservoir line: formation name + its filled metrics (thickness,
-// porosity, Sw, pay) and a fluid tag when present. A row that reads as non-pay
-// renders "<name>: tight"; a missing/empty row renders an em dash (—) — SARH
-// defaults to a dash, not "tight", unless the data derives tight.
-function formationLine(name, row) {
+/* Reservoir Properties uses TWO decimals, not fmtNum's one: a water saturation
+   or a porosity is read to the hundredth (0.92, 21.35) and rounding it to one
+   place throws away a digit that matters. Percentages stay percentages -- the
+   value is shown exactly as it is stored and entered, so a number on this card
+   can be compared with the field it came from without a mental conversion. */
+export function fmt2(raw) {
+  if (!isFilled(raw)) return '';
+  var numeric = Number(raw);
+  if (!isFinite(numeric)) return String(raw);
+  return numeric.toFixed(2);
+}
+
+// One row of the Reservoir Properties table: the formation name, then pay
+// thickness, porosity and water saturation. A row with nothing recorded (or a
+// barren one) collapses to a single note spanning the value columns, so an
+// empty formation never reads as three missing measurements.
+function formationPropertyRow(name, row) {
   var tight = formationIsTight(row);
   if (tight || !formationHasData(row)) {
-    return '<div class="summary-formation summary-formation-empty"><span class="summary-formation-name">' + esc(name) + '</span><span class="summary-formation-note">' + (tight ? 'tight' : '—') + '</span></div>';
+    return '<div class="summary-props-row summary-props-row-empty">' +
+      '<span class="summary-props-name">' + esc(name) + '</span>' +
+      '<span class="summary-props-note">' + (tight ? 'tight' : EM_DASH) + '</span></div>';
   }
-  var bits = [];
-  if (isFilled(row.thickness_ft)) bits.push(fmtNum(row.thickness_ft) + ' ft');
-  if (isFilled(row.porosity_pct)) bits.push(fmtNum(row.porosity_pct) + '% φ');
-  if (isFilled(row.swt_pct)) bits.push(fmtNum(row.swt_pct) + '% Sw');
-  if (isFilled(row.pay_ft)) bits.push(fmtNum(row.pay_ft) + ' ft pay');
-  var fluidTag = isFilled(row.fluid) ? '<span class="summary-formation-fluid">' + esc(row.fluid) + '</span>' : '';
-  return '<div class="summary-formation"><span class="summary-formation-name">' + esc(name) + '</span><span class="summary-formation-metrics">' + esc(bits.join(' · ')) + '</span>' + fluidTag + '</div>';
+  var cell = function (value, suffix) {
+    var text = fmt2(value);
+    return '<span>' + (text ? esc(text) + (suffix || '') : EM_DASH) + '</span>';
+  };
+  return '<div class="summary-props-row">' +
+    '<span class="summary-props-name">' + esc(name) + '</span>' +
+    cell(row.pay_ft, ' ft') + cell(row.porosity_pct, '%') + cell(row.swt_pct, '%') +
+    '</div>';
 }
 
 // Well-card fold open state, keyed by fold id ('pva', 'lead'). Module-level so
@@ -1000,9 +1015,19 @@ export function renderRightPanel(tasks) {
   // Phase row: where the record sits (Lead vs BP Well · year). The phase MOVE
   // itself is a gear-popover action (see popoverHtml) -- rare, irreversible
   // without a counter-move, and supervisor-only, so it stays off the card face.
+  //
+  // The STAKED WELL NAME rides here too, when there is one. Staking does not
+  // rename a record -- the card's title is still the lead name -- so this was
+  // the one value that made the pairing visible nowhere at all: it is captured
+  // at Well Site Location and, until now, read back by nothing.
+  var stakedName = (Store.allFields['Well Site Location'] || {}).staked_well_name;
+  var stakedHtml = isFilled(stakedName)
+    ? '<span class="summary-phase-well" title="Staked well name — the lead keeps its own name">' +
+      esc(stakedName) + '</span>'
+    : '';
   var phaseHtml = '<div class="summary-phase"><span class="summary-phase-label">' +
     (isBP ? 'BP Well · ' + esc(Store.project.business_plan_year || year) : 'Lead') +
-    '</span></div>';
+    '</span>' + stakedHtml + '</div>';
   // Phase-specific body: leads show volumetrics + chance-of-success; drilled BP
   // wells show post-drill results per formation plus a predicted-vs-actual
   // comparison against the frozen lead snapshot.
@@ -1025,25 +1050,38 @@ export function renderRightPanel(tasks) {
         (Store.allFields['Quicklook Logs'] || {}).quicklook_top_reservoir_tvdss_ft
       ]);
     }
+    // "Gas (BCF)", not "Post-Drill Gas": on a well card every figure is a
+    // post-drill figure, and the qualifier only made the heading longer than
+    // the three numbers under it.
+    // The card face carries the RESULTS: volumes, how the well flowed, and
+    // what the reservoir turned out to be. SARH Prognosis and Top SARH used to
+    // sit here as two loose rows; they are predictions, and both already
+    // appear -- against their actuals, which is the only way they mean
+    // anything -- inside the Simulated Vs Actual Delta fold below.
     var metricsHtml = '<div class="summary-metrics">' +
-      statCluster('Post-Drill Gas (BCF)', [
+      statCluster('Gas (BCF)', [
         { label: 'P90', value: postDrillTrio.p90 },
         { label: 'Mean', value: postDrillTrio.mean },
         { label: 'P10', value: postDrillTrio.p10 }
       ]) +
-      metricRow('SARH Prognosis', prognosis) +
-      metricRow('Top SARH (ft TVDSS)', topSarh) +
       '</div>';
 
-    // Reservoirs: SARH always first (barren → "tight"); every other formation
-    // with any data follows, custom/non-gas included (fluid tag distinguishes).
-    var reservoirLines = [formationLine('SARH', sarh)];
+    // Reservoir Properties: a small table -- one header row over one row per
+    // formation, name on the left. It replaces the run-on "120 ft · 8.5% φ ·
+    // 35% Sw · 60 ft pay" line, which forced the reader to parse each value's
+    // unit to know which measure it was. SARH always leads (barren → "tight");
+    // every other formation with data follows.
+    var reservoirRows = [formationPropertyRow('SARH', sarh)];
     Object.keys(deduped).sort().forEach(function (name) {
       if (name === 'SARH' || !formationHasData(deduped[name].row)) return;
-      reservoirLines.push(formationLine(name, deduped[name].row));
+      reservoirRows.push(formationPropertyRow(name, deduped[name].row));
     });
-    var reservoirsHtml = '<div class="summary-section"><div class="summary-section-title">Reservoirs</div>' +
-      '<div class="summary-formations">' + reservoirLines.join('') + '</div></div>';
+    var reservoirsHtml = '<div class="summary-section"><div class="summary-section-title">Reservoir Properties</div>' +
+      '<div class="summary-props">' +
+      '<div class="summary-props-head">' +
+        '<span class="summary-props-name"></span>' +
+        '<span>Pay Thickness</span><span>Porosity (φ)</span><span>Water Saturation (Sw)</span>' +
+      '</div>' + reservoirRows.join('') + '</div></div>';
 
     // Flowback rate: the headline rate lives in a fluid-specific EAV field.
     // Petrophysical fluid precedence (newest authority first), mirroring the
@@ -1076,10 +1114,26 @@ export function renderRightPanel(tasks) {
       if (primaryStage || !stage) return;
       if (Object.keys(stage).some(function (key) { return isFilled(stage[key]); })) primaryStage = stage;
     });
-    var flowValue = primaryStage ? primaryStage[flowEntry.key] : flowbackFields[flowEntry.key];
-    var flowbackHtml = '<div class="summary-metrics summary-section">' +
-      metricRow('Flowback Rate', isFilled(flowValue) ? fmtNum(flowValue) + ' ' + flowEntry.unit : '', isFilled(fluid) ? fluid : 'Gas') +
-      '</div>';
+    // Flowback Results: the headline rate plus the two figures that say under
+    // what conditions it was measured. A rate without its wellhead pressure
+    // and choke size is not a comparable number, and both were already
+    // recorded on the stage row -- they simply had no surface here.
+    var flowRead = function (key) {
+      return primaryStage ? primaryStage[key] : flowbackFields[key];
+    };
+    var flowValue = flowRead(flowEntry.key);
+    var fwhp = flowRead('flowback_fwhp_psi');
+    var choke = flowRead('flowback_choke_size_in');
+    var flowbackHtml = '<div class="summary-section"><div class="summary-section-title">Flowback Results</div>' +
+      '<div class="summary-metrics">' +
+      // The rate's label follows the well's fluid, so an oil well does not
+      // read "Gas Rate" (the fluid itself rides along as the row's context).
+      metricRow(flowEntry.label || 'Gas Rate',
+        isFilled(flowValue) ? fmtNum(flowValue) + ' ' + flowEntry.unit : '',
+        isFilled(fluid) ? fluid : 'Gas') +
+      metricRow('Flowing Wellhead Pressure (FWHP)', isFilled(fwhp) ? fmtNum(fwhp) + ' psi' : '') +
+      metricRow('Choke Size', isFilled(choke) ? fmtNum(choke) + ' in' : '') +
+      '</div></div>';
 
     // Folds are per-project, like the rail accordion: a fresh selection starts
     // with every fold collapsed.
@@ -1093,7 +1147,7 @@ export function renderRightPanel(tasks) {
     var predMean = '';
     for (var si = 0; si < LEAD_PIIP_SOURCES.length && !isFilled(predMean); si += 1) predMean = (snap[LEAD_PIIP_SOURCES[si][0]] || {})[LEAD_PIIP_SOURCES[si][1]] || '';
     for (var li = 0; li < LEAD_PIIP_SOURCES.length && !isFilled(predMean); li += 1) predMean = (Store.allFields[LEAD_PIIP_SOURCES[li][0]] || {})[LEAD_PIIP_SOURCES[li][1]] || '';
-    var pvaHtml = foldSection('pva', 'Prediction vs Actual',
+    var pvaHtml = foldSection('pva', 'Simulated Vs Actual Delta',
       '<div class="summary-pva-head-row"><span class="summary-pva-label"></span><span class="summary-pva-cell summary-pva-colhead">Predicted</span><span class="summary-pva-cell summary-pva-colhead">Actual</span><span class="summary-pva-delta"></span></div>' +
       pvaRow('Top SARH', prognosis, topSarh) +
       pvaRow('Thickness (ft)', predThickness, sarh ? sarh.thickness_ft : '') +
@@ -1111,14 +1165,14 @@ export function renderRightPanel(tasks) {
     var leadHtml = foldSection('lead', 'Lead Summary',
       leadMetricsHtml(leadFieldSource(), LEAD_PIIP_SOURCES) + capturedNote);
 
-    // Folder links: the well's own shared folders (Well/MTR/PDA), not the
-    // lead's -- those already live inside the folded Lead Summary above via
-    // the pipeline itself, and get_section_folder_link resolves them from
-    // config.WELL_OVERVIEW_DIRECTORY_MAP by these same keys.
-    var folderSectionKeys = ['well', 'mtr', 'pda'];
-    var foldersFoldHtml = foldSection('folders', 'Folders', foldersHtml(folderSectionKeys));
-
-    bodyHtml = metricsHtml + reservoirsHtml + flowbackHtml + pvaHtml + leadHtml + foldersFoldHtml;
+    // The well card ends here: TWO folds, Simulated Vs Actual Delta and Lead
+    // Summary. The Folders fold is deliberately gone -- every step still
+    // carries its own shared-folder card (renderComponentFolder in
+    // detail-form.js), which is where a folder link is actually wanted while
+    // working a step.
+    // Order: what came out of the well (volumes, then how it flowed), then
+    // what the rock is, then the two folds.
+    bodyHtml = metricsHtml + flowbackHtml + reservoirsHtml + pvaHtml + leadHtml;
   } else {
     // ---- Lead card ----------------------------------------------------------
     // Res CoS is the primary first-row percent; its "Block · AR n" reference

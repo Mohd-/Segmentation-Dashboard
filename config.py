@@ -473,8 +473,74 @@ def _env_list(name: str):
     return tuple(str(item).strip() for item in value if str(item).strip())
 
 
-# Ordered standard hole-section values for Gate Interval From/To.  No approved
-# list was supplied, so this is empty unless deployment configures it.
+# ---------------------------------------------------------------------------
+# User-maintained pick lists (config/lists.yaml)
+# ---------------------------------------------------------------------------
+# Formation names and wellbore/hole sizes are lists an ASAS user extends, not
+# code. They live in ONE YAML file so nobody has to find them in two source
+# files and keep them in step. The file is optional: a missing file, a missing
+# key, an unreadable file or a malformed one all fall back to the built-in
+# default, so a deployment that never touches it behaves exactly as before.
+
+
+def user_lists_path() -> Path:
+    """Path to the user-maintained pick lists (config/lists.yaml)."""
+    raw = os.environ.get("SEGMENT_TRACKER_LISTS_PATH", str(BASE_DIR / "config" / "lists.yaml"))
+    return Path(raw).expanduser().resolve()
+
+
+def user_list(name: str, default) -> tuple:
+    """One list from config/lists.yaml, or ``default`` when it is unusable.
+
+    Read on every call rather than cached at import: the tests re-point the
+    file per case, and these lists are read a handful of times per request at
+    most. Entries are stripped and blanks dropped; duplicates are collapsed
+    keeping first position, so a hand-edited file cannot produce a dropdown
+    with the same option twice.
+    """
+    try:
+        import yaml  # local import: config.py must stay importable without it
+
+        with user_lists_path().open("r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle)
+    except Exception:
+        return tuple(default)
+    if not isinstance(data, dict):
+        return tuple(default)
+    raw = data.get(name)
+    if not isinstance(raw, list):
+        return tuple(default)
+    seen = {}
+    for item in raw:
+        text = str(item).strip()
+        if text and text not in seen:
+            seen[text] = True
+    return tuple(seen) or tuple(default)
+
+
+# The canonical formation trio is the fallback, so an absent lists.yaml leaves
+# the app exactly where it was.
+DEFAULT_FORMATIONS = ("SARH", "QASM", "QWRH")
+
+
+def formations() -> tuple:
+    """Formation names offered wherever a formation is picked."""
+    return user_list("formations", DEFAULT_FORMATIONS)
+
+
+def hole_sections() -> tuple:
+    """Ordered wellbore/hole sizes for the BP Gate's interval From/To pair.
+
+    The environment variable still wins where a deployment sets it; otherwise
+    the list comes from config/lists.yaml. Before both existed this was empty,
+    which is why those dropdowns offered formations only.
+    """
+    return _env_list("SEGMENT_TRACKER_BPE_HOLE_SECTIONS") or user_list("hole_sections", ())
+
+
+# Kept as a module-level name because callers imported it directly; it now
+# reflects the environment only. Read hole_sections() instead -- it also sees
+# config/lists.yaml.
 BPE_HOLE_SECTIONS = _env_list("SEGMENT_TRACKER_BPE_HOLE_SECTIONS")
 
 

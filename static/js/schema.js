@@ -72,13 +72,15 @@ export var FLUID_TYPES = ['', 'Gas', 'Gas over Water', 'Water Bearing', 'Dry Hol
 // summary card (WS5). The keys address a flowback STAGE row first
 // (FLOWBACK_STAGE_COLUMNS reuses the same names) and the retired step-level
 // flat EAV keys as legacy fallback.
+// `label` names the rate on the Well Summary's Flowback Results section, so an
+// oil well does not read "Gas Rate"; `unit` is what the value is shown in.
 export var FLOWBACK_RATE_FIELDS = {
-  'Gas': { key: 'flowback_gas_rate_mmscfd', unit: 'MMSCFD' },
-  'Gas over Water': { key: 'flowback_gas_rate_mmscfd', unit: 'MMSCFD' },
-  'Oil': { key: 'flowback_liquid_rate_bpd', unit: 'BPD' },
-  'Oil over Gas': { key: 'flowback_liquid_rate_bpd', unit: 'BPD' },
-  'Oil over Water': { key: 'flowback_liquid_rate_bpd', unit: 'BPD' },
-  'Water Bearing': { key: 'flowback_water_rate_bwpd', unit: 'BWPD' }
+  'Gas': { key: 'flowback_gas_rate_mmscfd', unit: 'MMSCFD', label: 'Gas Rate' },
+  'Gas over Water': { key: 'flowback_gas_rate_mmscfd', unit: 'MMSCFD', label: 'Gas Rate' },
+  'Oil': { key: 'flowback_liquid_rate_bpd', unit: 'BPD', label: 'Liquid Rate' },
+  'Oil over Gas': { key: 'flowback_liquid_rate_bpd', unit: 'BPD', label: 'Liquid Rate' },
+  'Oil over Water': { key: 'flowback_liquid_rate_bpd', unit: 'BPD', label: 'Liquid Rate' },
+  'Water Bearing': { key: 'flowback_water_rate_bwpd', unit: 'BWPD', label: 'Water Rate' }
 };
 // One flowback stage (#1..#n) per row of the Flowback Results mini-sheet (EAV
 // key flowback_stages_rows, a JSON array exactly like reservoir_cos_rows).
@@ -109,6 +111,15 @@ export var FLOWBACK_STAGE_COLUMNS = [
 // readable in old data (see detail.js fluid/tops fallbacks) but are no longer
 // rendered as inputs.
 export var FORMATIONS = ['SARH', 'QASM', 'QWRH'];
+
+// The list is USER-MAINTAINED (config/lists.yaml) and served by /api/meta, so
+// the array above is a boot fallback -- exactly the relationship the stage
+// lists in this file already have with the server. Takes the meta payload
+// rather than importing Store, keeping this module free of app state.
+export function formationNames(meta) {
+  var served = meta && meta.formations;
+  return (Array.isArray(served) && served.length) ? served.slice() : FORMATIONS.slice();
+}
 export var FORMATION_METRICS = [
   // bigOk: true -- TVDSS depths run well past the generic 9999 cap (see
   // validateStepFields). Formation metric values are edited/saved through the

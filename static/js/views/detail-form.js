@@ -1,7 +1,7 @@
 import { byId, all, esc, isFilled, truthy, msg } from '../dom.js';
 import { API } from '../api.js';
 import { currentUserName, currentRole, canManageAssignments, isCurrentPipelineView, Store } from '../state.js';
-import { SCHEMA, FORMATIONS, FORMATION_METRICS, FLUID_TYPES, SEISMIC_BLOCKS, CHECKBOX_SUBMIT_STEPS, validateStepFields, numericFieldError, submitBlockedMessage } from '../schema.js';
+import { SCHEMA, formationNames, FORMATION_METRICS, FLUID_TYPES, SEISMIC_BLOCKS, CHECKBOX_SUBMIT_STEPS, validateStepFields, numericFieldError, submitBlockedMessage } from '../schema.js';
 import { calculateTrapCos, calculateSealCos } from '../cos-rules.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { renderDetail, renderRightPanel, chooseInitialTask, tasksForPipeline, parseRepeatableRows, refreshAfterRecordChange, revealTaskStage } from './detail.js';
@@ -562,12 +562,13 @@ function makeFormationRow(name, isCustom, saved) {
 function seedFormationEdits(phase) {
   var saved = (Store.formations || []).filter(function (row) { return row.phase === phase; });
   var rows = [];
-  FORMATIONS.forEach(function (name) {
+  var canonical = formationNames(Store.meta);
+  canonical.forEach(function (name) {
     var match = saved.find(function (row) { return row.formation === name; });
     rows.push(makeFormationRow(name, false, match));
   });
   saved.forEach(function (row) {
-    if (FORMATIONS.indexOf(row.formation) < 0) rows.push(makeFormationRow(row.formation, true, row));
+    if (canonical.indexOf(row.formation) < 0) rows.push(makeFormationRow(row.formation, true, row));
   });
   formationEdits[phase] = rows;
   formationDirty[phase] = false;
@@ -914,7 +915,7 @@ function bindFormationFields(root) {
 // value no longer in that set appended so old rows render selected instead of
 // silently blanking (same courtesy repeatableSelectOptions extends).
 function formationNameOptions(current) {
-  var names = FORMATIONS.slice();
+  var names = formationNames(Store.meta);
   (Store.formations || []).forEach(function (row) {
     if (row && row.formation && names.indexOf(row.formation) < 0) names.push(row.formation);
   });

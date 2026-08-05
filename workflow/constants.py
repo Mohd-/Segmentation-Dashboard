@@ -2,10 +2,14 @@
 
 The bottom of the package's dependency graph -- nothing here imports another
 workflow module (or the database), so every other module can import from it
-freely. Also home to ``StaleRevisionError`` (the optimistic-lock conflict
+freely. (``config`` is the one exception, and it is below this file in the
+graph: it reads the environment and config/lists.yaml and imports nothing of
+ours.) Also home to ``StaleRevisionError`` (the optimistic-lock conflict
 signal main.py maps to HTTP 409) and the shared read-mapping tables.
 """
 from __future__ import annotations
+
+import config
 
 
 class StaleRevisionError(RuntimeError):
@@ -85,7 +89,18 @@ def applicable_stages(pipeline_type):
 # workflow.formations.upsert_project_formations, not a DB constraint). Rows
 # are keyed by (project, formation, phase); ``phase`` says which
 # interpretation step the values came from.
-FORMATIONS = ["SARH", "QASM", "QWRH"]
+def formations() -> list:
+    """The formation names on offer, from config/lists.yaml (see that file).
+
+    A function, not a constant: the list is user-maintained, so it must be
+    read when it is used rather than frozen at import. FORMATIONS below stays
+    as the module-level name older call sites import, evaluated once at
+    startup -- which is correct for a list that changes with a restart.
+    """
+    return list(config.formations())
+
+
+FORMATIONS = formations()
 FORMATION_PHASES = ["quicklook", "post_drill", "final", "resource_update"]
 FORMATION_VALUE_FIELDS = [
     "top_tvdss_ft", "base_tvdss_ft", "thickness_ft", "porosity_pct",

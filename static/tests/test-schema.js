@@ -3,7 +3,7 @@
 import { test, assert } from './harness.js';
 import {
   piip, SCHEMA, PROSPECT_STAGES, BP_STAGES, STATUSES, DONE,
-  SEISMIC_BLOCKS, FLUID_TYPES, FORMATIONS, FORMATION_METRICS,
+  SEISMIC_BLOCKS, FLUID_TYPES, FORMATIONS, formationNames, FORMATION_METRICS,
   RESERVOIR_COS_COLUMNS, FLOWBACK_STAGE_COLUMNS, FLOWBACK_RATE_FIELDS,
   RESOURCE_SCENARIOS, validateStepFields, numericFieldError,
   SAD_FORMATION_COLUMNS, REQUIRED_FIELDS_FOR_SUBMIT, CHECKBOX_SUBMIT_STEPS,
@@ -749,4 +749,32 @@ test('validateStepFields: merged Lead Assessment registers the confirmation; dir
   assert.equal(validateStepFields('Lead Assessment', {}), null);
   assert.equal(validateStepFields('Lead Assessment', { lead_piip_gas_p90: '10', lead_piip_gas_mean: '5' }),
     'Gas P90 must be lower than Mean.');
+});
+
+/* The Well Summary's Flowback Results names its headline rate after the well's
+   fluid, so an oil well does not read "Gas Rate". Every fluid in the map needs
+   both halves or the row renders with no label. */
+test('FLOWBACK_RATE_FIELDS carries a label and a unit for every fluid', function () {
+  Object.keys(FLOWBACK_RATE_FIELDS).forEach(function (fluid) {
+    var entry = FLOWBACK_RATE_FIELDS[fluid];
+    assert.ok(entry.key, fluid + ' has a field key');
+    assert.ok(entry.unit, fluid + ' has a unit');
+    assert.ok(entry.label, fluid + ' has a display label');
+  });
+  assert.equal(FLOWBACK_RATE_FIELDS['Gas'].label, 'Gas Rate');
+  assert.equal(FLOWBACK_RATE_FIELDS['Oil'].label, 'Liquid Rate');
+  assert.equal(FLOWBACK_RATE_FIELDS['Water Bearing'].label, 'Water Rate');
+});
+
+/* The formation list is user-maintained (config/lists.yaml) and served by
+   /api/meta; the module constant is only a boot fallback. */
+test('formationNames prefers the served list and falls back to the constant', function () {
+  assert.deepEqual(formationNames({ formations: ['ALPHA', 'BETA'] }), ['ALPHA', 'BETA']);
+  assert.deepEqual(formationNames({}), FORMATIONS);
+  assert.deepEqual(formationNames(null), FORMATIONS);
+  assert.deepEqual(formationNames({ formations: [] }), FORMATIONS, 'an empty served list is not a list');
+  // A copy, never the module array -- callers push custom names onto it.
+  var names = formationNames(null);
+  names.push('CUSTOM');
+  assert.equal(FORMATIONS.indexOf('CUSTOM'), -1);
 });

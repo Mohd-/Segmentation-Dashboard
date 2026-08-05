@@ -1,4 +1,5 @@
-// Tests for static/js/views/detail.js — the LEAD-LEVEL priority chip.
+// Tests for static/js/views/detail.js — the LEAD-LEVEL priority chip and the
+// Well Summary's two-decimal reservoir-property formatting.
 //
 // Priority is a record attribute (stored projects.priority, delivered on the
 // detail payload as project.priority): ONE chip beside the record name in the
@@ -6,7 +7,7 @@
 // Low → Medium → High → Low through PATCH /api/projects/<id>/priority;
 // everyone else sees a static, disabled chip.
 import { test, assert, fixture, mockFetch } from './harness.js';
-import { renderLeadPriorityChip, cycleLeadPriorityChip, nextLeadPriority } from '../js/views/detail.js';
+import { renderLeadPriorityChip, cycleLeadPriorityChip, nextLeadPriority, fmt2 } from '../js/views/detail.js';
 import { Store } from '../js/state.js';
 
 // The chip exactly as index.html ships it (hidden until a record renders).
@@ -131,4 +132,24 @@ test('detail cycleLeadPriorityChip is a no-op for a non-supervisor', function ()
       assert.equal(calls.length, 0, 'nothing is sent');
     });
   });
+});
+
+/* Reservoir Properties are read to the hundredth -- a water saturation of 0.92
+   or a porosity of 21.35 loses a digit that matters under fmtNum's single
+   decimal, which is why this card has its own formatter. Percentages are NOT
+   converted: the value is shown exactly as it is stored and entered. */
+test('detail fmt2 renders reservoir properties to two decimals', function () {
+  assert.equal(fmt2(0.92), '0.92');
+  assert.equal(fmt2('21.352'), '21.35');
+  assert.equal(fmt2(74), '74.00', 'a whole number still shows both places');
+  assert.equal(fmt2('20.8'), '20.80');
+  // Rounds, never truncates.
+  assert.equal(fmt2(9.999), '10.00');
+});
+
+test('detail fmt2 leaves blanks and non-numbers to the caller', function () {
+  assert.equal(fmt2(''), '', 'blank stays blank so the caller can render its dash');
+  assert.equal(fmt2(null), '');
+  assert.equal(fmt2(undefined), '');
+  assert.equal(fmt2('n/a'), 'n/a', 'text passes through untouched rather than becoming NaN');
 });

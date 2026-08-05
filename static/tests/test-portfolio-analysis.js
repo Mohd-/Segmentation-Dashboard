@@ -229,7 +229,8 @@ test('portfolio table renders a derived Quadrant column with a badge per row', a
     host.querySelectorAll('#portfolio-table thead th'),
     function (th) { return th.getAttribute('data-key'); });
   assert.equal(heads[heads.length - 1], 'quadrant', 'Quadrant closes the column set');
-  assert.equal(heads.length, 9);
+  assert.deepEqual(heads, ['well_name', 'staked_well_name', 'gas_field', 'seismic_block',
+    'classification', 'year', 'status', 'mean_ogip', 'total_cos', 'quadrant']);
 
   var cells = host.querySelectorAll('.pf-quadrant-cell');
   assert.equal(cells.length, 3);

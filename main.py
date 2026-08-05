@@ -380,6 +380,12 @@ def meta():
         # configuration" note, so this endpoint is the single production switch
         # that turns derivation on (see that constant's own comment).
         "twt_thickness_coefficients": config.TWT_THICKNESS_COEFFICIENTS,
+        # The user-maintained pick lists (config/lists.yaml). Served here so
+        # the client has ONE source for them instead of a hand-kept copy in
+        # schema.js -- that array is now a boot fallback like the stage lists
+        # above. See config/lists.yaml for how to extend them.
+        "formations": list(config.formations()),
+        "hole_sections": list(config.hole_sections()),
     })
 
 

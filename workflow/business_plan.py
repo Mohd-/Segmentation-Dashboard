@@ -859,8 +859,10 @@ def get_detail(session, project_id, detail_slug):
             "vsp": config.business_plan_vsp_url(),
             "structural_mtr": config.business_plan_structural_mtr_url(),
         },
-        "hole_sections": list(config.BPE_HOLE_SECTIONS),
-        "formation_options": list(FORMATIONS) + custom_formations,
+        # Both lists are user-maintained in config/lists.yaml (read per
+        # request, so an edit needs a restart at most, never a redeploy).
+        "hole_sections": list(config.hole_sections()),
+        "formation_options": list(config.formations()) + custom_formations,
         "booking_years": list(range(date.today().year, date.today().year + 4)),
     }
 

@@ -54,10 +54,18 @@ PORTFOLIO_EXPORT_COLUMNS: List[str] = [
     "Most Recent Age of Fault", "Dip", "Azimuth vs SHmax", "Fault LoC", "FPPM",
     "Seal CoS (%)", "Pore Pressure Gradient (psi/ft)",
     "Gas Rate (MMSCFD)", "Water Rate (BWPD)", "Condensate Rate (BPD)", "Choke Size (in)", "WHP (psi)",
+    # APPENDED, not inserted beside "Well Name" where it reads best: this
+    # sheet's column POSITIONS are a contract for external consumers (pinned
+    # by tests/test_api_contract.py), so a new column goes on the end.
+    # "Well Name" is the RECORD's name -- the same value the Staking sheet
+    # calls "Lead Name", because staking never renames a record. "Staked Well
+    # Name" is the separate name captured at Well Site Location, blank until
+    # the well is staked; together they are the lead <-> well map.
+    "Staked Well Name",
 ]
 
 STAKING_EXPORT_COLUMNS: List[str] = [
-    "Lead Name", "X", "Y",
+    "Lead Name", "Staked Well Name", "X", "Y",
     "Option 1 Max Distance (m)", "Option 1 Azimuth (deg)",
     "Option 2 Max Distance (m)", "Option 2 Azimuth (deg)",
     "Option 3 Max Distance (m)", "Option 3 Azimuth (deg)",
@@ -77,6 +85,7 @@ _PORTFOLIO_TASK_FIELD_KEYS: List[str] = [
     "post_drill_fluid_type", "quicklook_fluid_type",
     "reservoir_cos_rows",
     "flowback_dynamic_ogip_bcf",
+    "staked_well_name",
     "pda_booked",
     "p90_area_km2", "p10_area_km2",
     "formation_thickness_ft", "reservoir_thickness_ft",
@@ -97,6 +106,7 @@ _STAKING_TASK_FIELD_KEYS: List[str] = [
     "staking_opt1_max_distance_m", "staking_opt1_azimuth_deg",
     "staking_opt2_max_distance_m", "staking_opt2_azimuth_deg",
     "staking_opt3_max_distance_m", "staking_opt3_azimuth_deg",
+    "staked_well_name",
 ]
 
 _TRUTHY_STRINGS = {"1", "true", "yes", "on"}
@@ -363,6 +373,7 @@ def get_portfolio_export_rows(session) -> List[dict]:
             "X": _first_filled(fields.get("staking_well_x"), xy.get("lead_x")),
             "Y": _first_filled(fields.get("staking_well_y"), xy.get("lead_y")),
             "Well Name": item["project_name"],
+            "Staked Well Name": _first_filled(fields.get("staked_well_name")),
             "BP Year": item.get("year") or "",
             "Classification": classification,
             "Field": field_name,
@@ -429,6 +440,7 @@ def get_staking_export_rows(session) -> List[dict]:
         xy = lead_xy.get(item["project_id"], {})
         rows.append({
             "Lead Name": item["project_name"],
+            "Staked Well Name": _first_filled(fields.get("staked_well_name")),
             "X": _first_filled(fields.get("staking_well_x"), xy.get("lead_x")),
             "Y": _first_filled(fields.get("staking_well_y"), xy.get("lead_y")),
             "Option 1 Max Distance (m)": _first_filled(fields.get("staking_opt1_max_distance_m")),

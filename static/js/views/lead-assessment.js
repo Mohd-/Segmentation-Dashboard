@@ -31,7 +31,7 @@
 import { byId, all, esc, isFilled, truthy, msg } from '../dom.js';
 import { API } from '../api.js';
 import { Store, currentUserName, isCurrentPipelineView } from '../state.js';
-import { RESOURCE_SCENARIOS, FORMATIONS } from '../schema.js';
+import { RESOURCE_SCENARIOS, formationNames } from '../schema.js';
 import {
   buildCalculatePayload, buildLeadApplyFields, buildPlotMarkup,
   resultsFromStoredFields, resultsFromCalculation, openPlotLightbox
@@ -441,7 +441,7 @@ export function primaryFormationName(formations) {
   var names = rows.map(function (row) {
     return String((row && row.formation) || '').trim().toUpperCase();
   }).filter(function (name) { return !!name; });
-  var canonical = FORMATIONS.find(function (name) { return names.indexOf(name) >= 0; });
+  var canonical = formationNames(Store.meta).find(function (name) { return names.indexOf(name) >= 0; });
   return canonical || names[0] || '';
 }
 

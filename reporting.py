@@ -181,6 +181,12 @@ _BP_TASK_FIELD_KEYS = [
     # Portfolio/map consumer one fold rule: an active non-blank wins; its blank
     # cannot erase a retired value.
     "p90_area_km2", "p10_area_km2",
+    # The name the well was staked under (Well Site Location). It is captured
+    # separately from projects.project_name and NEVER replaces it -- staking
+    # does not rename a record -- so without carrying it here there was no
+    # surface anywhere that paired a staked well name with the lead it came
+    # from. That pairing is what the Portfolio column and the export use.
+    "staked_well_name",
 ]
 
 
@@ -491,6 +497,10 @@ def get_portfolio_rows(session, year="All", activity="All"):
         row = {
             "project_id": item["project_id"],
             "well_name": item["project_name"],
+            # The record's own name is the lead name and stays the identity;
+            # the staked well name is an additional label, blank until the
+            # well is staked. Together they ARE the lead <-> well map.
+            "staked_well_name": fields.get("staked_well_name") or "",
             "gas_field": folders.parse_field_and_well(item["project_name"])[0],
             "seismic_block": config.AR_TO_SEISMIC_BLOCK.get(ar_number, ar_number) if ar_number else "",
             "classification": _first_filled(fields.get("bp_gate_classification"),
