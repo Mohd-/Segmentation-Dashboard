@@ -1231,12 +1231,10 @@ export function renderRightPanel(tasks) {
   var popoverHtml =
     '<div id="summary-settings" class="summary-popover hidden" role="dialog" aria-label="Manage ' + recordKind.toLowerCase() + '">' +
     relocatedHtml +
-    // Announced but not yet built. Disabled rather than hidden so the roadmap
-    // is visible where it will land, and titled so the state has a reason.
-    '<div class="summary-popover-actions summary-popover-soon">' +
-      '<button id="export-well-properties" type="button" class="ghost" disabled title="Coming soon">Export automatic Well Prop.</button>' +
-      '<button id="export-well-logs" type="button" class="ghost" disabled title="Coming soon">Export Well Logs Data</button>' +
-    '</div>' +
+    // The two coming-soon exports used to sit here. Card 3B puts them in the
+    // page's own gear menu instead, beside Dark Mode and Export to Excel
+    // (views/header-menus.js) -- they are app-wide exports, not per-record
+    // actions, so this popover was the wrong shelf for them.
     '<div class="summary-popover-actions"><button id="rename-record" type="button" class="ghost">Rename ' + recordKind + '</button><button id="delete-record" type="button" class="danger">Delete ' + recordKind + '</button></div></div>';
 
   byId('summary-title').textContent = viewingBP ? 'Well Summary' : 'Lead Summary';

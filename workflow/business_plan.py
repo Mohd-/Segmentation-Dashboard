@@ -65,7 +65,10 @@ STAGES = (
         "stored_stage": "Post-Drilling",
         "details": (
             ("quicklook-logs", "Quicklook Logs", "Quicklook Logs"),
-            ("aramco-approved-pics", "Aramco Approved PICS", "Aramco Picks"),
+            # Card 3A spells the visible label "Picks". The slug and the stored
+            # task name ("Aramco Picks") are identifiers and stay put -- only
+            # the middle element of this tuple reaches a screen.
+            ("aramco-approved-pics", "Aramco Approved Picks", "Aramco Picks"),
             ("sad-model", "SAD Model", "SAD Model"),
             ("summary-slides", "Summary Slides", "Executive Summary"),
             ("post-drill-learning-review", "Post-Drill Learning Review", "Post-Well Outcome & Decision Gate"),

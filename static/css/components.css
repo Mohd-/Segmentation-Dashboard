@@ -187,6 +187,17 @@
 }
 .hm-action:hover { background: var(--surface-sunken); color: var(--ink-800); }
 .hm-action[disabled] { opacity: .55; cursor: default; }
+/* Card 3B's coming-soon exports. They carry NO icon (the card is explicit),
+   so they indent to the label column of the items above and sit in the faint
+   ink that means "not yet" everywhere else in the app. No hover, because
+   there is nothing to hover — the button is genuinely inert. */
+.hm-action-soon {
+  padding-left: calc(var(--space-3) + 18px + var(--space-3));
+  color: var(--text-faint);
+  font-weight: 400;
+}
+.hm-action-soon:hover { background: none; color: var(--text-faint); }
+.hm-soon-divider { margin: var(--space-1) 0; border: 0; border-top: 1px solid var(--border); }
 .hm-action-icon { display: inline-flex; align-items: center; flex: none; color: var(--text-muted); }
 .hm-action-icon .lucide { width: 18px; height: 18px; }
 /* The Excel glyph is the one tinted item: green is the spreadsheet's own
@@ -3095,6 +3106,23 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .bpe-approval-row { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-5); padding-top: var(--space-4); border-top: 1px solid var(--border); }
 .bpe-branch-note, .bpe-external-link { margin: var(--space-3) 0; padding: var(--space-3); border-left: 3px solid var(--warning-500); background: var(--warning-100); color: var(--warning-700); font-size: var(--text-sm); }
 .bpe-external-link a { color: var(--asas-blue); font-weight: 700; }
+
+/* Card 3C. The formation sheet reuses the summary card's fold mechanics
+   (.summary-fold-head / -body, so the chevron and collapse behave identically
+   everywhere) but not its typography: that head is sized for a narrow side
+   panel, and here it sits in the editor column beside .bpe-form-section
+   headings, so it takes their scale instead. */
+.bpe-formations-fold { margin-top: 0; border-top: none; }
+.bpe-formations-fold > .summary-fold-head {
+  padding: 0 0 var(--space-3);
+  color: var(--ink-800);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.bpe-formations-fold > .summary-fold-body { padding-bottom: 0; }
 
 .bpe-formation-block, .bpe-flow-stage { margin-bottom: var(--space-4); padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-sunken); }
 .bpe-formation-block > header, .bpe-flow-stage > header, .bpe-pay-heading, .bpe-flow-heading { display: flex; align-items: end; gap: var(--space-2); }

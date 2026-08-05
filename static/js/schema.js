@@ -38,6 +38,13 @@ export var RESOURCE_SCENARIOS = [
   { id: 'condensate_field_b', label: 'Condensate - Field B', resource_type: 'condensate' }
 ];
 
+// Card 3A. The PDF confirmation reads on two steps (Quicklook Logs and Final
+// Log Analysis) and is rendered twice more by the BPE detail form, so the
+// approved wording lives here once rather than in four string literals that
+// can drift apart. The neighbouring LAS and Petrel labels are deliberately
+// untouched -- the card names this one only.
+export var PDF_LABEL = 'Logs as PDF loaded in shared folder';
+
 export function piip(prefix) {
   // Grouped layout: the gas P90/Mean/P10 trio sits under a 'Gas (BCF)' section
   // in one row; the liquid checkbox stands alone; the liquid trio is its own row
@@ -351,7 +358,7 @@ export var SCHEMA = {
   // checkboxes remain as normal task fields (grouped in one row).
   'Quicklook Logs': [
     { key: 'quicklook_formations', label: 'Formation Interpretation (Quicklook)', type: 'formations', phase: 'quicklook' },
-    { key: 'quicklook_pdf', label: 'Logs in PDF', type: 'checkbox', row: 'quicklook_logs' },
+    { key: 'quicklook_pdf', label: PDF_LABEL, type: 'checkbox', row: 'quicklook_logs' },
     { key: 'quicklook_las', label: 'Logs as LAS', type: 'checkbox', row: 'quicklook_logs' }
   ],
   'Aramco Picks': [{ key: 'aramco_picks_loaded', label: 'AAP are loaded in Petrel & GK', type: 'checkbox' }],
@@ -418,7 +425,7 @@ export var SCHEMA = {
   'Final Log Analysis': [
     { key: 'final_formations', label: 'Formation Interpretation (Final)', type: 'formations', phase: 'final' },
     { key: 'final_petrel', label: 'Logs in Petrel', type: 'checkbox', row: 'final_logs' },
-    { key: 'final_pdf', label: 'Logs in PDF', type: 'checkbox', row: 'final_logs' },
+    { key: 'final_pdf', label: PDF_LABEL, type: 'checkbox', row: 'final_logs' },
     { key: 'final_las', label: 'Logs as LAS', type: 'checkbox', row: 'final_logs' }
   ],
   'PVAD Structural MTR': [{ key: 'pvad_mtr_link', label: 'DRAS', type: 'link', value: 'https://DRAS/', linkText: 'Open PVAD Structural MTR (DRAS)' }],

@@ -39,7 +39,7 @@ function navigation() {
     ] },
     { stage_key: 'post_drilling', stage_label: 'Post-Drilling', details: [
       { slug: 'quicklook-logs', label: 'Quicklook Logs', status: 'In Progress' },
-      { slug: 'aramco-approved-pics', label: 'Aramco Approved PICS', status: 'In Progress' },
+      { slug: 'aramco-approved-pics', label: 'Aramco Approved Picks', status: 'In Progress' },
       { slug: 'sad-model', label: 'SAD Model', status: 'In Progress' },
       { slug: 'summary-slides', label: 'Summary Slides', status: 'In Progress' },
       { slug: 'post-drill-learning-review', label: 'Post-Drill Learning Review', status: 'In Progress' }
