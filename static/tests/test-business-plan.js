@@ -1009,3 +1009,56 @@ test('business-plan only a flagged well under Post-Drilling gets the drilling bo
   var card = host.querySelector('.lead-card.is-active-drilling');
   assert.ok(card.classList.contains('lead-card-high'));
 });
+
+// ---------------------------------------------------------------------------
+// Card 3I -- the detail shell matches Segment Maturation's
+// ---------------------------------------------------------------------------
+//
+// The BPE page had its own rail head, its own editor head and a summary panel
+// missing the maturation card's opening elements. These pin the pieces that
+// were structurally different, using the SHARED class names -- if the shells
+// drift apart again, they drift here first.
+
+test('business-plan the detail shell uses the maturation shell anatomy', async function () {
+  var detail = detailPayload('gheer-inputs', {});
+  detail.project.lead_name = 'MDFT-7';
+  detail.project.project_name = 'MDFT-7ST2';
+  var host = mountGate(detail);
+  await openBusinessPlanDetail(7, 'gheer-inputs');
+
+  // Rail head: back control, title row with the priority chip, the lead name
+  // under it where the two differ, the stage eyebrow, then the all-fields link.
+  var rail = host.querySelector('.component-rail .rail-head');
+  assert.ok(rail.querySelector('#bpe-back'));
+  assert.ok(rail.querySelector('.detail-title-row #bpe-priority-chip'));
+  assert.equal(rail.querySelector('#bpe-detail-subtitle').textContent, 'MDFT-7');
+  assert.ok(rail.querySelector('.bpe-rail-eyebrow'));
+  assert.ok(rail.querySelector('#bpe-rail-edit-all.rail-all-fields'),
+    'the all-fields link is a rail control here too, not gear-only');
+
+  // Editor head: numbered chip, title, status chip, top controls -- the
+  // maturation order, with the rail's own numbering (GHEER Inputs is 3).
+  var head = host.querySelector('.component-editor .editor-head');
+  assert.equal(head.querySelector('.component-number').textContent, '3');
+  assert.ok(head.querySelector('h2'));
+  assert.ok(head.querySelector('.bpe-detail-status'));
+
+  // Summary panel: progress bar and phase row, which it had neither of.
+  var summary = host.querySelector('.summary-panel .ls-card');
+  assert.ok(summary.querySelector('.summary-progress .summary-progress-bar span'));
+  assert.match(summary.querySelector('.summary-phase-label').textContent, /BP Well/);
+  assert.equal(summary.querySelector('.summary-phase-well').textContent, 'MDFT-7',
+    'the lead name rides opposite the phase, as it does on the maturation card');
+});
+
+test('business-plan the status chip is always present, whatever the step tracks', async function () {
+  // It used to render only when the step had a tracking item, so a step
+  // without one got a differently-shaped head.
+  var detail = detailPayload('gheer-inputs', {});
+  detail.tracking = [];
+  var host = mountGate(detail);
+  await openBusinessPlanDetail(7, 'gheer-inputs');
+  var chip = host.querySelector('.editor-head .bpe-detail-status');
+  assert.ok(chip, 'the head keeps its shape');
+  assert.equal(chip.textContent.trim(), 'In Progress');
+});

@@ -1337,7 +1337,16 @@ function railMarkup() {
       '<div class="detail-title-row"><h3>' + esc(detail.project.project_name) + '</h3>' +
         priorityChipHtml('bpe-priority-chip', detail.project.priority,
                          (detail.role || currentRole()) === 'supervisor') + '</div>' +
+      // Card 3I: the maturation rail head carries the record's LEAD name under
+      // the title where the two differ (Card 3V's pairing), then the stage
+      // eyebrow, then the all-fields link -- same order, same elements.
+      (detail.project.lead_name && detail.project.lead_name !== detail.project.project_name
+        ? '<p id="bpe-detail-subtitle" class="detail-subtitle">' + esc(detail.project.lead_name) + '</p>'
+        : '') +
       '<p class="bpe-rail-eyebrow">' + esc(detail.detail.stage_label) + '</p>' +
+      // The maturation shell shows this as a rail link on a well; BPE hid it
+      // in the gear menu, which is the divergence the card names.
+      '<button type="button" id="bpe-rail-edit-all" class="link-button rail-all-fields">Edit all project fields</button>' +
     '</div>' +
     '<div class="component-list">' + detailNavMarkup() + '</div>' +
     '</aside>';
@@ -1360,16 +1369,40 @@ function topControlsMarkup() {
     (role === 'employee' ? 'disabled' : '') + '>' + selectOptions(assigneeOptions(), state.detail.assignee) + '</select></label></div>';
 }
 
+// Card 3I: the maturation editor head is a numbered chip, the step title, its
+// status chip and the top controls -- in that order. BPE had the title and a
+// CONDITIONAL status chip, so a step with no tracking item rendered a
+// differently-shaped head. The number is the rail's own numbering for this
+// step, so the head and the rail agree about which step you are on.
 function editorMarkup() {
   var detail = state.detail;
-  var chip = (detail.tracking || []).length
-    ? '<span class="bpe-detail-status state-' + esc(detail.tracking[0].color) + '">' +
-      statusIcon(detail.tracking[0]) + esc(detail.tracking[0].status) + '</span>'
-    : '';
+  var tracking = (detail.tracking || [])[0];
+  var chip = '<span class="bpe-detail-status state-' +
+    esc(tracking ? tracking.color : 'empty') + '">' +
+    (tracking ? statusIcon(tracking) : '') +
+    esc(tracking ? tracking.status : 'In Progress') + '</span>';
   return '<section class="component-editor bpe-detail-form">' +
-    '<div class="editor-head"><h2>' + esc(detail.detail.label) + '</h2>' + chip + topControlsMarkup() + '</div>' +
+    '<div class="editor-head">' +
+      '<span class="component-number">' + detailNumber(state.detailSlug) + '</span>' +
+      '<div><h2>' + esc(detail.detail.label) + '</h2></div>' +
+      chip + topControlsMarkup() +
+    '</div>' +
     bodyMarkup() +
     '</section>';
+}
+
+// The step's position in the rail's continuous 1..14 numbering -- the same
+// numbering the folder mapping's BP identifiers use.
+function detailNumber(slug) {
+  var number = 0;
+  var found = 0;
+  (state.detail.navigation || []).forEach(function (group) {
+    (group.details || []).forEach(function (item) {
+      number += 1;
+      if (item.slug === slug) found = number;
+    });
+  });
+  return found || 1;
 }
 
 /* -------------------------------------------------------------------------
@@ -1395,10 +1428,21 @@ function summaryMarkup() {
   var project = detail.project || {};
   var items = detail.stage_items || [];
   var done = items.filter(function (item) { return item.status === 'Completed'; }).length;
+  var percent = items.length ? Math.round((done / items.length) * 100) : 0;
   return '<aside class="summary-panel"><div class="ls-card">' +
     '<div class="ls-head"><h3 class="ls-title">Well Summary</h3>' +
       '<button type="button" id="bpe-summary-gear" class="icon-btn ls-gear" aria-haspopup="menu"' +
       ' aria-expanded="false" title="Well Summary actions" aria-label="Well Summary actions">' + icon('settings') + '</button>' +
+    '</div>' +
+    // Card 3I: the maturation summary opens with a progress bar and a phase
+    // row. Both were missing here, which is what made this panel read as a
+    // different component rather than the same one with well content.
+    '<div class="summary-progress"><div class="summary-progress-bar"><span style="width:' + percent + '%"></span></div>' +
+      '<div class="summary-progress-figures"><b>' + percent + '%</b><small>' + done + ' / ' + items.length + '</small></div></div>' +
+    '<div class="summary-phase"><span class="summary-phase-label">BP Well &middot; ' +
+      esc(project.business_plan_year || '') + '</span>' +
+      (project.lead_name && project.lead_name !== project.project_name
+        ? '<span class="summary-phase-well" title="Lead name">' + esc(project.lead_name) + '</span>' : '') +
     '</div>' +
     '<dl class="bpe-summary-facts">' +
       summaryFact('Well', project.project_name) +
@@ -2277,8 +2321,9 @@ function bindDetail() {
     gear.setAttribute('aria-expanded', String(open));
   });
   wireBpeSummaryDismissOnce();
-  var edit = byId('bpe-edit-all');
-  if (edit) edit.addEventListener('click', function () {
+  // ONE handler, two entry points: the gear item and (Card 3I) the rail link
+  // the maturation shell puts there. Both do exactly the same thing.
+  function openAllFields() {
     closeBpeSummaryMenu();
     flushPendingSaves().then(function (saved) {
       if (!saved) return;
@@ -2286,7 +2331,11 @@ function bindDetail() {
       byId('bpe-detail-view').classList.add('hidden');
       import('./project-editor.js').then(function (module) { module.openProjectEditor(projectId); });
     });
-  });
+  }
+  var edit = byId('bpe-edit-all');
+  if (edit) edit.addEventListener('click', openAllFields);
+  var railEdit = byId('bpe-rail-edit-all');
+  if (railEdit) railEdit.addEventListener('click', openAllFields);
 }
 
 export function businessPlanTestHooks() {
