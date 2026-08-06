@@ -12,8 +12,8 @@ deployed, and nothing will be without an explicit instruction.
 |---|---|
 | Branch | `asas-redesign` |
 | Base (last shared commit with `main`) | `e804d9f` |
-| Head | `ee30010` |
-| Commits in this batch | 15 (`df23a8c` … head) |
+| Head | `26e3b87` |
+| Commits in this batch | 17 (`df23a8c` … head) |
 | Diff | 58 files, +3908 / −540 |
 | Remote | **nothing pushed** |
 | Target environment | **not identified** — see Blockers |
@@ -24,7 +24,7 @@ deployed, and nothing will be without an explicit instruction.
 |---|---|
 | `df23a8c` | 3G (labels), 3A, 3B, 3C — B90→P90, PDF wording, PICS→Picks, gear-menu exports, formation sheet open on arrival |
 | `b69e882` | The BPE 6 navigation lock |
-| `2ba77a9` | 3E — Well Summary content |
+| `2ba77a9` | 3E — Well Summary content (maturation shell) |
 | `029d091` | 3H — TVDSS stored positive (**migration v11**) |
 | `5caea8d` | 3T — Coring Formations checkbox dropdown |
 | `21842df` | 3AB — the stage/step folder mapping |
@@ -35,6 +35,8 @@ deployed, and nothing will be without an explicit instruction.
 | `c547d80` | 3Q(part) — Map Summary beside the Toolbox |
 | `80b6486` | 3S — Segmentation Slides on the shared approval framework |
 | `ee30010` | 3I — BPE detail-shell parity |
+| `f0a8177` | 3F reverted (owner call), the drilling border reworked, the maturation Well Summary redrawn |
+| `26e3b87` | 3E applied where the card asks for it — the **BPE** Well Summary |
 
 Excluded, per Card 3AA §3: every deferred formula, every image-dependent layout
 detail, the polygon linking rule, and anything else in
@@ -45,8 +47,8 @@ documents, not code.
 
 | Check | Result |
 |---|---|
-| Back-end tests | **741 passed** (`pytest -q`) |
-| Front-end tests | **607 passed** (`run_frontend_tests.py --browser firefox`) |
+| Back-end tests | **739 passed** (`pytest -q`) |
+| Front-end tests | **606 passed** (`run_frontend_tests.py --browser firefox`) |
 | New failures | none |
 | Pre-existing failures | none |
 | Clean startup | yes, on a seeded scratch database |
@@ -92,6 +94,15 @@ These are correct and intended, and someone will notice them on day one:
    will now see its positive value.
 5. **The Portfolio export's "Well Name" column** carries the staked name; the
    lead name is an appended column. Column positions are unchanged.
+6. **The Business Plan Execution step page's Well Summary is now the well
+   card** — Gas, Flowback Results, Reservoir Properties and the two expandable
+   sections, the same card the Segment Maturation shell shows for that well
+   (Card 3E is a BPE card; it had been applied to the maturation panel only).
+   Four fact rows (Well, Field, Business Plan Year, Stage Progress) and the
+   stage's tracking-item list went with the change: the well's name and lead
+   name are in the rail head above it, the year is in the phase row, the
+   progress bar keeps the stage count, and every tracking item's own state is
+   on its step page and on the board card.
 
 ## Blockers to release, not to the work
 

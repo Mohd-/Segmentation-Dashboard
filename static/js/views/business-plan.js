@@ -12,10 +12,11 @@ import { DROPDOWN_OPEN_EVENT } from './lead-filters.js';
 // One numeric rule set for the whole app; see bpeNumericError for the one
 // argument this form passes differently.
 import { numericFieldError, PDF_LABEL } from '../schema.js';
-// The Well Summary wears the Lead Summary card's chrome, and borrows its one
-// "no value recorded" glyph so the two panels cannot disagree about how an
-// empty fact looks.
-import { EM_DASH } from './lead-summary.js';
+/* Card 3E: the Well Summary's BODY is the maturation shell's own -- one
+   builder, called with this page's payload, so the two shells cannot drift
+   into two cards. The import is one-directional (views/detail.js does not
+   import this module) and both bindings are touched only inside functions. */
+import { wellSummaryBodyHtml, wireWellSummaryFolds } from './detail.js';
 
 var FLUIDS = ['Gas', 'Gas over Water', 'Water Bearing', 'Dry Hole', 'Oil', 'Oil over Gas', 'Oil over Water'];
 var STAGE_META = [
@@ -1374,22 +1375,30 @@ function detailNumber(slug) {
 }
 
 /* -------------------------------------------------------------------------
-   The Well Summary. Its CONTENT is the original panel's, unchanged and in the
-   original order -- four label/value rows (Well, Field, Business Plan Year,
-   Stage Progress as completed/total) over the stage's tracking items, with the
-   gear menu -- and its CHROME is the redesign's Lead Summary card
-   (views/lead-summary.js: .ls-card / .ls-head / .ls-title / .ls-section /
-   .ls-gear / .ls-menu). No progress bar and no column grid: this panel reads
-   as a fact sheet, which is what it always was.
+   The Well Summary — Card 3E.
+
+   This panel is the SAME card the Segment Maturation shell shows beside a BP
+   well's step, not a BPE-shaped lookalike: the chrome is the Lead Summary
+   card's (.ls-card / .ls-head / .ls-title / .ls-gear / .ls-menu) and the BODY
+   is built by views/detail.js's wellSummaryBodyHtml, from the `well_summary`
+   bundle this step's own payload carries. So the content is Gas, Flowback
+   Results, Reservoir Properties and exactly two expandable sections
+   (Simulated Vs Actual Delta, then Lead Summary) -- one card, one builder,
+   in both shells.
+
+   What this replaced: four fact rows (Well, Field, Business Plan Year, Stage
+   Progress) over the stage's tracking items. The well's name and its lead name
+   are in the rail head above, the year is in the phase row here, and every
+   tracking item's own state is on its step page and on the board card -- so
+   what went is a duplicate reading of state, not the only reading of it.
    ------------------------------------------------------------------------- */
 
-// One fact row. The value is the value or the one "no value" glyph -- never
-// blank, because a blank cell reads as a layout bug where a dash reads as
-// "not recorded yet".
-function summaryFact(label, raw) {
-  return '<div><dt>' + esc(label) + '</dt>' +
-    '<dd>' + (isFilled(raw) ? esc(raw) : EM_DASH) + '</dd></div>';
-}
+// Fold open state for THIS shell's Well Summary, keyed by fold id, kept per
+// well: the maturation shell keeps its own map (views/detail.js), so a fold
+// opened on one page never silently opens on the other. Reset when the open
+// well changes, exactly as the rail accordion is.
+var summaryFolds = {};
+var summaryFoldsProjectId = null;
 
 function summaryMarkup() {
   var detail = state.detail;
@@ -1397,6 +1406,11 @@ function summaryMarkup() {
   var items = detail.stage_items || [];
   var done = items.filter(function (item) { return item.status === 'Completed'; }).length;
   var percent = items.length ? Math.round((done / items.length) * 100) : 0;
+  if (summaryFoldsProjectId !== state.projectId) {
+    summaryFolds = {};
+    summaryFoldsProjectId = state.projectId;
+  }
+  var bundle = detail.well_summary || {};
   return '<aside class="summary-panel"><div class="ls-card">' +
     '<div class="ls-head"><h3 class="ls-title">Well Summary</h3>' +
       '<button type="button" id="bpe-summary-gear" class="icon-btn ls-gear" aria-haspopup="menu"' +
@@ -1404,7 +1418,8 @@ function summaryMarkup() {
     '</div>' +
     // Card 3I: the maturation summary opens with a progress bar and a phase
     // row. Both were missing here, which is what made this panel read as a
-    // different component rather than the same one with well content.
+    // different component rather than the same one with well content. The
+    // denominator is the stage's OWN item count, never a hard-coded six.
     '<div class="summary-progress"><div class="summary-progress-bar"><span style="width:' + percent + '%"></span></div>' +
       '<div class="summary-progress-figures"><b>' + percent + '%</b><small>' + done + ' / ' + items.length + '</small></div></div>' +
     '<div class="summary-phase"><span class="summary-phase-label">BP Well &middot; ' +
@@ -1412,19 +1427,14 @@ function summaryMarkup() {
       (project.lead_name && project.lead_name !== project.project_name
         ? '<span class="summary-phase-well" title="Lead name">' + esc(project.lead_name) + '</span>' : '') +
     '</div>' +
-    '<dl class="bpe-summary-facts">' +
-      summaryFact('Well', project.project_name) +
-      summaryFact('Field', project.field) +
-      summaryFact('Business Plan Year', project.business_plan_year) +
-      // The denominator is the stage's OWN item count, never a hard-coded six.
-      summaryFact('Stage Progress', done + ' / ' + items.length) +
-    '</dl>' +
-    '<section class="ls-section"><div class="ls-items">' + items.map(function (item) {
-      // The board's own dot vocabulary (views/board-widgets.js), so a step's
-      // state reads the same on the card and in this panel.
-      return '<span class="lead-item">' + leadItemHtml(item.status, item.label, item.source) +
-        '<span class="lead-item-label">' + esc(item.label) + '</span></span>';
-    }).join('') + '</div></section>' +
+    // The ids inside carry a prefix because both detail shells live in one
+    // document -- see wellSummaryBodyHtml.
+    wellSummaryBodyHtml({
+      fields: bundle.fields,
+      formations: bundle.formations,
+      leadSummary: bundle.lead_summary,
+      derisking: bundle.derisking
+    }, summaryFolds, 'bpe-') +
     '<div id="bpe-summary-menu" class="ls-menu hidden" role="menu" aria-labelledby="bpe-summary-gear">' +
       '<button type="button" id="bpe-edit-all" class="ls-menu-item" role="menuitem">Edit all project fields</button>' +
     '</div>' +
@@ -1652,7 +1662,11 @@ function queueSave(work, options) {
     if (options.merge !== false) {
       var next = response.detail || response;
       mergeReturnedDetail(next);
+      // A status move rebuilds the page; anything else rebuilds the Well
+      // Summary only, because the card reads the record's values and a saved
+      // value must not sit behind the form that produced it.
       if (options.rerender || result.before !== detailStateSignature(state.detail)) renderDetail();
+      else renderSummaryPanel();
     }
     setFeedback(hasCurrentDrafts() ? 'Saving...' : 'Saved', false);
     return response;
@@ -2208,6 +2222,53 @@ function wireBpeSummaryDismissOnce() {
   });
 }
 
+/* The Well Summary panel's own wiring, kept apart from bindDetail because the
+   panel is re-rendered on its own (see renderSummaryPanel): every listener here
+   belongs to a node that refresh replaces. */
+function openAllFields() {
+  closeBpeSummaryMenu();
+  flushPendingSaves().then(function (saved) {
+    if (!saved) return;
+    var projectId = state.projectId;
+    byId('bpe-detail-view').classList.add('hidden');
+    import('./project-editor.js').then(function (module) { module.openProjectEditor(projectId); });
+  });
+}
+
+function wireSummaryPanel() {
+  var panel = byId('bpe-detail-view') && byId('bpe-detail-view').querySelector('.summary-panel');
+  if (!panel) return;
+  var gear = byId('bpe-summary-gear');
+  var menu = byId('bpe-summary-menu');
+  if (gear && menu) gear.addEventListener('click', function (event) {
+    event.stopPropagation();
+    var open = menu.classList.toggle('hidden') === false;
+    gear.setAttribute('aria-expanded', String(open));
+  });
+  var edit = byId('bpe-edit-all');
+  if (edit) edit.addEventListener('click', openAllFields);
+  // Card 3E's two expandable sections. Bound inside the panel, so this never
+  // reaches the editor's own Formation Interpretation fold, and toggling one
+  // writes nothing beyond the local open-state map.
+  wireWellSummaryFolds(panel, summaryFolds);
+}
+
+/* Re-render the Well Summary ALONE.
+
+   The detail page as a whole is rebuilt only when its status signature moves
+   (see queueSave), which is deliberate -- rebuilding the editor mid-edit is
+   disruptive. But since Card 3E the panel reads the record's VALUES too, so a
+   saved formation or flowback row changes what it should show without changing
+   any status. Replacing just this node keeps the panel honest while leaving the
+   form the user is typing into exactly where it was. */
+function renderSummaryPanel() {
+  var view = byId('bpe-detail-view');
+  var panel = view && view.querySelector('.summary-panel');
+  if (!panel || !state.detail) return;
+  panel.outerHTML = summaryMarkup();
+  wireSummaryPanel();
+}
+
 function bindDetail() {
   byId('bpe-back').addEventListener('click', refreshBusinessPlan);
   // The stage accordion, mirroring views/detail.js wireRailHandlers: clicking
@@ -2281,27 +2342,10 @@ function bindDetail() {
       }
     });
   });
-  var gear = byId('bpe-summary-gear');
-  var menu = byId('bpe-summary-menu');
-  if (gear && menu) gear.addEventListener('click', function (event) {
-    event.stopPropagation();
-    var open = menu.classList.toggle('hidden') === false;
-    gear.setAttribute('aria-expanded', String(open));
-  });
+  wireSummaryPanel();
   wireBpeSummaryDismissOnce();
-  // ONE handler, two entry points: the gear item and (Card 3I) the rail link
-  // the maturation shell puts there. Both do exactly the same thing.
-  function openAllFields() {
-    closeBpeSummaryMenu();
-    flushPendingSaves().then(function (saved) {
-      if (!saved) return;
-      var projectId = state.projectId;
-      byId('bpe-detail-view').classList.add('hidden');
-      import('./project-editor.js').then(function (module) { module.openProjectEditor(projectId); });
-    });
-  }
-  var edit = byId('bpe-edit-all');
-  if (edit) edit.addEventListener('click', openAllFields);
+  // The rail's twin of the panel's own "Edit all project fields" -- Card 3I put
+  // the link where the maturation shell keeps it, and both run one handler.
   var railEdit = byId('bpe-rail-edit-all');
   if (railEdit) railEdit.addEventListener('click', openAllFields);
 }

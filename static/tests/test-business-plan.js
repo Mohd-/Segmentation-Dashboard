@@ -100,6 +100,22 @@ test('business-plan renders the approved dashboard and one auto-save approval de
       stage_label: 'Pre-Drilling', task_name: 'BP Execution Gate' },
     task: { task_id: 13, status: 'In Progress' }, assignee: 'Supervisor', values: {},
     comments_key: 'bpe_comments_business_plan_gate', formations: [], flowback_stages: [],
+    // Card 3E: the record-level bundle the Well Summary is built from. It
+    // carries EVERY formation phase (unlike `formations` above, which is this
+    // step's own phase) plus the frozen lead snapshot and the server's Total
+    // CoS -- the same four inputs the maturation shell hands the same builder.
+    well_summary: {
+      fields: {
+        'SAD Model': { post_drill_piip_gas_p90: 90, post_drill_piip_gas_mean: 116, post_drill_piip_gas_p10: 140 },
+        'Flowback Results': { flowback_gas_rate_mmscfd: 12.5, flowback_fwhp_psi: 3200, flowback_choke_size_in: 0.5 },
+        'Well Proposal': { sarh_formation_prognosis_pre_drill: 8000 }
+      },
+      formations: [{ formation: 'SARH', phase: 'final', top_tvdss_ft: 8120, thickness_ft: 96,
+                     pay_ft: 74, porosity_pct: 0.214, swt_pct: 0.209, fluid: 'Gas' }],
+      lead_summary: { captured_at: '2026-01-09T00:00:00', captured_by: 'Supervisor',
+                      fields: { 'Lead Assessment': { reservoir_thickness_ft: 88, lead_piip_gas_mean: 101 } } },
+      derisking: '42'
+    },
     fluid_state: { decision: 'incomplete', successful: false, fluids: [] }, sad_update_branch: 'blocked_fluid',
     tracking: [{ key: 'business-plan-gate', status: 'In Progress', color: 'empty', source: 'manual', locked: false }],
     stage_items: items, navigation: navigation(), links: { vsp: '', structural_mtr: '' },
@@ -266,17 +282,57 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   // is progressPercent() over the stage's own items (1 of 6 completed).
   assert.equal(host.querySelectorAll('.summary-panel .ls-card').length, 1);
   assert.equal(host.querySelector('.ls-title').textContent, 'Well Summary');
-  // The original panel's four fact rows, in the original order — no progress
-  // bar and no column grid.
-  assert.equal(host.querySelectorAll('.ls-progress').length, 0);
-  assert.equal(host.querySelectorAll('.ls-grid').length, 0);
-  assert.deepEqual(Array.prototype.map.call(host.querySelectorAll('.bpe-summary-facts dt'), function (cell) {
+  assert.equal(host.querySelector('.summary-progress-figures').textContent, '17%1 / 6');
+  assert.equal(host.querySelector('.summary-phase-label').textContent.trim(), 'BP Well · ' + currentYear);
+  /* Card 3E: the panel is the WELL SUMMARY CARD, not a fact sheet -- the same
+     builder the maturation shell calls, over this payload's own bundle. Its
+     sections, in the drawn order, and its trio read as the Lead Summary card's
+     do (label over value, "P90 Mean P10"). */
+  assert.deepEqual(Array.prototype.map.call(host.querySelectorAll('.summary-panel .ls-card > .ls-section > .ls-section-title'), function (title) {
+    return title.textContent;
+  }), ['Gas (BCF)', 'Flowback Results', 'Reservoir Properties']);
+  assert.deepEqual(Array.prototype.map.call(host.querySelectorAll('.summary-panel .ls-card > .ls-section .ls-col-label'), function (cell) {
     return cell.textContent;
-  }), ['Well', 'Field', 'Business Plan Year', 'Stage Progress']);
-  assert.deepEqual(Array.prototype.map.call(host.querySelectorAll('.bpe-summary-facts dd'), function (cell) {
+  }), ['P90', 'Mean', 'P10']);
+  assert.deepEqual(Array.prototype.map.call(host.querySelectorAll('.summary-panel .ls-card > .ls-section .ls-col-value'), function (cell) {
     return cell.textContent;
-  }), ['MDFT-7', 'MDFT', String(currentYear), '1 / 6']);
-  assert.equal(host.querySelectorAll('.ls-items .lead-dot').length, 6);
+  }), ['90', '116', '140']);
+  // The reservoir row is the drilled formation, its two percentages printed to
+  // exactly two decimals with no % suffix.
+  assert.equal(host.querySelector('.summary-props-row .summary-props-name').textContent, 'SARH');
+  assert.deepEqual(Array.prototype.map.call(host.querySelectorAll('.summary-props-row span:not(.summary-props-name)'), function (cell) {
+    return cell.textContent;
+  }), ['74.00 ft', '0.21', '0.21']);
+  // The old fact rows and item list are gone: the well's names are in the rail
+  // head, the year is in the phase row, and each item's state is on its page.
+  assert.equal(host.querySelectorAll('.bpe-summary-facts').length, 0);
+  assert.equal(host.querySelectorAll('.summary-panel .ls-items').length, 0);
+  // EXACTLY two expandable sections, the Delta first and both collapsed.
+  var folds = host.querySelectorAll('.summary-panel .summary-fold-head');
+  assert.equal(folds.length, 2);
+  assert.deepEqual(Array.prototype.map.call(folds, function (head) {
+    return head.querySelector('.summary-fold-title').textContent;
+  }), ['Simulated Vs Actual Delta', 'Lead Summary']);
+  assert.deepEqual(Array.prototype.map.call(folds, function (head) {
+    return head.getAttribute('aria-expanded');
+  }), ['false', 'false']);
+  // Ids are namespaced: both detail shells live in one document, and the
+  // maturation card renders the same fold keys.
+  assert.equal(folds[0].id, 'bpe-summary-fold-pva');
+  assert.equal(folds[0].getAttribute('aria-controls'), 'bpe-summary-fold-pva-body');
+  // Opening one is a pure view change -- it toggles in place and fires no
+  // request (the mock throws on anything unexpected).
+  folds[0].click();
+  assert.equal(folds[0].getAttribute('aria-expanded'), 'true');
+  assert.equal(host.querySelector('#bpe-summary-fold-pva-body').classList.contains('collapsed'), false);
+  assert.equal(host.querySelector('#bpe-summary-fold-lead-body').classList.contains('collapsed'), true,
+    'the folds are independent');
+  // The Delta compares the frozen lead snapshot with the drilled result.
+  assert.deepEqual(Array.prototype.map.call(host.querySelectorAll('#bpe-summary-fold-pva-body .summary-pva-label'), function (cell) {
+    return cell.textContent;
+  }), ['', 'Top SARH', 'Thickness (ft)', 'Area P90 (km²)', 'Area P10 (km²)', 'Mean (BCF)']);
+  folds[0].click();
+  assert.equal(folds[0].getAttribute('aria-expanded'), 'false');
   assert.ok(host.querySelector('.bpe-save-line').textContent.indexOf('All changes are saved automatically') >= 0);
   assert.equal(host.textContent.indexOf('Save Updates'), -1);
   assert.deepEqual(Array.prototype.map.call(host.querySelectorAll('.bpe-approval-row button'), function (button) {
@@ -318,7 +374,6 @@ function detailPayload(slug, values) {
 test('business-plan serializes auto-saves and a stale response cannot replace newer input', async function () {
   var host = fixture('<div id="bpe-main-view"></div><section id="bpe-detail-view" class="hidden"></section>');
   var base = detailPayload('business-plan-gate', {});
-  // An unrecorded value is a DASH in the Well Summary, never a blank cell.
   base.project.business_plan_year = null;
   var payloads = [];
   var releases = [];
@@ -348,8 +403,13 @@ test('business-plan serializes auto-saves and a stale response cannot replace ne
   });
 
   await openBusinessPlanDetail(7, 'business-plan-gate');
-  assert.equal(host.querySelectorAll('.bpe-summary-facts dd')[2].textContent, '—',
-    'a missing Business Plan Year reads as a dash, not a blank');
+  // A record with nothing recorded still renders every section, each value as
+  // the one "no value" glyph -- a blank cell reads as a layout bug.
+  assert.deepEqual(Array.prototype.map.call(host.querySelectorAll('.summary-panel .ls-card > .ls-section .ls-col-value'), function (cell) {
+    return cell.textContent;
+  }), ['—', '—', '—']);
+  assert.equal(host.querySelector('.summary-props-row-empty .summary-props-note').textContent, '—');
+  assert.equal(host.querySelectorAll('.summary-panel .summary-fold-head').length, 2);
   var program = host.querySelector('[data-bpe-field="bp_gate_logging_program"]');
   program.value = 'Standard A';
   program.dispatchEvent(new Event('change', { bubbles: true }));
@@ -979,4 +1039,61 @@ test('business-plan the status chip is always present, whatever the step tracks'
   var chip = host.querySelector('.editor-head .bpe-detail-status');
   assert.ok(chip, 'the head keeps its shape');
   assert.equal(chip.textContent.trim(), 'In Progress');
+});
+
+test('business-plan refreshes the Well Summary alone when a saved value changes it', async function () {
+  /* Card 3E: the panel reads the RECORD'S VALUES, not just its statuses. The
+     page as a whole is rebuilt only when a status moves (rebuilding the editor
+     mid-edit is disruptive), so a save that changes only values has to refresh
+     this one node -- otherwise the card sits behind the form that produced the
+     number. The editor, the focus and the open fold all have to survive it. */
+  var host = fixture('<div id="bpe-main-view"></div><section id="bpe-detail-view" class="hidden"></section>');
+  var stored = detailPayload('business-plan-gate', {});
+  stored.well_summary = {
+    fields: { 'SAD Model': { post_drill_piip_gas_p90: 90, post_drill_piip_gas_mean: 116, post_drill_piip_gas_p10: 140 } },
+    formations: [], lead_summary: null, derisking: ''
+  };
+  // The server's answer to the save: the same step, one volume revised. No
+  // tracking or stage_items change, so the page's own signature is unmoved.
+  var saved = detailPayload('business-plan-gate', { bp_gate_actual_drilling_days: '31.5' });
+  saved.well_summary = {
+    fields: { 'SAD Model': { post_drill_piip_gas_p90: 90, post_drill_piip_gas_mean: 121, post_drill_piip_gas_p10: 140 } },
+    formations: [], lead_summary: null, derisking: ''
+  };
+  mockFetch(function (url, options) {
+    var path = String(url);
+    var method = (options && options.method) || 'GET';
+    if (path.indexOf('/steps/business-plan-gate/field') >= 0 && method === 'PATCH') {
+      return response({ ok: true, detail: saved });
+    }
+    if (path.indexOf('/steps/business-plan-gate') >= 0) return response(stored);
+    if (path.indexOf('/api/users') >= 0) return response([]);
+    throw new Error('Unexpected request: ' + method + ' ' + path);
+  });
+
+  await openBusinessPlanDetail(7, 'business-plan-gate');
+  var means = function () {
+    return host.querySelectorAll('.summary-panel .ls-card > .ls-section .ls-col-value')[1].textContent;
+  };
+  assert.equal(means(), '116');
+  // Open a fold and remember the editor node, so we can tell a panel refresh
+  // from a whole-page rebuild.
+  host.querySelector('#bpe-summary-fold-pva').click();
+  var editor = host.querySelector('.component-editor');
+  // A plain numeric input, deliberately: a conditional field or a select
+  // rebuilds the page by design (it can change which controls exist), and this
+  // test is about the save that does NOT.
+  var program = host.querySelector('[data-bpe-field="bp_gate_actual_drilling_days"]');
+  program.focus();
+  program.value = '31.5';
+  program.dispatchEvent(new Event('input', { bubbles: true }));
+
+  await waitFor(function () { return means() === '121'; });
+  assert.equal(host.querySelector('.component-editor'), editor, 'the editor was not rebuilt');
+  assert.equal(document.activeElement, program, 'and the field kept the focus');
+  assert.equal(host.querySelector('#bpe-summary-fold-pva').getAttribute('aria-expanded'), 'true',
+    'the open fold survives the refresh');
+  // The refreshed panel is live, not a detached copy: its gear still opens.
+  host.querySelector('#bpe-summary-gear').click();
+  assert.equal(host.querySelector('#bpe-summary-menu').classList.contains('hidden'), false);
 });

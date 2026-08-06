@@ -791,3 +791,46 @@ def test_bpe_un_approving_actions_are_supervisor_only_at_the_route(client):
     reopened = _transition(client, project_id, "reopen")
     assert reopened.status_code == 403
     assert "supervisor" in reopened.get_json()["detail"].lower()
+
+
+def test_detail_carries_the_well_summary_bundle_for_the_card_beside_the_step(client):
+    """Card 3E: the Well Summary panel is the maturation shell's own card, so
+    every step's payload carries the four record-level inputs that card reads.
+
+    They ride on THIS payload rather than a second request, which is what keeps
+    the panel and the step it sits beside on one vintage.
+    """
+    project_id = _bp_project(client)
+    # Values the card reads, each from a step that is NOT the one being opened:
+    # the bundle is record-level, not step-level.
+    _raw_fields(client, project_id, "SAD Model", {
+        "post_drill_piip_gas_p90": "90",
+        "post_drill_piip_gas_mean": "116",
+        "post_drill_piip_gas_p10": "140",
+    })
+    _raw_fields(client, project_id, "Quicklook Logs", {"quicklook_fluid_type": "Gas"})
+    client.put(f"/api/business-plan/wells/{project_id}/steps/quicklook-logs/formations",
+               json={"rows": [_formation("Gas")]})
+
+    detail = client.get(
+        f"/api/business-plan/wells/{project_id}/steps/business-plan-gate").get_json()
+    bundle = detail["well_summary"]
+    assert set(bundle) == {"fields", "formations", "lead_summary", "derisking"}
+
+    # The field map is record-wide, so a step's own payload can answer for the
+    # whole well.
+    assert bundle["fields"]["SAD Model"]["post_drill_piip_gas_mean"] == "116"
+    assert bundle["fields"]["Quicklook Logs"]["quicklook_fluid_type"] == "Gas"
+
+    # EVERY phase, unlike the step-scoped `formations` list beside it: this step
+    # has no formations of its own, and the card still resolves the well's.
+    assert detail["formations"] == []
+    assert [(row["formation"], row["phase"]) for row in bundle["formations"]] == [("SARH", "quicklook")]
+
+    # A well that was never matured through the lead phase has no snapshot --
+    # the key is present and null rather than absent, so the card renders its
+    # Lead Summary fold with dashes instead of failing to render.
+    assert bundle["lead_summary"] is None
+    # Total CoS is computed server-side (there is no client-side second formula)
+    # and is blank until the lead CoS steps are scored.
+    assert bundle["derisking"] == ""

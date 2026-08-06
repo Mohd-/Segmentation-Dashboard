@@ -23,6 +23,8 @@ from .constants import (
 from .history import log_task_event
 from .notifications import notify_transition
 from .projects import _sync_completed_at
+from .promotion import get_lead_summary_snapshot
+from .summary import get_project_overview
 
 
 FLUIDS = (
@@ -875,6 +877,20 @@ def get_detail(session, project_id, detail_slug):
         "values": effective["values"],
         "comments_key": "bpe_comments_" + detail_slug.replace("-", "_"),
         "formations": [row for row in formations if row.get("phase") == expected_phase],
+        # Card 3E: the Well Summary beside the step is the SAME card the
+        # maturation shell renders (static/js/views/detail.js
+        # wellSummaryBodyHtml), so it needs the record-level inputs that card
+        # reads -- the retired-inclusive field map, every formation phase (the
+        # `formations` list above is deliberately filtered to this step's own
+        # phase), the frozen lead snapshot and the read-time Total CoS. They
+        # ride on THIS payload rather than a second request so the panel can
+        # never show a different vintage from the step beside it.
+        "well_summary": {
+            "fields": fields,
+            "formations": formations,
+            "lead_summary": get_lead_summary_snapshot(session, project_id),
+            "derisking": get_project_overview(session, project_id).get("derisking", ""),
+        },
         "flowback_stages": effective["flowback_rows"],
         "flowback_initialized": "flowback_stages_rows" in (fields.get("Flowback Results") or {}),
         "fluid_state": effective["fluid"],
