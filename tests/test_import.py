@@ -790,3 +790,79 @@ def test_ar_number_imports_and_block_mismatch_warns(client, app_modules, tmp_pat
         assert exported["Seismic Block"] == "Block A"  # derived from the AR, not the cell
     finally:
         session.close()
+
+
+def test_nucd_area_imports_on_leads_and_wells_and_round_trips(client, app_modules, tmp_path):
+    """The "NUCD Area" cell lands on projects.nucd_area for BOTH record types
+    (it is a record property, not a BP-step input), survives the export round
+    trip, and follows the X/Y rule on --update: a non-blank cell overwrites, a
+    blank one never erases."""
+    import import_excel
+    import db as db_module
+
+    def stored(session, name):
+        return db_module.fetch_one(
+            session, "SELECT nucd_area FROM projects WHERE project_name = :n", {"n": name})["nucd_area"]
+
+    rows = [
+        {"Well Name": "AREA-LEAD-1", "Status": "Proposed", "NUCD Area": "  North   Jafurah "},
+        {"Well Name": "AREA-WELL-1", "Status": "Gas", "BP Year": 2027, "NUCD Area": "South Ghawar"},
+    ]
+    _write_sheet(tmp_path / "area1.xlsx", rows, header_row=1)
+
+    session = _session(app_modules)
+    try:
+        report = import_excel.import_rows(session, import_excel.parse_workbook(str(tmp_path / "area1.xlsx")))
+        assert [r.outcome for r in report.results] == ["created", "created"], \
+            [(r.well_name, r.reason) for r in report.results]
+        # Whitespace collapsed by the domain setter, not by the sheet.
+        assert stored(session, "AREA-LEAD-1") == "North Jafurah"
+        assert stored(session, "AREA-WELL-1") == "South Ghawar"
+        # A lead row is NOT warned about here -- unlike Classification, this
+        # column applies to every record type.
+        lead_result = report.results[0]
+        assert not any("NUCD Area" in w for w in lead_result.warnings), lead_result.warnings
+
+        exported = _export_by_name(session)
+        assert exported["AREA-LEAD-1"]["NUCD Area"] == "North Jafurah"
+        assert exported["AREA-WELL-1"]["NUCD Area"] == "South Ghawar"
+
+        # --update: one row moves its area, the other leaves the cell blank and
+        # keeps the stored one.
+        _write_sheet(tmp_path / "area2.xlsx", [
+            {"Well Name": "AREA-LEAD-1", "Status": "Proposed", "NUCD Area": "Central Jafurah"},
+            {"Well Name": "AREA-WELL-1", "Status": "Gas", "BP Year": 2027},
+        ], header_row=1)
+        report = import_excel.import_rows(
+            session, import_excel.parse_workbook(str(tmp_path / "area2.xlsx")), update=True)
+        assert [r.outcome for r in report.results] == ["updated", "updated"], \
+            [(r.well_name, r.reason) for r in report.results]
+        assert stored(session, "AREA-LEAD-1") == "Central Jafurah"
+        assert stored(session, "AREA-WELL-1") == "South Ghawar"
+    finally:
+        session.close()
+
+
+def test_an_over_long_nucd_area_warns_without_losing_the_record(client, app_modules, tmp_path):
+    """One bad cell must not cost the whole row: the area is reported and
+    skipped, and everything else about the record still imports."""
+    import import_excel
+    import db as db_module
+
+    _write_sheet(tmp_path / "area-long.xlsx", [
+        {"Well Name": "AREA-LONG-1", "Status": "Proposed", "P90 Area (km2)": 4,
+         "NUCD Area": "x" * 121},
+    ], header_row=1)
+
+    session = _session(app_modules)
+    try:
+        result = import_excel.import_rows(
+            session, import_excel.parse_workbook(str(tmp_path / "area-long.xlsx"))).results[0]
+        assert result.outcome == "created", result.reason
+        assert any("NUCD Area not stored" in w for w in result.warnings), result.warnings
+        project = db_module.fetch_one(
+            session, "SELECT nucd_area FROM projects WHERE project_name = 'AREA-LONG-1'", {})
+        assert project["nucd_area"] is None
+        assert _export_by_name(session)["AREA-LONG-1"]["P90 Area (km2)"] == "4"
+    finally:
+        session.close()

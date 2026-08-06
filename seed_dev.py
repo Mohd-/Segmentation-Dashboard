@@ -114,6 +114,12 @@ LEAD_CLUSTER_JITTER_M = 5000.0
 
 DRILLED_FLUIDS = ["Dry Hole", "Gas", "Water Bearing", "Oil over Gas", "Oil", "Gas over Water"]
 GHEER_CLASSIFICATIONS = ["Development", "Appraisal", "Exploration"]
+# Placeholder NUCD areas for seeded records. The real application DERIVES
+# nothing here: an area arrives only through import_excel's "NUCD Area"
+# column, and a record nobody stated one for stays blank. These exist so the
+# Portfolio's NUCD Area column has something to show on a dev database, and
+# they are deliberately generic rather than real area names.
+NUCD_AREAS = ["North", "Central", "South", "East"]
 PULL_UP_OPTIONS = ["No", "Semi", "Yes"]
 
 COMMENT_SAMPLES = [
@@ -151,6 +157,19 @@ def _unique_name(session, prefix) -> str:
                             {"name": candidate}):
             return candidate
         n += 1
+
+
+def _seed_nucd_area(session, project_id, name, changed_by):
+    """Give a seeded record a placeholder NUCD area, grouped by field code.
+
+    Records in the same field land in the same area, which is how the column
+    reads in practice. Deterministic on the name (not random) so re-seeding
+    the same names gives the same areas. Writes through the real setter, so
+    the audit event looks exactly like the importer's.
+    """
+    code = str(name or "").split("-")[0] or "?"
+    area = NUCD_AREAS[sum(ord(char) for char in code) % len(NUCD_AREAS)]
+    workflow.set_nucd_area(session, project_id, area, changed_by=changed_by)
 
 
 def _lead_coordinates(name):
@@ -556,8 +575,10 @@ def _seed_prospect_leads(session, users, role_by_name, supervisors):
         code = PROSPECT_FIELD_CODES[i % len(PROSPECT_FIELD_CODES)]
         name = _unique_name(session, code)
         lead_x, lead_y = _lead_coordinates(name)
-        pid = workflow.add_project(session, name, changed_by=random.choice(users),
+        creator = random.choice(users)
+        pid = workflow.add_project(session, name, changed_by=creator,
                                    lead_x=lead_x, lead_y=lead_y)
+        _seed_nucd_area(session, pid, name, creator)
         tasks = [t for t in workflow.get_project_tasks(session, pid)
                 if t["stage_group"] in workflow.PROSPECT_STAGES]
 
@@ -587,8 +608,10 @@ def _seed_prospect_leads(session, users, role_by_name, supervisors):
         code = PROSPECT_FIELD_CODES[(len(stage_targets) + i) % len(PROSPECT_FIELD_CODES)]
         name = _unique_name(session, code)
         lead_x, lead_y = _lead_coordinates(name)
-        pid = workflow.add_project(session, name, changed_by=random.choice(users),
+        creator = random.choice(users)
+        pid = workflow.add_project(session, name, changed_by=creator,
                                    lead_x=lead_x, lead_y=lead_y)
+        _seed_nucd_area(session, pid, name, creator)
         tasks = [t for t in workflow.get_project_tasks(session, pid)
                 if t["stage_group"] in workflow.PROSPECT_STAGES]
         _seed_pipeline_progress(session, tasks, len(tasks), "Not Assigned", users, role_by_name, supervisors)
@@ -620,8 +643,10 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
     for i, code in enumerate(BP_FIELD_CODES):
         name = _unique_name(session, code)
         lead_x, lead_y = _lead_coordinates(name)
-        pid = workflow.add_project(session, name, changed_by=random.choice(users),
+        creator = random.choice(users)
+        pid = workflow.add_project(session, name, changed_by=creator,
                                    lead_x=lead_x, lead_y=lead_y)
+        _seed_nucd_area(session, pid, name, creator)
         project_ids.append(pid)
 
         tasks = workflow.get_project_tasks(session, pid)

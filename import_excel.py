@@ -1,4 +1,4 @@
-"""Excel importer for the 41-column "Portfolio Export" sheet -- the inverse of
+"""Excel importer for the 43-column "Portfolio Export" sheet -- the inverse of
 ``portfolio_export.get_portfolio_export_rows``.
 
 What this does
@@ -923,10 +923,12 @@ def import_rows(session, rows, update=False) -> ImportReport:
         # X/Y are project-level (projects.lead_x/lead_y), not step fields, so
         # they ride on the create call itself / a coordinates-only rename on
         # update. Blank cells never erase stored coordinates (rename only
-        # writes a coordinate it was actually given).
-        xy_warnings: List[str] = []
-        lead_x = _num(row, "X", xy_warnings)
-        lead_y = _num(row, "Y", xy_warnings)
+        # writes a coordinate it was actually given). project_warnings collects
+        # every PROJECT-level cell's complaint (X, Y, NUCD Area) so they lead
+        # the row's warning list ahead of the step-field ones.
+        project_warnings: List[str] = []
+        lead_x = _num(row, "X", project_warnings)
+        lead_y = _num(row, "Y", project_warnings)
         try:
             if is_update:
                 pid = existing["project_id"]
@@ -942,8 +944,19 @@ def import_rows(session, rows, update=False) -> ImportReport:
                 pid = workflow.add_project(session, name, changed_by=IMPORT_USER,
                                            lead_x=lead_x, lead_y=lead_y, auto_assign=False)
                 created_pid = pid
+            # NUCD Area is project-level too (projects.nucd_area) and this
+            # sheet is its ONLY input -- nothing in the UI writes it. A blank
+            # cell never erases a stored area, matching the X/Y rule above; an
+            # over-long value is reported as a cell warning rather than losing
+            # the whole record over one field the sheet got wrong.
+            nucd_area = _text(row, "NUCD Area")
+            if nucd_area:
+                try:
+                    workflow.set_nucd_area(session, pid, nucd_area, changed_by=IMPORT_USER)
+                except ValueError as exc:
+                    project_warnings.append(f"NUCD Area not stored: {exc}")
             warnings, notes = _import_record(session, row, record_type, year, fluid, pid, is_update)
-            warnings = xy_warnings + warnings
+            warnings = project_warnings + warnings
         except Exception as exc:  # keep the batch going; report the failure verbatim
             # Recover the session FIRST: a failure can leave it mid-transaction
             # (worst case, a commit that died partway strands it in the

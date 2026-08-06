@@ -37,6 +37,8 @@ deployed, and nothing will be without an explicit instruction.
 | `ee30010` | 3I — BPE detail-shell parity |
 | `f0a8177` | 3F reverted (owner call), the drilling border reworked, the maturation Well Summary redrawn |
 | `26e3b87` | 3E applied where the card asks for it — the **BPE** Well Summary |
+| `97ded4a` | The BP Gate toggle's real question, and Active Drilling from the step gear |
+| `8efd8b2` | 3N unblocked — NUCD Area on the record, in the sheet, in the Portfolio (**migration v12**) |
 
 Excluded, per Card 3AA §3: every deferred formula, every image-dependent layout
 detail, the polygon linking rule, and anything else in
@@ -47,8 +49,8 @@ documents, not code.
 
 | Check | Result |
 |---|---|
-| Back-end tests | **744 passed** (`pytest -q`) |
-| Front-end tests | **610 passed** (`run_frontend_tests.py --browser firefox`) |
+| Back-end tests | **751 passed** (`pytest -q`) |
+| Front-end tests | **611 passed** (`run_frontend_tests.py --browser firefox`) |
 | New failures | none |
 | Pre-existing failures | none |
 | Clean startup | yes, on a seeded scratch database |
@@ -62,7 +64,23 @@ what was checked.
 
 ## Migration
 
-**One: v11, `_migrate_v11_tvdss_positive`.** `LATEST_SCHEMA_VERSION` 10 → 11.
+**Two.**
+
+**v12, `_migrate_v12_project_nucd_area`.** `LATEST_SCHEMA_VERSION` 11 → 12.
+
+- **Effect:** adds the nullable `projects.nucd_area` TEXT column. Nothing else
+  changes: no row is written, no value is derived.
+- **Nothing to backfill, deliberately.** There is no existing value an area
+  could be computed from, and deriving one from the field or seismic block
+  would be a guess stored as data. Every existing record arrives blank and
+  stays blank until an import states an area.
+- **Idempotent:** guarded on column existence (the v6 pattern), so a database
+  already carrying the column replays unchanged.
+- **Rollback:** `ALTER TABLE projects DROP COLUMN nucd_area`, or restore the
+  backup. Nothing else read or written by the app depends on the column being
+  present.
+
+**v11, `_migrate_v11_tvdss_positive`.** `LATEST_SCHEMA_VERSION` 10 → 11.
 
 - **Effect:** stores every TVDSS as a magnitude and writes one
   `TVDSS Sign Normalized` audit event per converted value, carrying the prior
@@ -116,6 +134,12 @@ These are correct and intended, and someone will notice them on day one:
    populated on arrival instead of reading "No wells match these filters". The
    gate is now the Pre-Drilling column's own toggle, on by default, so that
    column opens on the same working set as before.
+10. **The Portfolio's Classification column is now NUCD Area.** The area is a
+   property of the record, fed only by the importer's `NUCD Area` sheet column
+   — no screen writes it, so a record nobody has stated an area for reads
+   blank. Classification did not go anywhere: the BP Execution Gate still owns
+   it and the export still has its column. The export gained a `NUCD Area`
+   column at the END of the sheet; every existing column keeps its position.
 
 ## Blockers to release, not to the work
 

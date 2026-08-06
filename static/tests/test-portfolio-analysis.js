@@ -291,10 +291,10 @@ test('portfolio table marks each row with its quadrant beside the name', async f
   var heads = Array.prototype.map.call(
     host.querySelectorAll('#portfolio-table thead th'),
     function (th) { return th.getAttribute('data-key'); });
-  // Card 3N's requested order. `nucd Area` is absent and reported blocked --
-  // no field of that name exists anywhere in this application.
+  // Card 3N's requested order, with NUCD Area now in place of Classification
+  // (the owner named its source: projects.nucd_area, fed by the importer).
   assert.deepEqual(heads, ['well_name', 'mean_ogip', 'total_cos', 'status',
-    'seismic_block', 'gas_field', 'classification', 'year']);
+    'seismic_block', 'gas_field', 'nucd_area', 'year']);
 
   var marks = host.querySelectorAll('#portfolio-table tbody .pf-quadrant');
   assert.equal(marks.length, 2, 'the row with neither measure gets no mark at all');
@@ -335,6 +335,51 @@ test('portfolio names a record by its well name and keeps the lead beneath', asy
   assert.equal(rows[1].querySelector('.well-link').textContent, 'BETA-1');
   assert.equal(rows[1].querySelectorAll('.pf-lead-name').length, 0,
     'no second line when the two names are the same');
+});
+
+test('portfolio shows the NUCD Area and filters on it like any stored column', async function () {
+  var host = portfolioFixture();
+  mockFetch(function (url) {
+    if (String(url).indexOf('/api/portfolio/rows') >= 0) {
+      return new Response(JSON.stringify({ rows: [
+        { project_id: 1, well_name: 'ALPHA-1', gas_field: 'ALPHA', status: 'Gas',
+          nucd_area: 'North Jafurah', mean_ogip: 30, total_cos: 80, is_lead: 0, pipeline_type: 'bp' },
+        { project_id: 2, well_name: 'BETA-1', gas_field: 'BETA', status: 'Proposed',
+          nucd_area: 'South Ghawar', mean_ogip: 3, total_cos: 20, is_lead: 1, pipeline_type: 'prospect' },
+        // No area stated: an empty cell, and no option of its own in the list.
+        { project_id: 3, well_name: 'GAMMA-1', gas_field: 'GAMMA', status: 'Proposed',
+          mean_ogip: 1, total_cos: 10, is_lead: 1, pipeline_type: 'prospect' }
+      ] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    throw new Error('Unexpected request: ' + url);
+  });
+
+  await refreshPortfolio();
+  await waitFor(function () { return host.querySelectorAll('#portfolio-table tbody tr').length === 3; });
+
+  function areaCells() {
+    return Array.prototype.map.call(
+      host.querySelectorAll('#portfolio-table tbody tr td:nth-child(7)'),
+      function (cell) { return cell.textContent.trim(); });
+  }
+  assert.deepEqual(areaCells(), ['North Jafurah', 'South Ghawar', '']);
+
+  var head = host.querySelector('#portfolio-table th[data-key="nucd_area"]');
+  assert.equal(head.querySelector('.pf-col-label').textContent, 'NUCD Area');
+  head.querySelector('.pf-col-trigger').click();
+  var options = head.querySelectorAll('.pf-multi-list .portfolio-filter-option');
+  assert.deepEqual(Array.prototype.map.call(options, function (option) {
+    return option.querySelector('span').textContent;
+  }), ['North Jafurah', 'South Ghawar'], 'blanks are not an area to filter by');
+
+  options[0].querySelector('input').click();
+  await waitFor(function () { return host.querySelectorAll('#portfolio-table tbody tr').length === 1; });
+  assert.deepEqual(areaCells(), ['North Jafurah']);
+  assert.ok(head.querySelector('.pf-filter-mark').classList.contains('is-on'),
+    'the header says the column is constraining the rowset');
+
+  head.querySelector('.pf-clear-filter').click();
+  await waitFor(function () { return host.querySelectorAll('#portfolio-table tbody tr').length === 3; });
 });
 
 /* ---------------------------------------------------------------------------

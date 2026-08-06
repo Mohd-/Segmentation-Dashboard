@@ -1620,6 +1620,60 @@ def test_migration_v10_maps_unambiguous_business_plan_data_and_replays(client, a
     _rebootstrap(dbmod, client.db_path)
     assert _v10_business_plan_shape(client.db_path, pid) == upgraded
 
+
+# ---------------------------------------------------------------------------
+# v12: the record-level NUCD Area column
+# ---------------------------------------------------------------------------
+
+def _stored_nucd_area(db_path, project_id):
+    conn = raw_sqlite_connect(db_path)
+    try:
+        return conn.execute("SELECT nucd_area FROM projects WHERE project_id = ?",
+                            (project_id,)).fetchone()["nucd_area"]
+    finally:
+        conn.close()
+
+
+def test_migration_v12_adds_the_nucd_area_column_and_replays(client, app_modules):
+    """Upgrade-and-replay for step 12: a v11-shaped database (projects WITHOUT
+    nucd_area) gets the nullable column, arriving NULL on every existing record
+    -- there is nothing to derive an area from, and inventing one from the
+    field or seismic block would be a guess stored as data. A value written
+    after the upgrade survives the step running again."""
+    _, dbmod = app_modules
+    import migrations
+
+    pid = create_project(client, "V12-AREA-1")
+
+    conn = raw_sqlite_connect(client.db_path)
+    with conn:
+        conn.execute("ALTER TABLE projects DROP COLUMN nucd_area")
+        conn.execute("UPDATE app_settings SET value = '11' WHERE key = 'schema_version'")
+    conn.close()
+
+    _rebootstrap(dbmod, client.db_path)
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
+        version = conn.execute(
+            "SELECT value FROM app_settings WHERE key = 'schema_version'").fetchone()["value"]
+    finally:
+        conn.close()
+    assert "nucd_area" in columns
+    assert version == str(migrations.LATEST_SCHEMA_VERSION)
+    assert _stored_nucd_area(client.db_path, pid) is None
+
+    # Replay safety: the step only ADDS a missing column, so an area stored
+    # after the upgrade is still there when the step runs again.
+    conn = raw_sqlite_connect(client.db_path)
+    with conn:
+        conn.execute("UPDATE projects SET nucd_area = 'North Jafurah' WHERE project_id = ?", (pid,))
+    conn.close()
+    _stamp_schema_version(client.db_path, 11)
+    _rebootstrap(dbmod, client.db_path)
+    assert _stored_nucd_area(client.db_path, pid) == "North Jafurah"
+
+
 def test_segmentation_slides_ready_still_reads_pending_approval(client):
     """The one display rule that survived the restructure verbatim."""
     task = None

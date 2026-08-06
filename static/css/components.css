@@ -1872,11 +1872,11 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .pxp-tooltip b { display: block; color: var(--text); }
 .portfolio-table tbody tr { cursor: default; }
 .portfolio-table tbody tr:hover { background: var(--surface); }
-/* Columns: 1 Well Name, 2 Field, 3 Seismic Block, 4 Classification,
-   5 BP Year, 6 Status, 7 Mean OGIP (numeric), 8 Total CoS (numeric). Column
-   widths/alignment key off nth-child, so these indices move whenever a column
-   is inserted. The numeric body cells right-align; their headers keep the menu
-   trigger's label-left/affix-right layout. */
+/* Columns: 1 Well Name, 2 Mean OGIP (numeric), 3 Total CoS (numeric),
+   4 Status, 5 Seismic Block, 6 Field, 7 NUCD Area, 8 BP Year. Column
+   widths key off nth-child, so these indices move whenever a column is
+   inserted or reordered. The numeric body cells right-align; their headers
+   keep the menu trigger's label-left/affix-right layout. */
 .portfolio-table th:nth-child(1), .portfolio-table td:nth-child(1) { min-width: 190px; }
 .portfolio-table th:nth-child(5), .portfolio-table td:nth-child(5) { width: 90px; }
 /* Measured columns align right so their digits line up. Keyed by CLASS, not by
