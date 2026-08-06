@@ -698,17 +698,25 @@ function formationIsTight(row) {
   return fluid === '' && (row.pay_ft === 0 || String(row.pay_ft).trim() === '0');
 }
 // The staked well name, or '' -- captured at Well Site Location and read back
-// from the record's own fields (the same value the server resolves from).
+// from the record's own fields.
 export function stakedWellName() {
   return (Store.allFields['Well Site Location'] || {}).staked_well_name || '';
 }
 
-// The name to show for the record in the CURRENT view. See renderDetail.
+// Card 3V: ONE canonical name, decided by the SERVER (workflow.
+// annotate_canonical_names) and published as project_name on every payload,
+// with the lead name alongside as lead_name. The client used to re-derive this
+// and carve out Segment Maturation; it no longer does, because two places
+// deciding what a record is called is exactly how surfaces come to disagree.
 export function displayRecordName() {
-  var leadName = (Store.project && Store.project.project_name) || '';
-  if (Store.pipeline !== 'bp') return leadName;
-  var staked = String(stakedWellName()).trim();
-  return staked || leadName;
+  return (Store.project && Store.project.project_name) || '';
+}
+
+// The name the record was matured under. Never lost -- it rides every payload
+// that carries the canonical one.
+export function leadRecordName() {
+  var project = Store.project || {};
+  return project.lead_name || project.project_name || '';
 }
 
 /* Reservoir Properties uses TWO decimals, not fmtNum's one: a water saturation
@@ -1062,15 +1070,13 @@ export function renderRightPanel(tasks) {
   // itself is a gear-popover action (see popoverHtml) -- rare, irreversible
   // without a counter-move, and supervisor-only, so it stays off the card face.
   //
-  // The OTHER name rides here, opposite the phase. A BP well is titled by the
-  // name it was STAKED under, so this carries the lead it was matured as --
-  // the only place that pairing is visible once the title has changed. Shown
-  // only when the two names actually differ.
-  var leadName = (Store.project && Store.project.project_name) || '';
-  var staked = String(stakedWellName()).trim();
-  var stakedHtml = (viewingBP && staked && staked !== leadName)
-    ? '<span class="summary-phase-well" title="Lead name in Segment Maturation">' +
-      esc(leadName) + '</span>'
+  // The OTHER name rides here, opposite the phase. A staked record is titled
+  // by the name it is KNOWN by, so this carries the lead it was matured as --
+  // the pairing stays visible once the title has changed, in both pipelines.
+  var leadName = leadRecordName();
+  var canonical = displayRecordName();
+  var stakedHtml = (leadName && leadName !== canonical)
+    ? '<span class="summary-phase-well" title="Lead name">' + esc(leadName) + '</span>'
     : '';
   var phaseHtml = '<div class="summary-phase"><span class="summary-phase-label">' +
     (isBP ? 'BP Well · ' + esc(Store.project.business_plan_year || year) : 'Lead') +

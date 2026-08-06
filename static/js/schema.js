@@ -345,6 +345,10 @@ export var SCHEMA = {
   // (reporting._approval_to_stake_map).
   'Approval to Stake': [
     { key: 'staking_well_created', label: 'Well creation and well folder are completed', type: 'checkbox' },
+    // Card 3V's handover confirmation. Persisted and audited like any other
+    // field, but absent from FIELD_COMPLETION: it is a record of something a
+    // person did on the share, not a gate.
+    { key: 'lead_folder_handover_confirmed', label: 'Lead Folder is moved to the Well Proposal Folder', type: 'checkbox' },
     { key: 'approval_stake_letter_loaded', label: 'The Approval to Stake letter is placed in the shared folder', type: 'checkbox' }
   ],
   // sarh_formation_prognosis_pre_drill keeps its key (renaming EAV keys

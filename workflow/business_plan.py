@@ -18,6 +18,7 @@ from helpers import today_str, utc_now_str
 
 from .constants import (
     FORMATIONS, STAKED_WELL_NAME_FIELD, StaleRevisionError, display_record_name,
+    staking_confirmed,
 )
 from .history import log_task_event
 from .notifications import notify_transition
@@ -628,15 +629,16 @@ def _well_projection(project, tasks, fields, formations, effective):
     items = effective["stages"][current["key"]]
     completed = sum(1 for item in items if item["status"] == "Completed")
     assignees = _assignees(tasks)
-    # From Business Plan Execution onwards a record is known by the name it was
-    # STAKED under; the lead name it was matured under travels alongside so the
-    # pairing stays recoverable (see workflow.display_record_name). `field` is
-    # still derived from the LEAD name -- the field is where the segment is, and
-    # a staked name is not guaranteed to carry the same prefix.
+    # Card 3V: a record is known by the name it was STAKED under, once staking
+    # is CONFIRMED; the lead name it was matured under travels alongside so the
+    # pairing stays recoverable. `field` is still derived from the LEAD name --
+    # the field is where the segment is, and a staked name is not guaranteed to
+    # carry the same prefix.
     staked_name = _value(fields, "Well Site Location", STAKED_WELL_NAME_FIELD)
+    confirmed = staking_confirmed(fields.get("Well Site Location") or {})
     return {
         "project_id": project["project_id"],
-        "project_name": display_record_name(project["project_name"], staked_name),
+        "project_name": display_record_name(project["project_name"], staked_name, confirmed),
         "lead_name": project["project_name"],
         "staked_well_name": staked_name or "",
         "field": _field_from_name(project["project_name"]),
@@ -868,10 +870,12 @@ def get_detail(session, project_id, detail_slug):
     return {
         "project": {
             "project_id": project["project_id"],
-            # Same rule as the board: the staked well name once there is one,
-            # with the lead name carried alongside.
+            # Same rule as the board: the staked well name once staking is
+            # confirmed, with the lead name carried alongside.
             "project_name": display_record_name(
-                project["project_name"], _value(fields, "Well Site Location", STAKED_WELL_NAME_FIELD)),
+                project["project_name"],
+                _value(fields, "Well Site Location", STAKED_WELL_NAME_FIELD),
+                staking_confirmed(fields.get("Well Site Location") or {})),
             "lead_name": project["project_name"],
             "staked_well_name": _value(fields, "Well Site Location", STAKED_WELL_NAME_FIELD) or "",
             "field": _field_from_name(project["project_name"]),

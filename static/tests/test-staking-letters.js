@@ -24,6 +24,9 @@ import {
 // out here rather than read back off CHECKBOXES so a silent edit to the module
 // fails a test instead of quietly agreeing with itself.
 var LABEL_1 = 'Well creation and well folder are completed';
+// Card 3V's handover confirmation, worded EXACTLY as the card writes it and
+// placed immediately after the well-creation control the card names.
+var LABEL_HANDOVER = 'Lead Folder is moved to the Well Proposal Folder';
 var LABEL_2 = 'The Approval to Stake letter is placed in the shared folder';
 var LABEL_3 = 'The Wellsite Location letter is placed in the shared folder';
 
@@ -67,6 +70,7 @@ test('staking-letters: every edited key names its owning task', function () {
   // completing on the keys it owns (workflow/constants.py FIELD_COMPLETION).
   assert.deepEqual(KEY_OWNER, {
     staking_well_created: 'Approval to Stake',
+    lead_folder_handover_confirmed: 'Approval to Stake',
     approval_stake_letter_loaded: 'Approval to Stake',
     wellsite_letter_loaded: 'Well Site Location',
     staked_x: 'Well Site Location',
@@ -96,17 +100,31 @@ test('staking-letters: the page never resurrects the retired Well Creation step'
    Rendering — the three confirmations, in process order
    ------------------------------------------------------------------------- */
 
-test('staking-letters: three checkboxes render in PROCESS order with the exact labels', function () {
+test('staking-letters: four checkboxes render in PROCESS order with the exact labels', function () {
   var root = renderPage();
   var boxes = Array.prototype.slice.call(root.querySelectorAll('.sl-check'));
-  assert.equal(boxes.length, 3, 'three confirmations, no more');
+  assert.equal(boxes.length, 4, 'four confirmations, no more');
+  // Card 3V's handover sits immediately after well creation -- you move the
+  // folder once the well exists, and before its letters are filed.
   assert.deepEqual(boxes.map(function (label) { return label.textContent.trim(); }),
-    [LABEL_1, LABEL_2, LABEL_3]);
+    [LABEL_1, LABEL_HANDOVER, LABEL_2, LABEL_3]);
   assert.deepEqual(boxes.map(function (label) {
     return label.querySelector('input').getAttribute('data-sl-field');
-  }), ['staking_well_created', 'approval_stake_letter_loaded', 'wellsite_letter_loaded']);
+  }), ['staking_well_created', 'lead_folder_handover_confirmed',
+       'approval_stake_letter_loaded', 'wellsite_letter_loaded']);
   assert.deepEqual(CHECKBOXES.map(function (entry) { return entry.label; }),
-    [LABEL_1, LABEL_2, LABEL_3]);
+    [LABEL_1, LABEL_HANDOVER, LABEL_2, LABEL_3]);
+});
+
+test('staking-letters: the handover confirmation gates nothing', function () {
+  // It records that a PERSON moved the folder. The application performs no
+  // file operation for it, and FIELD_COMPLETION['Approval to Stake'] is
+  // unchanged -- ticking it alone completes nothing.
+  var plan = buildSavePlan(values({ lead_folder_handover_confirmed: '1' }), {});
+  assert.deepEqual(plan.map(function (entry) { return entry.taskName; }), ['Approval to Stake']);
+  assert.deepEqual(plan[0].fields,
+    { staking_well_created: '', lead_folder_handover_confirmed: '1',
+      approval_stake_letter_loaded: '' });
 });
 
 test('staking-letters: the wording is "Staking", never "Stacking"', function () {
@@ -277,7 +295,8 @@ test('staking-letters: the plan groups by owning task, in rail order, whole-task
   assert.deepEqual(plan.map(function (entry) { return entry.taskName; }),
     ['Approval to Stake', 'Well Site Location']);
   assert.deepEqual(plan[0].fields,
-    { staking_well_created: '1', approval_stake_letter_loaded: '1' });
+    { staking_well_created: '1', lead_folder_handover_confirmed: '',
+      approval_stake_letter_loaded: '1' });
   assert.deepEqual(plan[1].fields,
     { wellsite_letter_loaded: '1', staked_x: '532100.5', staked_y: '2895120.1',
       staked_well_name: '' });
@@ -291,7 +310,8 @@ test('staking-letters: boxes 1+2 alone complete ONE item and leave the other alo
   }), {});
   assert.deepEqual(plan.map(function (entry) { return entry.taskName; }), ['Approval to Stake']);
   assert.deepEqual(plan[0].fields,
-    { staking_well_created: '1', approval_stake_letter_loaded: '1' });
+    { staking_well_created: '1', lead_folder_handover_confirmed: '',
+      approval_stake_letter_loaded: '1' });
 });
 
 /* -------------------------------------------------------------------------

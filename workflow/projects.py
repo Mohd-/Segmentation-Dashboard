@@ -22,6 +22,7 @@ import db
 import folders
 from helpers import health_from_target, parse_iso_date, today_str, utc_now_str
 
+from . import constants
 from .constants import (BP_EXECUTION_STAGES, LATEST_MEAN_GAS_SOURCES,
                         LEAD_ASSESSMENT_CHECKPOINTS, PIPELINE_TEMPLATES,
                         PROSPECT_STAGES, STAGE_ORDER, applicable_stages,
@@ -620,6 +621,64 @@ def _annotate_mean_gas(session, projects):
             break
 
 
+def _wellsite_fields_by_project(session, project_ids):
+    """The Well Site Location dynamic fields for a set of records, in one read.
+
+    Batched because the board annotates every visible row, and a per-record
+    query there is the classic N+1.
+    """
+    if not project_ids:
+        return {}
+    ids = list({int(pid) for pid in project_ids})
+    placeholders = ", ".join(f":p{index}" for index in range(len(ids)))
+    params = {f"p{index}": value for index, value in enumerate(ids)}
+    rows = db.fetch_all(session, f"""
+        SELECT t.project_id AS project_id, d.field_key AS field_key,
+               d.field_value AS field_value
+        FROM project_tasks t
+        JOIN task_dynamic_fields d ON d.task_id = t.task_id
+        WHERE t.task_name = :step AND t.project_id IN ({placeholders})
+    """, dict(params, step=constants.WELL_SITE_LOCATION_STEP))
+    grouped: Dict[int, Dict[str, Any]] = {}
+    for row in rows:
+        grouped.setdefault(int(row["project_id"]), {})[row["field_key"]] = row["field_value"]
+    return grouped
+
+
+def annotate_canonical_names(session, projects):
+    """Card 3V: give every row the name it is KNOWN by, plus its lead name.
+
+    ``project_name`` on the PAYLOAD becomes the canonical display name, and
+    ``lead_name`` carries the name the record was matured under. The stored
+    column is untouched -- it remains the lead name and the stable key that
+    relations and historical audit rows hang off. This is the same shape the
+    Business Plan Execution projection and the Portfolio rows already publish,
+    so every surface reads one field for "what is this called".
+    """
+    rows = [row for row in (projects or []) if row]
+    fields_by_project = _wellsite_fields_by_project(
+        session, [row.get("project_id") for row in rows])
+    for row in rows:
+        fields = fields_by_project.get(int(row.get("project_id") or 0), {})
+        lead_name = row.get("project_name") or ""
+        staked = fields.get(constants.STAKED_WELL_NAME_FIELD) or ""
+        row["lead_name"] = lead_name
+        row["staked_well_name"] = str(staked).strip()
+        row["project_name"] = constants.display_record_name(
+            lead_name, staked, constants.staking_confirmed(fields))
+    return rows
+
+
+def canonical_record_name(session, project_id):
+    """The one name a single record is known by (see annotate_canonical_names)."""
+    project = db.fetch_one(
+        session, "SELECT project_id, project_name FROM projects WHERE project_id = :project_id",
+        {"project_id": project_id})
+    if not project:
+        return ""
+    return annotate_canonical_names(session, [dict(project)])[0]["project_name"]
+
+
 def _annotate_derived_state(session, projects):
     """Fill the derived board pointers on a list of project dicts, in place.
 
@@ -780,6 +839,7 @@ def get_projects(session, search_text="", stage_filter="All", status_filter="All
         ORDER BY p.project_id DESC
     """, params)
     _annotate_derived_state(session, rows)
+    annotate_canonical_names(session, rows)
     filtered = []
     for item in rows:
         # Drilling is only surfaced while the project sits in Post-Drilling.
@@ -832,6 +892,7 @@ def get_project(session, project_id):
     if not project.get("lead_folder_path"):
         project["lead_folder_path"] = folders.default_lead_folder_path(project.get("project_name") or "")
     _annotate_derived_state(session, [project])
+    annotate_canonical_names(session, [project])
     return project
 
 

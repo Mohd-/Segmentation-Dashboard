@@ -55,6 +55,10 @@ from .constants import (
     display_record_name,
     FORMATION_VALUE_FIELDS,
     FORMATIONS,
+    LEAD_FOLDER_HANDOVER_FIELD,
+    CANONICAL_RENAME_EVENT,
+    WELL_SITE_LOCATION_STEP,
+    staking_confirmed,
     MERGED_COS_LEGACY_NAMES,
     MERGED_COS_TASK_NAME,
     NON_PROSPECTIVE_AUTO_COMPLETE_STEPS,
@@ -88,8 +92,10 @@ from .formations import (
 )
 from .history import log_task_event
 from .lifecycle import (
+    apply_canonical_name,
     apply_checkbox_submission,
     apply_field_completion,
+    guard_staking_name,
     assign_task,
     ensure_task_approved,
     get_project_tasks,
@@ -118,6 +124,8 @@ from .projects import (
     get_projects,
     project_completion_percent,
     restore_project,
+    annotate_canonical_names,
+    canonical_record_name,
     set_project_priority,
     update_project_name,
 )
@@ -161,7 +169,8 @@ __all__ = [
     "FIELD_REOPEN_COMMENT", "FIELD_REOPEN_EVENT",
     "FORMATION_FLUID_TYPES", "FORMATION_NUMERIC_FIELDS",
     "FORMATION_PHASES", "FORMATION_VALUE_FIELDS", "FORMATIONS",
-    "display_record_name", "STAKED_WELL_NAME_FIELD",
+    "display_record_name", "STAKED_WELL_NAME_FIELD", "WELL_SITE_LOCATION_STEP",
+    "LEAD_FOLDER_HANDOVER_FIELD", "CANONICAL_RENAME_EVENT", "staking_confirmed",
     "MERGED_COS_LEGACY_NAMES", "MERGED_COS_TASK_NAME",
     "NON_PROSPECTIVE_AUTO_COMPLETE_STEPS", "NON_PROSPECTIVE_FLUIDS",
     "NUMERIC_FIELDS",
@@ -178,9 +187,11 @@ __all__ = [
     # projects
     "add_project", "archive_project", "delete_project", "get_project",
     "get_projects", "project_completion_percent", "restore_project",
+    "annotate_canonical_names", "canonical_record_name",
     "set_project_priority", "update_project_name",
     # lifecycle
-    "apply_checkbox_submission", "apply_field_completion", "assign_task",
+    "apply_canonical_name", "apply_checkbox_submission", "apply_field_completion",
+    "guard_staking_name", "assign_task",
     "ensure_task_approved",
     "get_project_tasks", "get_task",
     "get_task_dynamic_fields", "satisfy_submit_gate", "save_task",

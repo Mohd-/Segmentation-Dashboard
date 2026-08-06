@@ -223,7 +223,8 @@ def _resolve_template(template: str, field_name: str, lead_name: str, well_name:
     return _windows_join(config.NAUGAD_SHARE_ROOT, *parts), []
 
 
-def mapped_step_folder(session, project_id: int, task_name=None, detail_slug=None):
+def mapped_step_folder(session, project_id: int, task_name=None, detail_slug=None,
+                       canonical_name=None):
     """The approved shared folder for one step, or None when it has no mapping.
 
     None means exactly that: the caller renders NO folder component. Card 3AB
@@ -245,13 +246,15 @@ def mapped_step_folder(session, project_id: int, task_name=None, detail_slug=Non
     project = _project_row(session, project_id)
     if not project:
         raise FileNotFoundError("Record not found.")
-    # The canonical name is what the record is KNOWN by, which after staking is
-    # its staked well name -- so a well-based destination resolves under the
-    # name the well actually carries. parse_field_and_well is the application's
-    # existing, approved split; this does not invent a second one.
-    canonical = project.get("project_name") or ""
+    # The canonical name is what the record is KNOWN by, which after confirmed
+    # staking is its staked well name -- so a well-based destination resolves
+    # under the name the well actually carries. Callers pass it in (this module
+    # stays free of the workflow package, which imports it); the stored lead
+    # name is the fallback. parse_field_and_well is the application's existing,
+    # approved split -- this does not invent a second one.
+    lead_name = project.get("project_name") or ""
+    canonical = str(canonical_name or "").strip() or lead_name
     field_name, well_name = parse_field_and_well(canonical)
-    lead_name = canonical
     unc_path, missing = _resolve_template(template, field_name, lead_name, well_name)
     if missing:
         return {

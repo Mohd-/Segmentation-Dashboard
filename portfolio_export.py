@@ -88,6 +88,8 @@ _PORTFOLIO_TASK_FIELD_KEYS: List[str] = [
     "reservoir_cos_rows",
     "flowback_dynamic_ogip_bcf",
     "staked_well_name",
+    # Card 3V's confirmation predicate reads these three (workflow.staking_confirmed).
+    "wellsite_letter_loaded", "staked_x", "staked_y",
     "pda_booked",
     "p90_area_km2", "p10_area_km2",
     "formation_thickness_ft", "reservoir_thickness_ft",
@@ -374,8 +376,11 @@ def get_portfolio_export_rows(session) -> List[dict]:
         rows.append({
             "X": _first_filled(fields.get("staking_well_x"), xy.get("lead_x")),
             "Y": _first_filled(fields.get("staking_well_y"), xy.get("lead_y")),
+            # Card 3V: the staked name once staking is CONFIRMED, never a
+            # typed-but-unconfirmed one.
             "Well Name": workflow.display_record_name(
-                item["project_name"], fields.get("staked_well_name")),
+                item["project_name"], fields.get("staked_well_name"),
+                workflow.staking_confirmed(fields)),
             "Lead Name": item["project_name"],
             "BP Year": item.get("year") or "",
             "Classification": classification,

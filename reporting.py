@@ -187,6 +187,10 @@ _BP_TASK_FIELD_KEYS = [
     # surface anywhere that paired a staked well name with the lead it came
     # from. That pairing is what the Portfolio column and the export use.
     "staked_well_name",
+    # Card 3V: the staked name is authoritative only once staking is CONFIRMED
+    # (workflow.staking_confirmed), which is the Well Site Location step's own
+    # completion predicate. These three are what that predicate reads.
+    "wellsite_letter_loaded", "staked_x", "staked_y",
 ]
 
 
@@ -497,11 +501,12 @@ def get_portfolio_rows(session, year="All", activity="All"):
         staked_name = fields.get("staked_well_name") or ""
         row = {
             "project_id": item["project_id"],
-            # OUTSIDE Segment Maturation a record is known by its staked well
-            # name once it has one (workflow.display_record_name). The lead
-            # name travels alongside rather than being replaced, so the
+            # Card 3V: a record is known by its staked well name once staking
+            # is CONFIRMED -- a typed but unconfirmed name renames nothing. The
+            # lead name travels alongside rather than being replaced, so the
             # lead <-> well pairing is always recoverable from a row.
-            "well_name": workflow.display_record_name(item["project_name"], staked_name),
+            "well_name": workflow.display_record_name(
+                item["project_name"], staked_name, workflow.staking_confirmed(fields)),
             "lead_name": item["project_name"],
             "staked_well_name": staked_name,
             "gas_field": folders.parse_field_and_well(item["project_name"])[0],

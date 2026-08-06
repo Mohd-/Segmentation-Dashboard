@@ -423,6 +423,10 @@ _PROJECT_LIST_FIELDS = (
     # the derived current_stage verbatim. assignees and
     # lead_priority are the board's own per-lead values.
     "assignees", "tracked_items", "display_stage", "lead_priority",
+    # Card 3V: project_name above is the CANONICAL name -- the staked well name
+    # once staking is confirmed. These carry the pairing alongside it, so a
+    # board card can show what the record was matured as without a second read.
+    "lead_name", "staked_well_name",
     # Card 1C: the record's field, DERIVED from the record name by the same
     # folders.parse_field_and_well split the share paths use -- there is no
     # stored field column. Feeds the board's Field filter.
@@ -775,7 +779,8 @@ def component_folder(project_id, task_id):
     if not task or int(task.get("project_id") or 0) != int(project_id):
         raise ValueError("Component folder could not be resolved.")
     mapped = folders.mapped_step_folder(
-        session, project_id, task_name=task.get("task_name"))
+        session, project_id, task_name=task.get("task_name"),
+        canonical_name=workflow.canonical_record_name(session, project_id))
     return json_response(mapped or {"requires_folder": 0})
 
 
@@ -867,7 +872,8 @@ def business_plan_detail(project_id, detail_slug):
     # destinations. `folder` is absent when the step has no mapping, and the
     # detail form renders no folder component for it.
     payload["folder"] = folders.mapped_step_folder(
-        session, project_id, detail_slug=detail_slug)
+        session, project_id, detail_slug=detail_slug,
+        canonical_name=payload["project"]["project_name"])
     return json_response(payload)
 
 

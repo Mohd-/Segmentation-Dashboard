@@ -1753,6 +1753,10 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .pf-name-cell { display: flex; align-items: baseline; gap: 6px; }
 .pf-name { display: flex; flex-direction: column; min-width: 0; }
 .pf-lead-name { color: var(--text-faint); font-size: var(--text-xs); overflow-wrap: anywhere; }
+/* Card 3V. The lead name under a staked record's canonical name, on the
+   Segment Maturation board card -- same faint treatment the Portfolio row uses
+   for the same pairing. */
+.lead-card-lead-name { display: block; color: var(--text-faint); font-size: var(--text-xs); overflow-wrap: anywhere; }
 
 /* Quadrant mark: the cross plot's four cutoff classes, shown beside the record
    name rather than as a column of four repeating words. Icon only -- the class

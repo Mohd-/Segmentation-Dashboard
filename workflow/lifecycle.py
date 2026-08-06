@@ -15,6 +15,7 @@ import db
 from helpers import to_float_or_none, today_str, utc_now_str
 
 from .constants import (
+    CANONICAL_RENAME_EVENT,
     CHECKBOX_SUBMIT_FROM_STATUSES,
     CHECKBOX_SUBMIT_STEPS,
     DONE_STATUSES,
@@ -26,6 +27,10 @@ from .constants import (
     FIELD_REOPEN_EVENT,
     MERGED_COS_TASK_NAME,
     NUMERIC_FIELDS,
+    STAKED_WELL_NAME_FIELD,
+    WELL_SITE_LOCATION_STEP,
+    display_record_name,
+    staking_confirmed,
     POSITIVE_NUMBER_FIELDS,
     REQUIRED_FIELDS_FOR_SUBMIT,
     STATUSES,
@@ -347,6 +352,9 @@ def save_task_dynamic_fields(session, task_id, fields, changed_by="Web User", re
     fields = fields or {}
     fields = _apply_seal_cos_calculation(task, fields)
     fields = _apply_trap_cos_calculation(session, task, fields)
+    # Card 3V: a canonical name has to identify one record. Checked BEFORE the
+    # write so a collision leaves the stored name untouched.
+    guard_staking_name(session, task, fields)
     now = utc_now_str()
     with db.write_transaction(session):
         _apply_dynamic_fields(session, task, fields, changed_by, now)
@@ -355,6 +363,7 @@ def save_task_dynamic_fields(session, task_id, fields, changed_by="Web User", re
     _fill_project_surfaces(session, task["project_id"])
     if reconcile:
         apply_field_completion(session, task_id, changed_by)
+        apply_canonical_name(session, task_id, changed_by)
 
 
 def save_task(session, task_id, payload, changed_by="Web User", allow_priority_change=True):
@@ -391,6 +400,10 @@ def save_task(session, task_id, payload, changed_by="Web User", allow_priority_c
     priority = str(payload.get("priority") or "Medium").strip().title()
     if priority not in {"Low", "Medium", "High"}:
         priority = "Medium"
+
+    # Card 3V: a canonical name has to identify one record. Checked BEFORE the
+    # write opens, so a collision leaves the stored name untouched.
+    guard_staking_name(session, get_task(session, task_id), fields)
 
     result: Dict[str, Any] = {}
     with db.write_transaction(session):
@@ -505,6 +518,11 @@ def save_task(session, task_id, payload, changed_by="Web User", allow_priority_c
     if not status_supplied:
         completed = apply_field_completion(session, task_id, changed_by)
         submitted = apply_checkbox_submission(session, task_id, changed_by)
+        # Card 3V's canonical-name event rides the same post-commit boundary,
+        # and runs regardless of which (if either) branch moved the step: a
+        # save that only fills in the coordinates can be the one that confirms
+        # staking.
+        apply_canonical_name(session, task_id, changed_by)
         if submitted or completed:
             return submitted or completed
     return result
@@ -1018,3 +1036,109 @@ def apply_checkbox_submission(session, task_id, changed_by):
         assign_task(session, task_id, assignee, cascade=False, changed_by=changed_by)
     transition_task(session, task_id, "submit", changed_by=changed_by)
     return get_task(session, task_id)
+
+
+# ---------------------------------------------------------------------------
+# Card 3V -- the canonical name, guarded and audited
+# ---------------------------------------------------------------------------
+
+def _wellsite_fields(session, project_id):
+    """This record's Well Site Location dynamic fields."""
+    rows = db.fetch_all(session, """
+        SELECT d.field_key AS field_key, d.field_value AS field_value
+        FROM project_tasks t
+        JOIN task_dynamic_fields d ON d.task_id = t.task_id
+        WHERE t.project_id = :project_id AND t.task_name = :step
+    """, {"project_id": project_id, "step": WELL_SITE_LOCATION_STEP})
+    return {row["field_key"]: row["field_value"] for row in rows}
+
+
+def guard_staking_name(session, task, fields):
+    """Refuse a staking name another record already answers to (pre-write).
+
+    A canonical name has to identify ONE record, or every surface that shows it
+    becomes ambiguous. The check compares against both halves of the name
+    space -- stored lead names and other records' staked names -- because
+    either is something a person could already be calling a record.
+
+    Nothing is renamed, numbered or merged on a collision: the save is rejected
+    with a message naming the conflict, and the record keeps the name it had.
+    """
+    if not task or task.get("task_name") != WELL_SITE_LOCATION_STEP:
+        return
+    if STAKED_WELL_NAME_FIELD not in (fields or {}):
+        return
+    proposed = str((fields or {}).get(STAKED_WELL_NAME_FIELD) or "").strip()
+    if not proposed:
+        return
+    project_id = int(task["project_id"])
+    clash = db.fetch_one(session, """
+        SELECT project_name FROM projects
+        WHERE project_id != :project_id
+          AND COALESCE(archived, 0) = 0
+          AND LOWER(TRIM(project_name)) = LOWER(:proposed)
+    """, {"project_id": project_id, "proposed": proposed})
+    if clash:
+        raise ValueError(
+            f"\"{proposed}\" is already the name of another record. "
+            "Staking names have to be unique.")
+    other = db.fetch_one(session, """
+        SELECT p.project_name AS project_name
+        FROM task_dynamic_fields d
+        JOIN project_tasks t ON t.task_id = d.task_id
+        JOIN projects p ON p.project_id = t.project_id
+        WHERE d.field_key = :key
+          AND t.task_name = :step
+          AND t.project_id != :project_id
+          AND COALESCE(p.archived, 0) = 0
+          AND LOWER(TRIM(d.field_value)) = LOWER(:proposed)
+        LIMIT 1
+    """, {"key": STAKED_WELL_NAME_FIELD, "step": WELL_SITE_LOCATION_STEP,
+          "project_id": project_id, "proposed": proposed})
+    if other:
+        raise ValueError(
+            f"\"{proposed}\" is already the staked well name of "
+            f"{other['project_name']}. Staking names have to be unique.")
+
+
+def apply_canonical_name(session, task_id, changed_by):
+    """POST-COMMIT hook: record the first time a record takes its staked name.
+
+    Written ONCE, the first time staking confirms. Replaying the same save, or
+    editing another field on the step afterwards, finds the event already there
+    and writes nothing -- so the audit trail says "this record became KELS-1ST1"
+    exactly once, which is what happened.
+
+    The event carries the previous name in ``old_status`` and the new one in
+    ``new_status``, and hangs off the step that caused it. Nothing is renamed in
+    the database: projects.project_name stays the lead name and the stable key.
+    """
+    task = get_task(session, task_id)
+    if not task or task.get("task_name") != WELL_SITE_LOCATION_STEP:
+        return
+    project_id = task["project_id"]
+    fields = _wellsite_fields(session, project_id)
+    if not staking_confirmed(fields):
+        return
+    project = db.fetch_one(
+        session, "SELECT project_name FROM projects WHERE project_id = :project_id",
+        {"project_id": project_id})
+    if not project:
+        return
+    canonical = display_record_name(
+        project["project_name"], fields.get(STAKED_WELL_NAME_FIELD), True)
+    if canonical == project["project_name"]:
+        return
+    already = db.fetch_one(session, """
+        SELECT history_id FROM task_history
+        WHERE project_id = :project_id AND action_type = :event AND new_status = :name
+        LIMIT 1
+    """, {"project_id": project_id, "event": CANONICAL_RENAME_EVENT, "name": canonical})
+    if already:
+        return
+    with db.write_transaction(session):
+        log_task_event(session, task_id, project_id, task["task_name"],
+                       CANONICAL_RENAME_EVENT, project["project_name"], canonical,
+                       changed_by,
+                       f"Staking confirmed: this record is known as {canonical}. "
+                       f"Its lead name, {project['project_name']}, is unchanged.")

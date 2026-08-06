@@ -56,6 +56,7 @@ export var PRIMARY_STEP = 'Approval to Stake';
 // data migration v5 already wrote.
 export var KEY_OWNER = {
   staking_well_created: 'Approval to Stake',
+  lead_folder_handover_confirmed: 'Approval to Stake',
   approval_stake_letter_loaded: 'Approval to Stake',
   wellsite_letter_loaded: 'Well Site Location',
   staked_x: 'Well Site Location',
@@ -75,6 +76,12 @@ export var KEY_OWNER = {
 export var CHECKBOXES = [
   { key: 'staking_well_created',
     label: 'Well creation and well folder are completed' },
+  // Card 3V, placed immediately after the well-creation control the card names
+  // and worded EXACTLY as the card writes it. It records that a person moved
+  // the folder; the application performs no file operation for it, and it
+  // gates no completion (FIELD_COMPLETION['Approval to Stake'] is unchanged).
+  { key: 'lead_folder_handover_confirmed',
+    label: 'Lead Folder is moved to the Well Proposal Folder' },
   { key: 'approval_stake_letter_loaded',
     label: 'The Approval to Stake letter is placed in the shared folder' },
   { key: 'wellsite_letter_loaded',

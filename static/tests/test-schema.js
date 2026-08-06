@@ -391,14 +391,16 @@ test('validateStepFields: a 0-degree azimuth is a perfectly ordinary bearing', f
    what the project editor's all-fields card and any reference view render, and
    they carry the same keys, labels and reveal. */
 
-test('schema.SCHEMA: Approval to Stake declares both confirmations, in process order', function () {
+test('schema.SCHEMA: Approval to Stake declares its confirmations, in process order', function () {
+  // Card 3V added the folder handover between well creation and the letter.
   assert.deepEqual(stepKeys('Approval to Stake'),
-    ['staking_well_created', 'approval_stake_letter_loaded']);
+    ['staking_well_created', 'lead_folder_handover_confirmed', 'approval_stake_letter_loaded']);
   SCHEMA['Approval to Stake'].forEach(function (field) {
     assert.equal(field.type, 'checkbox', field.key + ' is a checkbox');
   });
   assert.deepEqual(SCHEMA['Approval to Stake'].map(function (f) { return f.label; }), [
     'Well creation and well folder are completed',
+    'Lead Folder is moved to the Well Proposal Folder',
     'The Approval to Stake letter is placed in the shared folder'
   ]);
 });

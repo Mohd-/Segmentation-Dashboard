@@ -107,28 +107,61 @@ FORMATION_PHASES = ["quicklook", "post_drill", "final", "resource_update"]
 # What a record is CALLED, and where
 # ---------------------------------------------------------------------------
 # A record keeps ONE identity for its whole life -- projects.project_name, the
-# lead name -- and staking does not rename it. What staking does is give the
-# record the name it will be known by as a WELL, captured at Well Site Location
-# in the `staked_well_name` dynamic field.
+# lead name, which is also the stable key every relation and every historical
+# audit row hangs off. Staking does not rewrite it. What staking does is decide
+# the name the record is KNOWN BY from that point on, captured at Well Site
+# Location in the `staked_well_name` dynamic field.
 #
-# So the same record answers to two names depending on where you are looking:
+# Card 3V: once staking is CONFIRMED that becomes the canonical display name
+# EVERYWHERE -- Segment Maturation's board and detail header included, not just
+# Business Plan Execution, Portfolio Analysis, the Map and the exports. One
+# name source, so no surface can disagree with another about what a record is
+# called. The lead name is never lost: it travels alongside on every payload
+# that carries either, renders beneath the canonical name wherever the two
+# differ, and keeps its own export column.
 #
-#   Segment Maturation   the LEAD name, always. This is the pipeline where the
-#                        segment is being matured; renaming it mid-pipeline
-#                        because a well name was chosen would lose the thread.
-#   Everywhere else      the STAKED WELL name once there is one -- Business
-#                        Plan Execution, Portfolio Analysis, the exports --
-#                        falling back to the lead name while it is unstaked.
-#
-# Both names travel together on every payload that carries either, so the
-# lead <-> well pairing is always recoverable.
+# CONFIRMED is an event, not a keystroke. Typing a name into an unsaved field
+# renames nothing: the record answers to its staked name only once the Well
+# Site Location step is complete under its own predicate below (the letter is
+# filed AND the coordinates are recorded) and a non-blank name is stored.
 STAKED_WELL_NAME_FIELD = "staked_well_name"
+WELL_SITE_LOCATION_STEP = "Well Site Location"
+
+# Card 3V's handover confirmation, recorded on the Approval to Stake step
+# beside the existing well-creation box. It records that a PERSON moved the
+# lead folder; the application performs no file operation for it and it gates
+# no completion.
+LEAD_FOLDER_HANDOVER_FIELD = "lead_folder_handover_confirmed"
+
+# The audit event written the first time a record takes its staked name.
+CANONICAL_RENAME_EVENT = "Canonical Name Set"
 
 
-def display_record_name(project_name, staked_well_name=None):
-    """The name a record is known by OUTSIDE Segment Maturation."""
+def staking_confirmed(wellsite_fields):
+    """Is this record's staked name authoritative yet?
+
+    ``wellsite_fields`` is the Well Site Location task's dynamic-field map. The
+    test is deliberately the SAME one FIELD_COMPLETION uses to call that step
+    complete, plus a stored name -- so "the step is done" and "the record has
+    its well name" can never disagree.
+    """
+    fields = wellsite_fields or {}
+    if not str(fields.get(STAKED_WELL_NAME_FIELD) or "").strip():
+        return False
+    # Delegated rather than restated: field_completion_met is the one place
+    # that knows what finishes this step, so the two answers cannot drift.
+    return field_completion_met(WELL_SITE_LOCATION_STEP, fields)
+
+
+def display_record_name(project_name, staked_well_name=None, confirmed=True):
+    """The name a record is known by, everywhere.
+
+    ``confirmed`` lets a caller that has already evaluated staking_confirmed
+    pass the answer in; callers holding only a vetted staked name (the field is
+    read from a completed step) leave it at its default.
+    """
     staked = str(staked_well_name or "").strip()
-    return staked or str(project_name or "")
+    return staked if (staked and confirmed) else str(project_name or "")
 FORMATION_VALUE_FIELDS = [
     "top_tvdss_ft", "base_tvdss_ft", "thickness_ft", "porosity_pct",
     "swt_pct", "pay_ft", "ngr_pct", "fluid",

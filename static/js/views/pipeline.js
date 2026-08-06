@@ -124,6 +124,12 @@ function leadCardHtml(project, stage) {
     ' data-priority="' + esc(priority) + '">' +
     '<span class="lead-card-identity">' +
       '<span class="lead-card-name">' + esc(project.project_name) + '</span>' +
+      // Card 3V: a staked record is titled by the name it is KNOWN by, so the
+      // lead it was matured as rides underneath -- the pairing stays visible
+      // rather than being replaced. Shown only when the two actually differ.
+      (project.lead_name && project.lead_name !== project.project_name
+        ? '<span class="lead-card-lead-name" title="Lead name">' + esc(project.lead_name) + '</span>'
+        : '') +
       '<span class="lead-card-people">' + assigneesHtml(project) + '</span>' +
     '</span>' +
     '<span class="lead-card-items">' + trackedItemsHtml(project, stage) + '</span>' +
