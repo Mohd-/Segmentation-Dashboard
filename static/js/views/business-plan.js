@@ -783,12 +783,12 @@ function folderMarkup() {
   if (!folder) return '';
   if (folder.blocked) {
     return '<div class="folder-card folder-card-blocked" role="status">' +
-      '<span class="folder-glyph" aria-hidden="true">📁</span>' +
+      '<span class="folder-glyph" aria-hidden="true">' + ICONS['folder'] + '</span>' +
       '<span class="folder-path">' + esc(folder.blocked) + '</span></div>';
   }
   if (!folder.path) return '';
   return '<div class="folder-card">' +
-    '<span class="folder-glyph" aria-hidden="true">📁</span>' +
+    '<span class="folder-glyph" aria-hidden="true">' + ICONS['folder'] + '</span>' +
     '<a class="folder-path" href="' + esc(folder.file_url || '#') + '" title="' + esc(folder.path) + '">' +
     esc(folder.path) + '</a>' +
     '<button type="button" id="bpe-copy-folder" class="icon-btn" title="Copy shared-folder path" aria-label="Copy shared-folder path">' +

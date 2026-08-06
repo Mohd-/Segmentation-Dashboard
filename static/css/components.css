@@ -966,7 +966,10 @@
 .rail-stage-chevron { color: var(--text-faint); line-height: 1; }
 .rail-stage-chevron::before { content: '\25B8'; }                       /* ▸ collapsed */
 .rail-stage-head.open .rail-stage-chevron::before { content: '\25BE'; } /* ▾ open */
-.stage-icon { color: var(--text-faint); font-size: var(--text-base); line-height: 1; }
+/* Card 3Y turned these from text characters into SVGs, so the box has to size
+   the glyph rather than the font size sizing a character. */
+.stage-icon { display: inline-flex; align-items: center; color: var(--text-faint); line-height: 1; }
+.stage-icon .lucide { width: 16px; height: 16px; }
 .rail-stage-body { display: flex; flex-direction: column; gap: var(--space-2); padding: 2px 0 var(--space-2); }
 .rail-stage-body.collapsed { display: none; }
 .component-item {
@@ -1150,7 +1153,8 @@ button.priority.priority-high:hover { background: var(--danger-100); }
   background: var(--surface-sunken);
   color: var(--text-muted);
 }
-.folder-card .folder-glyph { flex: 0 0 auto; color: var(--text-faint); }
+.folder-card .folder-glyph { display: inline-flex; align-items: center; flex: 0 0 auto; color: var(--text-faint); }
+.folder-card .folder-glyph .lucide { width: 16px; height: 16px; }
 .folder-card .folder-path {
   flex: 1;
   min-width: 0;

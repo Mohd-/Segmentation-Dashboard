@@ -143,17 +143,18 @@ export function openDetail(projectId, pipeline) {
     });
   }).catch(function (error) { msg(error.message, 'error'); });
 }
-// Monochrome stage glyphs for the rail headers (must read at ~14px).
-// \uFE0E (variation selector-15) forces text presentation so no color emoji
-// sneak in. Keys match the stage_group values from workflow.py / /api/meta;
-// unknown stages fall back to a plain bullet.
+// Card 3Y: these were Unicode characters with a variation selector forcing
+// text presentation -- a workaround for the fact that they were emoji at all.
+// They are approved SVGs now, the SAME ones both boards already use for the
+// same stages (pipeline.js STAGE_HEADER_ICONS, business-plan.js STAGE_META),
+// so a stage reads identically wherever it appears.
 var STAGE_ICONS = {
-  'Lead Assessment': '\u25CE',          // ◎ bullseye
-  'Risk Analysis': '\u2696\uFE0E',       // ⚖ scales
-  'Pre-Well Delivery': '\u26F3\uFE0E',   // ⛳ flag
-  'Well Delivery': '\u2692\uFE0E',       // ⚒ hammer and pick
-  'Post-Drilling': '\u26CF\uFE0E',       // ⛏ pick
-  'Post-Testing': '\u2713'              // ✓ check
+  'Lead Assessment': 'clipboard-check',
+  'Risk Analysis': 'gauge',
+  'Pre-Well Delivery': 'rig',
+  'Well Delivery': 'clipboard-steps',
+  'Post-Drilling': 'rig',
+  'Post-Testing': 'gauge'
 };
 
 // Rail accordion: exactly one stage group open at a time (zero open allowed).
@@ -468,7 +469,7 @@ export function renderDetail() {
     }).join('');
     return '<div class="rail-stage">' +
       '<button type="button" class="rail-stage-head' + (isOpen ? ' open' : '') + '" data-stage="' + esc(group.stage) + '" aria-expanded="' + isOpen + '">' +
-      '<span class="stage-icon" aria-hidden="true">' + (STAGE_ICONS[group.stage] || '•') + '</span>' +
+      '<span class="stage-icon" aria-hidden="true">' + (ICONS[STAGE_ICONS[group.stage]] || '') + '</span>' +
       '<span class="rail-stage-name">' + esc(group.stage) + '</span>' +
       '<span class="rail-stage-count">' + approved + '/' + group.tasks.length + '</span>' +
       '<span class="rail-stage-chevron" aria-hidden="true"></span></button>' +
@@ -798,10 +799,10 @@ function wireFolds() {
 // in detail-form.js) so both folder-link styles read as one pattern.
 function folderRowHtml(sectionKey) {
   return '<div class="folder-card" data-folder-key="' + esc(sectionKey) + '">' +
-    '<span class="folder-glyph" aria-hidden="true">📁</span>' +
+    '<span class="folder-glyph" aria-hidden="true">' + ICONS['folder'] + '</span>' +
     '<span class="folder-path" id="summary-folder-path-' + esc(sectionKey) + '">Loading…</span>' +
     '<button type="button" class="icon-btn" id="summary-folder-copy-' + esc(sectionKey) +
-    '" title="Copy folder link" aria-label="Copy folder link" disabled>⧉</button></div>';
+    '" title="Copy folder link" aria-label="Copy folder link" disabled>' + ICONS['copy'] + '</button></div>';
 }
 function foldersHtml(sectionKeys) {
   return '<div class="summary-folders">' + sectionKeys.map(folderRowHtml).join('') + '</div>';

@@ -30,6 +30,7 @@
  */
 import { byId, all, esc, isFilled, truthy, msg } from '../dom.js';
 import { API } from '../api.js';
+import { ICONS } from '../icons.js';
 import { Store, currentUserName, isCurrentPipelineView } from '../state.js';
 import { RESOURCE_SCENARIOS, formationNames } from '../schema.js';
 import {
@@ -1157,9 +1158,9 @@ function renderFolderRow(onCopy) {
   var card = document.createElement('div');
   card.id = 'component-folder-card';
   card.className = 'folder-card';
-  card.innerHTML = '<span class="folder-glyph" aria-hidden="true">📁</span>' +
+  card.innerHTML = '<span class="folder-glyph" aria-hidden="true">' + ICONS['folder'] + '</span>' +
     '<span class="folder-path" id="la-folder-path">Loading…</span>' +
-    '<button type="button" class="icon-btn" id="copy-component-folder" title="Copy folder link" aria-label="Copy folder link" disabled>⧉</button>';
+    '<button type="button" class="icon-btn" id="copy-component-folder" title="Copy folder link" aria-label="Copy folder link" disabled>' + ICONS['copy'] + '</button>';
   anchor.parentNode.insertBefore(card, anchor.nextSibling);
   var forProjectId = Store.projectId;
   API.componentFolder(forProjectId, task.task_id).then(function (info) {

@@ -221,7 +221,7 @@ function renderSidebar() {
     // marker carries the server's own message in its tooltip.
     var warning = row.error
       ? '<span class="map-layer-error" role="img" title="' + esc(errorHint(row.error))
-        + '" aria-label="' + esc(errorHint(row.error)) + '">⚠</span>'
+        + '" aria-label="' + esc(errorHint(row.error)) + '">' + ICONS['alert'] + '</span>'
       : '';
     var actions = row.pinned ? '' :
       '<button type="button" class="map-layer-btn map-layer-move" data-dir="1" title="Move up (draw above)" aria-label="Move ' + esc(row.label) + ' up">' + ICONS['chevron-up'] + '</button>'

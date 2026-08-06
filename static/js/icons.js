@@ -42,6 +42,14 @@ export var ICONS = {
   'arrow-up': "<svg aria-hidden=\"true\" focusable=\"false\" class=\"lucide lucide-arrow-up\" xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"> <path d=\"m5 12 7-7 7 7\"/> <path d=\"M12 19V5\"/> </svg>",
   'copy': "<svg aria-hidden=\"true\" focusable=\"false\" class=\"lucide lucide-copy\" xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\" ry=\"2\"/><path d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\"/></svg>",
 
+  // --- Shared-folder cards -------------------------------------------------
+  // Card 3Y: this replaced a literal folder EMOJI, which rendered in whatever
+  // colour and weight each platform felt like and never matched the monoline
+  // set around it.
+  'folder': "<svg aria-hidden=\"true\" focusable=\"false\" class=\"lucide lucide-folder\" xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"> <path d=\"M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\"/> </svg>",
+  // Replaced a bare "\u26A0" character in the map's layer errors.
+  'alert': "<svg aria-hidden=\"true\" focusable=\"false\" class=\"lucide lucide-alert\" xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"> <path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"/> <path d=\"M12 9v4\"/> <path d=\"M12 17h.01\"/> </svg>",
+
   // --- Navigation (the six workspace tabs) ---------------------------------
   // 'rig-trend' is the composed Segment Maturation mark: growth chart + derrick
   // side by side in one 48x24 box, hence lucide-wide.

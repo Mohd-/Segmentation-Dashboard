@@ -1,5 +1,6 @@
 import { byId, all, esc, isFilled, truthy, msg } from '../dom.js';
 import { API } from '../api.js';
+import { ICONS } from '../icons.js';
 import { currentUserName, currentRole, canManageAssignments, isCurrentPipelineView, Store } from '../state.js';
 import { SCHEMA, formationNames, FORMATION_METRICS, FLUID_TYPES, SEISMIC_BLOCKS, CHECKBOX_SUBMIT_STEPS, validateStepFields, numericFieldError, submitBlockedMessage } from '../schema.js';
 import { calculateTrapCos, calculateSealCos } from '../cos-rules.js';
@@ -1188,7 +1189,7 @@ export function renderComponentFolder(info) {
   if (info.blocked) {
     card.className = 'folder-card folder-card-blocked';
     card.setAttribute('role', 'status');
-    card.innerHTML = '<span class="folder-glyph" aria-hidden="true">📁</span>' +
+    card.innerHTML = '<span class="folder-glyph" aria-hidden="true">' + ICONS['folder'] + '</span>' +
       '<span class="folder-path">' + esc(info.blocked) + '</span>';
     var blockedAnchor = byId('comments-field');
     blockedAnchor.parentNode.insertBefore(card, blockedAnchor.nextSibling);
@@ -1196,9 +1197,9 @@ export function renderComponentFolder(info) {
   }
   var path = info.unc_path;
   card.className = 'folder-card';
-  card.innerHTML = '<span class="folder-glyph" aria-hidden="true">📁</span>' +
+  card.innerHTML = '<span class="folder-glyph" aria-hidden="true">' + ICONS['folder'] + '</span>' +
     '<span class="folder-path" title="' + esc(path) + '">' + esc(path) + '</span>' +
-    '<button type="button" class="icon-btn" id="copy-component-folder" title="Copy folder link" aria-label="Copy folder link">⧉</button>';
+    '<button type="button" class="icon-btn" id="copy-component-folder" title="Copy folder link" aria-label="Copy folder link">' + ICONS['copy'] + '</button>';
   // Comments-above-file-location: the card sits directly after the comments
   // field instead of after the dynamic-fields grid.
   var anchor = byId('comments-field');
@@ -1476,7 +1477,7 @@ export function repeatableInputMarkup(field, row, rowIndex) {
     // does (schema.js numericFieldError reads the same flag).
     var floor = (col.type === 'number' && !col.allowNegative) ? ' min="0"' : '';
     return '<input type="' + (col.type === 'number' ? 'number' : 'text') + '" step="any"' + floor + ' ' + attr + aria + ghost + ' value="' + esc(value) + '">';
-  }).join('') + '<button type="button" class="icon-btn remove-repeatable-row" data-repeatable-key="' + esc(field.key) + '" data-repeatable-row="' + rowIndex + '" title="Remove row" aria-label="Remove row">✕</button></div>';
+  }).join('') + '<button type="button" class="icon-btn remove-repeatable-row" data-repeatable-key="' + esc(field.key) + '" data-repeatable-row="' + rowIndex + '" title="Remove row" aria-label="Remove row">' + ICONS['x'] + '</button></div>';
 }
 export function renderRepeatableField(field, value) {
   var rows = parseRepeatableRows(value);
