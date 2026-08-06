@@ -32,6 +32,7 @@
  */
 import { byId, all, esc, isFilled, truthy, msg } from '../dom.js';
 import { API } from '../api.js';
+import { ICONS } from '../icons.js';
 import { Store, currentUserName, isCurrentPipelineView } from '../state.js';
 import { refreshAfterRecordChange } from './detail.js';
 
@@ -56,6 +57,7 @@ export var PRIMARY_STEP = 'Approval to Stake';
 // data migration v5 already wrote.
 export var KEY_OWNER = {
   staking_well_created: 'Approval to Stake',
+  lead_folder_handover_confirmed: 'Approval to Stake',
   approval_stake_letter_loaded: 'Approval to Stake',
   wellsite_letter_loaded: 'Well Site Location',
   staked_x: 'Well Site Location',
@@ -75,6 +77,12 @@ export var KEY_OWNER = {
 export var CHECKBOXES = [
   { key: 'staking_well_created',
     label: 'Well creation and well folder are completed' },
+  // Card 3V, placed immediately after the well-creation control the card names
+  // and worded EXACTLY as the card writes it. It records that a person moved
+  // the folder; the application performs no file operation for it, and it
+  // gates no completion (FIELD_COMPLETION['Approval to Stake'] is unchanged).
+  { key: 'lead_folder_handover_confirmed',
+    label: 'Lead Folder is moved to the Well Proposal Folder' },
   { key: 'approval_stake_letter_loaded',
     label: 'The Approval to Stake letter is placed in the shared folder' },
   { key: 'wellsite_letter_loaded',
@@ -228,7 +236,8 @@ function checkboxMarkup(entry, values) {
 function coordinateMarkup(field, values) {
   var value = values[field.key];
   return '<div class="sl-cell">' +
-    '<input type="number" step="any" data-sl-field="' + esc(field.key) + '"' +
+    // UTM Zone 37N eastings and northings are both positive by construction.
+    '<input type="number" step="any" min="0" data-sl-field="' + esc(field.key) + '"' +
     ' value="' + esc(value == null ? '' : value) + '"' +
     ' placeholder="' + esc(field.label) + '" aria-label="' + esc(field.label) + '">' +
     '<span class="sl-field-error" data-error-for="' + esc(field.key) + '" role="alert"></span>' +
@@ -390,9 +399,9 @@ function renderFolderRow(task, onCopy) {
   var card = document.createElement('div');
   card.id = 'component-folder-card';
   card.className = 'folder-card';
-  card.innerHTML = '<span class="folder-glyph" aria-hidden="true">📁</span>' +
+  card.innerHTML = '<span class="folder-glyph" aria-hidden="true">' + ICONS['folder'] + '</span>' +
     '<span class="folder-path" id="sl-folder-path">Loading…</span>' +
-    '<button type="button" class="icon-btn" id="copy-component-folder" title="Copy folder link" aria-label="Copy folder link" disabled>⧉</button>';
+    '<button type="button" class="icon-btn" id="copy-component-folder" title="Copy folder link" aria-label="Copy folder link" disabled>' + ICONS['copy'] + '</button>';
   anchor.parentNode.insertBefore(card, anchor.nextSibling);
   var forProjectId = Store.projectId;
   API.componentFolder(forProjectId, task.task_id).then(function (info) {

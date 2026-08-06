@@ -172,6 +172,12 @@ def test_recall_of_fully_matured_lead_stays_off_the_board(client):
     pid = create_project(client, "RECALL-MATURE-1")
     for task in get_tasks(client, pid):
         if task["stage_group"] in workflow.PROSPECT_STAGES:
+            # A step may declare prerequisites for submitting (Card 3S gave
+            # Segmentation Slides one); satisfy whatever it declares.
+            required = workflow.REQUIRED_FIELDS_FOR_SUBMIT.get(task["task_name"], ())
+            if required:
+                client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
+                             json={"fields": {key: "1" for key, _label in required}})
             resp = client.post(f"/api/tasks/{task['task_id']}/assign",
                                json={"assignee": "Supervisor", "cascade": False})
             assert resp.status_code == 200, resp.get_json()
@@ -368,3 +374,110 @@ def test_overview_lead_ogip_composed_from_lead_piip_gas_mean_at_read(client):
     })
     detail = client.get(f"/api/projects/{pid}/detail").get_json()
     assert detail["overview"]["lead_ogip"] == "13.0"
+
+
+# ---------------------------------------------------------------------------
+# Card 3X -- Active Drilling
+# ---------------------------------------------------------------------------
+
+def _into_post_drilling(client, project_id):
+    """Put a BP well in the Post-Drilling stage, which is the only stage that
+    may be marked as actively drilling.
+
+    The gate is approved directly in the database: this file is about the FLAG,
+    not about the gate's own approval path (which tests/
+    test_business_plan_execution.py drives through the API end to end).
+    """
+    from conftest import get_task_by_name, raw_sqlite_connect
+    gate = get_task_by_name(client, project_id, "BP Execution Gate")
+    conn = raw_sqlite_connect(client.db_path)
+    with conn:
+        conn.execute("UPDATE project_tasks SET status = 'Approved' WHERE task_id = ?",
+                     (gate["task_id"],))
+    conn.close()
+    for slug, keys in (
+        ("well-letters", ("well_proposal_shared", "site_preparation_shared",
+                          "approval_to_drill_shared")),
+        ("gheer-inputs", ("gheer_geophysical_shared", "gheer_geomechanical_shared")),
+    ):
+        for key in keys:
+            response = client.patch(
+                f"/api/business-plan/wells/{project_id}/steps/{slug}/field",
+                json={"field_key": key, "value": True})
+            assert response.status_code == 200, response.get_json()
+
+
+def _drilling_events(client, project_id):
+    from conftest import raw_sqlite_connect
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        return [dict(row) for row in conn.execute(
+            "SELECT old_status, new_status, changed_by FROM task_history "
+            "WHERE project_id = ? AND action_type = 'Active Drilling Flag' "
+            "ORDER BY history_id", (project_id,))]
+    finally:
+        conn.close()
+
+
+def test_active_drilling_persists_and_audits_only_real_changes(client):
+    pid = create_project(client, "DRILL-1", pipeline_type="bp",
+                         business_plan_enabled=True, business_plan_year=2030)
+    assert client.get(f"/api/projects/{pid}/detail").get_json()["project"]["active_drilling"] == 0
+    # Only a Post-Drilling well may be marked; the refusal has its own tests in
+    # tests/test_business_plan_execution.py.
+    _into_post_drilling(client, pid)
+
+    resp = client.patch(f"/api/projects/{pid}/flags", json={"active_drilling": True})
+    assert resp.status_code == 200, resp.get_json()
+    assert client.get(f"/api/projects/{pid}/detail").get_json()["project"]["active_drilling"] == 1
+    assert len(_drilling_events(client, pid)) == 1
+
+    # Saving the same state again is not an event: a trail full of no-ops hides
+    # the toggles that mattered.
+    client.patch(f"/api/projects/{pid}/flags", json={"active_drilling": True})
+    assert len(_drilling_events(client, pid)) == 1
+
+    client.patch(f"/api/projects/{pid}/flags", json={"active_drilling": False})
+    events = _drilling_events(client, pid)
+    assert len(events) == 2
+    assert (events[0]["old_status"], events[0]["new_status"]) == ("0", "1")
+    assert (events[1]["old_status"], events[1]["new_status"]) == ("1", "0")
+    assert client.get(f"/api/projects/{pid}/detail").get_json()["project"]["active_drilling"] == 0
+
+
+def test_active_drilling_defaults_off_and_is_never_inferred(client):
+    """The card is explicit: never derived from stage, dates, rig days or
+    incomplete steps, and never auto-toggled by a stage move."""
+    pid = create_project(client, "DRILL-2", pipeline_type="bp",
+                         business_plan_enabled=True, business_plan_year=2030)
+    assert client.get(f"/api/projects/{pid}/detail").get_json()["project"]["active_drilling"] == 0
+    rows = client.get("/api/projects?pipeline_filter=bp").get_json()
+    assert next(r for r in rows if r["project_id"] == pid)["active_drilling"] == 0
+
+
+def test_active_drilling_requires_an_authorized_role(client):
+    """UI visibility is not authorization -- the endpoint enforces it."""
+    pid = create_project(client, "DRILL-3", pipeline_type="bp",
+                         business_plan_enabled=True, business_plan_year=2030)
+    assert client.post("/api/login", json={"name": "Employee"}).status_code == 200
+    resp = client.patch(f"/api/projects/{pid}/flags", json={"active_drilling": True})
+    assert resp.status_code == 403
+    assert _drilling_events(client, pid) == []
+
+
+def test_active_drilling_changes_no_workflow_state(client):
+    """It is an operational visual state and nothing else: no stage move, no
+    completion, no approval, no KPI shift."""
+    pid = create_project(client, "DRILL-4", pipeline_type="bp",
+                         business_plan_enabled=True, business_plan_year=2030)
+    before = client.get(f"/api/business-plan/dashboard?year=2030").get_json()
+    well_before = next(w for w in before["wells"] if w["project_id"] == pid)
+
+    client.patch(f"/api/projects/{pid}/flags", json={"active_drilling": True})
+
+    after = client.get(f"/api/business-plan/dashboard?year=2030").get_json()
+    well_after = next(w for w in after["wells"] if w["project_id"] == pid)
+    assert well_after["stage_key"] == well_before["stage_key"]
+    assert well_after["completed_count"] == well_before["completed_count"]
+    assert well_after["all_states"] == well_before["all_states"]
+    assert after["kpis"] == before["kpis"]

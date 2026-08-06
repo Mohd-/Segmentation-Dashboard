@@ -22,11 +22,12 @@ import { refreshAudit } from './audit.js';
 import { STAKING_LETTER_STEPS } from './staking-letters.js';
 // Card 2A: the shared Lead Summary block. It is PURE -- this module resolves
 // every value out of Store and hands it one plain object (see leadSummaryData).
-import { leadSummaryHtml, wireLeadSummary, closeLeadSummaryMenu } from './lead-summary.js';
+import { leadSummaryHtml, wireLeadSummary, closeLeadSummaryMenu, EM_DASH } from './lead-summary.js';
 // The board's own completion arithmetic, imported rather than re-derived: the
 // Lead Summary progress bar and the board KPI donut must read one formula over
 // one dataset (the lead's 12 tracked items).
 import { completedItemCount, TRACKED_ITEM_COUNT } from './lead-kpis.js';
+import { applyPriorityChip, nextLeadPriority } from './board-widgets.js';
 
 // A LEAD detail page is the redesigned Card 2A shell (single back control, big
 // name, three-stage sidebar, wide Lead Summary). EVERY branch below guards on
@@ -60,27 +61,19 @@ var LEAD_STAGE_ICONS = {
    the backend's current_role()). Everyone else sees a static, disabled chip.
    ------------------------------------------------------------------------- */
 
-var LEAD_PRIORITY_CYCLE = { Low: 'Medium', Medium: 'High', High: 'Low' };
-
-// Exported so the cycle order is pinned by a test, not just by the handler.
-export function nextLeadPriority(current) {
-  return LEAD_PRIORITY_CYCLE[current || 'Low'] || 'Low';
-}
+// The vocabulary, the cycle order and the chip markup are shared with the
+// Business Plan Execution shell (views/board-widgets.js) so both sides of the
+// app present the same record-level attribute identically. Re-exported here
+// because this module has always been the chip's public face.
+export { nextLeadPriority };
 
 function canSetLeadPriority() {
   return currentRole() === 'supervisor';
 }
 
 export function renderLeadPriorityChip() {
-  var chip = byId('lead-priority-chip');
-  if (!chip) return;
-  var value = (Store.project && Store.project.priority) || 'Low';
-  var editable = canSetLeadPriority();
-  chip.disabled = !editable;
-  chip.textContent = value;
-  chip.className = 'priority lead-priority-chip priority-' + String(value).toLowerCase() +
-    (editable ? '' : ' lead-priority-chip-static');
-  chip.title = 'Priority: ' + value + (editable ? ' — click to change' : ' — set by a supervisor');
+  applyPriorityChip(byId('lead-priority-chip'),
+    (Store.project && Store.project.priority) || 'Low', canSetLeadPriority());
 }
 
 // PATCH the record's stored priority, then run the standard record refresh so
@@ -150,17 +143,18 @@ export function openDetail(projectId, pipeline) {
     });
   }).catch(function (error) { msg(error.message, 'error'); });
 }
-// Monochrome stage glyphs for the rail headers (must read at ~14px).
-// \uFE0E (variation selector-15) forces text presentation so no color emoji
-// sneak in. Keys match the stage_group values from workflow.py / /api/meta;
-// unknown stages fall back to a plain bullet.
+// Card 3Y: these were Unicode characters with a variation selector forcing
+// text presentation -- a workaround for the fact that they were emoji at all.
+// They are approved SVGs now, the SAME ones both boards already use for the
+// same stages (pipeline.js STAGE_HEADER_ICONS, business-plan.js STAGE_META),
+// so a stage reads identically wherever it appears.
 var STAGE_ICONS = {
-  'Lead Assessment': '\u25CE',          // ◎ bullseye
-  'Risk Analysis': '\u2696\uFE0E',       // ⚖ scales
-  'Pre-Well Delivery': '\u26F3\uFE0E',   // ⛳ flag
-  'Well Delivery': '\u2692\uFE0E',       // ⚒ hammer and pick
-  'Post-Drilling': '\u26CF\uFE0E',       // ⛏ pick
-  'Post-Testing': '\u2713'              // ✓ check
+  'Lead Assessment': 'clipboard-check',
+  'Risk Analysis': 'gauge',
+  'Pre-Well Delivery': 'rig',
+  'Well Delivery': 'clipboard-steps',
+  'Post-Drilling': 'rig',
+  'Post-Testing': 'gauge'
 };
 
 // Rail accordion: exactly one stage group open at a time (zero open allowed).
@@ -414,7 +408,13 @@ export function renderDetail() {
   var otherLabel = otherPipeline === 'bp' ? 'Business Plan Execution' : 'Prospect Maturation';
   var isReference = !isCurrentPipelineView();
   var leadView = isLeadView();
-  byId('detail-name').textContent = Store.project.project_name || 'Lead / Well';
+  // WHAT THIS RECORD IS CALLED HERE. Segment Maturation always shows the lead
+  // name -- that is the pipeline the segment is being matured in, and renaming
+  // it mid-pipeline because a well name was chosen would lose the thread. The
+  // Business Plan view shows the name it was STAKED under once there is one
+  // (workflow.display_record_name is the server's twin of this rule); the lead
+  // name is not lost, it moves to the summary card's phase row.
+  byId('detail-name').textContent = displayRecordName() || 'Lead / Well';
   // The chip ships hidden in index.html (no record selected yet); the render
   // rewrites its className wholesale, which is also what reveals it.
   renderLeadPriorityChip();
@@ -469,7 +469,7 @@ export function renderDetail() {
     }).join('');
     return '<div class="rail-stage">' +
       '<button type="button" class="rail-stage-head' + (isOpen ? ' open' : '') + '" data-stage="' + esc(group.stage) + '" aria-expanded="' + isOpen + '">' +
-      '<span class="stage-icon" aria-hidden="true">' + (STAGE_ICONS[group.stage] || '•') + '</span>' +
+      '<span class="stage-icon" aria-hidden="true">' + (ICONS[STAGE_ICONS[group.stage]] || '') + '</span>' +
       '<span class="rail-stage-name">' + esc(group.stage) + '</span>' +
       '<span class="rail-stage-count">' + approved + '/' + group.tasks.length + '</span>' +
       '<span class="rail-stage-chevron" aria-hidden="true"></span></button>' +
@@ -556,6 +556,19 @@ function blockForAr(map, ar) {
    value on the current step always supersedes the frozen/retired one. */
 var AREA_STEPS = ['Lead Assessment', 'Area Definition', 'Reservoir Area Definition'];
 var THICKNESS_STEPS = ['Lead Assessment', 'Thickness Estimation'];
+// Card 3E's Area delta. Both sides are stored as a P90/P10 PAIR with no mean
+// between them (schema.js RANGE_PAIRS), so there is no single "area" to
+// compare -- each bound is compared against its own counterpart. Ladders read
+// newest authority first, the same rule POST_DRILL_PIIP_SOURCES follows: SAD
+// Update supersedes SAD Model, and each merged step is followed by the retired
+// step it absorbed so wells written before the merge still resolve.
+var AREA_STEPS = ['Lead Assessment', 'Area Definition'];
+var SAD_AREA_SOURCES = [
+  ['SAD Update', 'sad_update_area_km2_'],
+  ['Resource Assessment Update', 'sad_update_area_km2_'],
+  ['SAD Model', 'sad_area_km2_'],
+  ['Post-Drilling Resource Assessment', 'sad_area_km2_']
+];
 var TRAP_STEPS = ['Trap and Seal CoS', 'Trap CoS'];
 var SEAL_STEPS = ['Trap and Seal CoS', 'Seal CoS'];
 
@@ -641,12 +654,12 @@ function liquidTrio(sources, fieldMap) {
 var FORMATION_ACTUAL_PHASES = ['final', 'resource_update', 'post_drill', 'quicklook'];
 var FORMATION_VALUE_KEYS = ['top_tvdss_ft', 'base_tvdss_ft', 'thickness_ft', 'porosity_pct', 'swt_pct', 'pay_ft', 'ngr_pct', 'fluid'];
 
-// Collapse Store.formations to one row per formation name, each taken at its
+// Collapse a formation list to one row per formation name, each taken at its
 // highest-precedence phase. Names compare upper-cased (custom names are stored
 // upper-cased; the canonical trio already is). Returns { NAME: {row, rank} }.
-function dedupeFormationsByPhase() {
+function dedupeFormationsByPhase(formations) {
   var byName = {};
-  (Store.formations || []).forEach(function (row) {
+  (formations || []).forEach(function (row) {
     var name = String(row.formation || '').trim().toUpperCase();
     if (!name) return;
     var rank = FORMATION_ACTUAL_PHASES.indexOf(row.phase);
@@ -664,11 +677,11 @@ function firstFilledValue(values) {
   for (var i = 0; i < values.length; i += 1) { if (isFilled(values[i])) return values[i]; }
   return '';
 }
-// SARH's fluid at a specific phase, read straight from Store.formations (not the
-// newest-phase dedupe): the well's fluid ladder blends these per-phase SARH
+// SARH's fluid at a specific phase, read straight from the formation list (not
+// the newest-phase dedupe): the well's fluid ladder blends these per-phase SARH
 // fluids with the legacy step-level *_fluid_type fields.
-function sarhFluidAtPhase(phase) {
-  var rows = (Store.formations || []).filter(function (row) {
+function sarhFluidAtPhase(formations, phase) {
+  var rows = (formations || []).filter(function (row) {
     return String(row.formation || '').trim().toUpperCase() === 'SARH' && row.phase === phase;
   });
   for (var i = 0; i < rows.length; i += 1) { if (isFilled(rows[i].fluid)) return rows[i].fluid; }
@@ -685,56 +698,116 @@ function formationIsTight(row) {
   if (fluid === 'Dry' || fluid === 'Dry Hole') return true;
   return fluid === '' && (row.pay_ft === 0 || String(row.pay_ft).trim() === '0');
 }
-// One compact reservoir line: formation name + its filled metrics (thickness,
-// porosity, Sw, pay) and a fluid tag when present. A row that reads as non-pay
-// renders "<name>: tight"; a missing/empty row renders an em dash (—) — SARH
-// defaults to a dash, not "tight", unless the data derives tight.
-function formationLine(name, row) {
+// The staked well name, or '' -- captured at Well Site Location and read back
+// from the record's own fields.
+export function stakedWellName() {
+  return (Store.allFields['Well Site Location'] || {}).staked_well_name || '';
+}
+
+// Card 3V: ONE canonical name, decided by the SERVER (workflow.
+// annotate_canonical_names) and published as project_name on every payload,
+// with the lead name alongside as lead_name. The client used to re-derive this
+// and carve out Segment Maturation; it no longer does, because two places
+// deciding what a record is called is exactly how surfaces come to disagree.
+export function displayRecordName() {
+  return (Store.project && Store.project.project_name) || '';
+}
+
+// The name the record was matured under. Never lost -- it rides every payload
+// that carries the canonical one.
+export function leadRecordName() {
+  var project = Store.project || {};
+  return project.lead_name || project.project_name || '';
+}
+
+/* Reservoir Properties uses TWO decimals, not fmtNum's one: a water saturation
+   or a porosity is read to the hundredth (0.92, 21.35) and rounding it to one
+   place throws away a digit that matters. Percentages stay percentages -- the
+   value is shown exactly as it is stored and entered, so a number on this card
+   can be compared with the field it came from without a mental conversion. */
+export function fmt2(raw) {
+  if (!isFilled(raw)) return '';
+  var numeric = Number(raw);
+  if (!isFinite(numeric)) return String(raw);
+  return numeric.toFixed(2);
+}
+
+// One row of the Reservoir Properties table: the formation name, then pay
+// thickness, porosity and water saturation. A row with nothing recorded (or a
+// barren one) collapses to a single note spanning the value columns, so an
+// empty formation never reads as three missing measurements.
+function formationPropertyRow(name, row) {
   var tight = formationIsTight(row);
   if (tight || !formationHasData(row)) {
-    return '<div class="summary-formation summary-formation-empty"><span class="summary-formation-name">' + esc(name) + '</span><span class="summary-formation-note">' + (tight ? 'tight' : '—') + '</span></div>';
+    return '<div class="summary-props-row summary-props-row-empty">' +
+      '<span class="summary-props-name">' + esc(name) + '</span>' +
+      '<span class="summary-props-note">' + (tight ? 'tight' : EM_DASH) + '</span></div>';
   }
-  var bits = [];
-  if (isFilled(row.thickness_ft)) bits.push(fmtNum(row.thickness_ft) + ' ft');
-  if (isFilled(row.porosity_pct)) bits.push(fmtNum(row.porosity_pct) + '% φ');
-  if (isFilled(row.swt_pct)) bits.push(fmtNum(row.swt_pct) + '% Sw');
-  if (isFilled(row.pay_ft)) bits.push(fmtNum(row.pay_ft) + ' ft pay');
-  var fluidTag = isFilled(row.fluid) ? '<span class="summary-formation-fluid">' + esc(row.fluid) + '</span>' : '';
-  return '<div class="summary-formation"><span class="summary-formation-name">' + esc(name) + '</span><span class="summary-formation-metrics">' + esc(bits.join(' · ')) + '</span>' + fluidTag + '</div>';
+  var cell = function (value, suffix) {
+    var text = fmt2(value);
+    return '<span>' + (text ? esc(text) + (suffix || '') : EM_DASH) + '</span>';
+  };
+  // Card 3E: porosity and water saturation print as bare two-decimal numbers.
+  // The stored value is unchanged and unconverted -- only the % sign goes, and
+  // the column heading carries the measure. Pay thickness keeps its unit; it
+  // is a length, and the card's rule is about the two percentages.
+  return '<div class="summary-props-row">' +
+    '<span class="summary-props-name">' + esc(name) + '</span>' +
+    cell(row.pay_ft, ' ft') + cell(row.porosity_pct) + cell(row.swt_pct) +
+    '</div>';
 }
 
 // Well-card fold open state, keyed by fold id ('pva', 'lead'). Module-level so
 // it survives the re-render after each save; reset when the selected project
-// changes (mirrors the rail-stage accordion's per-project guard).
+// changes (mirrors the rail-stage accordion's per-project guard). It is THIS
+// shell's state only -- the Business Plan Execution shell renders the same card
+// (see wellSummaryBodyHtml) and keeps its own map, so opening a fold on one
+// page does not silently open it on the other.
 var openFolds = {};
 var foldProjectId = null;
 
 // One collapsible section of the well card: chevron header + collapsed body.
-// `id` is the fold key; the rendered ids are summary-fold-<id>[-body], which
-// wireFolds() binds after the card is written.
-function foldSection(id, title, bodyHtml) {
-  var isOpen = !!openFolds[id];
+// `id` is the fold key and `folds` the open-state map it reads; the rendered
+// ids are <prefix>summary-fold-<id>[-body]. The prefix exists because both
+// shells can be mounted at once (they are two tabs of one document), and two
+// nodes cannot share an id.
+function foldSection(id, title, bodyHtml, folds, prefix) {
+  var isOpen = !!(folds || openFolds)[id];
+  var domId = (prefix || '') + 'summary-fold-' + id;
   return '<div class="summary-fold">' +
-    '<button id="summary-fold-' + id + '" type="button" class="summary-fold-head' + (isOpen ? ' open' : '') +
-    '" data-fold="' + id + '" aria-expanded="' + isOpen + '" aria-controls="summary-fold-' + id + '-body">' +
+    '<button id="' + domId + '" type="button" class="summary-fold-head' + (isOpen ? ' open' : '') +
+    '" data-fold="' + id + '" aria-expanded="' + isOpen + '" aria-controls="' + domId + '-body">' +
     '<span class="summary-fold-title">' + esc(title) + '</span>' +
     '<span class="summary-fold-chevron" aria-hidden="true"></span></button>' +
-    '<div id="summary-fold-' + id + '-body" class="summary-fold-body' + (isOpen ? '' : ' collapsed') + '">' + bodyHtml + '</div></div>';
+    '<div id="' + domId + '-body" class="summary-fold-body' + (isOpen ? '' : ' collapsed') + '">' + bodyHtml + '</div></div>';
 }
-// Toggle each rendered fold in place so the surrounding card isn't re-rendered.
-function wireFolds() {
-  all('.summary-fold-head').forEach(function (head) {
+
+/* Toggle each rendered fold in place so the surrounding card isn't re-rendered
+   -- Card 3E's rule that opening a fold must not write or mutate anything. The
+   body is found as the head's own sibling rather than by id, so a shell that
+   prefixes its ids needs no second lookup rule. `onToggle` lets a caller stamp
+   whatever it uses to decide when the state is stale. */
+export function wireWellSummaryFolds(root, folds, onToggle) {
+  var state = folds || openFolds;
+  all('.summary-fold-head', root || document).forEach(function (head) {
     head.addEventListener('click', function () {
       var id = head.getAttribute('data-fold');
-      var isOpen = !openFolds[id];
-      openFolds[id] = isOpen;
-      foldProjectId = Store.projectId;
+      var isOpen = !state[id];
+      state[id] = isOpen;
+      if (onToggle) onToggle(id, isOpen);
       head.classList.toggle('open', isOpen);
       head.setAttribute('aria-expanded', String(isOpen));
-      var body = byId('summary-fold-' + id + '-body');
+      var body = head.parentNode && head.parentNode.querySelector('.summary-fold-body');
       if (body) body.classList.toggle('collapsed', !isOpen);
     });
   });
+}
+// Scoped to THIS card, not the document: the Business Plan Execution shell has
+// folds of its own (its Well Summary and its Formation Interpretation sheet),
+// and a document-wide bind would hand them a second handler that undoes the
+// first one's toggle.
+function wireFolds() {
+  wireWellSummaryFolds(byId('lead-summary'), openFolds, function () { foldProjectId = Store.projectId; });
 }
 
 // Folders fold: one row per WELL_OVERVIEW_DIRECTORY_MAP section key (see
@@ -745,10 +818,10 @@ function wireFolds() {
 // in detail-form.js) so both folder-link styles read as one pattern.
 function folderRowHtml(sectionKey) {
   return '<div class="folder-card" data-folder-key="' + esc(sectionKey) + '">' +
-    '<span class="folder-glyph" aria-hidden="true">📁</span>' +
+    '<span class="folder-glyph" aria-hidden="true">' + ICONS['folder'] + '</span>' +
     '<span class="folder-path" id="summary-folder-path-' + esc(sectionKey) + '">Loading…</span>' +
     '<button type="button" class="icon-btn" id="summary-folder-copy-' + esc(sectionKey) +
-    '" title="Copy folder link" aria-label="Copy folder link" disabled>⧉</button></div>';
+    '" title="Copy folder link" aria-label="Copy folder link" disabled>' + ICONS['copy'] + '</button></div>';
 }
 function foldersHtml(sectionKeys) {
   return '<div class="summary-folders">' + sectionKeys.map(folderRowHtml).join('') + '</div>';
@@ -811,21 +884,40 @@ function metricRow(label, value, note) {
   return '<div class="summary-metric"><div class="summary-metric-label"><span>' + esc(label) + '</span>' + small + '</div><div class="summary-metric-value">' + (isFilled(value) ? esc(fmtNum(value)) : '—') + '</div></div>';
 }
 
+/* One titled block of the well card, in the Lead Summary card's own anatomy
+   (.ls-section / .ls-section-title): a title-case navy heading over its
+   content, separated from the block above by a hairline. The two cards sit in
+   the same slot on the same page, so they read as one component with two
+   contents rather than two components. */
+function summarySection(title, bodyHtml) {
+  return '<section class="ls-section summary-section">' +
+    '<h4 class="ls-section-title">' + esc(title) + '</h4>' + bodyHtml + '</section>';
+}
+
+// A row of aligned label-over-value columns -- the Lead Summary's own grid, so
+// the well card's Gas trio lines up exactly as the lead card's does.
+function columnsHtml(columns) {
+  var cells = columns.map(function (column) {
+    return '<div class="ls-col"><span class="ls-col-label">' + esc(column.label) + '</span>' +
+      '<span class="ls-col-value">' + (isFilled(column.value) ? esc(fmtNum(column.value)) : EM_DASH) +
+      '</span></div>';
+  }).join('');
+  return '<div class="ls-grid" style="grid-template-columns:repeat(' +
+    columns.length + ',minmax(0,1fr))">' + cells + '</div>';
+}
+
 // A stat cluster: a quiet group label over a row of sub-label/value columns
 // (sub-label sits above its value, columns aligned). `cols` is a list of
 // { label, value }; empty values render as — in place, so a cluster with no
 // values at all still renders once with all dashes (it is never hidden). An
 // optional `context` line (e.g. the Reservoir CoS "Block · AR n" reference)
 // sits quietly below the grid. Numbers read larger than the sub-labels.
+// It renders through the SAME section/grid helpers the rest of the card now
+// uses, so the Lead Summary fold's trios read as "P90 Mean P10" like the trios
+// above them rather than "P90 MEAN P10" -- one card, one voice, open or shut.
 function statCluster(label, cols, context) {
-  var cells = cols.map(function (col) {
-    return '<div class="summary-cluster-col"><span class="summary-cluster-sub">' + esc(col.label) + '</span>' +
-      '<span class="summary-cluster-val">' + (isFilled(col.value) ? esc(fmtNum(col.value)) : '—') + '</span></div>';
-  }).join('');
   var contextHtml = isFilled(context) ? '<div class="summary-cluster-context">' + esc(context) + '</div>' : '';
-  return '<div class="summary-cluster"><div class="summary-cluster-label">' + esc(label) + '</div>' +
-    '<div class="summary-cluster-grid" style="grid-template-columns:repeat(' + cols.length + ',minmax(0,1fr))">' + cells + '</div>' +
-    contextHtml + '</div>';
+  return summarySection(label, columnsHtml(cols) + contextHtml);
 }
 
 // LEAD_PIIP_SOURCES (the lead half of LATEST_PIIP_SOURCES) and
@@ -839,9 +931,9 @@ function statCluster(label, cols, context) {
 // after promotion) filling any gap -- the same snapshot-then-live precedence
 // Prediction vs Actual uses for its predicted column. A record with no
 // snapshot (never promoted through the lead phase) reads entirely live.
-function leadFieldSource() {
-  var frozen = (Store.leadSummary && Store.leadSummary.fields) || {};
-  var live = Store.allFields || {};
+function leadFieldSource(leadSummary, allFields) {
+  var frozen = (leadSummary && leadSummary.fields) || {};
+  var live = allFields || {};
   var merged = {};
   Object.keys(live).concat(Object.keys(frozen)).forEach(function (task) {
     if (merged[task]) return;
@@ -859,9 +951,10 @@ function leadFieldSource() {
 // The lead card's body: volumetrics + chance-of-success, over a given field map
 // and gas-mean source list. Rendered on its own for a lead record and inside
 // the well card's Lead Summary fold for a promoted one. Total CoS comes from
-// /detail's overview (derived at read time from the still-active lead CoS
-// steps), never recomputed here.
-function leadMetricsHtml(fieldMap, gasSources) {
+// the payload's overview (derived at read time from the still-active lead CoS
+// steps), never recomputed here -- it is handed in as `derisking` because the
+// well card renders in two shells, each with its own payload.
+function leadMetricsHtml(fieldMap, gasSources, derisking) {
   var resCos = reservoirCosPrimary(fieldMap);
   var trio = gasTrio(gasSources, fieldMap);
   return '<div class="summary-metrics">' +
@@ -875,9 +968,194 @@ function leadMetricsHtml(fieldMap, gasSources) {
       { label: 'Res', value: resCos.pct },
       { label: 'Trap', value: fieldFrom(fieldMap, TRAP_STEPS, 'trap_cos_pct') },
       { label: 'Seal', value: fieldFrom(fieldMap, SEAL_STEPS, 'seal_cos_pct') },
-      { label: 'Total', value: (Store.overview || {}).derisking }
+      { label: 'Total', value: derisking }
     ], resCos.ref) +
     '</div>';
+}
+
+/* =========================================================================
+   THE WELL SUMMARY CARD'S BODY — Card 3E, rendered in BOTH shells.
+
+   The Segment Maturation detail page and the Business Plan Execution detail
+   page each show a Well Summary beside the step they are working, and Card 3E
+   describes ONE card: Gas, how the well flowed, what the rock turned out to
+   be, then exactly two expandable sections (Simulated Vs Actual Delta, then
+   Lead Summary). So there is one builder, called from both, rather than a
+   second visually similar component on the BPE side.
+
+   It reads NO module state. Everything comes in through `source`:
+
+     {
+       fields:      { <task name>: { <field key>: value } },  // retired-inclusive
+       formations:  [ <project_formations row>, ... ],        // EVERY phase
+       leadSummary: { fields, captured_at, captured_by } | null,
+       derisking:   '<Total CoS %>'   // computed server-side, never here
+     }
+
+   `folds` is the caller's own open-state map (fold id -> bool) and `prefix`
+   namespaces the rendered ids, because both shells can be mounted in one
+   document. Rendering never writes: a fold's state lives in the caller's map,
+   which is why toggling one saves nothing.
+   ========================================================================= */
+export function wellSummaryBodyHtml(source, folds, prefix) {
+  var data = source || {};
+  var fields = data.fields || {};
+  var formations = data.formations || [];
+  var leadSummary = data.leadSummary || null;
+  var deduped = dedupeFormationsByPhase(formations);
+  var sarh = deduped['SARH'] ? deduped['SARH'].row : null;
+  // Post-Drill Gas: source-consistent P90/Mean/P10 from resource_update else
+  // post_drill (the drilled results only). Mean feeds Prediction vs Actual.
+  var postDrillTrio = gasTrio(POST_DRILL_PIIP_SOURCES, fields);
+  var meanPostDrill = postDrillTrio.mean;
+  var prognosis = (fields['Well Proposal'] || {}).sarh_formation_prognosis_pre_drill;
+  // SARH top prefers the formation row; legacy wells stored the top at step
+  // level (final then quicklook), so fall back there before blanking.
+  var topSarh = sarh ? sarh.top_tvdss_ft : '';
+  if (!isFilled(topSarh)) {
+    topSarh = firstFilledValue([
+      (fields['Final Log Analysis'] || {}).final_top_reservoir_tvdss_ft,
+      (fields['Quicklook Logs'] || {}).quicklook_top_reservoir_tvdss_ft
+    ]);
+  }
+  // "Gas (BCF)", not "Post-Drill Gas": on a well card every figure is a
+  // post-drill figure, and the qualifier only made the heading longer than
+  // the three numbers under it.
+  // The card face carries the RESULTS: volumes, how the well flowed, and
+  // what the reservoir turned out to be. SARH Prognosis and Top SARH used to
+  // sit here as two loose rows; they are predictions, and both already
+  // appear -- against their actuals, which is the only way they mean
+  // anything -- inside the Simulated vs Actual Delta fold below.
+  // Card 3E, as drawn: Gas leads the card as a titled section with the
+  // trio beneath it. Built from the SAME markup the Segment Maturation Lead
+  // Summary uses for its own trios (.ls-section / .ls-grid / .ls-col), so
+  // the two cards are one visual language rather than two that resemble
+  // each other.
+  var metricsHtml = summarySection('Gas (BCF)', columnsHtml([
+    { label: 'P90', value: postDrillTrio.p90 },
+    { label: 'Mean', value: postDrillTrio.mean },
+    { label: 'P10', value: postDrillTrio.p10 }
+  ]));
+
+  // Reservoir Properties: a small table -- one header row over one row per
+  // formation, name on the left. It replaces the run-on "120 ft · 8.5% φ ·
+  // 35% Sw · 60 ft pay" line, which forced the reader to parse each value's
+  // unit to know which measure it was. SARH always leads (barren → "tight");
+  // every other formation with data follows.
+  var reservoirRows = [formationPropertyRow('SARH', sarh)];
+  Object.keys(deduped).sort().forEach(function (name) {
+    if (name === 'SARH' || !formationHasData(deduped[name].row)) return;
+    reservoirRows.push(formationPropertyRow(name, deduped[name].row));
+  });
+  var reservoirsHtml = summarySection('Reservoir Properties',
+    '<div class="summary-props">' +
+    '<div class="summary-props-head">' +
+      '<span class="summary-props-name"></span>' +
+      '<span>Pay Thickness</span><span>Porosity (φ)</span><span>Water Saturation (Sw)</span>' +
+    '</div>' + reservoirRows.join('') + '</div>');
+
+  // Flowback rate: the headline rate lives in a fluid-specific EAV field.
+  // Petrophysical fluid precedence (newest authority first), mirroring the
+  // formations phase precedence and the backend portfolio status order.
+  // Well fluid ladder (newest authority first), matching the backend: SARH's
+  // final-phase formation fluid, then legacy final_fluid_type, the two
+  // resource assessments' fluid, SARH's quicklook-phase fluid, then legacy
+  // quicklook_fluid_type. Each resource-assessment rung is read from the
+  // step that owns it since the v4 merges (SAD Update / SAD Model) with the
+  // retired step it absorbed right behind it, for wells written before.
+  var fluid = firstFilledValue([
+    sarhFluidAtPhase(formations, 'final'),
+    (fields['Final Log Analysis'] || {}).final_fluid_type,
+    (fields['SAD Update'] || {}).resource_update_fluid_type,
+    (fields['Resource Assessment Update'] || {}).resource_update_fluid_type,
+    (fields['SAD Model'] || {}).post_drill_fluid_type,
+    (fields['Post-Drilling Resource Assessment'] || {}).post_drill_fluid_type,
+    sarhFluidAtPhase(formations, 'quicklook'),
+    (fields['Quicklook Logs'] || {}).quicklook_fluid_type
+  ]);
+  var flowEntry = FLOWBACK_RATE_FIELDS[fluid] || FLOWBACK_RATE_FIELDS['Gas'];
+  // Primary flowback values are stage #1 -- the first non-empty row of the
+  // Flowback Results stages mini-sheet (whose column keys reuse the retired
+  // flat key names). Only when NO stage row exists does the read fall back
+  // to the retired step-level flat key, so a stage row and legacy flat data
+  // never mix (single-vintage rule, like the Reservoir CoS primary row).
+  var flowbackFields = fields['Flowback Results'] || {};
+  var primaryStage = null;
+  parseRepeatableRows(flowbackFields.flowback_stages_rows || '[]').forEach(function (stage) {
+    if (primaryStage || !stage) return;
+    if (Object.keys(stage).some(function (key) { return isFilled(stage[key]); })) primaryStage = stage;
+  });
+  // Flowback Results: the headline rate plus the two figures that say under
+  // what conditions it was measured. A rate without its wellhead pressure
+  // and choke size is not a comparable number, and both were already
+  // recorded on the stage row -- they simply had no surface here.
+  var flowRead = function (key) {
+    return primaryStage ? primaryStage[key] : flowbackFields[key];
+  };
+  var flowValue = flowRead(flowEntry.key);
+  var fwhp = flowRead('flowback_fwhp_psi');
+  var choke = flowRead('flowback_choke_size_in');
+  var flowbackHtml = summarySection('Flowback Results',
+    '<div class="summary-metrics">' +
+    // The rate's label follows the well's fluid, so an oil well does not
+    // read "Gas Rate" (the fluid itself rides along as the row's context).
+    metricRow(flowEntry.label || 'Gas Rate',
+      isFilled(flowValue) ? fmtNum(flowValue) + ' ' + flowEntry.unit : '',
+      isFilled(fluid) ? fluid : 'Gas') +
+    metricRow('Flowing Wellhead Pressure (FWHP)', isFilled(fwhp) ? fmtNum(fwhp) + ' psi' : '') +
+    metricRow('Choke Size', isFilled(choke) ? fmtNum(choke) + ' in' : '') +
+    '</div>');
+
+  // Prediction vs Actual: predicted values read the frozen lead snapshot,
+  // falling back to live fields where the plan allows.
+  var snap = (leadSummary && leadSummary.fields) || {};
+  var predThickness = fieldFrom(snap, THICKNESS_STEPS, 'reservoir_thickness_ft');
+  if (!isFilled(predThickness)) predThickness = fieldFrom(fields, THICKNESS_STEPS, 'reservoir_thickness_ft');
+  var predMean = '';
+  for (var si = 0; si < LEAD_PIIP_SOURCES.length && !isFilled(predMean); si += 1) predMean = (snap[LEAD_PIIP_SOURCES[si][0]] || {})[LEAD_PIIP_SOURCES[si][1]] || '';
+  for (var li = 0; li < LEAD_PIIP_SOURCES.length && !isFilled(predMean); li += 1) predMean = (fields[LEAD_PIIP_SOURCES[li][0]] || {})[LEAD_PIIP_SOURCES[li][1]] || '';
+  // Card 3E adds Area. It is stored as a P90/P10 pair on BOTH sides with no
+  // mean between them, so there is no single area to compare: each bound
+  // meets its own counterpart through the existing delta mechanism. Reading
+  // one bound alone, or averaging the two into an invented mean, would both
+  // be claims the data does not make.
+  function areaBound(bound) {
+    var predicted = fieldFrom(snap, AREA_STEPS, 'p' + bound + '_area_km2');
+    if (!isFilled(predicted)) predicted = fieldFrom(fields, AREA_STEPS, 'p' + bound + '_area_km2');
+    var actual = '';
+    for (var ai = 0; ai < SAD_AREA_SOURCES.length && !isFilled(actual); ai += 1) {
+      actual = (fields[SAD_AREA_SOURCES[ai][0]] || {})[SAD_AREA_SOURCES[ai][1] + 'p' + bound] || '';
+    }
+    return pvaRow('Area P' + bound + ' (km²)', predicted, actual);
+  }
+  var pvaHtml = foldSection('pva', 'Simulated Vs Actual Delta',
+    '<div class="summary-pva-head-row"><span class="summary-pva-label"></span><span class="summary-pva-cell summary-pva-colhead">Predicted</span><span class="summary-pva-cell summary-pva-colhead">Actual</span><span class="summary-pva-delta"></span></div>' +
+    pvaRow('Top SARH', prognosis, topSarh) +
+    pvaRow('Thickness (ft)', predThickness, sarh ? sarh.thickness_ft : '') +
+    areaBound('90') + areaBound('10') +
+    pvaRow('Mean (BCF)', predMean, meanPostDrill), folds, prefix);
+
+  // Lead Summary: the same card the lead phase shows, over the frozen
+  // snapshot (see leadFieldSource) and the lead's own gas sources -- the
+  // volumetrics and chance-of-success this well was drilled on. Kept folded
+  // so the well card still opens on its post-drill results.
+  var captured = leadSummary && leadSummary.captured_at;
+  var capturedNote = captured
+    ? '<div class="summary-fold-note">Captured at promotion · ' + esc(String(captured).slice(0, 10)) +
+      (leadSummary.captured_by ? ' · ' + esc(leadSummary.captured_by) : '') + '</div>'
+    : '';
+  var leadHtml = foldSection('lead', 'Lead Summary',
+    leadMetricsHtml(leadFieldSource(leadSummary, fields), LEAD_PIIP_SOURCES, data.derisking) + capturedNote,
+    folds, prefix);
+
+  // The well card ends here: TWO folds, Simulated vs Actual Delta and Lead
+  // Summary. The Folders fold is deliberately gone -- every step still
+  // carries its own shared-folder card (renderComponentFolder in
+  // detail-form.js), which is where a folder link is actually wanted while
+  // working a step.
+  // The card's order, as drawn: Gas, how it flowed, what the rock turned out
+  // to be, then the two expandable sections.
+  return metricsHtml + flowbackHtml + reservoirsHtml + pvaHtml + leadHtml;
 }
 
 // The gear popover, its outside-click/Escape dismissal, and the toggle button
@@ -1007,132 +1285,52 @@ export function renderRightPanel(tasks) {
   // Phase row: where the record sits (Lead vs BP Well · year). The phase MOVE
   // itself is a gear-popover action (see popoverHtml) -- rare, irreversible
   // without a counter-move, and supervisor-only, so it stays off the card face.
+  //
+  // The OTHER name rides here, opposite the phase. A staked record is titled
+  // by the name it is KNOWN by, so this carries the lead it was matured as --
+  // the pairing stays visible once the title has changed, in both pipelines.
+  var leadName = leadRecordName();
+  var canonical = displayRecordName();
+  var stakedHtml = (leadName && leadName !== canonical)
+    ? '<span class="summary-phase-well" title="Lead name">' + esc(leadName) + '</span>'
+    : '';
   var phaseHtml = '<div class="summary-phase"><span class="summary-phase-label">' +
     (isBP ? 'BP Well · ' + esc(Store.project.business_plan_year || year) : 'Lead') +
-    '</span></div>';
+    '</span>' + stakedHtml + '</div>';
   // Phase-specific body: leads show volumetrics + chance-of-success; drilled BP
   // wells show post-drill results per formation plus a predicted-vs-actual
   // comparison against the frozen lead snapshot.
   var bodyHtml;
+  // Which section folders the card lazily resolves after it is written. Only
+  // the LEAD card has a Folders fold; the well card's was removed (each step
+  // carries its own folder card instead). Declared here rather than inside the
+  // lead branch so the well card hands wireFolderLinks an empty list instead
+  // of `undefined` -- the latter threw, and the throw took wireSummarySettings
+  // down with it, leaving the well card's gear popover dead.
+  var folderSectionKeys = [];
   if (viewingBP) {
     // ---- Well card ----------------------------------------------------------
-    var deduped = dedupeFormationsByPhase();
-    var sarh = deduped['SARH'] ? deduped['SARH'].row : null;
-    // Post-Drill Gas: source-consistent P90/Mean/P10 from resource_update else
-    // post_drill (the drilled results only). Mean feeds Prediction vs Actual.
-    var postDrillTrio = gasTrio(POST_DRILL_PIIP_SOURCES);
-    var meanPostDrill = postDrillTrio.mean;
-    var prognosis = (Store.allFields['Well Proposal'] || {}).sarh_formation_prognosis_pre_drill;
-    // SARH top prefers the formation row; legacy wells stored the top at step
-    // level (final then quicklook), so fall back there before blanking.
-    var topSarh = sarh ? sarh.top_tvdss_ft : '';
-    if (!isFilled(topSarh)) {
-      topSarh = firstFilledValue([
-        (Store.allFields['Final Log Analysis'] || {}).final_top_reservoir_tvdss_ft,
-        (Store.allFields['Quicklook Logs'] || {}).quicklook_top_reservoir_tvdss_ft
-      ]);
-    }
-    var metricsHtml = '<div class="summary-metrics">' +
-      statCluster('Post-Drill Gas (BCF)', [
-        { label: 'P90', value: postDrillTrio.p90 },
-        { label: 'Mean', value: postDrillTrio.mean },
-        { label: 'P10', value: postDrillTrio.p10 }
-      ]) +
-      metricRow('SARH Prognosis', prognosis) +
-      metricRow('Top SARH (ft TVDSS)', topSarh) +
-      '</div>';
-
-    // Reservoirs: SARH always first (barren → "tight"); every other formation
-    // with any data follows, custom/non-gas included (fluid tag distinguishes).
-    var reservoirLines = [formationLine('SARH', sarh)];
-    Object.keys(deduped).sort().forEach(function (name) {
-      if (name === 'SARH' || !formationHasData(deduped[name].row)) return;
-      reservoirLines.push(formationLine(name, deduped[name].row));
-    });
-    var reservoirsHtml = '<div class="summary-section"><div class="summary-section-title">Reservoirs</div>' +
-      '<div class="summary-formations">' + reservoirLines.join('') + '</div></div>';
-
-    // Flowback rate: the headline rate lives in a fluid-specific EAV field.
-    // Petrophysical fluid precedence (newest authority first), mirroring the
-    // formations phase precedence and the backend portfolio status order.
-    // Well fluid ladder (newest authority first), matching the backend: SARH's
-    // final-phase formation fluid, then legacy final_fluid_type, the two
-    // resource assessments' fluid, SARH's quicklook-phase fluid, then legacy
-    // quicklook_fluid_type. Each resource-assessment rung is read from the
-    // step that owns it since the v4 merges (SAD Update / SAD Model) with the
-    // retired step it absorbed right behind it, for wells written before.
-    var fluid = firstFilledValue([
-      sarhFluidAtPhase('final'),
-      (Store.allFields['Final Log Analysis'] || {}).final_fluid_type,
-      (Store.allFields['SAD Update'] || {}).resource_update_fluid_type,
-      (Store.allFields['Resource Assessment Update'] || {}).resource_update_fluid_type,
-      (Store.allFields['SAD Model'] || {}).post_drill_fluid_type,
-      (Store.allFields['Post-Drilling Resource Assessment'] || {}).post_drill_fluid_type,
-      sarhFluidAtPhase('quicklook'),
-      (Store.allFields['Quicklook Logs'] || {}).quicklook_fluid_type
-    ]);
-    var flowEntry = FLOWBACK_RATE_FIELDS[fluid] || FLOWBACK_RATE_FIELDS['Gas'];
-    // Primary flowback values are stage #1 -- the first non-empty row of the
-    // Flowback Results stages mini-sheet (whose column keys reuse the retired
-    // flat key names). Only when NO stage row exists does the read fall back
-    // to the retired step-level flat key, so a stage row and legacy flat data
-    // never mix (single-vintage rule, like the Reservoir CoS primary row).
-    var flowbackFields = Store.allFields['Flowback Results'] || {};
-    var primaryStage = null;
-    parseRepeatableRows(flowbackFields.flowback_stages_rows || '[]').forEach(function (stage) {
-      if (primaryStage || !stage) return;
-      if (Object.keys(stage).some(function (key) { return isFilled(stage[key]); })) primaryStage = stage;
-    });
-    var flowValue = primaryStage ? primaryStage[flowEntry.key] : flowbackFields[flowEntry.key];
-    var flowbackHtml = '<div class="summary-metrics summary-section">' +
-      metricRow('Flowback Rate', isFilled(flowValue) ? fmtNum(flowValue) + ' ' + flowEntry.unit : '', isFilled(fluid) ? fluid : 'Gas') +
-      '</div>';
-
     // Folds are per-project, like the rail accordion: a fresh selection starts
     // with every fold collapsed.
     if (Store.projectId !== foldProjectId) { openFolds = {}; foldProjectId = Store.projectId; }
-
-    // Prediction vs Actual: predicted values read the frozen lead snapshot,
-    // falling back to live fields where the plan allows.
-    var snap = (Store.leadSummary && Store.leadSummary.fields) || {};
-    var predThickness = fieldFrom(snap, THICKNESS_STEPS, 'reservoir_thickness_ft');
-    if (!isFilled(predThickness)) predThickness = fieldFrom(Store.allFields, THICKNESS_STEPS, 'reservoir_thickness_ft');
-    var predMean = '';
-    for (var si = 0; si < LEAD_PIIP_SOURCES.length && !isFilled(predMean); si += 1) predMean = (snap[LEAD_PIIP_SOURCES[si][0]] || {})[LEAD_PIIP_SOURCES[si][1]] || '';
-    for (var li = 0; li < LEAD_PIIP_SOURCES.length && !isFilled(predMean); li += 1) predMean = (Store.allFields[LEAD_PIIP_SOURCES[li][0]] || {})[LEAD_PIIP_SOURCES[li][1]] || '';
-    var pvaHtml = foldSection('pva', 'Prediction vs Actual',
-      '<div class="summary-pva-head-row"><span class="summary-pva-label"></span><span class="summary-pva-cell summary-pva-colhead">Predicted</span><span class="summary-pva-cell summary-pva-colhead">Actual</span><span class="summary-pva-delta"></span></div>' +
-      pvaRow('Top SARH', prognosis, topSarh) +
-      pvaRow('Thickness (ft)', predThickness, sarh ? sarh.thickness_ft : '') +
-      pvaRow('Mean (BCF)', predMean, meanPostDrill));
-
-    // Lead Summary: the same card the lead phase shows, over the frozen
-    // snapshot (see leadFieldSource) and the lead's own gas sources -- the
-    // volumetrics and chance-of-success this well was drilled on. Kept folded
-    // so the well card still opens on its post-drill results.
-    var captured = Store.leadSummary && Store.leadSummary.captured_at;
-    var capturedNote = captured
-      ? '<div class="summary-fold-note">Captured at promotion · ' + esc(String(captured).slice(0, 10)) +
-        (Store.leadSummary.captured_by ? ' · ' + esc(Store.leadSummary.captured_by) : '') + '</div>'
-      : '';
-    var leadHtml = foldSection('lead', 'Lead Summary',
-      leadMetricsHtml(leadFieldSource(), LEAD_PIIP_SOURCES) + capturedNote);
-
-    // Folder links: the well's own shared folders (Well/MTR/PDA), not the
-    // lead's -- those already live inside the folded Lead Summary above via
-    // the pipeline itself, and get_section_folder_link resolves them from
-    // config.WELL_OVERVIEW_DIRECTORY_MAP by these same keys.
-    var folderSectionKeys = ['well', 'mtr', 'pda'];
-    var foldersFoldHtml = foldSection('folders', 'Folders', foldersHtml(folderSectionKeys));
-
-    bodyHtml = metricsHtml + reservoirsHtml + flowbackHtml + pvaHtml + leadHtml + foldersFoldHtml;
+    // Card 3E's one card, built by the shared builder this shell and the
+    // Business Plan Execution shell both call. Store is unwrapped HERE -- the
+    // builder itself reads no state, so the other shell can hand it the same
+    // four inputs off its own payload.
+    bodyHtml = wellSummaryBodyHtml({
+      fields: Store.allFields,
+      formations: Store.formations,
+      leadSummary: Store.leadSummary,
+      derisking: (Store.overview || {}).derisking
+    }, openFolds);
   } else {
     // ---- Lead card ----------------------------------------------------------
     // Res CoS is the primary first-row percent; its "Block · AR n" reference
     // rides along as the cluster's quiet context line (no bulky <small> label).
-    var folderSectionKeys = ['lead'];
+    folderSectionKeys = ['lead'];
     var foldersFoldHtml = foldSection('folders', 'Folders', foldersHtml(folderSectionKeys));
-    bodyHtml = leadMetricsHtml(Store.allFields, LATEST_PIIP_SOURCES) + foldersFoldHtml;
+    bodyHtml = leadMetricsHtml(Store.allFields, LATEST_PIIP_SOURCES,
+                               (Store.overview || {}).derisking) + foldersFoldHtml;
   }
   /* Popover: what the compact card dropped but still needs a home -- the Active
      Well flag, the phase move, and rename/delete. The phase button is
@@ -1156,13 +1354,31 @@ export function renderRightPanel(tasks) {
         ? '<button id="summary-phase-action" type="button" class="ghost danger-outline">Recall to Lead Phase…</button>'
         : '<button id="summary-phase-action" type="button" class="ghost">Promote to BP Well…</button>') + '</div>';
     }
+    // Card 3X. Exact copy, no article. The checkbox IS the accessible state:
+    // the animated border is a second, redundant signal, never the only one.
+    // Only a well whose current BPE stage is Post-Drilling may be marked, and
+    // the payload states that (workflow/projects.py get_project) rather than
+    // this shell guessing at a BPE stage from the maturation task list. The
+    // rule is enforced on write either way.
+    var isDrilling = Number(Store.project.active_drilling || 0) === 1;
+    var canDrill = Store.project.active_drilling_allowed !== false;
     relocatedHtml =
       '<label class="summary-popover-check"><input id="summary-active-flag" type="checkbox" ' +
-      (isActive ? 'checked' : '') + '> Active Well</label>' + phaseButtonHtml;
+      (isActive ? 'checked' : '') + '> Active Well</label>' +
+      '<label class="summary-popover-check' + (canDrill ? '' : ' is-disabled') + '" title="' +
+      (canDrill ? 'Mark this well as actively drilling'
+                : 'Only a well in the Post-Drilling stage can be marked as actively drilling') +
+      '"><input id="summary-active-drilling" type="checkbox" ' +
+      (isDrilling ? 'checked' : '') + (canDrill ? '' : ' disabled') +
+      '> Active Drilling</label>' + phaseButtonHtml;
   }
   var popoverHtml =
     '<div id="summary-settings" class="summary-popover hidden" role="dialog" aria-label="Manage ' + recordKind.toLowerCase() + '">' +
     relocatedHtml +
+    // The two coming-soon exports used to sit here. Card 3B puts them in the
+    // page's own gear menu instead, beside Dark Mode and Export to Excel
+    // (views/header-menus.js) -- they are app-wide exports, not per-record
+    // actions, so this popover was the wrong shelf for them.
     '<div class="summary-popover-actions"><button id="rename-record" type="button" class="ghost">Rename ' + recordKind + '</button><button id="delete-record" type="button" class="danger">Delete ' + recordKind + '</button></div></div>';
 
   byId('summary-title').textContent = viewingBP ? 'Well Summary' : 'Lead Summary';
@@ -1182,6 +1398,10 @@ export function renderRightPanel(tasks) {
 
   var activeFlag = byId('summary-active-flag');
   if (activeFlag) activeFlag.addEventListener('change', function () { saveProjectFlags({ active_well_enabled: activeFlag.checked }); });
+  var drillingFlag = byId('summary-active-drilling');
+  if (drillingFlag) drillingFlag.addEventListener('change', function () {
+    saveProjectFlags({ active_drilling: drillingFlag.checked });
+  });
   var phaseAction = byId('summary-phase-action');
   if (phaseAction) phaseAction.addEventListener('click', function () {
     // Hand off to the confirm dialog with the popover already dismissed, so a

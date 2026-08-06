@@ -30,8 +30,9 @@
  */
 import { byId, all, esc, isFilled, truthy, msg } from '../dom.js';
 import { API } from '../api.js';
+import { ICONS } from '../icons.js';
 import { Store, currentUserName, isCurrentPipelineView } from '../state.js';
-import { RESOURCE_SCENARIOS, FORMATIONS } from '../schema.js';
+import { RESOURCE_SCENARIOS, formationNames } from '../schema.js';
 import {
   buildCalculatePayload, buildLeadApplyFields, buildPlotMarkup,
   resultsFromStoredFields, resultsFromCalculation, openPlotLightbox
@@ -91,10 +92,6 @@ var LEGACY_KEY_OWNER = {
   polygons_surfaces_loaded: 'Resource Assessment'
 };
 
-// The folder section key card 2B's folder row resolves
-// (config.WELL_OVERVIEW_DIRECTORY_MAP / folders.LEAD_COMPONENT_SECTION_KEYS):
-// <leads share>\<field>\<lead>\Polygons__Surfaces.
-export var FOLDER_SECTION_KEY = 'polygons';
 
 // The scenario a page with nothing stored opens on -- same default the
 // standalone calculator uses.
@@ -113,6 +110,9 @@ export var MESSAGES = {
   // The TVDSS is the one exception: numeric parse only, sign and magnitude free
   // (a subsea depth is legitimately negative on some datums).
   tvdss: 'Top Formation TVDSS must be numeric.',
+  // Card 3H. Depths are stored as magnitudes; a horizon above the datum still
+  // reads negative in the field, but the value recorded here is its depth.
+  tvdssNegative: 'Top Formation TVDSS must not be negative.',
   // Ordering. Rejected on EQUALITY too, in both directions -- a pair whose two
   // sides are the same number is a mis-entry, not a degenerate distribution --
   // and never silently swapped: swapping would quietly rewrite what the user
@@ -169,11 +169,13 @@ export function numberError(key, raw) {
   return null;
 }
 
-// Section 3's TVDSS: numeric parse only. No positivity rule (see MESSAGES),
-// no completion effect.
+// Section 3's TVDSS. Card 3H made it a magnitude like every other measure, so
+// it now refuses a negative as well as a non-number. Still no completion
+// effect -- it is reference information, not a gate.
 export function tvdssError(raw) {
   if (!isFilled(raw)) return null;
-  return isNaN(Number(raw)) ? MESSAGES.tvdss : null;
+  if (isNaN(Number(raw))) return MESSAGES.tvdss;
+  return Number(raw) < 0 ? MESSAGES.tvdssNegative : null;
 }
 
 // Both sides filled, both individually valid, and hi strictly greater than lo?
@@ -441,7 +443,7 @@ export function primaryFormationName(formations) {
   var names = rows.map(function (row) {
     return String((row && row.formation) || '').trim().toUpperCase();
   }).filter(function (name) { return !!name; });
-  var canonical = FORMATIONS.find(function (name) { return names.indexOf(name) >= 0; });
+  var canonical = formationNames(Store.meta).find(function (name) { return names.indexOf(name) >= 0; });
   return canonical || names[0] || '';
 }
 
@@ -527,7 +529,11 @@ export function earlierComments(tasks) {
 
 function numberInput(key, value, options) {
   options = options || {};
-  return '<input type="number" step="any" data-la-field="' + esc(key) + '"' +
+  // Card 3H: every measure on this page is a magnitude, Top Formation TVDSS
+  // included. It used to be the one exemption; migration v11 converted the
+  // stored values and kept each prior signed one in the Audit Trail.
+  return '<input type="number" step="any" min="0"' +
+    ' data-la-field="' + esc(key) + '"' +
     ' value="' + esc(value == null ? '' : value) + '"' +
     ' aria-label="' + esc(options.label || LABELS[key] || key) + '"' +
     (options.placeholder ? ' placeholder="' + esc(options.placeholder) + '"' : '') +
@@ -699,13 +705,36 @@ export function workspaceMarkup(state) {
 // their own `state` and compare it back against this module-level one before
 // touching the DOM, so a debounced calculation that resolves after the user has
 // navigated to another step (or another lead) is a safe no-op.
+//
+// WITH ONE CORRECTION, which is the whole of the remount story below. An edit
+// to a key in KEY_OWNER (an Area, a thickness, a GRV) is auto-saved, and the
+// save REMOUNTS this page: saveLeadAssessment -> refreshAfterRecordChange ->
+// loadComponent -> renderLeadAssessment, which builds a brand-new state object.
+// The calc debounce (600ms) is shorter than the save debounce (800ms), so the
+// calculation is typically still in flight when that happens. A scenario change
+// touches no owned key, so it never remounts -- which is the only reason it
+// always produced a plot and an area edit did not.
+//
+// So the module-level identity of `state` cannot be the staleness test on its
+// own: a remount of the SAME component is not a navigation, and the answer in
+// flight is still the answer that page wants. Two things follow -- results are
+// matched to the live state by COMPONENT (liveStateFor), and the calculation
+// half of the outgoing state is carried across the remount (carryOver).
 
 var state = null;
 var debounceTimer = null;
 
+// The outgoing page's calculation half, kept across a remount and keyed by the
+// component it belongs to. Written only from a real mounted state, read only by
+// a mount of that same component, and dropped the moment either fails to match.
+var carryOver = null;
+
 export function teardownLeadAssessment() {
   if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
   state = null;
+  // Navigating away ends the edit session, so nothing may survive it -- see the
+  // KI-005 note on captureCarryOver.
+  carryOver = null;
 }
 
 export function isLeadAssessmentStep(taskName) {
@@ -834,6 +863,24 @@ export function scheduleCalculation(delay) {
   }, wait);
 }
 
+// Which live state, if any, should a result computed for `activeState` land on?
+// A calculation answers a question about a COMPONENT, not about one particular
+// render of it: when the user's own edit auto-saves and remounts the page
+// mid-flight, the fresh state is the same lead's Lead Assessment waiting for
+// exactly this answer, and discarding it is what left the plot slot empty.
+// Only a genuinely different component -- or nothing mounted at all -- makes
+// the answer stale. The task id is the identity that matters (a task row
+// belongs to one record), with the project id as a second, cheap belt.
+function liveStateFor(activeState) {
+  if (!state || !activeState) return null;
+  if (state === activeState) return state;
+  var live = state.resourceTask;
+  var origin = activeState.resourceTask;
+  if (!live || !origin || live.task_id !== origin.task_id) return null;
+  if (state.projectId !== activeState.projectId) return null;
+  return state;
+}
+
 function runCalculation() {
   var activeState = state;
   if (!activeState) return;
@@ -852,22 +899,28 @@ function runCalculation() {
   if (!task) { setStatus('Lead Assessment component not found.', 'error'); return; }
   API.resourceAssessment(task.task_id, calculationPayload(resolved, activeState.scenario))
     .then(function (result) {
-      if (state !== activeState) return null;
-      activeState.display = resultsFromCalculation(result);
+      var target = liveStateFor(activeState);
+      if (!target) return null;
+      target.display = resultsFromCalculation(result);
       var plots = result.plots || {};
-      activeState.plots = {
+      target.plots = {
         gas: plots.gas ? buildPlotMarkup(plots.gas, 'Gas exceedance plot') : '',
         liquid: plots.condensate ? buildPlotMarkup(plots.condensate, 'Condensate exceedance plot') : ''
       };
+      // A remounted state opened with a blank signature; the answer it has just
+      // been handed is what that signature describes, so record it alongside
+      // the plots it produced (the two are only ever remembered together).
+      target.signature = signature;
       renderResults();
       setStatus('', '');
-      return persistResults(activeState, result, resolved);
+      return persistResults(target, result, resolved);
     })
     .catch(function (error) {
-      if (state !== activeState) return;
+      var target = liveStateFor(activeState);
+      if (!target) return;
       // A rejected signature must not be remembered: the same inputs have to be
       // retried on the next edit rather than silently skipped as "already run".
-      activeState.signature = '';
+      target.signature = '';
       setStatus(error.message, 'error');
     });
 }
@@ -895,19 +948,22 @@ function persistResults(activeState, result, resolved) {
     grvP10: resolved.inputs.grvP10
   }, 'lead');
   return API.saveFields(activeState.resourceTask.task_id, fields).then(function () {
-    if (state !== activeState) return null;
+    if (!liveStateFor(activeState)) return null;
     // The write may have completed the Resource Assessment item (its server-side
     // predicate is this mean PLUS the polygons box). Refresh the rail, the dots
     // and the Lead Summary from the server -- renderDetail rebuilds only the
     // sidebar and the summary panel, never this centre column, so the user's
     // half-typed inputs are untouched.
     return API.detail(Store.projectId).then(function (detail) {
-      if (state !== activeState || Store.projectId !== activeState.projectId) return;
+      // The rail belongs to whatever is mounted NOW, so the refresh is applied
+      // to the live state rather than to the one that started the write.
+      var live = liveStateFor(activeState);
+      if (!live || Store.projectId !== live.projectId) return;
       Store.project = detail.project || {};
       Store.tasks = detail.tasks || [];
       Store.allFields = detail.fields || {};
       Store.overview = detail.overview || null;
-      activeState.resourceTask = taskNamed(PRIMARY_STEP) || activeState.resourceTask;
+      live.resourceTask = taskNamed(PRIMARY_STEP) || live.resourceTask;
       renderDetail();
     });
   }).catch(function () {
@@ -1086,21 +1142,36 @@ function wirePlots(root) {
 // The lead's Polygons & Surfaces share row, in the shell's own folder-card slot
 // (directly under the comments box), with the same glyph/path/copy markup every
 // other folder card uses.
+//
+// Card 3AB: the destination now comes from the ONE approved stage/step mapping
+// (config.LEAD_STEP_FOLDER_LINKS), reached through the component-folder
+// endpoint keyed by this page's own task. It used to resolve the generic
+// `polygons` SECTION instead, which produced a differently-spelled path
+// (...\Leads\...\Polygons__Surfaces) that the approved table does not use.
 function renderFolderRow(onCopy) {
   var previous = byId('component-folder-card');
   if (previous) previous.remove();
   var anchor = byId('comments-field');
   if (!anchor) return;
+  var task = state.resourceTask;
+  if (!task) return;
   var card = document.createElement('div');
   card.id = 'component-folder-card';
   card.className = 'folder-card';
-  card.innerHTML = '<span class="folder-glyph" aria-hidden="true">📁</span>' +
+  card.innerHTML = '<span class="folder-glyph" aria-hidden="true">' + ICONS['folder'] + '</span>' +
     '<span class="folder-path" id="la-folder-path">Loading…</span>' +
-    '<button type="button" class="icon-btn" id="copy-component-folder" title="Copy folder link" aria-label="Copy folder link" disabled>⧉</button>';
+    '<button type="button" class="icon-btn" id="copy-component-folder" title="Copy folder link" aria-label="Copy folder link" disabled>' + ICONS['copy'] + '</button>';
   anchor.parentNode.insertBefore(card, anchor.nextSibling);
   var forProjectId = Store.projectId;
-  API.sectionFolder(forProjectId, FOLDER_SECTION_KEY).then(function (info) {
+  API.componentFolder(forProjectId, task.task_id).then(function (info) {
     if (Store.projectId !== forProjectId) return;
+    // An unmapped step has no folder component at all (Card 3AB), so the card
+    // is removed rather than left saying "not configured".
+    if (!info || !Number(info.requires_folder)) {
+      var placeholder = byId('component-folder-card');
+      if (placeholder) placeholder.remove();
+      return;
+    }
     var path = (info && info.unc_path) || '';
     var pathElement = byId('la-folder-path');
     var button = byId('copy-component-folder');
@@ -1122,6 +1193,48 @@ function renderFolderRow(onCopy) {
 // Mount
 // ---------------------------------------------------------------------------
 
+// Snapshot the OUTGOING page's calculation half on the way into a mount, so a
+// remount caused by the user's own edit does not blank a plot that already
+// landed (or disarm a debounce timer that is about to fire). Only the four
+// things a run owns travel -- everything else the fresh mount re-hydrates from
+// the server, which is newer by definition.
+//
+// WHY THIS CANNOT RESURRECT userDirty ON A VIEW (KI-005). The snapshot exists
+// only between an unmount and the very next mount, and it is only ever read
+// back when that mount is the SAME task row (below). Every view-only route into
+// this page therefore starts clean:
+//   * a fresh page load has no module state at all, so nothing is captured;
+//   * opening ANOTHER lead's Lead Assessment captures the previous lead's state
+//     but cannot match its task id (a task row belongs to exactly one record),
+//     and the failed match drops the snapshot rather than holding it;
+//   * leaving for any other step mounts a different page, and
+//     teardownOtherConsolidatedPages -> teardownLeadAssessment clears both the
+//     state and the snapshot before that page renders.
+// What is left is exactly one case: a remount of the same lead's Lead
+// Assessment while the user is editing it -- which is the auto-save's own
+// reload, i.e. a remount the user's keystroke caused. And even there a carried
+// userDirty:true cannot by itself START a run: only onFieldInput and the
+// scenario radio call scheduleCalculation, and both set the flag themselves
+// first. It only lets a timer the user ALREADY armed survive the reload.
+function captureCarryOver() {
+  carryOver = null;
+  if (!state || !state.resourceTask) return;
+  var plots = state.plots || { gas: '', liquid: '' };
+  carryOver = {
+    taskId: state.resourceTask.task_id,
+    projectId: state.projectId,
+    scenario: state.scenario,
+    display: state.display,
+    plots: plots,
+    // Never remember a signature whose plot never landed: the short-circuit in
+    // runCalculation would then skip the retry of an edit the user can see no
+    // result for. Same reasoning as the .catch there -- a run that produced
+    // nothing on screen is a run that has to be repeatable.
+    signature: (plots.gas || plots.liquid) ? state.signature : '',
+    userDirty: !!state.userDirty
+  };
+}
+
 // Render the whole workspace into the shell's #dynamic-fields body. `task` is
 // whichever of the four rail rows the user clicked -- it decides nothing about
 // the layout, only which row stays highlighted. `onCopy` is detail-form.js's
@@ -1129,32 +1242,48 @@ function renderFolderRow(onCopy) {
 // dependency back on the form it mounts inside).
 export function renderLeadAssessment(root, options) {
   options = options || {};
+  captureCarryOver();
   var allFields = Store.allFields || {};
   var values = readStoredValues(allFields);
   var thicknessFields = allFields[PRIMARY_STEP] || allFields['Thickness Estimation'] || {};
   var resourceFields = allFields[PRIMARY_STEP] || allFields['Resource Assessment'] || {};
   var storedScenario = resourceFields.lead_resource_scenario;
   var stored = resultsFromStoredFields(resourceFields, 'lead');
+  var resourceTask = taskNamed(PRIMARY_STEP);
+  // The snapshot is consumed here or not at all: a mismatch drops it, so a
+  // stale one can never wait around for a later, unrelated mount.
+  var carried = carryOver;
+  carryOver = null;
+  if (!carried || !resourceTask || carried.taskId !== resourceTask.task_id ||
+      carried.projectId !== Store.projectId) {
+    carried = null;
+  }
   state = {
     projectId: Store.projectId,
     meta: Store.meta,
     formations: Store.formations || [],
-    resourceTask: taskNamed(PRIMARY_STEP),
+    resourceTask: resourceTask,
     values: values,
     errors: {},
     sourceMode: conversionConfigured(Store.meta)
       ? resolveSourceMode(values, thicknessFields.thickness_source_mode)
       : '',
-    scenario: isFilled(storedScenario) ? storedScenario : DEFAULT_SCENARIO,
+    scenario: carried ? carried.scenario
+      : (isFilled(storedScenario) ? storedScenario : DEFAULT_SCENARIO),
     // The stored PIIP numbers are what the page opens on; the plots are not
-    // stored (they are rendered figures), so they arrive with the first run.
-    display: stored,
-    plots: { gas: '', liquid: '' },
-    signature: '',
+    // stored (they are rendered figures), so they arrive with the first run --
+    // or, across a same-component remount, with the snapshot that already had
+    // them.
+    display: carried ? carried.display : stored,
+    plots: carried ? carried.plots : { gas: '', liquid: '' },
+    signature: carried ? carried.signature : '',
     // FALSE until a DOM event handler says otherwise -- see markUserEdit.
     // Mounting, hydrating and re-rendering this page never set it, and the
-    // persisting auto-run cannot fire while it is false.
-    userDirty: false,
+    // persisting auto-run cannot fire while it is false. The one exception is
+    // the same-component remount the user's own edit caused, which carries the
+    // flag it had already set -- see captureCarryOver for why no view-only
+    // path can reach that.
+    userDirty: carried ? carried.userDirty : false,
     earlier: earlierComments(Store.tasks)
   };
   root.innerHTML = workspaceMarkup(state);

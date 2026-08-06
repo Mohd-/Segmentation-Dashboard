@@ -24,6 +24,11 @@ class ResourceRequest:
     area_p90_km2: float | None = None
     area_p10_km2: float | None = None
     thickness_p50_ft: float | None = None
+    # Per-run substitutes for the scenario's petrophysical distributions
+    # (porosity, Sg, NGR, geometric factor, 1/Bg). Empty means "use the
+    # scenario exactly as configured", which is what every caller that does not
+    # know about them sends. See resource_engine/overrides.py.
+    overrides: dict[str, Any] | None = None
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any] | "ResourceRequest") -> "ResourceRequest":
@@ -34,6 +39,10 @@ class ResourceRequest:
 
     def validate(self) -> None:
         """Validate public user inputs."""
+        from .overrides import validate_overrides
+
+        # Raises with a message naming the offending parameter.
+        validate_overrides(self.overrides)
         if not self.scenario:
             raise InputValidationError("A scenario id is required.")
         if self.method not in ("grv", "area_thickness"):

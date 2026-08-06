@@ -7,7 +7,7 @@
 // is every rule a wrong answer would silently corrupt — which polygon a well
 // falls in, which layer draws on top, what the totals say, and whether a
 // hostile shapefile attribute can reach the DOM as markup.
-import { test, assert, fixture, mockFetch } from './harness.js';
+import { test, assert, fixture, mockFetch, waitFor } from './harness.js';
 import {
   LayerStore, WELLS_ID, MAP_STATE_KEY, PALETTE,
   pointInRings, polygonLabel, formatOgip, ogipValue, hasCoords, featureKey,
@@ -435,7 +435,14 @@ test('map: state round-trips order, visibility, colors and the summary collapse'
   store.setColor('fields', '#123456');
   store.setColor(WELLS_ID, '#654321');
   store.summaryCollapsed = true;
-  assert.equal(writeMapState(store.toState(), storage), true);
+  store.sidebarCollapsed = true;
+  store.filtersCollapsed = true;
+  store.layersCollapsed = true;
+  var emitted = store.toState();
+  assert.equal(typeof emitted.sidebarCollapsed, 'boolean');
+  assert.equal(typeof emitted.filtersCollapsed, 'boolean');
+  assert.equal(typeof emitted.layersCollapsed, 'boolean');
+  assert.equal(writeMapState(emitted, storage), true);
   assert.ok(storage._raw[MAP_STATE_KEY], 'written under the namespaced key');
 
   var restored = new LayerStore();
@@ -447,6 +454,46 @@ test('map: state round-trips order, visibility, colors and the summary collapse'
   assert.equal(restored.wellsVisible, false);
   assert.equal(restored.wellsColor, '#654321');
   assert.equal(restored.summaryCollapsed, true);
+  assert.equal(restored.sidebarCollapsed, true);
+  assert.equal(restored.filtersCollapsed, true);
+  assert.equal(restored.layersCollapsed, true);
+});
+
+/* sidebarCollapsed is the one tri-state flag: null means "the user has never
+   said", which is the view's licence to pick the default for the viewport. */
+test('map: an unstored sidebar collapse reads as null, and the folds default open', function () {
+  assert.equal(normalizeState(null).sidebarCollapsed, null, 'never stored');
+  assert.equal(normalizeState({ sidebarCollapsed: 1 }).sidebarCollapsed, null, 'only a real boolean counts');
+  assert.equal(normalizeState({ sidebarCollapsed: false }).sidebarCollapsed, false);
+  assert.equal(normalizeState(null).filtersCollapsed, false);
+  assert.equal(normalizeState(null).layersCollapsed, false);
+  var store = new LayerStore();
+  assert.equal(store.sidebarCollapsed, null, 'the store default is "never chosen" too');
+  store.applyState(normalizeState(null));
+  assert.equal(store.sidebarCollapsed, null, 'applyState carries the null through');
+});
+
+/* The null has to survive every persist that is NOT the sidebar toggle. It is
+   written by seven unrelated paths (a layer tick, a reorder, a recolor, the
+   summary toggle...), and if any of them froze the viewport-derived default as
+   a stored boolean, a phone would never open full-screen again. */
+test('map: an unrelated persist leaves the unchosen sidebar collapse unchosen', function () {
+  var storage = memStorage();
+  var store = new LayerStore();
+  store.applyState(readMapState(storage));       // nothing stored yet
+  store.setLayers(layerMeta());
+  assert.equal(store.toState().sidebarCollapsed, null, 'nothing chosen, nothing to write');
+
+  store.setVisible('blocks', false);              // an unrelated change...
+  writeMapState(store.toState(), storage);        // ...and the persist it triggers
+  var reloaded = new LayerStore().applyState(readMapState(storage));
+  assert.equal(reloaded.sidebarCollapsed, null, 'still unchosen after an unrelated persist');
+  assert.equal(reloaded.toState().sidebarCollapsed, null, 'and it is written back as null');
+
+  store.sidebarCollapsed = true;                  // the toggle, the one chooser
+  writeMapState(store.toState(), storage);
+  var chosen = new LayerStore().applyState(readMapState(storage));
+  assert.equal(chosen.sidebarCollapsed, true, 'an explicit choice round-trips as a boolean');
 });
 
 test('map: a stale saved order drops vanished layers and appends unseen ones on top', function () {
@@ -848,15 +895,24 @@ test('map: with no plotted wells the summary reads zero and says why', function 
 var MAP_MARKUP = [
   '<section id="tab-map" class="tab active">',
   '<div class="panel map-panel">',
-  '<aside class="map-sidebar">',
-  '<button id="map-fit-all" type="button"></button>',
-  '<button id="map-reload" type="button"></button>',
-  '<div id="map-layer-list"></div>',
-  '</aside>',
   '<div class="map-stage">',
   '<canvas id="map-canvas"></canvas>',
   '<div id="map-summary"><button id="map-summary-toggle" aria-expanded="true"></button>',
   '<div id="map-summary-body"></div></div>',
+  '<aside id="map-sidebar" class="map-sidebar">',
+  '<button id="map-sidebar-toggle" aria-expanded="true"></button>',
+  '<div id="map-sidebar-body">',
+  '<button id="map-fit-all" type="button"></button>',
+  '<button id="map-reload" type="button"></button>',
+  '<section id="map-filters-fold" class="map-fold">',
+  '<button id="map-filters-toggle" class="map-fold-head open" aria-expanded="true"></button>',
+  '<div id="map-filter-list"></div>',
+  '</section>',
+  '<section id="map-layers-fold" class="map-fold">',
+  '<button id="map-layers-toggle" class="map-fold-head open" aria-expanded="true"></button>',
+  '<div id="map-layer-list"></div>',
+  '</section>',
+  '</div></aside>',
   '<div class="map-toolbox">',
   '<button id="map-tool-pointer" aria-pressed="true"></button>',
   '<button id="map-tool-measure" aria-pressed="false"></button>',
@@ -945,6 +1001,13 @@ test('map: refreshMap boots the tab — sidebar order, summary figures, toolbox 
     assert.match(summary, /Total Mean OGIP14\.0 BCF/, 'W2 has no figure and contributes 0');
     assert.match(summary, /Total Area14\.0 km²/, 'area includes every row in the filtered map payload');
 
+    // Two containers, not one: the filters and the layer rows are rendered
+    // into their own folds so each can be collapsed on its own.
+    assert.equal(document.getElementById('map-filter-list').querySelectorAll('.map-well-filter').length, 4);
+    assert.equal(document.getElementById('map-layer-list').querySelectorAll('.map-layer').length, 4);
+    assert.equal(document.getElementById('map-filter-list').querySelectorAll('.map-layer').length, 0);
+    assert.equal(document.getElementById('map-layer-list').querySelectorAll('.map-well-filter').length, 0);
+
     // Four independent checklist groups are populated from the full rowset.
     assert.equal(root.querySelectorAll('.map-well-filter').length, 4);
     assert.equal(root.querySelectorAll('.map-well-filter[data-filter="field"] input').length, 2);
@@ -990,6 +1053,83 @@ test('map: refreshMap boots the tab — sidebar order, summary figures, toolbox 
     document.getElementById('map-summary-toggle').click();
     assert.equal(document.getElementById('map-summary-body').hidden, true);
     assert.equal(JSON.parse(window.localStorage.getItem(MAP_STATE_KEY)).summaryCollapsed, true);
-    try { window.localStorage.removeItem(MAP_STATE_KEY); } catch (err) { /* storage may be unavailable */ }
+
+    // The whole sidebar box folds to its header bar, and back.
+    var box = document.getElementById('map-sidebar');
+    var boxBody = document.getElementById('map-sidebar-body');
+    var boxToggle = document.getElementById('map-sidebar-toggle');
+    assert.equal(boxBody.hidden, false, 'desktop default is expanded');
+    boxToggle.click();
+    assert.equal(boxBody.hidden, true);
+    assert.equal(boxToggle.getAttribute('aria-expanded'), 'false');
+    assert.ok(box.classList.contains('is-collapsed'));
+    assert.equal(JSON.parse(window.localStorage.getItem(MAP_STATE_KEY)).sidebarCollapsed, true);
+    boxToggle.click();
+    assert.equal(boxBody.hidden, false);
+    assert.equal(JSON.parse(window.localStorage.getItem(MAP_STATE_KEY)).sidebarCollapsed, false);
+
+    // Each fold inside it collapses independently, chevron state included.
+    var filtersToggle = document.getElementById('map-filters-toggle');
+    var filterList = document.getElementById('map-filter-list');
+    filtersToggle.click();
+    assert.equal(filterList.hidden, true);
+    assert.equal(filtersToggle.getAttribute('aria-expanded'), 'false');
+    assert.equal(filtersToggle.classList.contains('open'), false, 'the chevron flips shut');
+    assert.equal(JSON.parse(window.localStorage.getItem(MAP_STATE_KEY)).filtersCollapsed, true);
+    filtersToggle.click();
+    assert.equal(filterList.hidden, false);
+    assert.ok(filtersToggle.classList.contains('open'));
+    assert.equal(JSON.parse(window.localStorage.getItem(MAP_STATE_KEY)).filtersCollapsed, false);
+
+    var layersToggle = document.getElementById('map-layers-toggle');
+    var layerList = document.getElementById('map-layer-list');
+    layersToggle.click();
+    assert.equal(layerList.hidden, true);
+    assert.equal(layersToggle.getAttribute('aria-expanded'), 'false');
+    assert.equal(layersToggle.classList.contains('open'), false);
+    assert.equal(JSON.parse(window.localStorage.getItem(MAP_STATE_KEY)).layersCollapsed, true);
+
+    // The container split did not cost the filters their handlers: a filter
+    // change still moves both the summary and the wells row's count.
+    var north = filterList.querySelector('.map-well-filter[data-filter="field"] input[value="North"]');
+    north.checked = true;
+    north.dispatchEvent(new Event('change', { bubbles: true }));
+    assert.match(document.getElementById('map-summary-body').textContent, /Wells shown2/);
+    assert.equal(layerList.querySelector('.map-layer[data-layer="' + WELLS_ID + '"] .map-layer-count').textContent, '2');
+    north.checked = false;
+    north.dispatchEvent(new Event('change', { bubbles: true }));
+
+    // A re-render rewrites the container's CONTENTS, never its attributes —
+    // so a collapsed fold stays collapsed across one.
+    layerList.querySelector('.map-layer[data-layer="blocks"] .map-layer-move[data-dir="-1"]').click();
+    assert.equal(document.getElementById('map-layer-list').hidden, true, 'the fold survives a re-render');
+
+    /* A failed load writes its message into a container that may be hidden,
+       and `hidden` takes it out of the accessibility tree as well — so the
+       app's toast, which is independent of the box, is what carries the
+       failure. The collapse state is deliberately left exactly as the user
+       set it. */
+    boxToggle.click();
+    assert.equal(boxBody.hidden, true, 'collapsed, as a phone boots');
+    var savedPrefs = window.localStorage.getItem(MAP_STATE_KEY);
+    mockFetch(function () { throw new Error('network down'); });
+    document.getElementById('map-reload').click();
+    // Captured as it lands: the toast is a shared, self-clearing region that
+    // any other view booted by this suite may write to next.
+    var toasted = '';
+    return waitFor(function () {
+      var toast = document.getElementById('app-message');
+      if (!toast || !/Could not load map layers/.test(toast.textContent)) return false;
+      toasted = toast.textContent;
+      return true;
+    }).then(function () {
+      assert.match(toasted, /Could not load map layers: network down/);
+      assert.equal(boxBody.hidden, true, 'a failure does not prise the box open');
+      assert.equal(layerList.hidden, true, 'nor the fold the user closed');
+      assert.match(layerList.textContent, /Could not load layers: network down/,
+        'the explanation is waiting inside the box for anyone who expands it');
+      assert.equal(window.localStorage.getItem(MAP_STATE_KEY), savedPrefs, 'and nothing was persisted');
+      try { window.localStorage.removeItem(MAP_STATE_KEY); } catch (err) { /* storage may be unavailable */ }
+    });
   });
 });

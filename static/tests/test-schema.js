@@ -3,7 +3,7 @@
 import { test, assert } from './harness.js';
 import {
   piip, SCHEMA, PROSPECT_STAGES, BP_STAGES, STATUSES, DONE,
-  SEISMIC_BLOCKS, FLUID_TYPES, FORMATIONS, FORMATION_METRICS,
+  SEISMIC_BLOCKS, FLUID_TYPES, FORMATIONS, formationNames, FORMATION_METRICS,
   RESERVOIR_COS_COLUMNS, FLOWBACK_STAGE_COLUMNS, FLOWBACK_RATE_FIELDS,
   RESOURCE_SCENARIOS, validateStepFields, numericFieldError,
   SAD_FORMATION_COLUMNS, REQUIRED_FIELDS_FOR_SUBMIT, CHECKBOX_SUBMIT_STEPS,
@@ -391,14 +391,16 @@ test('validateStepFields: a 0-degree azimuth is a perfectly ordinary bearing', f
    what the project editor's all-fields card and any reference view render, and
    they carry the same keys, labels and reveal. */
 
-test('schema.SCHEMA: Approval to Stake declares both confirmations, in process order', function () {
+test('schema.SCHEMA: Approval to Stake declares its confirmations, in process order', function () {
+  // Card 3V added the folder handover between well creation and the letter.
   assert.deepEqual(stepKeys('Approval to Stake'),
-    ['staking_well_created', 'approval_stake_letter_loaded']);
+    ['staking_well_created', 'lead_folder_handover_confirmed', 'approval_stake_letter_loaded']);
   SCHEMA['Approval to Stake'].forEach(function (field) {
     assert.equal(field.type, 'checkbox', field.key + ' is a checkbox');
   });
   assert.deepEqual(SCHEMA['Approval to Stake'].map(function (f) { return f.label; }), [
     'Well creation and well folder are completed',
+    'Lead Folder is moved to the Well Proposal Folder',
     'The Approval to Stake letter is placed in the shared folder'
   ]);
 });
@@ -634,8 +636,17 @@ test('validateStepFields: bigOk-flagged fields are exempt from the 9999 cap', fu
   assert.equal(validateStepFields('Moving Tolerance', { staking_well_x: '650000' }), null);
 });
 
-test('validateStepFields: Lead Assessment TVDSS accepts a negative subsea depth', function () {
-  assert.equal(validateStepFields('Lead Assessment', { top_formation_tvdss_ft: '-6500' }), null);
+// Card 3H reversed this. TVDSS used to be the one field carrying
+// allowNegative, because a horizon above the datum reads negative in the
+// field; ASAS now stores the MAGNITUDE, and migration v11 converted what was
+// already stored while keeping each prior signed value in the Audit Trail.
+test('validateStepFields: Lead Assessment TVDSS is a magnitude, not a signed depth', function () {
+  assert.equal(validateStepFields('Lead Assessment', { top_formation_tvdss_ft: '-6500' }),
+    'Top Formation TVDSS (ft) must not be negative.');
+  assert.equal(validateStepFields('Lead Assessment', { top_formation_tvdss_ft: '6500' }), null);
+  // bigOk survives the change: a depth runs past four digits, which the
+  // generic 9999 sanity cap would otherwise refuse. That is a separate rule.
+  assert.equal(validateStepFields('Lead Assessment', { top_formation_tvdss_ft: '12000' }), null);
 });
 
 test('validateStepFields: (d) numericFieldError rejects an out-of-range percentage', function () {
@@ -691,23 +702,47 @@ test('validateStepFields: cross-field -- Lead Assessment reservoir must not exce
   assert.equal(validateStepFields('Lead Assessment', { reservoir_thickness_ft: '40', formation_thickness_ft: '50' }), null);
 });
 
-test('validateStepFields: piip trio ordering -- P90 must not exceed Mean, Mean must not exceed P10', function () {
+test('validateStepFields: piip trio ordering -- P90 < Mean < P10, strictly', function () {
   assert.equal(validateStepFields('Pre-Drilling GeoX Assessment', { pre_drill_piip_gas_p90: '10', pre_drill_piip_gas_mean: '5' }),
-    'Gas P90 must not exceed Mean.');
+    'Gas P90 must be lower than Mean.');
   assert.equal(validateStepFields('Pre-Drilling GeoX Assessment', { pre_drill_piip_gas_mean: '20', pre_drill_piip_gas_p10: '10' }),
-    'Gas Mean must not exceed P10.');
+    'Gas Mean must be lower than P10.');
+  // A properly ordered trio still passes.
+  assert.equal(validateStepFields('Pre-Drilling GeoX Assessment', {
+    pre_drill_piip_gas_p90: '5', pre_drill_piip_gas_mean: '10', pre_drill_piip_gas_p10: '20'
+  }), null);
 });
 
-test('validateStepFields: piip trio -- equal values are permitted (manual deterministic entry)', function () {
+// Equality used to pass, on the argument that a deterministic entry may repeat
+// a value. It does not any more: three identical numbers are not a
+// distribution, and letting them through hid the commonest data-entry mistake
+// (the same figure pasted into all three cells) behind a clean save.
+test('validateStepFields: piip trio -- equal values are refused', function () {
   assert.equal(validateStepFields('Pre-Drilling GeoX Assessment', {
     pre_drill_piip_gas_p90: '10', pre_drill_piip_gas_mean: '10', pre_drill_piip_gas_p10: '10'
-  }), null);
+  }), 'Gas P90 must be lower than Mean.');
+  // ...including when only the upper pair collides.
+  assert.equal(validateStepFields('Pre-Drilling GeoX Assessment', {
+    pre_drill_piip_gas_mean: '10', pre_drill_piip_gas_p10: '10'
+  }), 'Gas Mean must be lower than P10.');
 });
 
 test('validateStepFields: piip trio -- the liquid trio is checked too, independent of the gas trio', function () {
   assert.equal(validateStepFields('Pre-Drilling GeoX Assessment', {
     pre_drill_piip_liquid_p90: '9', pre_drill_piip_liquid_mean: '3'
-  }), 'Liquid P90 must not exceed Mean.');
+  }), 'Liquid P90 must be lower than Mean.');
+});
+
+// The P90/P10 PAIRS -- resource ranges with no mean between them, so the trio
+// rule has nothing to bite on and they went unchecked entirely.
+test('validateStepFields: P90/P10 range pairs must be ordered', function () {
+  assert.equal(validateStepFields('SAD Model', { sad_grv_p90: '80', sad_grv_p10: '40' }),
+    'SAD GRV P90 must be lower than P10.');
+  assert.equal(validateStepFields('SAD Model', { sad_area_km2_p90: '12', sad_area_km2_p10: '12' }),
+    'SAD Area P90 must be lower than P10.');
+  assert.equal(validateStepFields('SAD Model', { sad_grv_p90: '40', sad_grv_p10: '80' }), null);
+  // Only one half filled is not yet an ordering claim.
+  assert.equal(validateStepFields('SAD Model', { sad_grv_p90: '40' }), null);
 });
 
 // Resource Assessment's SCHEMA entry carries no editable NUMBERS -- card 2B
@@ -724,5 +759,33 @@ test('validateStepFields: merged Lead Assessment registers the confirmation; dir
   assert.equal(confirmation.type, 'checkbox');
   assert.equal(validateStepFields('Lead Assessment', {}), null);
   assert.equal(validateStepFields('Lead Assessment', { lead_piip_gas_p90: '10', lead_piip_gas_mean: '5' }),
-    'Gas P90 must not exceed Mean.');
+    'Gas P90 must be lower than Mean.');
+});
+
+/* The Well Summary's Flowback Results names its headline rate after the well's
+   fluid, so an oil well does not read "Gas Rate". Every fluid in the map needs
+   both halves or the row renders with no label. */
+test('FLOWBACK_RATE_FIELDS carries a label and a unit for every fluid', function () {
+  Object.keys(FLOWBACK_RATE_FIELDS).forEach(function (fluid) {
+    var entry = FLOWBACK_RATE_FIELDS[fluid];
+    assert.ok(entry.key, fluid + ' has a field key');
+    assert.ok(entry.unit, fluid + ' has a unit');
+    assert.ok(entry.label, fluid + ' has a display label');
+  });
+  assert.equal(FLOWBACK_RATE_FIELDS['Gas'].label, 'Gas Rate');
+  assert.equal(FLOWBACK_RATE_FIELDS['Oil'].label, 'Liquid Rate');
+  assert.equal(FLOWBACK_RATE_FIELDS['Water Bearing'].label, 'Water Rate');
+});
+
+/* The formation list is user-maintained (config/lists.yaml) and served by
+   /api/meta; the module constant is only a boot fallback. */
+test('formationNames prefers the served list and falls back to the constant', function () {
+  assert.deepEqual(formationNames({ formations: ['ALPHA', 'BETA'] }), ['ALPHA', 'BETA']);
+  assert.deepEqual(formationNames({}), FORMATIONS);
+  assert.deepEqual(formationNames(null), FORMATIONS);
+  assert.deepEqual(formationNames({ formations: [] }), FORMATIONS, 'an empty served list is not a list');
+  // A copy, never the module array -- callers push custom names onto it.
+  var names = formationNames(null);
+  names.push('CUSTOM');
+  assert.equal(FORMATIONS.indexOf('CUSTOM'), -1);
 });

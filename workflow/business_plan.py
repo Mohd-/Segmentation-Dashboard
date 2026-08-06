@@ -16,10 +16,15 @@ import config
 import db
 from helpers import today_str, utc_now_str
 
-from .constants import FORMATIONS, StaleRevisionError
+from .constants import (
+    FORMATIONS, STAKED_WELL_NAME_FIELD, StaleRevisionError, display_record_name,
+    staking_confirmed,
+)
 from .history import log_task_event
 from .notifications import notify_transition
 from .projects import _sync_completed_at
+from .promotion import ACTIVE_DRILLING_FIELD, get_lead_summary_snapshot
+from .summary import get_project_overview
 
 
 FLUIDS = (
@@ -36,6 +41,11 @@ LEGACY_FLUIDS = frozenset({"Dry", "Water", "Condensate", "Liquid"})
 CLASSIFICATIONS = ("Development", "Appraisal", "Exploration")
 LOGGING_PROGRAMS = ("Standard A", "Standard B", "Optimized Standard B")
 PRIORITIES = ("Low", "Medium", "High")
+
+# The Business Plan Year filter's "show every year" sentinel. It is a string on
+# purpose: the filter's other values arrive from the query string as strings
+# too, so there is one comparison and no int/str ambiguity.
+ALL_YEARS = "all"
 
 
 STAGES = (
@@ -63,7 +73,10 @@ STAGES = (
         "stored_stage": "Post-Drilling",
         "details": (
             ("quicklook-logs", "Quicklook Logs", "Quicklook Logs"),
-            ("aramco-approved-pics", "Aramco Approved PICS", "Aramco Picks"),
+            # Card 3A spells the visible label "Picks". The slug and the stored
+            # task name ("Aramco Picks") are identifiers and stay put -- only
+            # the middle element of this tuple reaches a screen.
+            ("aramco-approved-pics", "Aramco Approved Picks", "Aramco Picks"),
             ("sad-model", "SAD Model", "SAD Model"),
             ("summary-slides", "Summary Slides", "Executive Summary"),
             ("post-drill-learning-review", "Post-Drill Learning Review", "Post-Well Outcome & Decision Gate"),
@@ -606,6 +619,17 @@ def _project_context(session, project_id):
     return project, tasks, fields, formations, effective
 
 
+def current_stage_key(session, project_id):
+    """The BPE stage this well is working right now ('pre_drilling', …).
+
+    Derived, never stored: it is the first stage with an item still open (see
+    _effective_state). Raises ValueError for anything that is not a BP record,
+    which is what callers asking "may this well be drilling?" want to hear.
+    """
+    _project, _tasks, _fields, _formations, effective = _project_context(session, project_id)
+    return effective["current_stage"]["key"]
+
+
 def _assignees(tasks):
     values = []
     for task_name in TASK_NAMES:
@@ -620,9 +644,18 @@ def _well_projection(project, tasks, fields, formations, effective):
     items = effective["stages"][current["key"]]
     completed = sum(1 for item in items if item["status"] == "Completed")
     assignees = _assignees(tasks)
+    # Card 3V: a record is known by the name it was STAKED under, once staking
+    # is CONFIRMED; the lead name it was matured under travels alongside so the
+    # pairing stays recoverable. `field` is still derived from the LEAD name --
+    # the field is where the segment is, and a staked name is not guaranteed to
+    # carry the same prefix.
+    staked_name = _value(fields, "Well Site Location", STAKED_WELL_NAME_FIELD)
+    confirmed = staking_confirmed(fields.get("Well Site Location") or {})
     return {
         "project_id": project["project_id"],
-        "project_name": project["project_name"],
+        "project_name": display_record_name(project["project_name"], staked_name, confirmed),
+        "lead_name": project["project_name"],
+        "staked_well_name": staked_name or "",
         "field": _field_from_name(project["project_name"]),
         "business_plan_year": project.get("business_plan_year"),
         "priority": project.get("priority") if project.get("priority") in PRIORITIES else "Low",
@@ -634,6 +667,16 @@ def _well_projection(project, tasks, fields, formations, effective):
         "completed_count": completed,
         "progress_percent": _round_whole(100 * completed / 6),
         "all_states": effective["states"],
+        # The gate item's own effective status ("Completed" once a supervisor
+        # has approved it, "Pending Approval" while it waits, "In Progress"
+        # otherwise). Stated here so the Pre-Drilling column's "BP Gate" toggle
+        # filters on a fact rather than re-deriving one from the item list.
+        "bp_gate_status": effective["states"]["business-plan-gate"]["status"],
+        # Card 3X. The animated border is shown only when this is on AND the
+        # card sits under Post-Drilling, so the card carries both facts.
+        "active_drilling": 1 if _truthy(
+            _value(fields, "Quicklook Logs", ACTIVE_DRILLING_FIELD)
+            or _value(fields, "Quicklook Logs Interpretation", ACTIVE_DRILLING_FIELD)) else 0,
         "actual_drilling_days": _number(effective["values"].get("bp_gate_actual_drilling_days")),
         "gate_approved": (tasks.get("BP Execution Gate") or {}).get("status") == "Approved",
         "successful": effective["fluid"]["successful"],
@@ -672,12 +715,17 @@ def _matches_filters(well, filters):
     field = filters.get("field", "All Fields")
     if field != "All Fields" and well["field"] != field:
         return False
-    try:
-        if int(well.get("business_plan_year") or 0) != int(filters["year"]):
+    if str(filters.get("year") or "") != ALL_YEARS:
+        try:
+            if int(well.get("business_plan_year") or 0) != int(filters["year"]):
+                return False
+        except (TypeError, ValueError):
             return False
-    except (TypeError, ValueError):
-        return False
-    step = filters.get("step", "business-plan-gate")
+    # "all" is the default, not "business-plan-gate": this is the STEP filter,
+    # and defaulting it to the gate quietly restricted every caller to
+    # Pre-Drilling wells. Narrowing to the gate is the Pre-Drilling column's own
+    # toggle (static/js/views/business-plan.js), which reaches one column.
+    step = filters.get("step", "all")
     status = filters.get("status", "All Status")
     current_keys = {item["key"] for item in well["items"]}
     if step != "all" and step not in current_keys:
@@ -695,7 +743,7 @@ def get_dashboard(session, filters=None):
     filters.setdefault("field", "All Fields")
     filters.setdefault("status", "All Status")
     filters.setdefault("year", date.today().year)
-    filters.setdefault("step", "business-plan-gate")
+    filters.setdefault("step", "all")
 
     projects = db.fetch_all(session, """
         SELECT * FROM projects
@@ -837,10 +885,28 @@ def get_detail(session, project_id, detail_slug):
     return {
         "project": {
             "project_id": project["project_id"],
-            "project_name": project["project_name"],
+            # Same rule as the board: the staked well name once staking is
+            # confirmed, with the lead name carried alongside.
+            "project_name": display_record_name(
+                project["project_name"],
+                _value(fields, "Well Site Location", STAKED_WELL_NAME_FIELD),
+                staking_confirmed(fields.get("Well Site Location") or {})),
+            "lead_name": project["project_name"],
+            "staked_well_name": _value(fields, "Well Site Location", STAKED_WELL_NAME_FIELD) or "",
             "field": _field_from_name(project["project_name"]),
             "business_plan_year": project.get("business_plan_year"),
             "priority": project.get("priority") if project.get("priority") in PRIORITIES else "Low",
+            # Card 3X, as the owner scoped it: the step page's gear carries the
+            # Active Drilling checkbox, and only a well whose CURRENT stage is
+            # Post-Drilling may be marked. Both facts ride here so the control
+            # can render its state and its availability without a second call;
+            # the rule itself is enforced on write (promotion._set_active_
+            # drilling), never only here.
+            "stage_key": effective["current_stage"]["key"],
+            "active_drilling": 1 if _truthy(
+                _value(fields, "Quicklook Logs", ACTIVE_DRILLING_FIELD)
+                or _value(fields, "Quicklook Logs Interpretation", ACTIVE_DRILLING_FIELD)) else 0,
+            "active_drilling_allowed": effective["current_stage"]["key"] == "post_drilling",
         },
         "detail": detail,
         "task": task,
@@ -848,6 +914,20 @@ def get_detail(session, project_id, detail_slug):
         "values": effective["values"],
         "comments_key": "bpe_comments_" + detail_slug.replace("-", "_"),
         "formations": [row for row in formations if row.get("phase") == expected_phase],
+        # Card 3E: the Well Summary beside the step is the SAME card the
+        # maturation shell renders (static/js/views/detail.js
+        # wellSummaryBodyHtml), so it needs the record-level inputs that card
+        # reads -- the retired-inclusive field map, every formation phase (the
+        # `formations` list above is deliberately filtered to this step's own
+        # phase), the frozen lead snapshot and the read-time Total CoS. They
+        # ride on THIS payload rather than a second request so the panel can
+        # never show a different vintage from the step beside it.
+        "well_summary": {
+            "fields": fields,
+            "formations": formations,
+            "lead_summary": get_lead_summary_snapshot(session, project_id),
+            "derisking": get_project_overview(session, project_id).get("derisking", ""),
+        },
         "flowback_stages": effective["flowback_rows"],
         "flowback_initialized": "flowback_stages_rows" in (fields.get("Flowback Results") or {}),
         "fluid_state": effective["fluid"],
@@ -859,8 +939,10 @@ def get_detail(session, project_id, detail_slug):
             "vsp": config.business_plan_vsp_url(),
             "structural_mtr": config.business_plan_structural_mtr_url(),
         },
-        "hole_sections": list(config.BPE_HOLE_SECTIONS),
-        "formation_options": list(FORMATIONS) + custom_formations,
+        # Both lists are user-maintained in config/lists.yaml (read per
+        # request, so an edit needs a restart at most, never a redeploy).
+        "hole_sections": list(config.hole_sections()),
+        "formation_options": list(config.formations()) + custom_formations,
         "booking_years": list(range(date.today().year, date.today().year + 4)),
     }
 

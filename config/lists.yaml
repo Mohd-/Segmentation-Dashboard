@@ -1,0 +1,38 @@
+# Pick lists you maintain, without touching code.
+#
+# THIS FILE IS THE PLACE TO ADD FORMATIONS AND WELLBORE SIZES.
+#
+# It is read at import time by workflow/constants.py and config.py. Edit it and
+# restart the app; there is no migration and nothing to rebuild. Delete the
+# file (or a key inside it) and the built-in defaults below apply again, so a
+# deployment that never touches it behaves exactly as before.
+#
+# Nothing is validated against these lists after the fact: a value already
+# stored on a well stays stored even if you later remove its entry here. The
+# lists only decide what the dropdowns OFFER.
+
+# Formation names offered wherever a formation is picked: the BP Gate's
+# logging-interval From/To pair, the coring program's multi-select, the
+# flowback stage rows, and the well-level formations sheet.
+#
+# Order is the order they appear in the dropdowns -- put the ones you use most
+# at the top. Names are stored upper-cased, and a user can still type a custom
+# name that is not on this list.
+formations:
+  - SARH
+  - QASM
+  - QWRH
+
+# Wellbore / hole sizes offered in the BP Gate's logging-interval From/To pair,
+# after the formations. These describe the hole the logging run passes
+# through, so an interval can read "SARH -> 8.5in Section" as well as
+# "SARH -> QASM".
+#
+# This list was empty until now (it was reachable only through an environment
+# variable nobody set), which is why the From/To dropdowns were short.
+hole_sections:
+  - 26in Section
+  - 16in Section
+  - 12.25in Section
+  - 8.5in Section
+  - 6.125in Section

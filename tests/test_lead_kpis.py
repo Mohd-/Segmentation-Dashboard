@@ -298,9 +298,11 @@ def test_mean_gas_costs_exactly_one_query_for_the_whole_board(client, app_module
         event.remove(engine, "before_cursor_execute", _record)
 
     # The board query itself carries an active_drilling subquery over EAV; the
-    # mean-gas fold and v7's four-checkpoint field fold each add ONE batched
-    # query. The count stays constant as project volume grows.
-    assert len(seen) == 3, seen
+    # mean-gas fold, v7's four-checkpoint field fold and Card 3V's canonical-name
+    # fold each add ONE batched query. What matters is that the count stays
+    # CONSTANT as project volume grows -- four leads here, and the same four
+    # statements for four hundred.
+    assert len(seen) == 4, seen
     by_id = {row["project_id"]: row["mean_gas_bcf"] for row in rows}
     assert [by_id[pid] for pid in ids] == [100.0, 101.0, 102.0, 103.0]
 

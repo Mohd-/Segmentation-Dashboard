@@ -9,35 +9,68 @@ import { byId, all, esc } from '../dom.js';
 // portfolio.js's pipeline/transitions graph.
 
 // Resource-class buckets over reporting.record_status values: a well with a
-// recorded gas fluid is a discovery; an undrilled record (Staked/Proposed)
-// is undiscovered potential. The remaining fluids (Dry Hole, Water Bearing,
-// Oil over Gas, Oil) are gas write-offs and count toward neither bucket.
+// recorded gas fluid is a discovery; an undrilled record is undiscovered
+// potential, split by whether it is already Staked or still Proposed. The
+// remaining fluids (Dry Hole, Water Bearing, Oil over Gas, Oil) are gas
+// write-offs and count toward neither bucket.
 export var DISCOVERED_STATUSES = ['Gas', 'Gas over Water'];
 export var UNDISCOVERED_STATUSES = ['Staked', 'Proposed'];
 // Yet-to-find is a fixed planning assumption, not data: 400 BCF for every
-// distinct gas field present in the current selection.
+// distinct gas field in the current selection. That figure is the field's
+// WHOLE estimated endowment, so what is left to find is it MINUS what has
+// already been found or booked as potential -- discovered and undiscovered
+// volumes eat into the estimate rather than stacking on top of it. The bar
+// therefore always totals the endowment, and its shape reads as "how much of
+// what we think is there have we accounted for".
 export var YTF_BCF_PER_FIELD = 400;
 
+// Segments vs wells: a record that has not been promoted to the Business Plan
+// is a segment/lead (is_lead), the rest are wells. Counting both per bucket is
+// what the two deleted stat boxes used to say, now said per category.
+function emptyBucket() { return { bcf: 0, segments: 0, wells: 0 }; }
+
+function addToBucket(bucket, row, ogip) {
+  if (ogip != null) bucket.bcf += ogip;
+  if (row.is_lead) bucket.segments += 1; else bucket.wells += 1;
+}
+
 export function computeResourceSummary(rows) {
-  var discovered = 0;
-  var undiscovered = 0;
+  var discovered = emptyBucket();
+  var staked = emptyBucket();
+  var proposed = emptyBucket();
   var seenFields = {};
   var fieldCount = 0;
   (rows || []).forEach(function (row) {
     var field = row.gas_field == null ? '' : String(row.gas_field);
     if (field && !seenFields[field]) { seenFields[field] = true; fieldCount += 1; }
-    var ogip = Number(row.mean_ogip);
-    if (row.mean_ogip === '' || row.mean_ogip == null || !isFinite(ogip)) return;
-    if (DISCOVERED_STATUSES.indexOf(row.status) >= 0) discovered += ogip;
-    else if (UNDISCOVERED_STATUSES.indexOf(row.status) >= 0) undiscovered += ogip;
+    var raw = Number(row.mean_ogip);
+    var ogip = (row.mean_ogip === '' || row.mean_ogip == null || !isFinite(raw)) ? null : raw;
+    // A record still COUNTS toward its category with no volume recorded --
+    // "3 segments" is true whether or not all three carry a Mean OGIP.
+    if (DISCOVERED_STATUSES.indexOf(row.status) >= 0) addToBucket(discovered, row, ogip);
+    else if (row.status === 'Staked') addToBucket(staked, row, ogip);
+    else if (row.status === 'Proposed') addToBucket(proposed, row, ogip);
   });
-  var ytf = fieldCount * YTF_BCF_PER_FIELD;
+  var initialYtf = fieldCount * YTF_BCF_PER_FIELD;
+  var accounted = discovered.bcf + staked.bcf + proposed.bcf;
+  var remainingYtf = Math.max(0, initialYtf - accounted);
   return {
     discovered: discovered,
-    undiscovered: undiscovered,
-    ytf: ytf,
+    staked: staked,
+    proposed: proposed,
+    // What is left of the endowment after everything already accounted for.
+    ytf: remainingYtf,
+    initialYtf: initialYtf,
+    accounted: accounted,
+    // True when the selection has already accounted for more than the
+    // endowment assumes. Surfaced rather than silently clamped: it means the
+    // 400 BCF/field assumption is low for this selection, which is worth
+    // knowing.
+    exceedsEstimate: accounted > initialYtf,
     fieldCount: fieldCount,
-    total: discovered + undiscovered + ytf
+    // The bar always totals the endowment; with no field in the selection
+    // there is nothing to total.
+    total: initialYtf
   };
 }
 
@@ -53,39 +86,91 @@ function fmtBcf(value) {
   });
 }
 
+// "3 segments · 1 well", with the singular right and either half dropped when
+// it is zero -- "0 wells" on every line is noise.
+function countsLabel(bucket) {
+  var bits = [];
+  if (bucket.segments) bits.push(bucket.segments + ' segment' + (bucket.segments === 1 ? '' : 's'));
+  if (bucket.wells) bits.push(bucket.wells + ' well' + (bucket.wells === 1 ? '' : 's'));
+  return bits.join(' · ') || 'no records';
+}
+
+// A block narrower than this share of the bar cannot hold its own value
+// legibly, so it goes unlabelled rather than showing a truncated number. Tuned
+// against the widest label the bar prints ("1,132.5 BCF") in the narrowest
+// supported card.
+var MIN_LABELLED_SHARE = 0.12;
+
 export function renderResourceBar(rows) {
   var element = byId('portfolio-resource-bar');
   if (!element) return;
   var summary = computeResourceSummary(rows);
+  var fieldsShort = summary.fieldCount + ' field' + (summary.fieldCount === 1 ? '' : 's');
+  var fieldsPhrase = fieldsShort + ' in the current selection';
   var stages = [
-    { slug: 'discovered', label: 'Discovered Resources', value: summary.discovered,
-      hint: 'Sum of Mean OGIP over Gas and Gas over Water wells in the current selection' },
-    { slug: 'undiscovered', label: 'Undiscovered Resources', value: summary.undiscovered,
-      hint: 'Sum of Mean OGIP over Staked and Proposed records in the current selection' },
-    { slug: 'ytf', label: 'Yet to Find', value: summary.ytf,
-      hint: YTF_BCF_PER_FIELD + ' BCF × ' + summary.fieldCount + ' field' + (summary.fieldCount === 1 ? '' : 's') + ' in the current selection' }
+    { slug: 'discovered', label: 'Discovered', value: summary.discovered.bcf,
+      counts: countsLabel(summary.discovered),
+      hint: 'Sum of Mean OGIP over Gas and Gas over Water records in the current selection' },
+    { slug: 'staked', label: 'Undiscovered: Staked', value: summary.staked.bcf,
+      counts: countsLabel(summary.staked),
+      hint: 'Sum of Mean OGIP over Staked records in the current selection' },
+    { slug: 'proposed', label: 'Undiscovered: Proposed', value: summary.proposed.bcf,
+      counts: countsLabel(summary.proposed),
+      hint: 'Sum of Mean OGIP over Proposed records in the current selection' },
+    { slug: 'ytf', label: 'Undiscovered: YTF', value: summary.ytf,
+      // YTF has no wells and no segments to count -- it is what the field
+      // endowment has left over. The field count is the honest number, and it
+      // is what drives the figure.
+      counts: fieldsShort,
+      hint: YTF_BCF_PER_FIELD + ' BCF × ' + fieldsPhrase + ', less the ' +
+        fmtBcf(summary.accounted) + ' BCF already discovered or booked as potential' }
   ];
-  // Segments are strictly proportional to their BCF share: inline flex
-  // weights with basis 0 (and no min-width floor), so width tracks value
-  // exactly however the filters re-scope the sums. A stage with no volume
-  // renders no segment at all. Captions live in a separate legend row
-  // (swatch + value + name, centered per entry) so a thin segment can never
-  // crush or overlap its caption.
-  var segments = stages.filter(function (stage) { return stage.value > 0; }).map(function (stage) {
-    return '<div class="prb-seg prb-' + stage.slug + '" style="flex:' + stage.value + ' 1 0%" title="' + esc(stage.hint) + '"></div>';
+  // Each block PRINTS its own value, as the approved design shows -- but only
+  // when it is wide enough to hold one. Widths are strictly proportional to
+  // BCF share, and a sliver clipping "116 BCF" down to "11" would state a
+  // number that is simply wrong. Below the threshold the block still shows in
+  // the bar and its value is in the caption beneath it and in the tooltip.
+  var shown = stages.filter(function (stage) { return stage.value > 0; });
+  var barTotal = shown.reduce(function (sum, stage) { return sum + stage.value; }, 0) || 1;
+  var segments = shown.map(function (stage) {
+    var roomy = (stage.value / barTotal) >= MIN_LABELLED_SHARE;
+    return '<div class="prb-seg prb-' + stage.slug + '" style="flex:' + stage.value + ' 1 0%"' +
+      ' title="' + esc(stage.hint) + '">' +
+      (roomy ? '<span class="prb-seg-value">' + esc(fmtBcf(stage.value)) + ' BCF</span>' : '') +
+      '</div>';
   }).join('');
   if (!segments) segments = '<div class="prb-seg prb-empty"></div>';
-  var legend = stages.map(function (stage) {
-    return '<div class="prb-key" title="' + esc(stage.hint) + '">' +
-      '<b><span class="prb-swatch prb-' + stage.slug + '"></span>' + esc(fmtBcf(stage.value)) + ' BCF</b>' +
-      '<small>' + esc(stage.label) + '</small></div>';
+  // The captions sit UNDER the bar, one column per stage, each carrying the
+  // stage name over its counts.
+  //
+  // They are EQUAL columns, not the segment weights. Matching the weights
+  // reads well on the mockup, where all four blocks are the same size -- but
+  // with real data one block routinely holds most of the total, and a caption
+  // in a 3px column shreds into a vertical column of single letters. Each
+  // caption instead carries its block's colour, so the tie to the bar is
+  // explicit rather than positional and survives any proportion.
+  var captions = shown.map(function (stage) {
+    return '<div class="prb-caption">' +
+      '<small><span class="prb-swatch prb-' + stage.slug + '"></span>' + esc(stage.label) + '</small>' +
+      '<em>' + esc(stage.counts) + '</em></div>';
   }).join('');
+  var overrun = summary.exceedsEstimate
+    ? '<p class="prb-overrun" role="status">Discovered and undiscovered volumes exceed the ' +
+      esc(fmtBcf(summary.initialYtf)) + ' BCF estimate by ' +
+      esc(fmtBcf(summary.accounted - summary.initialYtf)) + ' BCF — nothing is left to find under this assumption.</p>'
+    : '';
+  // The title states the ESTIMATE the bar divides -- the field endowment --
+  // not a running total of the segments, which is why it reads "Total".
   element.innerHTML =
-    '<p class="prb-title">Total Estimated Original Gas Initially in Place is <b>' + esc(fmtBcf(summary.total)) + ' BCF</b></p>' +
-    '<div class="prb-bar" role="img" aria-label="Discovered ' + esc(fmtBcf(summary.discovered)) +
-    ' BCF, undiscovered ' + esc(fmtBcf(summary.undiscovered)) +
+    '<p class="prb-title">Total Estimated Original Gas Initially in Place is <b>' +
+    esc(fmtBcf(summary.total)) + ' BCF</b>' +
+    '<small class="prb-title-note">' + esc(YTF_BCF_PER_FIELD + ' BCF × ' + fieldsPhrase) + '</small></p>' +
+    '<div class="prb-bar" role="img" aria-label="Of ' + esc(fmtBcf(summary.total)) +
+    ' BCF estimated: discovered ' + esc(fmtBcf(summary.discovered.bcf)) +
+    ' BCF, undiscovered staked ' + esc(fmtBcf(summary.staked.bcf)) +
+    ' BCF, undiscovered proposed ' + esc(fmtBcf(summary.proposed.bcf)) +
     ' BCF, yet to find ' + esc(fmtBcf(summary.ytf)) + ' BCF">' + segments + '</div>' +
-    '<div class="prb-legend">' + legend + '</div>';
+    '<div class="prb-captions">' + captions + '</div>' + overrun;
 }
 
 // ---------------------------------------------------------------------------
@@ -129,8 +214,13 @@ function niceCeil(value) {
   }
 }
 
-export function renderCrossPlot(rows) {
-  var host = byId('portfolio-crossplot');
+// `hostId` lets the SAME renderer draw the dialog's full-size plot and the
+// overview tile's reduced-scale one -- the tile is not a picture of the plot,
+// it IS the plot, so clicking it enlarges rather than showing something else.
+// The SVG has a fixed viewBox and scales to its container, so no second
+// drawing path is needed for the small size.
+export function renderCrossPlot(rows, hostId) {
+  var host = byId(hostId || 'portfolio-crossplot');
   if (!host) return;
   var points = crossPlotPoints(rows);
   var skipped = (rows || []).length - points.length;
@@ -237,7 +327,18 @@ function wireCrossPlotTooltip(host, points) {
 // ---------------------------------------------------------------------------
 
 var crossPlotRows = [];
-export function setCrossPlotRows(rows) { crossPlotRows = rows || []; }
+export function setCrossPlotRows(rows) {
+  crossPlotRows = rows || [];
+  renderCrossPlotThumb();
+}
+
+// The overview tile. Draws the rowset the dialog would OPEN with, so enlarging
+// never changes what is on screen. Silently absent when the tile is not in the
+// DOM (test fixtures, and the dialog-only tests).
+export function renderCrossPlotThumb() {
+  if (!byId('portfolio-crossplot-thumb')) return;
+  renderCrossPlot(filteredCrossPlotRows(), 'portfolio-crossplot-thumb');
+}
 
 // The plot's cutoff quadrants double as a filter dimension. Cutoff values
 // sit on the "high" side (CoS 50% / OGIP 10 BCF count as Super Stars-ward);
@@ -341,6 +442,9 @@ export function initPortfolioAnalysis() {
     var container = byId(filter.id);
     if (container) container.addEventListener('change', function () {
       renderCrossPlot(filteredCrossPlotRows());
+      // Keep the tile showing what the dialog shows, so closing the dialog
+      // does not reveal a stale thumbnail.
+      renderCrossPlotThumb();
     });
   });
 }

@@ -135,6 +135,48 @@ export function kpiTileHtml(value, label, modifier, icon, support) {
 }
 
 /* -------------------------------------------------------------------------
+   Record priority chip
+
+   Priority is a RECORD-level attribute (projects.priority), never a per-step
+   one, and it is the same attribute on both sides of the app -- so both detail
+   shells render the same chip in the same place (beside the record name, in
+   .detail-title-row) and cycle it the same way. This block owns the vocabulary
+   and the markup; each shell owns its own Store lookup and PATCH call.
+   ------------------------------------------------------------------------- */
+
+var LEAD_PRIORITY_CYCLE = { Low: 'Medium', Medium: 'High', High: 'Low' };
+
+// Exported so the cycle order is pinned by a test, not just by a handler.
+export function nextLeadPriority(current) {
+  return LEAD_PRIORITY_CYCLE[current || 'Low'] || 'Low';
+}
+
+// Paint an EXISTING chip element (the maturation shell's chip is static markup
+// in index.html). Everything a reader needs is here: the level as text, the
+// tint as the class, and whether it can be changed as both `disabled` and the
+// title, so the chip never looks clickable to someone who cannot click it.
+export function applyPriorityChip(chip, value, editable, extraClass) {
+  if (!chip) return;
+  var level = LEAD_PRIORITY_CYCLE[value] ? value : 'Low';
+  chip.disabled = !editable;
+  chip.textContent = level;
+  chip.className = 'priority ' + (extraClass || 'lead-priority-chip') +
+    ' priority-' + level.toLowerCase() + (editable ? '' : ' lead-priority-chip-static');
+  chip.title = 'Priority: ' + level +
+    (editable ? ' — click to change' : ' — set by a supervisor');
+}
+
+// The same chip as markup, for shells that rebuild their header on every
+// render instead of holding a static element.
+export function priorityChipHtml(id, value, editable) {
+  var level = LEAD_PRIORITY_CYCLE[value] ? value : 'Low';
+  var title = 'Priority: ' + level + (editable ? ' — click to change' : ' — set by a supervisor');
+  return '<button type="button" id="' + esc(id) + '" class="priority lead-priority-chip priority-' +
+    level.toLowerCase() + (editable ? '' : ' lead-priority-chip-static') + '"' +
+    (editable ? '' : ' disabled') + ' title="' + esc(title) + '">' + esc(level) + '</button>';
+}
+
+/* -------------------------------------------------------------------------
    Lead-card people + tracked-item dots (from views/pipeline.js)
    ------------------------------------------------------------------------- */
 
@@ -163,11 +205,25 @@ export function personChipsHtml(names) {
   }).join('');
 }
 
+// A step the workflow satisfied on the user's behalf reads as done, but it is
+// not somebody's achievement -- so it keeps the check GLYPH and loses the
+// green, rendering in the muted token instead (.lead-dot-completed-system).
+// Only 'Completed' has a system variant: pending and in-progress are states
+// nobody has finished, so "who did it" has nothing to say about them yet.
+export function isSystemCompleted(status, source) {
+  return status === 'Completed' && source === 'system';
+}
+
 // One tracked-item's dot -- role="img"/aria-label/title exactly as the
 // maturation board renders today. Callers own the surrounding
 // <span class="lead-item"> wrapper and the item's own visible label.
-export function leadItemHtml(status, label) {
+// `source` is optional: 'system' for auto-completed steps, anything else (or
+// omitted) for the ordinary case.
+export function leadItemHtml(status, label, source) {
   var dot = ITEM_DOTS[status] || ITEM_DOTS['In Progress'];
-  return '<span class="lead-dot lead-dot-' + dot.slug + '" role="img" aria-label="' + esc(status) +
-    '" title="' + esc(label + ' — ' + status) + '">' + ICONS[dot.icon] + '</span>';
+  var system = isSystemCompleted(status, source);
+  var reading = system ? 'Completed automatically' : status;
+  return '<span class="lead-dot lead-dot-' + dot.slug + (system ? ' lead-dot-completed-system' : '') +
+    '" role="img" aria-label="' + esc(reading) +
+    '" title="' + esc(label + ' — ' + reading) + '">' + ICONS[dot.icon] + '</span>';
 }

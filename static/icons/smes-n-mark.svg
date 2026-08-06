@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-labelledby="smes-mark-title">
+  <title id="smes-mark-title">SMES N brand mark</title>
+  <rect x="2" y="2" width="44" height="44" rx="7" fill="#070E78"/>
+  <path d="m24 7 4.4 6.5h-8.8L24 7Z" fill="#fff"/>
+  <path d="M17 17.2h14" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+  <path d="M17.4 36V21.5L30.6 36V21.5" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

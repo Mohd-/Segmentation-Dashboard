@@ -1,10 +1,15 @@
-"""Card 3D -- the Segmentation Slides approval workflow.
+"""Cards 3D and 3S -- the Segmentation Slides approval workflow.
 
-The one tracked item whose completion is still a HUMAN decision. Its employee
-has no "Submit for Approval" button: ticking "Segmentation slides are placed in
-the shared folder" and saving IS the request for review
-(constants.CHECKBOX_SUBMIT_STEPS -> lifecycle.apply_checkbox_submission), and
-only a supervisor's Approved click closes the step.
+The one tracked item whose completion is a HUMAN decision.
+
+Card 3S moved it onto the Business Plan Execution approval framework, which
+changed HOW the request for review is made. It used to be implicit: ticking
+"Segmentation slides are placed in the shared folder" and saving submitted the
+step, because the page offered no Submit button. Under the shared framework a
+save is NEVER a submission -- the employee submits explicitly, the box is a
+REQUIREMENT that submit checks (REQUIRED_FIELDS_FOR_SUBMIT), and a supervisor
+may additionally reopen an approved step. Only a supervisor's Approved click
+still closes it.
 
 Everything here drives the REAL endpoints (PATCH /api/tasks/<id> with a fields
 payload -- exactly what the detail form's Save sends -- and POST
@@ -40,6 +45,11 @@ def save(client, task, fields, expect=200, **extra):
     resp = client.patch(f"/api/tasks/{task['task_id']}", json=body)
     assert resp.status_code == expect, resp.get_json()
     return resp.get_json().get("task")
+
+
+def submit(client, task, expect=200):
+    """The explicit request for review Card 3S introduced."""
+    return transition(client, task, "submit", expect=expect)
 
 
 def transition(client, task, action, expect=200):
@@ -91,21 +101,45 @@ def slides_task(client, pid):
 # The declarative tables
 # ---------------------------------------------------------------------------
 
-def test_the_checkbox_submit_table_names_only_manual_approval_steps():
-    """A step may be field-COMPLETED or checkbox-SUBMITTED, never both: the
-    first drives itself to Approved, the second stops at Ready on purpose."""
+def test_no_step_submits_itself_on_save_any_more():
+    """Card 3S emptied CHECKBOX_SUBMIT_STEPS.
+
+    Segmentation Slides was its only entry. Under the shared approval framework
+    a save is never a submission, so the table is empty -- but the mechanism is
+    kept, because "a save IS the request for review" is a policy this codebase
+    may want again, and deleting it would throw away the capability rather than
+    the decision.
+    """
     import workflow
 
-    assert workflow.CHECKBOX_SUBMIT_STEPS == {STEP: BOX}
+    assert workflow.CHECKBOX_SUBMIT_STEPS == {}
     assert not (set(workflow.CHECKBOX_SUBMIT_STEPS) & set(workflow.FIELD_COMPLETION))
-    assert set(workflow.CHECKBOX_SUBMIT_STEPS) <= workflow.FIELD_COMPLETION_MANUAL_APPROVAL_STEPS
-    assert set(workflow.CHECKBOX_SUBMIT_STEPS) <= {name for _s, name, _g in workflow.PIPELINE_TEMPLATES}
+
+
+def test_the_confirmation_is_now_a_submit_REQUIREMENT(client):
+    """The box did not disappear -- it became what it reads as. Submitting
+    without it is refused, naming the box."""
+    import workflow
+
+    assert workflow.REQUIRED_FIELDS_FOR_SUBMIT[STEP] == (
+        (BOX, "Segmentation slides are placed in the shared folder"),)
+
+    login(client, SUPERVISOR)
+    pid = create_project(client, "SS-REQUIRE-1")
+    task = assign(client, slides_task(client, pid), EMPLOYEE)
+    login(client, EMPLOYEE)
+
+    resp = client.post(f"/api/tasks/{task['task_id']}/transition",
+                       json={"action": "submit", "revision": task["revision"]})
+    assert resp.status_code == 400
+    assert "shared folder" in resp.get_json()["detail"]
+    # Refused BEFORE any state change: no pending review was created.
+    assert slides_task(client, pid)["status"] == "In Progress"
 
 
 def test_the_submission_only_ever_moves_a_step_to_ready():
     import workflow
 
-    assert workflow.CHECKBOX_SUBMIT_FROM_STATUSES == frozenset({"Not Assigned", "In Progress"})
     assert workflow.TASK_TRANSITIONS["submit"] == ("In Progress", "Ready")
 
 
@@ -113,17 +147,18 @@ def test_the_submission_only_ever_moves_a_step_to_ready():
 # The employee's save = submit
 # ---------------------------------------------------------------------------
 
-def test_checked_save_submits_for_review_in_the_same_action(client):
+def test_an_explicit_submit_files_the_request_for_review(client):
     login(client, SUPERVISOR)
     pid = create_project(client, "SS-SUBMIT-1")
     task = assign(client, slides_task(client, pid), EMPLOYEE)
     assert task["status"] == "In Progress"
     login(client, EMPLOYEE)
 
+    # A save is a DRAFT, whatever it carries.
     saved = save(client, task, {BOX: "1"})
+    assert saved["status"] == "In Progress", "a save is never a submission"
 
-    # The save RESPONSE already carries the post-submit row, so the client
-    # adopts the new status/revision instead of a stale pair.
+    saved = submit(client, saved)
     assert saved["status"] == "Ready"
     assert slides_task(client, pid)["status"] == "Ready"
     assert tracked_items(client, pid)[STEP] == "Pending Approval"
@@ -143,20 +178,20 @@ def test_the_submission_notifies_the_supervisors(client):
     task = assign(client, slides_task(client, pid), EMPLOYEE)
     login(client, EMPLOYEE)
 
-    save(client, task, {BOX: "1"})
+    submit(client, save(client, task, {BOX: "1"}))
 
     assert notifications(client, task["task_id"]) == \
         [{"recipient": SUPERVISOR, "actor": EMPLOYEE, "event": "submitted"}]
 
 
-def test_a_second_checked_save_does_not_submit_twice(client):
+def test_saving_a_pending_step_does_not_submit_it_again(client):
     """A step already Ready is waiting on a supervisor: re-saving it (fixing a
     typo in the comments) must not file the same review request again."""
     login(client, SUPERVISOR)
     pid = create_project(client, "SS-SUBMIT-2")
     task = assign(client, slides_task(client, pid), EMPLOYEE)
     login(client, EMPLOYEE)
-    pending = save(client, task, {BOX: "1"})
+    pending = submit(client, save(client, task, {BOX: "1"}))
 
     again = save(client, pending, {BOX: "1"}, comments="second thoughts")
 
@@ -188,7 +223,7 @@ def test_unticking_never_withdraws_a_pending_submission(client):
     pid = create_project(client, "SS-DRAFT-2")
     task = assign(client, slides_task(client, pid), EMPLOYEE)
     login(client, EMPLOYEE)
-    pending = save(client, task, {BOX: "1"})
+    pending = submit(client, save(client, task, {BOX: "1"}))
     assert pending["status"] == "Ready"
 
     still_pending = save(client, pending, {BOX: ""})
@@ -197,13 +232,12 @@ def test_unticking_never_withdraws_a_pending_submission(client):
     assert tracked_items(client, pid)[STEP] == "Pending Approval"
 
 
-def test_a_checked_save_on_an_unassigned_step_assigns_the_saving_user(client):
-    """Assignment is the only door out of "Not Assigned", so the save has to
-    name somebody -- the person who ticked the box.
+def test_submitting_an_unassigned_step_is_refused_for_an_employee(client):
+    """Under the shared framework an employee may only submit work assigned to
+    them -- the same rule every other step follows. Ticking a box no longer
+    quietly assigns the step to whoever ticked it.
 
-    Created ANONYMOUSLY (before login) so the step really is Not Assigned:
-    a logged-in creation would auto-assign it to its creator (the creation
-    auto-assignment's creator-default tier), which is a different test.
+    Created ANONYMOUSLY (before login) so the step really is Not Assigned.
     """
     pid = create_project(client, "SS-ASSIGN-1")
     login(client, EMPLOYEE)
@@ -211,34 +245,20 @@ def test_a_checked_save_on_an_unassigned_step_assigns_the_saving_user(client):
     assert task["status"] == "Not Assigned"
 
     saved = save(client, task, {BOX: "1"})
-
-    assert (saved["status"], saved["assigned_to"]) == ("Ready", EMPLOYEE)
-    assert [row["action_type"] for row in history(client, task["task_id"])] == [
-        "Component Inputs Updated", "Component Assigned", "Component Submitted"]
+    assert saved["status"] == "Not Assigned", "still a draft"
+    submit(client, saved, expect=403)
 
 
-def test_a_checked_save_never_takes_over_someone_elses_step(client):
+def test_a_supervisor_may_submit_a_step_assigned_to_someone_else(client):
+    """Supervisors and staff may submit any component; the submit does not take
+    the step over."""
     login(client, SUPERVISOR)
     pid = create_project(client, "SS-ASSIGN-2")
     task = assign(client, slides_task(client, pid), EMPLOYEE)
 
-    saved = save(client, task, {BOX: "1"})  # saved by the supervisor
+    saved = submit(client, save(client, task, {BOX: "1"}))
 
     assert (saved["status"], saved["assigned_to"]) == ("Ready", EMPLOYEE)
-
-
-def test_a_save_that_drives_status_explicitly_stands_the_hook_down(client):
-    """PATCH with a ``status`` key is a caller driving status directly (the
-    legacy path); the hook reacts to FIELD edits, not to status writes."""
-    login(client, SUPERVISOR)
-    pid = create_project(client, "SS-EXPLICIT-1")
-    task = assign(client, slides_task(client, pid), EMPLOYEE)
-
-    saved = save(client, task, {BOX: "1"}, status="In Progress")
-
-    assert saved["status"] == "In Progress"
-    assert not [row for row in history(client, task["task_id"])
-                if row["action_type"] == "Component Submitted"]
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +270,7 @@ def test_supervisor_approval_completes_the_tracked_item(client):
     pid = create_project(client, "SS-APPROVE-1")
     task = assign(client, slides_task(client, pid), EMPLOYEE)
     login(client, EMPLOYEE)
-    pending = save(client, task, {BOX: "1"})
+    pending = submit(client, save(client, task, {BOX: "1"}))
     login(client, SUPERVISOR)
 
     approved = transition(client, pending, "approve")
@@ -271,7 +291,7 @@ def test_approval_history_records_the_actor_and_a_timestamp(client):
     pid = create_project(client, "SS-APPROVE-2")
     task = assign(client, slides_task(client, pid), EMPLOYEE)
     login(client, EMPLOYEE)
-    pending = save(client, task, {BOX: "1"})
+    pending = submit(client, save(client, task, {BOX: "1"}))
     login(client, SUPERVISOR)
     transition(client, pending, "approve")
 
@@ -292,7 +312,7 @@ def test_return_reopens_the_step_with_every_field_intact(client):
     pid = create_project(client, "SS-RETURN-1")
     task = assign(client, slides_task(client, pid), EMPLOYEE)
     login(client, EMPLOYEE)
-    pending = save(client, task, {BOX: "1"}, comments="ready for review")
+    pending = submit(client, save(client, task, {BOX: "1"}, comments="ready for review"))
     login(client, SUPERVISOR)
 
     returned = transition(client, pending, "return")
@@ -306,19 +326,20 @@ def test_return_reopens_the_step_with_every_field_intact(client):
         {"recipient": EMPLOYEE, "actor": SUPERVISOR, "event": "returned"}
 
 
-def test_a_returned_step_can_be_resubmitted_by_saving_again(client):
-    """The box is still ticked after a return, so the employee's next save --
-    a real edit answering the supervisor's note -- asks again."""
+def test_a_returned_step_can_be_resubmitted(client):
+    """A return preserves everything, so answering the note and submitting
+    again is the whole correction flow."""
     login(client, SUPERVISOR)
     pid = create_project(client, "SS-RETURN-2")
     task = assign(client, slides_task(client, pid), EMPLOYEE)
     login(client, EMPLOYEE)
-    pending = save(client, task, {BOX: "1"})
+    pending = submit(client, save(client, task, {BOX: "1"}))
     login(client, SUPERVISOR)
     returned = transition(client, pending, "return")
     login(client, EMPLOYEE)
 
-    resubmitted = save(client, returned, {BOX: "1"}, comments="addressed the notes")
+    edited = save(client, returned, {BOX: "1"}, comments="addressed the notes")
+    resubmitted = submit(client, edited)
 
     assert resubmitted["status"] == "Ready"
     assert len([row for row in notifications(client, task["task_id"])
@@ -332,7 +353,7 @@ def test_an_employee_may_not_approve_the_step(client):
     pid = create_project(client, "SS-ROLE-1")
     task = assign(client, slides_task(client, pid), EMPLOYEE)
     login(client, EMPLOYEE)
-    pending = save(client, task, {BOX: "1"})
+    pending = submit(client, save(client, task, {BOX: "1"}))
 
     transition(client, pending, "approve", expect=403)
     assert slides_task(client, pid)["status"] == "Ready"
@@ -342,9 +363,13 @@ def test_an_employee_may_not_approve_the_step(client):
 # The field-completion engine keeps its hands off
 # ---------------------------------------------------------------------------
 
-def test_a_checked_save_never_approves_the_step(client):
-    """The guard, end to end: no save of this step -- ticked, re-ticked, or
-    saved by a supervisor -- may reach Approved without a human's click."""
+def test_no_save_of_this_step_ever_approves_it(client):
+    """The guard, end to end: no save -- ticked, re-ticked, or made by a
+    supervisor -- may reach Approved, or even Ready, without a click.
+
+    The step is deliberately absent from FIELD_COMPLETION, so the engine that
+    closes every other prospect step on its field state cannot touch it.
+    """
     login(client, SUPERVISOR)
     pid = create_project(client, "SS-ENGINE-1")
     task = slides_task(client, pid)
@@ -353,10 +378,11 @@ def test_a_checked_save_never_approves_the_step(client):
     saved = save(client, saved, {BOX: "1"})
     saved = save(client, saved, {BOX: "1", "seismic_slides_loaded": "1"})
 
-    assert saved["status"] == "Ready"
+    assert saved["status"] != "Approved"
+    assert saved["status"] != "Ready", "a save is never a submission"
     events = {row["action_type"] for row in history(client, task["task_id"])}
-    assert not events & {"Field Completion", "Field Reopen", "Component Approved"}
-    assert tracked_items(client, pid)[STEP] == "Pending Approval"
+    assert not events & {"Field Completion", "Field Reopen", "Component Approved",
+                         "Component Submitted"}
 
 
 def test_pending_approval_stays_this_step_alone_under_the_new_flow(client):
@@ -369,10 +395,74 @@ def test_pending_approval_stays_this_step_alone_under_the_new_flow(client):
     # ... and park a sibling in Ready the manual way for contrast.
     other = assign(client, get_task_by_name(client, pid, "Lead Assessment"), EMPLOYEE)
     login(client, EMPLOYEE)
-    save(client, task, {BOX: "1"})
+    submit(client, save(client, task, {BOX: "1"}))
     transition(client, other, "submit")
 
     items = tracked_items(client, pid)
     assert items[STEP] == "Pending Approval"
     assert [label for label, status in items.items() if status == "Pending Approval"] == [STEP]
     assert items["Area Definition"] == "In Progress"
+
+
+# ---------------------------------------------------------------------------
+# Card 3S -- reopening an approved step
+# ---------------------------------------------------------------------------
+
+def test_a_supervisor_may_reopen_an_approved_step(client):
+    """The framework's last transition. The earlier approval is NOT undone in
+    the record: task_history is append-only, so reopening adds an event."""
+    login(client, SUPERVISOR)
+    pid = create_project(client, "SS-REOPEN-1")
+    task = assign(client, slides_task(client, pid), EMPLOYEE)
+    login(client, EMPLOYEE)
+    pending = submit(client, save(client, task, {BOX: "1"}))
+    login(client, SUPERVISOR)
+    approved = transition(client, pending, "approve")
+    assert tracked_items(client, pid)[STEP] == "Completed"
+
+    reopened = transition(client, approved, "reopen")
+
+    assert reopened["status"] == "In Progress"
+    assert reopened["assigned_to"] == EMPLOYEE, "the assignee is preserved"
+    assert tracked_items(client, pid)[STEP] == "In Progress"
+    # Both events are in the trail, in order -- the approval was not erased.
+    events = [row["action_type"] for row in history(client, task["task_id"])]
+    assert events.index("Component Approved") < events.index("Component Reopened")
+    # And the confirmation is still stored, so the correction starts from the
+    # work that was already done.
+    assert client.get(f"/api/tasks/{task['task_id']}/dynamic-fields").get_json()[BOX] == "1"
+
+
+def test_an_employee_may_not_reopen_an_approved_step(client):
+    """Reopening used to be engine-only precisely because publishing it
+    ungated would be an un-approve anyone could reach. It is published now,
+    supervisor-gated at the route."""
+    login(client, SUPERVISOR)
+    pid = create_project(client, "SS-REOPEN-2")
+    task = assign(client, slides_task(client, pid), EMPLOYEE)
+    login(client, EMPLOYEE)
+    pending = submit(client, save(client, task, {BOX: "1"}))
+    login(client, SUPERVISOR)
+    approved = transition(client, pending, "approve")
+
+    login(client, EMPLOYEE)
+    transition(client, approved, "reopen", expect=403)
+    assert slides_task(client, pid)["status"] == "Approved"
+
+
+def test_a_refused_submission_leaves_the_step_usable(client):
+    """Card 3S is explicit that a failed submission must not reproduce the BPE
+    navigation lock. Server-side that means: no state change, no pending row,
+    and the very next legitimate submit still works."""
+    login(client, SUPERVISOR)
+    pid = create_project(client, "SS-REFUSE-1")
+    task = assign(client, slides_task(client, pid), EMPLOYEE)
+    login(client, EMPLOYEE)
+
+    submit(client, task, expect=400)
+    assert slides_task(client, pid)["status"] == "In Progress"
+    assert not [row for row in history(client, task["task_id"])
+                if row["action_type"] == "Component Submitted"]
+
+    fixed = save(client, slides_task(client, pid), {BOX: "1"})
+    assert submit(client, fixed)["status"] == "Ready"

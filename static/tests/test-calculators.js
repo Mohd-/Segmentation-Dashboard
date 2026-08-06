@@ -248,3 +248,154 @@ test('calculators: editing Reservoir inputs invalidates an in-flight response', 
     assert.equal(mounted.root.querySelector('#calc-reservoir-run').disabled, false);
   }).finally(mounted.restore);
 });
+
+/* ---------------------------------------------------------------------------
+   Advanced settings -- the scenario's petrophysical assumptions
+
+   These five numbers used to be invisible: a run's answer depended on values
+   the user could not see. The panel shows them and lets ONE run substitute
+   its own, which makes two properties load-bearing: an untouched panel must
+   change nothing about the request, and an override must be impossible to
+   miss once it exists.
+   --------------------------------------------------------------------------- */
+
+var META_ADVANCED = {
+  twt_thickness_coefficients: {},
+  resource_scenarios: META_PENDING.resource_scenarios,
+  resource_parameters: {
+    dry_gas_high_pressure: [
+      { name: 'porosity', label: 'Porosity', unit: 'fraction', distribution: 'normal',
+        p90: 0.11, p10: 0.21, minimum: 0, maximum: 0.4, method: null },
+      { name: 'geometric_factor', label: 'Geometric factor', unit: 'fraction',
+        distribution: 'lognormal', p90: 0.4, p10: 0.7, method: 'area_thickness' }
+    ]
+  }
+};
+
+function advRow(root, name) {
+  return root.querySelector('.calc-adv-row[data-adv="' + name + '"]');
+}
+
+test('calculators: Advanced settings prefill from the scenario and start unmodified', function () {
+  var mounted = mount(META_ADVANCED);
+  try {
+    var panel = mounted.root.querySelector('#calc-advanced');
+    assert.ok(panel, 'the panel exists');
+    assert.equal(panel.open, false, 'closed by default -- most people only read it');
+    var porosity = advRow(mounted.root, 'porosity');
+    assert.equal(porosity.querySelector('[data-adv-field="distribution"]').value, 'normal');
+    assert.equal(porosity.querySelector('[data-adv-field="p90"]').value, '0.11');
+    assert.equal(porosity.querySelector('[data-adv-field="p10"]').value, '0.21');
+    assert.equal(porosity.classList.contains('is-modified'), false);
+    assert.equal(porosity.querySelector('.calc-adv-reset').hidden, true);
+    // The bounds the scenario declares are shown, not editable.
+    assert.match(porosity.querySelector('.calc-adv-bounds').textContent, /min 0 · max 0\.4/);
+    // The geometric factor belongs to the Box Model, and GRV is the default.
+    assert.ok(advRow(mounted.root, 'geometric_factor').classList.contains('hidden'));
+  } finally { mounted.restore(); }
+});
+
+test('calculators: an untouched Advanced panel sends no overrides at all', function () {
+  var mounted = mount(META_ADVANCED);
+  var seen = null;
+  mockFetch(function (url, options) {
+    seen = JSON.parse(options.body);
+    return jsonResponse({ gas: { p90: 1, p50: 2, mean: 3, p10: 4 }, units: { gas: 'BCF' },
+      overridden_inputs: [], plots: {} });
+  });
+  // Opening the panel is not editing it.
+  mounted.root.querySelector('#calc-advanced').open = true;
+  mounted.root.querySelector('#calc-resource-run').click();
+  return waitFor(function () { return seen; }).then(function () {
+    assert.equal('overrides' in seen, false,
+      'a run with nothing edited is byte-identical to one with the panel never opened');
+  }).finally(mounted.restore);
+});
+
+test('calculators: only the edited row travels, and the result says so', function () {
+  var mounted = mount(META_ADVANCED);
+  var seen = null;
+  mockFetch(function (url, options) {
+    seen = JSON.parse(options.body);
+    return jsonResponse({ gas: { p90: 1, p50: 2, mean: 3, p10: 4 }, units: { gas: 'BCF' },
+      overridden_inputs: ['porosity'], plots: {} });
+  });
+  var porosity = advRow(mounted.root, 'porosity');
+  input(porosity.querySelector('[data-adv-field="p10"]'), '0.30');
+  assert.ok(porosity.classList.contains('is-modified'));
+  assert.equal(porosity.querySelector('.calc-adv-reset').hidden, false);
+  // A collapsed panel must not be able to hide an override.
+  assert.equal(mounted.root.querySelector('.calc-advanced-count').textContent, '1 overridden');
+
+  mounted.root.querySelector('#calc-resource-run').click();
+  return waitFor(function () { return seen; }).then(function () {
+    assert.deepEqual(seen.overrides, { porosity: { distribution: 'normal', p90: 0.11, p10: 0.3 } });
+    return waitFor(function () { return mounted.root.querySelector('.calc-override-banner'); });
+  }).then(function () {
+    // The banner names what the SERVER said it overrode, not what the client
+    // meant to send.
+    assert.match(mounted.root.querySelector('.calc-override-banner').textContent,
+      /Run with overridden assumptions: Porosity/);
+  }).finally(mounted.restore);
+});
+
+test('calculators: changing a distribution swaps the fields it needs', function () {
+  var mounted = mount(META_ADVANCED);
+  try {
+    var porosity = advRow(mounted.root, 'porosity');
+    var select = porosity.querySelector('[data-adv-field="distribution"]');
+    select.value = 'constant';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    var fields = Array.prototype.map.call(porosity.querySelectorAll('[data-adv-field]'),
+      function (control) { return control.getAttribute('data-adv-field'); });
+    // A constant takes one value; leaving p90/p10 behind would send fields the
+    // chosen distribution has no use for (which the server refuses by name).
+    assert.deepEqual(fields, ['distribution', 'value']);
+    assert.ok(porosity.classList.contains('is-modified'));
+  } finally { mounted.restore(); }
+});
+
+test('calculators: Reset returns a row to the scenario value', function () {
+  var mounted = mount(META_ADVANCED);
+  try {
+    var porosity = advRow(mounted.root, 'porosity');
+    input(porosity.querySelector('[data-adv-field="p10"]'), '0.35');
+    assert.ok(porosity.classList.contains('is-modified'));
+    porosity.querySelector('.calc-adv-reset').click();
+    assert.equal(porosity.querySelector('[data-adv-field="p10"]').value, '0.21');
+    assert.equal(porosity.classList.contains('is-modified'), false);
+    assert.equal(mounted.root.querySelector('.calc-advanced-count').textContent, '');
+  } finally { mounted.restore(); }
+});
+
+test('calculators: an inverted Advanced range is refused before the request', function () {
+  var mounted = mount(META_ADVANCED);
+  var calls = 0;
+  mockFetch(function () {
+    calls += 1;
+    return jsonResponse({ gas: {}, units: {}, plots: {} });
+  });
+  try {
+    var porosity = advRow(mounted.root, 'porosity');
+    input(porosity.querySelector('[data-adv-field="p10"]'), '0.05');
+    mounted.root.querySelector('#calc-resource-run').click();
+    var error = mounted.root.querySelector('#calc-resource-error');
+    assert.equal(error.classList.contains('hidden'), false);
+    assert.match(error.textContent, /Porosity: P90 must be lower than P10/);
+    assert.equal(calls, 0, 'nothing left the browser');
+  } finally { mounted.restore(); }
+});
+
+test('calculators: the Box Model reveals the geometric factor row', function () {
+  var mounted = mount(META_ADVANCED);
+  try {
+    var method = mounted.root.querySelector('#calc-resource-method');
+    method.value = 'Box Model';
+    method.dispatchEvent(new Event('change', { bubbles: true }));
+    assert.equal(advRow(mounted.root, 'geometric_factor').classList.contains('hidden'), false);
+    method.value = 'GRV';
+    method.dispatchEvent(new Event('change', { bubbles: true }));
+    assert.ok(advRow(mounted.root, 'geometric_factor').classList.contains('hidden'),
+      'a parameter the selected method does not use is neither shown nor sent');
+  } finally { mounted.restore(); }
+});

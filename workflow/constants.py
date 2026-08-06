@@ -2,10 +2,14 @@
 
 The bottom of the package's dependency graph -- nothing here imports another
 workflow module (or the database), so every other module can import from it
-freely. Also home to ``StaleRevisionError`` (the optimistic-lock conflict
+freely. (``config`` is the one exception, and it is below this file in the
+graph: it reads the environment and config/lists.yaml and imports nothing of
+ours.) Also home to ``StaleRevisionError`` (the optimistic-lock conflict
 signal main.py maps to HTTP 409) and the shared read-mapping tables.
 """
 from __future__ import annotations
+
+import config
 
 
 class StaleRevisionError(RuntimeError):
@@ -85,8 +89,79 @@ def applicable_stages(pipeline_type):
 # workflow.formations.upsert_project_formations, not a DB constraint). Rows
 # are keyed by (project, formation, phase); ``phase`` says which
 # interpretation step the values came from.
-FORMATIONS = ["SARH", "QASM", "QWRH"]
+def formations() -> list:
+    """The formation names on offer, from config/lists.yaml (see that file).
+
+    A function, not a constant: the list is user-maintained, so it must be
+    read when it is used rather than frozen at import. FORMATIONS below stays
+    as the module-level name older call sites import, evaluated once at
+    startup -- which is correct for a list that changes with a restart.
+    """
+    return list(config.formations())
+
+
+FORMATIONS = formations()
 FORMATION_PHASES = ["quicklook", "post_drill", "final", "resource_update"]
+
+# ---------------------------------------------------------------------------
+# What a record is CALLED, and where
+# ---------------------------------------------------------------------------
+# A record keeps ONE identity for its whole life -- projects.project_name, the
+# lead name, which is also the stable key every relation and every historical
+# audit row hangs off. Staking does not rewrite it. What staking does is decide
+# the name the record is KNOWN BY from that point on, captured at Well Site
+# Location in the `staked_well_name` dynamic field.
+#
+# Card 3V: once staking is CONFIRMED that becomes the canonical display name
+# EVERYWHERE -- Segment Maturation's board and detail header included, not just
+# Business Plan Execution, Portfolio Analysis, the Map and the exports. One
+# name source, so no surface can disagree with another about what a record is
+# called. The lead name is never lost: it travels alongside on every payload
+# that carries either, renders beneath the canonical name wherever the two
+# differ, and keeps its own export column.
+#
+# CONFIRMED is an event, not a keystroke. Typing a name into an unsaved field
+# renames nothing: the record answers to its staked name only once the Well
+# Site Location step is complete under its own predicate below (the letter is
+# filed AND the coordinates are recorded) and a non-blank name is stored.
+STAKED_WELL_NAME_FIELD = "staked_well_name"
+WELL_SITE_LOCATION_STEP = "Well Site Location"
+
+# Card 3V's handover confirmation, recorded on the Approval to Stake step
+# beside the existing well-creation box. It records that a PERSON moved the
+# lead folder; the application performs no file operation for it and it gates
+# no completion.
+LEAD_FOLDER_HANDOVER_FIELD = "lead_folder_handover_confirmed"
+
+# The audit event written the first time a record takes its staked name.
+CANONICAL_RENAME_EVENT = "Canonical Name Set"
+
+
+def staking_confirmed(wellsite_fields):
+    """Is this record's staked name authoritative yet?
+
+    ``wellsite_fields`` is the Well Site Location task's dynamic-field map. The
+    test is deliberately the SAME one FIELD_COMPLETION uses to call that step
+    complete, plus a stored name -- so "the step is done" and "the record has
+    its well name" can never disagree.
+    """
+    fields = wellsite_fields or {}
+    if not str(fields.get(STAKED_WELL_NAME_FIELD) or "").strip():
+        return False
+    # Delegated rather than restated: field_completion_met is the one place
+    # that knows what finishes this step, so the two answers cannot drift.
+    return field_completion_met(WELL_SITE_LOCATION_STEP, fields)
+
+
+def display_record_name(project_name, staked_well_name=None, confirmed=True):
+    """The name a record is known by, everywhere.
+
+    ``confirmed`` lets a caller that has already evaluated staking_confirmed
+    pass the answer in; callers holding only a vetted staked name (the field is
+    read from a completed step) leave it at its default.
+    """
+    staked = str(staked_well_name or "").strip()
+    return staked if (staked and confirmed) else str(project_name or "")
 FORMATION_VALUE_FIELDS = [
     "top_tvdss_ft", "base_tvdss_ft", "thickness_ft", "porosity_pct",
     "swt_pct", "pay_ft", "ngr_pct", "fluid",
@@ -398,6 +473,13 @@ REQUIRED_FIELDS_FOR_SUBMIT = {
     "SAD Update": (
         ("sad_update_done", "SAD Update"),
         ("final_exec_summary_done", "Final Executive Summary"),
+    ),
+    # Card 3S. The confirmation used to BE the submission: ticking it and
+    # saving filed the request for review. Under the Business Plan Execution
+    # approval framework a save is never a submission, so the box became what
+    # it reads as -- a REQUIREMENT the explicit Submit for Approval checks.
+    "Segmentation Slides": (
+        ("segmentation_slides_loaded", "Segmentation slides are placed in the shared folder"),
     ),
 }
 
@@ -785,9 +867,16 @@ def lead_assessment_checkpoint_met(checkpoint, fields):
 # there is no "withdraw" in the lifecycle, and inventing one would silently
 # cancel a review the supervisor may already be reading. Reopening a submitted
 # step stays the supervisor's "return" action.
-CHECKBOX_SUBMIT_STEPS = {
-    "Segmentation Slides": "segmentation_slides_loaded",
-}
+# Card 3S emptied this table. It used to hold Segmentation Slides, whose ticked
+# confirmation submitted the step on save because the page offered no Submit
+# button. That step now uses the shared approval framework -- an explicit
+# Submit for Approval, with the box as a REQUIRED_FIELDS_FOR_SUBMIT
+# prerequisite -- so nothing here auto-submits any more.
+#
+# The table and its hook stay: they are the mechanism for "a save IS the
+# request for review", and emptying it is a policy change, not a deletion of
+# the capability.
+CHECKBOX_SUBMIT_STEPS = {}
 
 # The statuses a checkbox-driven submission may move FROM (see above).
 CHECKBOX_SUBMIT_FROM_STATUSES = frozenset({"Not Assigned", "In Progress"})

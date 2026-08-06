@@ -791,3 +791,206 @@ def test_bpe_un_approving_actions_are_supervisor_only_at_the_route(client):
     reopened = _transition(client, project_id, "reopen")
     assert reopened.status_code == 403
     assert "supervisor" in reopened.get_json()["detail"].lower()
+
+
+def test_detail_carries_the_well_summary_bundle_for_the_card_beside_the_step(client):
+    """Card 3E: the Well Summary panel is the maturation shell's own card, so
+    every step's payload carries the four record-level inputs that card reads.
+
+    They ride on THIS payload rather than a second request, which is what keeps
+    the panel and the step it sits beside on one vintage.
+    """
+    project_id = _bp_project(client)
+    # Values the card reads, each from a step that is NOT the one being opened:
+    # the bundle is record-level, not step-level.
+    _raw_fields(client, project_id, "SAD Model", {
+        "post_drill_piip_gas_p90": "90",
+        "post_drill_piip_gas_mean": "116",
+        "post_drill_piip_gas_p10": "140",
+    })
+    _raw_fields(client, project_id, "Quicklook Logs", {"quicklook_fluid_type": "Gas"})
+    client.put(f"/api/business-plan/wells/{project_id}/steps/quicklook-logs/formations",
+               json={"rows": [_formation("Gas")]})
+
+    detail = client.get(
+        f"/api/business-plan/wells/{project_id}/steps/business-plan-gate").get_json()
+    bundle = detail["well_summary"]
+    assert set(bundle) == {"fields", "formations", "lead_summary", "derisking"}
+
+    # The field map is record-wide, so a step's own payload can answer for the
+    # whole well.
+    assert bundle["fields"]["SAD Model"]["post_drill_piip_gas_mean"] == "116"
+    assert bundle["fields"]["Quicklook Logs"]["quicklook_fluid_type"] == "Gas"
+
+    # EVERY phase, unlike the step-scoped `formations` list beside it: this step
+    # has no formations of its own, and the card still resolves the well's.
+    assert detail["formations"] == []
+    assert [(row["formation"], row["phase"]) for row in bundle["formations"]] == [("SARH", "quicklook")]
+
+    # A well that was never matured through the lead phase has no snapshot --
+    # the key is present and null rather than absent, so the card renders its
+    # Lead Summary fold with dashes instead of failing to render.
+    assert bundle["lead_summary"] is None
+    # Total CoS is computed server-side (there is no client-side second formula)
+    # and is blank until the lead CoS steps are scored.
+    assert bundle["derisking"] == ""
+
+
+def test_the_board_opens_on_every_step(client):
+    """The Step filter defaults to `all`; narrowing to the gate is the
+    Pre-Drilling column's own toggle (see the gate-status test below).
+
+    The default used to be `business-plan-gate`, which is a STEP filter wearing
+    a gate's name: it restricted every caller to wells whose current stage still
+    holds that item, so Post-Drilling and Post-Testing looked permanently empty.
+    """
+    project_id = _bp_project(client, "BPE-GATE")
+    year = date.today().year
+
+    default_body = client.get(f"/api/business-plan/dashboard?year={year}").get_json()
+    explicit_all = client.get(f"/api/business-plan/dashboard?year={year}&step=all").get_json()
+    assert [row["project_id"] for row in default_body["wells"]] == \
+        [row["project_id"] for row in explicit_all["wells"]], \
+        "omitting the step filter is the same request as asking for all steps"
+
+    assert project_id in [row["project_id"] for row in default_body["wells"]]
+
+    # The filter itself is untouched -- asking for one step still narrows to it.
+    narrowed = client.get(
+        f"/api/business-plan/dashboard?year={year}&step=business-plan-gate").get_json()
+    assert project_id in [row["project_id"] for row in narrowed["wells"]]
+    assert all("business-plan-gate" in {item["key"] for item in row["items"]}
+               for row in narrowed["wells"])
+
+
+def test_all_years_shows_wells_from_every_year_at_once(client):
+    """The year filter defaults to the current year and always did. "All Years"
+    is a real option rather than a cleared filter, so it travels as the literal
+    `all` and the year comparison is skipped entirely.
+    """
+    near = _bp_project(client, "BPE-YEAR-NEAR", year=date.today().year)
+    far = _bp_project(client, "BPE-YEAR-FAR", year=2033)
+
+    this_year = client.get(
+        f"/api/business-plan/dashboard?year={date.today().year}").get_json()
+    visible = {row["project_id"] for row in this_year["wells"]}
+    assert near in visible and far not in visible
+
+    every_year = client.get("/api/business-plan/dashboard?year=all").get_json()
+    visible = {row["project_id"] for row in every_year["wells"]}
+    assert near in visible and far in visible
+
+    # A year that is neither a number nor the sentinel still matches nothing,
+    # rather than falling through to "show everything".
+    nonsense = client.get("/api/business-plan/dashboard?year=every").get_json()
+    assert nonsense["wells"] == []
+
+
+# ---------------------------------------------------------------------------
+# The Pre-Drilling column's BP Gate toggle, and Active Drilling
+# ---------------------------------------------------------------------------
+
+def test_a_well_states_its_business_plan_gate_status_for_the_column_toggle(client):
+    """The toggle shows wells whose gate is approved or awaiting approval, so
+    the payload states the gate item's own effective status rather than a
+    boolean that answers a different question.
+
+    It used to publish `at_business_plan_gate` (= "not Completed"), which every
+    well matched until someone approved a gate -- so the toggle looked dead on a
+    board where nothing had been submitted yet.
+    """
+    project_id = _bp_project(client, "BPE-GATE")
+
+    def gate_status():
+        body = client.get(
+            f"/api/business-plan/dashboard?year={date.today().year}").get_json()
+        well = next(row for row in body["wells"] if row["project_id"] == project_id)
+        # It is the gate ITEM's status, not a second derivation of it.
+        assert well["bp_gate_status"] == well["all_states"]["business-plan-gate"]["status"]
+        return well["bp_gate_status"]
+
+    assert gate_status() == "In Progress"
+    _submittable_gate(client, project_id)
+    assert _transition(client, project_id, "submit").status_code == 200
+    assert gate_status() == "Pending Approval"
+    assert _transition(client, project_id, "approve").status_code == 200
+    assert gate_status() == "Completed"
+
+
+def test_only_a_post_drilling_well_can_be_marked_as_actively_drilling(client):
+    """The rule lives on the WRITE, not in the gear menu that offers it: a
+    direct PATCH from anywhere has to meet it too.
+    """
+    project_id = _bp_project(client, "BPE-DRILL")
+
+    def flags(value):
+        return client.patch(f"/api/projects/{project_id}/flags",
+                            json={"active_drilling": value, "changed_by": "Supervisor"})
+
+    def detail():
+        return client.get(
+            f"/api/business-plan/wells/{project_id}/steps/business-plan-gate").get_json()
+
+    # Pre-Drilling: refused, and the step page says so before anyone tries.
+    assert detail()["project"]["stage_key"] == "pre_drilling"
+    assert detail()["project"]["active_drilling_allowed"] is False
+    refused = flags(True)
+    assert refused.status_code == 400
+    assert "Post-Drilling" in refused.get_json()["detail"]
+    assert detail()["project"]["active_drilling"] == 0
+
+    # Drive the well into Post-Drilling: every Pre-Drilling item complete.
+    _submittable_gate(client, project_id)
+    assert _transition(client, project_id, "submit").status_code == 200
+    assert _transition(client, project_id, "approve").status_code == 200
+    for key in ("well_proposal_shared", "site_preparation_shared", "approval_to_drill_shared"):
+        _save(client, project_id, "well-letters", key, True)
+    for key in ("gheer_geophysical_shared", "gheer_geomechanical_shared"):
+        _save(client, project_id, "gheer-inputs", key, True)
+    assert detail()["project"]["stage_key"] == "post_drilling"
+    assert detail()["project"]["active_drilling_allowed"] is True
+
+    # Now it is allowed, audited once, and visible on the board row that draws
+    # the animated border.
+    assert flags(True).status_code == 200
+    assert detail()["project"]["active_drilling"] == 1
+    board = client.get(f"/api/business-plan/dashboard?year={date.today().year}").get_json()
+    row = next(well for well in board["wells"] if well["project_id"] == project_id)
+    assert row["active_drilling"] == 1 and row["stage_key"] == "post_drilling"
+    events = [event for event in _history(client, project_id)
+              if event["action_type"] == "Active Drilling Flag"]
+    assert len(events) == 1
+    # Saving the same state again is not an event.
+    assert flags(True).status_code == 200
+    assert len([event for event in _history(client, project_id)
+                if event["action_type"] == "Active Drilling Flag"]) == 1
+
+
+def test_active_drilling_can_always_be_turned_off_and_needs_a_supervisor(client):
+    """Clearing the flag is never blocked by the stage rule -- a well that moved
+    on must not be stuck reading "drilling" -- and setting it is supervisor-only
+    at the route, which is where authorization belongs.
+    """
+    project_id = _bp_project(client, "BPE-DRILL-OFF")
+    _submittable_gate(client, project_id)
+    _transition(client, project_id, "submit")
+    _transition(client, project_id, "approve")
+    for key in ("well_proposal_shared", "site_preparation_shared", "approval_to_drill_shared"):
+        _save(client, project_id, "well-letters", key, True)
+    for key in ("gheer_geophysical_shared", "gheer_geomechanical_shared"):
+        _save(client, project_id, "gheer-inputs", key, True)
+    assert client.patch(f"/api/projects/{project_id}/flags",
+                        json={"active_drilling": True}).status_code == 200
+
+    # Move the well on to Post-Testing; the flag is still clearable there.
+    _save(client, project_id, "quicklook-logs", "quicklook_pdf", True)
+    client.post("/api/login", json={"name": "Employee"})
+    denied = client.patch(f"/api/projects/{project_id}/flags", json={"active_drilling": False})
+    assert denied.status_code == 403
+    client.post("/api/logout", json={})
+    assert client.patch(f"/api/projects/{project_id}/flags",
+                        json={"active_drilling": False}).status_code == 200
+    project = client.get(f"/api/projects/{project_id}").get_json()
+    assert project["active_drilling"] == 0
+    # The maturation gear reads the same availability fact off this payload.
+    assert "active_drilling_allowed" in project

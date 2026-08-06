@@ -127,9 +127,15 @@ function mount(server, options) {
   };
 }
 
+// Only the items that DO something. Card 3B's coming-soon pair deliberately
+// carries no data-action, which is what keeps it out of this list.
 function gearLabels(host) {
-  return Array.prototype.slice.call(host.gearMenu.querySelectorAll('.hm-action-label'))
+  return Array.prototype.slice.call(
+    host.gearMenu.querySelectorAll('.hm-action[data-action] .hm-action-label'))
     .map(function (element) { return element.textContent; });
+}
+function soonItems(host) {
+  return Array.prototype.slice.call(host.gearMenu.querySelectorAll('.hm-action-soon'));
 }
 function gearAction(host, key) {
   return host.gearMenu.querySelector('.hm-action[data-action="' + key + '"]');
@@ -174,7 +180,7 @@ test('header-menus eventTitle covers the three stored events and degrades safely
 // The gear menu
 // ---------------------------------------------------------------------------
 
-test('header-menus gear menu offers exactly three items, in order', function () {
+test('header-menus gear menu offers exactly three ACTIONS, in order', function () {
   var server = makeServer();
   var host = mount(server);
   host.gear.click();
@@ -198,6 +204,32 @@ test('header-menus gear menu HIDES Sign out when there is no session to end', fu
   // two keep their order.
   assert.deepEqual(gearLabels(host), ['Dark Mode', 'Export to Excel']);
   assert.equal(gearAction(host, 'signout'), null);
+});
+
+// Card 3B. Announced but not built, so they must be visible and completely
+// dead: no data-action means runGearAction can never be reached for them, and
+// `disabled` stops both pointer and keyboard activation. If either ever gains
+// a handler, this is the test that should stop it.
+test('header-menus gear menu lists two coming-soon exports that do nothing', function () {
+  var server = makeServer();
+  var host = mount(server);
+  host.gear.click();
+  var soon = soonItems(host);
+  assert.deepEqual(soon.map(function (element) { return element.textContent.trim(); }),
+    ['Export automatic Well Prop.', 'Export Well Logs Data']);
+  soon.forEach(function (element) {
+    assert.equal(element.disabled, true, 'the coming-soon item is genuinely disabled');
+    assert.equal(element.getAttribute('data-action'), null,
+      'no data-action, so no gear action can dispatch for it');
+    assert.equal(element.querySelector('.hm-action-icon'), null,
+      'Card 3B asks for a plain label with no icon');
+  });
+  // Clicking a disabled button is inert, but assert the outcome rather than
+  // the mechanism: nothing is requested and the menu does not close.
+  var before = server.calls.length;
+  soon[0].click();
+  assert.equal(server.calls.length, before, 'no request was made');
+  assert.equal(host.gearMenu.hidden, false, 'the menu stayed open');
 });
 
 test('header-menus Dark Mode swaps to Light Mode (and moon to sun) with the theme', function () {

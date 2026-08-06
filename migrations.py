@@ -44,7 +44,7 @@ import db
 from helpers import utc_now_str
 from models import Base
 
-LATEST_SCHEMA_VERSION = 10
+LATEST_SCHEMA_VERSION = 11
 
 
 # ---------------------------------------------------------------------------
@@ -992,6 +992,120 @@ def _migrate_v10_business_plan_execution(session, engine) -> None:
                   "now": now, "task_id": task["task_id"]})
 
 
+_V11_ACTOR = "migration:v11"
+_V11_EVENT = "TVDSS Sign Normalized"
+
+# Where a signed TVDSS could have been stored: two formation tables, plus the
+# lead's own Section 3 reading in the EAV. Every other depth field (MD, TVD,
+# TWT, ground elevation) is untouched -- this is about ONE field's sign
+# representation, not about depths in general.
+# Both tables carry their own project_id and an `id` primary key, so each is
+# reachable without a join.
+_V11_COLUMN_SOURCES = (
+    ("project_formations", ("top_tvdss_ft", "base_tvdss_ft")),
+    ("project_formation_pay_intervals", ("top_tvdss_ft", "base_tvdss_ft")),
+)
+_V11_FIELD_KEY = "top_formation_tvdss_ft"
+
+
+def _v11_log(session, task_id, project_id, task_name, old_value, new_value, detail):
+    """One immutable event per converted value, carrying the PRIOR signed one.
+
+    ``old_status`` holds the value as it was stored. That is the whole point of
+    the migration event: the sign is no longer recoverable from the row itself,
+    so the audit trail is where a reader goes to find what was originally
+    entered.
+    """
+    db.execute(session, """
+        INSERT INTO task_history (task_id, project_id, task_name, action_type,
+                                  old_status, new_status, changed_at, changed_by, comment)
+        VALUES (:task_id, :project_id, :task_name, :action_type,
+                :old_status, :new_status, :changed_at, :changed_by, :comment)
+    """, {"task_id": task_id, "project_id": project_id, "task_name": task_name,
+          "action_type": _V11_EVENT, "old_status": str(old_value),
+          "new_status": str(new_value), "changed_at": utc_now_str(),
+          "changed_by": _V11_ACTOR,
+          "comment": f"TVDSS stored as a magnitude; prior signed value {old_value} ({detail})."})
+
+
+def _migrate_v11_tvdss_positive(session, engine) -> None:
+    """Card 3H. Store every TVDSS as a magnitude, and keep the old sign visible.
+
+    TVDSS was the one field exempted from the application's no-negative rule,
+    because a horizon above the datum is legitimately negative. The card
+    reverses that: storage becomes the magnitude and the sign survives only as
+    an Audit Trail event. Units and datum meaning do not change -- a depth of
+    -120 and one of 120 refer to the same horizon; only the representation
+    moves.
+
+    Idempotent by construction: it selects rows that are still negative, so a
+    replay finds none and writes no second event.
+    """
+    # task_history hangs off a task. Formation rows belong to the WELL rather
+    # than to any one step, so an event about them is anchored the way
+    # workflow.update_project_name anchors a rename: on the record's first
+    # task, preferring the step that last wrote the row when it recorded one.
+    anchors = {}
+
+    def anchor_task(project_id, source_task_id):
+        if source_task_id:
+            return source_task_id
+        if project_id not in anchors:
+            row = db.fetch_one(session, """
+                SELECT task_id FROM project_tasks WHERE project_id = :project_id
+                ORDER BY sequence_no, task_id LIMIT 1
+            """, {"project_id": project_id})
+            anchors[project_id] = row["task_id"] if row else None
+        return anchors[project_id]
+
+    for table, columns in _V11_COLUMN_SOURCES:
+        for column in columns:
+            rows = db.fetch_all(session, f"""
+                SELECT id AS row_id, project_id, formation, source_task_id,
+                       {column} AS value
+                FROM {table}
+                WHERE {column} IS NOT NULL AND {column} < 0
+            """)
+            for row in rows:
+                old_value = row["value"]
+                new_value = abs(float(old_value))
+                db.execute(session, f"""
+                    UPDATE {table} SET {column} = :value WHERE id = :row_id
+                """, {"value": new_value, "row_id": row["row_id"]})
+                task_id = anchor_task(row["project_id"], row["source_task_id"])
+                if task_id is None:
+                    continue  # orphaned rows carry no auditable owner
+                _v11_log(session, task_id, row["project_id"],
+                         f"Formations ({row['formation']})",
+                         old_value, new_value, f"{table}.{column}")
+
+    # The lead's Section 3 reading lives in the EAV, where every value is text,
+    # so the filter is a leading minus rather than a numeric comparison. A row
+    # that does not parse as a number is left exactly as it is -- this
+    # migration converts signs, it does not clean up bad data.
+    rows = db.fetch_all(session, """
+        SELECT d.task_id AS task_id, d.field_value AS value,
+               t.project_id AS project_id, t.task_name AS task_name
+        FROM task_dynamic_fields d
+        JOIN project_tasks t ON t.task_id = d.task_id
+        WHERE d.field_key = :field_key AND TRIM(d.field_value) LIKE '-%'
+    """, {"field_key": _V11_FIELD_KEY})
+    for row in rows:
+        raw = str(row["value"]).strip()
+        try:
+            new_value = abs(float(raw))
+        except (TypeError, ValueError):
+            continue
+        text = str(int(new_value)) if float(new_value).is_integer() else str(new_value)
+        db.execute(session, """
+            UPDATE task_dynamic_fields SET field_value = :value, updated_at = :now
+            WHERE task_id = :task_id AND field_key = :field_key
+        """, {"value": text, "now": utc_now_str(),
+              "task_id": row["task_id"], "field_key": _V11_FIELD_KEY})
+        _v11_log(session, row["task_id"], row["project_id"], row["task_name"],
+                 raw, text, _V11_FIELD_KEY)
+
+
 # List of (version, fn) dispatched by run() in ascending order against the
 # stored schema_version. Append new steps with the next integer version and
 # bump LATEST_SCHEMA_VERSION to match; never edit or remove a shipped step.
@@ -1005,6 +1119,7 @@ MIGRATIONS = [
     (8, _migrate_v8_repair_lead_assessment_fold),
     (9, _migrate_v9_project_priority),
     (10, _migrate_v10_business_plan_execution),
+    (11, _migrate_v11_tvdss_positive),
 ]
 
 

@@ -215,3 +215,115 @@ def test_api_resource_assessment_rejects_geox_before_running_engine(client, monk
     assert resp.get_json()["detail"] == (
         "Resource calculator is only available for Lead Assessment."
     )
+
+
+# ---------------------------------------------------------------------------
+# Advanced settings -- per-run overrides of the scenario's petrophysics
+# ---------------------------------------------------------------------------
+# Porosity, Sg, NGR, the geometric factor and 1/Bg are the approved
+# per-scenario assumptions. A Calculator-tab run may substitute its own; a
+# lead's stored assessment may not.
+
+BOX = {
+    "scenario": "dry_gas_high_pressure", "method": "Box Model",
+    "area_p90_km2": "5.72", "area_p10_km2": "19.09", "thickness_p50_ft": "144.4",
+}
+
+
+def test_scenario_parameters_describes_the_five_overridables():
+    parameters = rc.scenario_parameters()
+    assert "dry_gas_high_pressure" in parameters
+    described = parameters["dry_gas_high_pressure"]
+    assert [p["name"] for p in described] == [
+        "porosity", "gas_saturation", "net_to_gross",
+        "geometric_factor", "gas_expansion_factor_1_over_bg",
+    ]
+    porosity = described[0]
+    # Enough for a panel to render a row and send an edited copy back.
+    assert porosity["distribution"] == "normal"
+    assert porosity["p90"] == 0.11 and porosity["p10"] == 0.21
+    assert porosity["maximum"] == 0.40
+    assert porosity["label"] and porosity["unit"]
+    # The geometric factor belongs to one method, so a caller can hide it.
+    geometric = [p for p in described if p["name"] == "geometric_factor"][0]
+    assert geometric["method"] == "area_thickness"
+
+
+def test_an_override_changes_the_answer_and_is_reported_back():
+    baseline = rc.run(BOX)
+    assert baseline["overridden_inputs"] == []
+    raised = rc.run(dict(BOX, overrides={
+        "porosity": {"distribution": "normal", "p90": 0.11, "p10": 0.30},
+    }))
+    assert raised["overridden_inputs"] == ["porosity"]
+    # More porosity, more gas -- the override actually reached the sampler.
+    assert raised["gas"]["mean"] > baseline["gas"]["mean"]
+
+
+def test_an_empty_override_map_is_the_unmodified_run():
+    """The panel sends nothing when nothing was edited, and 'nothing' must be
+    bit-for-bit the same run as one made with the panel never opened."""
+    assert rc.run(dict(BOX, overrides={}))["gas"] == rc.run(BOX)["gas"]
+
+
+def test_overrides_do_not_leak_the_replaced_shape():
+    """A lognormal override must not inherit the normal's mean/stddev.
+
+    The configured porosity carries mean, stddev, p90 and p10; overriding it
+    with a lognormal has to sample a lognormal, not a normal wearing new
+    percentiles.
+    """
+    result = rc.run(dict(BOX, overrides={
+        "porosity": {"distribution": "lognormal", "p90": 0.11, "p10": 0.21},
+    }))
+    assert result["overridden_inputs"] == ["porosity"]
+    normal = rc.run(dict(BOX, overrides={
+        "porosity": {"distribution": "normal", "p90": 0.11, "p10": 0.21},
+    }))
+    assert result["gas"]["mean"] != normal["gas"]["mean"]
+
+
+def test_override_bounds_carry_over_from_the_scenario():
+    """A porosity override stays inside the scenario's 0-0.40 range.
+
+    The bound is a physical limit the scenario declares; an override that
+    does not restate it must not escape it. A constant ABOVE the maximum is
+    refused by the sampler's own bound check rather than silently clipped.
+    """
+    with pytest.raises(ValueError):
+        rc.run(dict(BOX, overrides={"porosity": {"distribution": "constant", "value": 0.9}}))
+
+
+@pytest.mark.parametrize("bad, message", [
+    ({"porosity": {"distribution": "triangular", "p90": 0.1, "p10": 0.2}}, "must be one of"),
+    ({"porosity": {"distribution": "normal", "p90": 0.3, "p10": 0.1}}, "P90 must be lower than P10"),
+    ({"porosity": {"distribution": "normal", "p90": -1, "p10": 0.2}}, "must not be negative"),
+    ({"porosity": {"distribution": "lognormal", "mean": 1, "stddev": 1}}, "has no mean, stddev"),
+    ({"porosity": {"distribution": "constant"}}, "needs a value"),
+    ({"unobtainium": {"distribution": "constant", "value": 1}}, "Unknown advanced parameter"),
+])
+def test_bad_overrides_are_refused_by_name(bad, message):
+    with pytest.raises(ValueError, match=message):
+        rc.run(dict(BOX, overrides=bad))
+
+
+def test_api_calculator_resources_accepts_overrides(client):
+    resp = client.post("/api/calculators/resources", json=dict(BOX, overrides={
+        "gas_saturation": {"distribution": "constant", "value": 0.5},
+    }))
+    assert resp.status_code == 200
+    assert resp.get_json()["overridden_inputs"] == ["gas_saturation"]
+
+
+def test_api_lead_assessment_refuses_overrides(client):
+    """A lead's stored assessment must be comparable with every other lead's,
+    so it always runs on the scenario as configured."""
+    pid = create_project(client, "RESCALC-OVR-1")
+    task = get_task_by_name(client, pid, "Lead Assessment")
+    resp = client.post(f"/api/tasks/{task['task_id']}/resource-assessment", json=dict(
+        BOX, overrides={"porosity": {"distribution": "constant", "value": 0.2}}))
+    assert resp.status_code == 400
+    assert "Calculator tab only" in resp.get_json()["detail"]
+    # Without them the same body is fine.
+    assert client.post(f"/api/tasks/{task['task_id']}/resource-assessment",
+                       json=BOX).status_code == 200

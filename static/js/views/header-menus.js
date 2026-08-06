@@ -294,8 +294,18 @@ function openItem(element) {
    The gear menu
    ------------------------------------------------------------------------- */
 
-// Exactly three items, in this order. Sign out is OMITTED (not disabled, not
-// greyed) when there is no session to end.
+// Card 3B. Announced, not built. They are listed here so the roadmap is
+// visible where it will land, and they are genuinely inert: `soon` items get
+// no data-action, so runGearAction can never be reached for them, and the
+// button is `disabled` so neither click nor Enter/Space activates it. No
+// route, no download, no request, no loading state.
+var COMING_SOON = [
+  { label: 'Export automatic Well Prop.' },
+  { label: 'Export Well Logs Data' }
+];
+
+// The three real actions, in this order, then the coming-soon pair. Sign out
+// is OMITTED (not disabled, not greyed) when there is no session to end.
 function gearItems() {
   var isDark = document.documentElement.dataset.theme === 'dark';
   var items = [
@@ -320,11 +330,21 @@ function gearItemMarkup(item) {
     '</button>';
 }
 
+// No icon, no data-action, no badge -- the card asks for a plain disabled
+// label in the established faint treatment.
+function comingSoonMarkup(item) {
+  return '<button type="button" class="hm-action hm-action-soon" disabled title="Coming soon">' +
+    '<span class="hm-action-label">' + esc(item.label) + '</span>' +
+    '</button>';
+}
+
 function renderGearMenu() {
   var menu = gearMenu();
   if (!menu) return;
-  menu.innerHTML = gearItems().map(gearItemMarkup).join('');
-  all('.hm-action', menu).forEach(function (element) {
+  menu.innerHTML = gearItems().map(gearItemMarkup).join('') +
+    '<hr class="hm-soon-divider">' +
+    COMING_SOON.map(comingSoonMarkup).join('');
+  all('.hm-action[data-action]', menu).forEach(function (element) {
     element.addEventListener('click', function () {
       runGearAction(element.getAttribute('data-action'), element);
     });

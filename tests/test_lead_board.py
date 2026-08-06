@@ -54,8 +54,27 @@ def _transition(client, task, action):
     return resp.get_json()["task"]
 
 
+def _satisfy_submit_requirements(client, pid, step_name):
+    """Tick whatever a step declares as a prerequisite for submitting.
+
+    Card 3S gave Segmentation Slides one (its shared-folder confirmation), so a
+    helper that drives ANY step to Ready has to satisfy the declared table
+    rather than assuming no step has requirements.
+    """
+    import workflow
+
+    required = workflow.REQUIRED_FIELDS_FOR_SUBMIT.get(step_name, ())
+    if not required:
+        return
+    task = get_task_by_name(client, pid, step_name)
+    resp = client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
+                        json={"fields": {key: "1" for key, _label in required}})
+    assert resp.status_code == 200, resp.get_json()
+
+
 def _set_ready(client, pid, step_name, assignee="Employee"):
     """Drive one step to the Ready (submitted, awaiting approval) status."""
+    _satisfy_submit_requirements(client, pid, step_name)
     task = get_task_by_name(client, pid, step_name)
     return _transition(client, _assign(client, task, assignee), "submit")
 

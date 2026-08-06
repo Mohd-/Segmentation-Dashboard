@@ -181,6 +181,16 @@ _BP_TASK_FIELD_KEYS = [
     # Portfolio/map consumer one fold rule: an active non-blank wins; its blank
     # cannot erase a retired value.
     "p90_area_km2", "p10_area_km2",
+    # The name the well was staked under (Well Site Location). It is captured
+    # separately from projects.project_name and NEVER replaces it -- staking
+    # does not rename a record -- so without carrying it here there was no
+    # surface anywhere that paired a staked well name with the lead it came
+    # from. That pairing is what the Portfolio column and the export use.
+    "staked_well_name",
+    # Card 3V: the staked name is authoritative only once staking is CONFIRMED
+    # (workflow.staking_confirmed), which is the Well Site Location step's own
+    # completion predicate. These three are what that predicate reads.
+    "wellsite_letter_loaded", "staked_x", "staked_y",
 ]
 
 
@@ -488,9 +498,17 @@ def get_portfolio_rows(session, year="All", activity="All"):
                                   fields.get("post_drill_piip_gas_mean"),
                                   fields.get("pre_drill_piip_gas_mean"),
                                   fields.get("lead_piip_gas_mean"))
+        staked_name = fields.get("staked_well_name") or ""
         row = {
             "project_id": item["project_id"],
-            "well_name": item["project_name"],
+            # Card 3V: a record is known by its staked well name once staking
+            # is CONFIRMED -- a typed but unconfirmed name renames nothing. The
+            # lead name travels alongside rather than being replaced, so the
+            # lead <-> well pairing is always recoverable from a row.
+            "well_name": workflow.display_record_name(
+                item["project_name"], staked_name, workflow.staking_confirmed(fields)),
+            "lead_name": item["project_name"],
+            "staked_well_name": staked_name,
             "gas_field": folders.parse_field_and_well(item["project_name"])[0],
             "seismic_block": config.AR_TO_SEISMIC_BLOCK.get(ar_number, ar_number) if ar_number else "",
             "classification": _first_filled(fields.get("bp_gate_classification"),

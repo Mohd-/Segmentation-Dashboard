@@ -5,17 +5,24 @@ import { Store, currentRole, currentUserName } from '../state.js';
 import { confirmDialog } from '../dialog.js';
 import {
   placeFilterMenu, filterTriggerHtml, filterOptionHtml,
-  kpiDonutHtml, kpiTileHtml, personChipsHtml, leadItemHtml
+  kpiDonutHtml, kpiTileHtml, personChipsHtml, leadItemHtml,
+  priorityChipHtml, applyPriorityChip, nextLeadPriority
 } from './board-widgets.js';
 import { DROPDOWN_OPEN_EVENT } from './lead-filters.js';
-// The Well Summary wears the Lead Summary card's chrome, and borrows its one
-// "no value recorded" glyph so the two panels cannot disagree about how an
-// empty fact looks.
-import { EM_DASH } from './lead-summary.js';
+// One numeric rule set for the whole app; see bpeNumericError for the one
+// argument this form passes differently.
+import { numericFieldError, PDF_LABEL } from '../schema.js';
+/* Card 3E: the Well Summary's BODY is the maturation shell's own -- one
+   builder, called with this page's payload, so the two shells cannot drift
+   into two cards. The import is one-directional (views/detail.js does not
+   import this module) and both bindings are touched only inside functions. */
+import { wellSummaryBodyHtml, wireWellSummaryFolds } from './detail.js';
 
 var FLUIDS = ['Gas', 'Gas over Water', 'Water Bearing', 'Dry Hole', 'Oil', 'Oil over Gas', 'Oil over Water'];
 var STAGE_META = [
-  { key: 'pre_drilling', label: 'Pre-Drilling', icon: 'clipboard-check' },
+  // The multi-step clipboard, so the BP stage reads apart from the maturation
+  // board's Lead Assessment clipboard at a glance.
+  { key: 'pre_drilling', label: 'Pre-Drilling', icon: 'clipboard-steps' },
   { key: 'post_drilling', label: 'Post-Drilling', icon: 'rig' },
   { key: 'post_testing', label: 'Post-Testing', icon: 'gauge' }
 ];
@@ -68,21 +75,38 @@ function setSelect(id, values, selected) {
   element.value = String(selected);
 }
 
+/* "All Years" is a real OPTION, not a cleared filter, so it lives in the same
+   list as the years themselves and travels to the server as the literal `all`
+   (workflow/business_plan.py ALL_YEARS). The 1999-2035 span is
+   config.BPE_YEAR_MIN/MAX; `years` arrives on the dashboard payload, and the
+   hardcoded span here is only the pre-first-fetch fallback. */
+var ALL_YEARS = 'all';
+
+function yearOptions(years) {
+  var list = years && years.length ? years : (function () {
+    var span = [];
+    for (var year = 1999; year <= 2035; year += 1) span.push(year);
+    return span;
+  }());
+  return [{ value: ALL_YEARS, label: 'All Years' }].concat(list.map(function (year) {
+    return { value: String(year), label: String(year) };
+  }));
+}
+
 function currentFilters() {
   return {
     assignee: (byId('bp-assignee-filter') && byId('bp-assignee-filter').value) || 'All Assignees',
     field: (byId('bp-field-filter') && byId('bp-field-filter').value) || 'All Fields',
     status: (byId('bp-status-filter') && byId('bp-status-filter').value) || 'All Status',
     year: (byId('bp-year-filter') && byId('bp-year-filter').value) || String(new Date().getFullYear()),
-    step: (byId('bp-step-filter') && byId('bp-step-filter').value) || 'business-plan-gate'
+    step: (byId('bp-step-filter') && byId('bp-step-filter').value) || 'all'
   };
 }
 
 function initialize() {
   if (state.initialized) return;
   state.initialized = true;
-  var years = [];
-  for (var year = 1999; year <= 2035; year += 1) years.push(String(year));
+  var years = yearOptions();
   setSelect('bp-assignee-filter', ['All Assignees', 'Unassigned'], 'All Assignees');
   setSelect('bp-field-filter', ['All Fields'], 'All Fields');
   setSelect('bp-status-filter', ['All Status', 'Completed', 'Pending Approval', 'In Progress'], 'All Status');
@@ -90,7 +114,7 @@ function initialize() {
   setSelect('bp-step-filter', [
     { value: 'all', label: 'All Steps' },
     { value: 'business-plan-gate', label: 'Business Plan Gate' }
-  ], 'business-plan-gate');
+  ], 'all');
   // Card BP1: this module owns all five filters -- populating them (above)
   // AND binding their change handler, so there is exactly one fill and one
   // listener per select, never main.js's boot() racing this initialize().
@@ -117,15 +141,15 @@ function initialize() {
    fixture without #bpe-filter-row keeps working untouched.
    ========================================================================= */
 
-// Left to right, matching the select order in index.html. `fallback` is the
-// select's default value, i.e. the one that reads as NO filter -- the same
-// literals currentFilters() falls back to and syncBusinessPlanPromotion()
-// resets to (Year defaults to the current year instead, see defaultValue).
+// THIS ARRAY IS THE VISIBLE LEFT-TO-RIGHT ORDER of the filter row; the hidden
+// selects in index.html keep their own (now different) order, which is purely
+// cosmetic because every lookup here goes through `data-bp-filter`. The step
+// filter leads and the assignee filter closes the row, per the requested swap.
+// `fallback` is the select's default value, i.e. the one that reads as NO
+// filter -- the same literals currentFilters() falls back to and
+// syncBusinessPlanPromotion() resets to (Year defaults to the current year
+// instead, see defaultValue).
 var BP_FILTERS = [
-  { key: 'assignee', id: 'bp-assignee-filter', caption: 'Assignee', fallback: 'All Assignees' },
-  { key: 'field', id: 'bp-field-filter', caption: 'Field', fallback: 'All Fields' },
-  { key: 'status', id: 'bp-status-filter', caption: 'Status', fallback: 'All Status' },
-  { key: 'year', id: 'bp-year-filter', caption: 'Year', fallback: null },
   // An initialism has to keep its spelling in the spoken label, or the trigger
   // announces itself as "Filter by bp gate".
   // `captionAtRest` is the maturation row's own rule (lead-filters triggerLabel):
@@ -133,8 +157,16 @@ var BP_FILTERS = [
   // repeats it. Only this filter qualifies -- "All Assignees" still says more
   // than "Assignee", and the Year's default is a real selection, not the
   // absence of one.
-  { key: 'step', id: 'bp-step-filter', caption: 'BP Gate', ariaCaption: 'BP Gate',
-    fallback: 'business-plan-gate', captionAtRest: true }
+  // Captioned "Step", not "BP Gate": it filters by TRACKING ITEM, and the one
+  // it happened to default to is the gate. Narrowing to the gate is now the
+  // Pre-Drilling column's own toggle, and two controls of the same name doing
+  // different things is how the old caption misled.
+  { key: 'step', id: 'bp-step-filter', caption: 'Step',
+    fallback: 'all', captionAtRest: true },
+  { key: 'field', id: 'bp-field-filter', caption: 'Field', fallback: 'All Fields' },
+  { key: 'status', id: 'bp-status-filter', caption: 'Status', fallback: 'All Status' },
+  { key: 'year', id: 'bp-year-filter', caption: 'Year', fallback: null },
+  { key: 'assignee', id: 'bp-assignee-filter', caption: 'Assignee', fallback: 'All Assignees' }
 ];
 
 // Status glyphs echo the card dots and the maturation menu exactly, so the
@@ -225,22 +257,36 @@ function announceOpen() {
    so a remembered key goes stale behind our back and the next click on that
    trigger would "toggle closed" a menu that is already closed. The DOM cannot
    go stale about its own hidden attribute. */
-function openBpeGroup() {
-  var host = byId(BPE_FILTER_ROOT);
-  if (!host) return null;
-  return all('.lead-filter', host).filter(function (group) {
-    var menu = group.querySelector('.lf-menu');
-    return menu && !menu.hidden;
-  })[0] || null;
+// Two roots carry menus built from this chrome: the dashboard's filter row and
+// the detail editor (Card 3T's Coring Formations). Both obey the same
+// one-dropdown-at-a-time contract, so both are swept together.
+var BPE_MENU_ROOTS = [BPE_FILTER_ROOT, 'bpe-detail-view'];
+
+function bpeMenuHosts() {
+  return BPE_MENU_ROOTS.map(byId).filter(Boolean);
 }
 
-// Scoped to this row: the maturation module keeps its own open state, so
+function openBpeMenuElement() {
+  var found = null;
+  bpeMenuHosts().forEach(function (host) {
+    if (found) return;
+    found = all('.lf-menu', host).filter(function (menu) { return !menu.hidden; })[0] || null;
+  });
+  return found;
+}
+
+function openBpeGroup() {
+  var menu = openBpeMenuElement();
+  return menu ? menu.parentNode : null;
+}
+
+// Scoped to OUR roots: the maturation module keeps its own open state, so
 // closing its menus is ITS job (our announce above is what asks it to).
 function closeBpeMenus() {
-  var host = byId(BPE_FILTER_ROOT);
-  if (!host) return;
-  all('.lf-menu', host).forEach(function (menu) { menu.hidden = true; });
-  all('.lf-trigger', host).forEach(function (trigger) { trigger.setAttribute('aria-expanded', 'false'); });
+  bpeMenuHosts().forEach(function (host) {
+    all('.lf-menu', host).forEach(function (menu) { menu.hidden = true; });
+    all('.lf-trigger', host).forEach(function (trigger) { trigger.setAttribute('aria-expanded', 'false'); });
+  });
 }
 
 function openBpeMenu(filter) {
@@ -444,7 +490,7 @@ export function syncBusinessPlanPromotion(year) {
       'bp-field-filter': 'All Fields',
       'bp-status-filter': 'All Status',
       'bp-year-filter': String(selectedYear),
-      'bp-step-filter': 'business-plan-gate'
+      'bp-step-filter': 'all'
     };
     Object.keys(defaults).forEach(function (id) {
       var element = byId(id);
@@ -459,7 +505,7 @@ function renderDashboard(payload, selected) {
   setSelect('bp-assignee-filter', options.assignees || [], selected.assignee);
   setSelect('bp-field-filter', options.fields || [], selected.field);
   setSelect('bp-status-filter', options.statuses || [], selected.status);
-  setSelect('bp-year-filter', (options.years || []).map(String), String(selected.year));
+  setSelect('bp-year-filter', yearOptions(options.years), String(selected.year));
   setSelect('bp-step-filter', options.steps || [], selected.step);
   // The triggers read their labels off the selects, so they are redrawn AFTER
   // the repopulation above -- never before it.
@@ -561,15 +607,23 @@ function firstIncompleteSlug(well) {
 // the dot's title always holds the full text.
 function trackedItemsHtml(well) {
   return ((well && well.items) || []).map(function (item) {
+    // item.source is the server's own 'system' | 'manual' | 'approval' marker
+    // (workflow/business_plan.py _state): a step the workflow closed on the
+    // user's behalf gets the muted check, not the green one.
     return '<span class="lead-item">' +
-      leadItemHtml(item.status, item.label) +
+      leadItemHtml(item.status, item.label, item.source) +
       '<span class="lead-item-label">' + esc(compact(item.label, 22)) + '</span>' +
       '</span>';
   }).join('');
 }
 
 function wellCard(well) {
-  return '<button type="button" class="lead-card lead-card-' + cardPriority(well) + '"' +
+  // Card 3X: animated only when the well is flagged AND its card sits under
+  // Post-Drilling. Outside that stage the flag is preserved but the card wears
+  // its ordinary priority border.
+  var drilling = Number(well.active_drilling || 0) === 1 && well.stage_key === 'post_drilling';
+  return '<button type="button" class="lead-card lead-card-' + cardPriority(well) +
+    (drilling ? ' is-active-drilling' : '') + '"' +
     ' data-project-id="' + well.project_id + '" data-step="' + esc(firstIncompleteSlug(well)) + '">' +
     '<span class="lead-card-identity">' +
       '<span class="lead-card-name">' + esc(well.project_name) + '</span>' +
@@ -579,11 +633,47 @@ function wellCard(well) {
     '</button>';
 }
 
+/* The Pre-Drilling column's own BP Gate filter.
+
+   ON, it shows the wells whose Business Plan Gate has CLEARED THE DESK: either
+   approved, or submitted and waiting on a supervisor. A well whose gate is
+   still being filled in is not shown. That is the question the column is
+   actually asked -- "what is through the gate?" -- and it is why the toggle
+   reads as doing nothing on a board where no gate has been submitted yet: with
+   the earlier rule ("still at the gate") every such well matched either way.
+
+   It reaches only the column it sits in: the other two keep their full
+   population and the global KPIs, which are computed over the fetched payload,
+   never move. The filtering is client-side, so toggling repaints from data
+   already in hand rather than asking the server the same question again. */
+var gateOnly = true;
+
+// The gate statuses the toggle admits. `bp_gate_status` is a stated fact on the
+// payload (workflow/business_plan.py _well_projection): "Completed" once a
+// supervisor has approved the gate, "Pending Approval" while it waits.
+var GATE_CLEARED_STATUSES = ['Completed', 'Pending Approval'];
+
+function gateCleared(well) {
+  return GATE_CLEARED_STATUSES.indexOf(well.bp_gate_status) >= 0;
+}
+
+function stageRows(wells, stageKey) {
+  var rows = wells.filter(function (well) { return well.stage_key === stageKey; });
+  if (stageKey !== 'pre_drilling' || !gateOnly) return rows;
+  return rows.filter(gateCleared);
+}
+
+function gateToggleHtml() {
+  return '<button type="button" id="bpe-gate-toggle" class="lead-column-toggle"' +
+    ' role="switch" aria-checked="' + (gateOnly ? 'true' : 'false') + '"' +
+    ' title="Show only wells whose Business Plan Gate is approved or awaiting approval">BP Gate</button>';
+}
+
 function renderStageBoard(payload) {
   var wells = payload.wells || [];
   var board = byId('bp-pipeline');
   board.innerHTML = STAGE_META.map(function (stage) {
-    var rows = wells.filter(function (well) { return well.stage_key === stage.key; });
+    var rows = stageRows(wells, stage.key);
     var body = rows.length ? rows.map(wellCard).join('') :
       '<div class="pipeline-empty">No wells match these filters.</div>';
     // Plain navy headers, uniform across the three columns: the stage is named
@@ -592,11 +682,17 @@ function renderStageBoard(payload) {
       '<header>' +
         '<span class="lead-column-icon" aria-hidden="true">' + icon(stage.icon) + '</span>' +
         '<h3>' + esc(stage.label) + '</h3>' +
+        (stage.key === 'pre_drilling' ? gateToggleHtml() : '') +
         '<span class="lead-column-count">' + rows.length + '</span>' +
       '</header>' +
       '<div class="lead-cards">' + body + '</div>' +
       '</section>';
   }).join('');
+  var gateToggle = byId('bpe-gate-toggle');
+  if (gateToggle) gateToggle.addEventListener('click', function () {
+    gateOnly = !gateOnly;
+    renderStageBoard(payload);
+  });
   all('.lead-card', board).forEach(function (card) {
     card.addEventListener('click', function () {
       openBusinessPlanDetail(Number(card.dataset.projectId), card.dataset.step);
@@ -708,12 +804,23 @@ function commentsMarkup() {
 // path / copy-button row detail-form.js renderComponentFolder and the summary
 // panel's folder rows draw). The path stays a LINK here -- the BP share is
 // openable and always was -- wearing the house .folder-path chrome.
-function folderMarkup(omit) {
-  if (omit) return '';
-  var folder = state.detail.folder || {};
+/* Card 3AB decides this now, and it decides it in ONE place: the server sends
+   `folder` only for a step the approved mapping lists, so an unlisted step
+   renders nothing here -- no blank card, no disabled one, no placeholder
+   destination. A mapped step whose record is missing a name it needs comes
+   back blocked, and says which name, instead of offering a link that would
+   open a partially-resolved location. */
+function folderMarkup() {
+  var folder = state.detail.folder;
+  if (!folder) return '';
+  if (folder.blocked) {
+    return '<div class="folder-card folder-card-blocked" role="status">' +
+      '<span class="folder-glyph" aria-hidden="true">' + ICONS['folder'] + '</span>' +
+      '<span class="folder-path">' + esc(folder.blocked) + '</span></div>';
+  }
   if (!folder.path) return '';
   return '<div class="folder-card">' +
-    '<span class="folder-glyph" aria-hidden="true">📁</span>' +
+    '<span class="folder-glyph" aria-hidden="true">' + ICONS['folder'] + '</span>' +
     '<a class="folder-path" href="' + esc(folder.file_url || '#') + '" title="' + esc(folder.path) + '">' +
     esc(folder.path) + '</a>' +
     '<button type="button" id="bpe-copy-folder" class="icon-btn" title="Copy shared-folder path" aria-label="Copy shared-folder path">' +
@@ -722,7 +829,7 @@ function folderMarkup(omit) {
 
 function commonTail(options) {
   options = options || {};
-  return commentsMarkup() + folderMarkup(options.omitFolder) +
+  return commentsMarkup() + folderMarkup() +
     '<div class="bpe-save-line"><span>All changes are saved automatically</span>' +
     // The house auto-save indicator (components.css .save-state): ambient
     // status, not a toast. setFeedback() owns its is-saving/is-saved/is-error
@@ -730,6 +837,59 @@ function commonTail(options) {
     '<small id="bpe-save-feedback" class="save-state" aria-live="polite"></small>' +
     '<button type="button" id="bpe-retry-save" class="ghost hidden">Retry</button></div>' +
     approvalMarkup();
+}
+
+/* -------------------------------------------------------------------------
+   Card 3T -- Coring Formations as a checkbox dropdown
+
+   The value has ALWAYS been a JSON array; only the control was wrong. A native
+   <select multiple> requires Ctrl-click to pick a second formation, which is a
+   convention most people do not know and none of the rest of this application
+   uses. This is the app's own dropdown -- the same .lf-trigger / .lf-menu /
+   .lf-option chrome as the board filters, with .lf-mark-box checkboxes -- so
+   the interaction is the one already learned on the Assignee filter.
+
+   Stored values that are no longer offered (a formation dropped from
+   config/lists.yaml after a well was planned) stay listed and stay checked:
+   removing an option from the picker must not silently unpick a well's data.
+   ------------------------------------------------------------------------- */
+
+var CORING_FIELD = 'bp_gate_coring_formations';
+
+// Everything on offer, plus anything already stored that is not, in that order.
+function coringOptions(formations, selected) {
+  return formations.concat(selected.filter(function (name) {
+    return formations.indexOf(name) < 0;
+  }));
+}
+
+// The closed control, following the Assignee filter's convention exactly:
+// nothing chosen reads as such, one chosen shows the value itself, several
+// show a count.
+function coringSummary(selected) {
+  if (!selected.length) return 'None selected';
+  if (selected.length === 1) return selected[0];
+  return selected.length + ' Formations';
+}
+
+function coringFormationsMarkup(formations, selected, coring) {
+  var options = coringOptions(formations, selected);
+  return '<div class="bpe-field bpe-coring-formations">' +
+    '<span id="bpe-coring-label">Coring Formations' +
+      (coring ? '<b aria-hidden="true">*</b>' : '') + '</span>' +
+    '<button type="button" id="bpe-coring-trigger" class="lf-trigger' +
+      (selected.length ? ' is-active' : '') + '"' +
+      ' aria-haspopup="listbox" aria-expanded="false" aria-labelledby="bpe-coring-label"' +
+      (coring ? '' : ' disabled') + '>' +
+      '<span class="lf-value">' + esc(coringSummary(selected)) + '</span>' +
+      '<span class="lf-caret" aria-hidden="true">' + ICONS['chevron-down'] + '</span>' +
+    '</button>' +
+    '<div id="bpe-coring-menu" class="lf-menu" hidden role="listbox" aria-multiselectable="true"' +
+      ' aria-labelledby="bpe-coring-label"></div>' +
+    '<small class="bpe-field-hint">' +
+      (coring ? esc(options.length + ' available — pick one or more.')
+              : 'Enabled when Coring Program is Yes.') +
+    '</small></div>';
 }
 
 function gateForm() {
@@ -778,10 +938,7 @@ function gateForm() {
       required: true, placeholder: 'Select', headingLabel: true
     }) +
     textInput('bp_gate_coring_thickness_ft', 'Coring Thickness (ft)', { type: 'number', required: coring, disabled: !coring }) +
-    '<label class="bpe-field"><span>Coring Formations' + (coring ? '<b aria-hidden="true">*</b>' : '') +
-    '</span><select multiple data-bpe-field="bp_gate_coring_formations" ' + (!coring ? 'disabled' : '') + '>' +
-    formations.map(function (formation) { return '<option ' + (selectedCoring.indexOf(formation) >= 0 ? 'selected' : '') + '>' + esc(formation) + '</option>'; }).join('') +
-    '</select></label></div></div>' +
+    coringFormationsMarkup(formations, selectedCoring, coring) + '</div></div>' +
     checkbox('bp_gate_slides_saved', 'Business Plan Execution Gate slides are saved in the shared folder.') +
     commonTail();
 }
@@ -806,9 +963,11 @@ function gheerForm() {
 }
 
 function aapForm() {
-  return checkbox('aap_petrel_loaded', 'Aramco Approved PICS are loaded into the PETREL repository.') +
-    checkbox('aap_geoknowledge_loaded', 'Aramco Approved PICS are loaded into the GeoKnowledge database.') +
-    commonTail({ omitFolder: true });
+  return checkbox('aap_petrel_loaded', 'Aramco Approved Picks are loaded into the PETREL repository.') +
+    checkbox('aap_geoknowledge_loaded', 'Aramco Approved Picks are loaded into the GeoKnowledge database.') +
+    // No omit flag: Aramco Picks (BP 5) is absent from the Card 3AB mapping,
+    // so the server sends no folder and this renders nothing on its own.
+    commonTail();
 }
 
 function summaryForm(finalSummary) {
@@ -838,11 +997,14 @@ function sadForm(update) {
   var locked = update && trackingByKey('sad-update').locked;
   var liquid = truthy(value(prefix + '_has_liquid'));
   return '<div class="bpe-form-section"><h3>Reservoir Area (km²)</h3><div class="bpe-pair">' +
-    textInput(base + '_area_km2_p90', 'B90', { type: 'number', required: true, disabled: locked }) +
-    textInput(base + '_area_km2_p10', 'B10', { type: 'number', required: true, disabled: locked }) + '</div></div>' +
+    // Card 3G: these four were the ONLY labels in the app reading "B90"/"B10".
+    // The keys have always been p90/p10 -- the labels were the typo, so this is
+    // a display correction with no data or validation change behind it.
+    textInput(base + '_area_km2_p90', 'P90', { type: 'number', required: true, disabled: locked }) +
+    textInput(base + '_area_km2_p10', 'P10', { type: 'number', required: true, disabled: locked }) + '</div></div>' +
     '<div class="bpe-form-section"><h3>GRV (10³ acre&middot;ft)</h3><div class="bpe-pair">' +
-    textInput(base + '_grv_p90', 'B90', { type: 'number', required: true, disabled: locked }) +
-    textInput(base + '_grv_p10', 'B10', { type: 'number', required: true, disabled: locked }) + '</div></div>' +
+    textInput(base + '_grv_p90', 'P90', { type: 'number', required: true, disabled: locked }) +
+    textInput(base + '_grv_p10', 'P10', { type: 'number', required: true, disabled: locked }) + '</div></div>' +
     checkbox(base + '_surfaces_polygons_loaded', 'The polygons and surfaces are placed in the shared folder.', { disabled: locked, system: locked }) +
     checkbox(base + '_slides_loaded', 'SAD Model slides are placed in the shared folder.', { disabled: locked, system: locked }) +
     '<div class="bpe-form-section"><h3>Gas Field Inputs</h3><div class="bpe-trio">' +
@@ -892,24 +1054,116 @@ function formationRowMarkup(row, formationIndex) {
     '<div class="bpe-pay-list">' + (payRows || '<div class="bpe-inline-empty">No Pay Intervals.</div>') + '</div></section>';
 }
 
+// TVDSS is the one signed measure in this form (above datum reads negative);
+// thickness, porosity, saturation, permeability and every rate cannot be.
+// Shared by both formation cells and the flowback cells below.
+// Card 3H: no numeric field on a BPE form is signed any more. TVDSS used to be
+// the one exemption -- above datum it reads negative -- but ASAS now stores the
+// magnitude, so every numeric input here carries the same floor. Kept as a
+// function because three call sites read better saying WHY there is a min.
+function numericFloor() {
+  return ' min="0"';
+}
+
+/* Client-side numeric validation for this whole form. Until now there was
+   none here at all: a negative porosity or a typo'd rate travelled to the
+   server, which refused it with a message the user only saw after the round
+   trip (and, for the structure sheets, as a whole-sheet failure rather than
+   against the cell).
+
+   It reuses schema.js's numericFieldError -- the same rules the maturation
+   forms enforce -- with bigOk ALWAYS on: BP figures such as a measured depth
+   in feet legitimately exceed that helper's 9999 sanity cap, which exists for
+   the maturation side's small measures. The negative and <=100% rules are the
+   ones that matter here. */
+function bpeNumericError(label, key, raw) {
+  return numericFieldError(label || key, raw, true, /_pct$/.test(key), false);
+}
+
+// The visible caption of a form cell, so the message names what the user is
+// looking at rather than a storage key. Falls back to the key.
+function fieldLabel(element, key) {
+  var caption = element.closest('label');
+  var span = caption && caption.querySelector('span');
+  return span ? span.textContent.replace(/\*$/, '').trim() : key;
+}
+
+// Reject an edit before it is buffered or queued: the message lands in the
+// save-state strip (this form's only feedback channel) and the input is
+// marked, so the offending cell is findable in a long sheet.
+function rejectNumericEdit(element, message) {
+  element.classList.add('bpe-invalid');
+  element.setAttribute('aria-invalid', 'true');
+  setFeedback(message, true);
+}
+
+function clearNumericRejection(element) {
+  element.classList.remove('bpe-invalid');
+  element.removeAttribute('aria-invalid');
+}
+
+// Guard shared by the three edit paths (plain fields, formation/pay cells,
+// flowback cells). Returns true when the edit may proceed.
+function numericEditAllowed(element, key) {
+  if (element.type !== 'number') return true;
+  var error = bpeNumericError(fieldLabel(element, key), key, element.value);
+  if (error) {
+    rejectNumericEdit(element, error);
+    return false;
+  }
+  clearNumericRejection(element);
+  return true;
+}
+
 function formationEnvelopeCell(index, key, label, cellValue) {
-  return '<label><span>' + esc(label) + '</span><input type="number" data-formation-index="' + index +
+  return '<label><span>' + esc(label) + '</span><input type="number" step="any"' + numericFloor() +
+    ' data-formation-index="' + index +
     '" data-formation-field="' + esc(key) + '" value="' + esc(cellValue == null ? '' : cellValue) + '"></label>';
 }
 
 function formationCell(formationIndex, payIndex, key, label, cellValue, type) {
-  return '<label><span>' + esc(label) + '</span><input type="' + type + '" data-formation-index="' + formationIndex +
+  var numeric = type === 'number' ? ' step="any"' + numericFloor() : '';
+  return '<label><span>' + esc(label) + '</span><input type="' + type + '"' + numeric +
+    ' data-formation-index="' + formationIndex +
     '" data-pay-index="' + payIndex + '" data-pay-field="' + esc(key) + '" value="' +
     esc(cellValue == null ? '' : cellValue) + '"></label>';
 }
 
+// Card 3C. The formation sheet IS the work on Quicklook Logs and Final Log
+// Analysis, so it opens on first entry rather than making everyone click
+// before they can type. The open state is remembered per (well, step): the
+// re-render that follows every auto-save keeps whatever the user chose, while
+// walking to a different step or well is a first load again and opens it.
+// Only these two steps render the section at all, so the default is scoped by
+// construction -- no other workflow's disclosure changes.
+var formationsFoldContext = null;
+var formationsFoldOpen = true;
+
+function formationsFoldIsOpen() {
+  var context = state.projectId + '|' + state.detailSlug;
+  if (formationsFoldContext !== context) {
+    formationsFoldContext = context;
+    formationsFoldOpen = true;
+  }
+  return formationsFoldOpen;
+}
+
 function formationsForm() {
   var rows = state.detail.formations || [];
+  var open = formationsFoldIsOpen();
   var confirmations = state.detailSlug === 'quicklook-logs' ?
-    checkbox('quicklook_pdf', 'Logs in PDF') + checkbox('quicklook_las', 'Logs as LAS') :
-    checkbox('final_petrel', 'Logs in Petrel') + checkbox('final_pdf', 'Logs in PDF') + checkbox('final_las', 'Logs as LAS');
-  return '<div class="bpe-formations">' + rows.map(formationRowMarkup).join('') +
-    '<button type="button" id="bpe-add-formation" class="ghost">' + icon('plus') + ' Add Formation</button></div>' +
+    checkbox('quicklook_pdf', PDF_LABEL) + checkbox('quicklook_las', 'Logs as LAS') :
+    checkbox('final_petrel', 'Logs in Petrel') + checkbox('final_pdf', PDF_LABEL) + checkbox('final_las', 'Logs as LAS');
+  return '<div class="summary-fold bpe-formations-fold">' +
+      '<button type="button" id="bpe-formations-head" class="summary-fold-head' + (open ? ' open' : '') +
+        '" aria-expanded="' + open + '" aria-controls="bpe-formations">' +
+        '<span class="summary-fold-title">Formation Interpretation</span>' +
+        '<span class="summary-fold-chevron" aria-hidden="true"></span></button>' +
+      '<div id="bpe-formations" class="bpe-formations summary-fold-body' + (open ? '' : ' collapsed') + '">' +
+        rows.map(formationRowMarkup).join('') +
+        '<button type="button" id="bpe-add-formation" class="ghost">' + icon('plus') + ' Add Formation</button>' +
+      '</div>' +
+    '</div>' +
     confirmations + commonTail();
 }
 
@@ -926,7 +1180,8 @@ function flowCell(index, key, label, required, formation) {
       '" data-flow-field="' + key + '"' + disabled + '>' + selectOptions(state.detail.formation_options || [], formation, 'Select Formation') + '</select></label>';
   }
   var row = state.detail.flowback_stages[index];
-  return '<label><span>' + esc(label) + (required ? '<b>*</b>' : '') + '</span><input type="number" data-flow-index="' + index +
+  return '<label><span>' + esc(label) + (required ? '<b>*</b>' : '') + '</span><input type="number" step="any"' +
+    numericFloor() + ' data-flow-index="' + index +
     '" data-flow-field="' + key + '" value="' + esc(row[key] == null ? '' : row[key]) + '"' + disabled + '></label>';
 }
 
@@ -1109,8 +1364,21 @@ function railMarkup() {
       // its own: first thing in the rail head, above the record name.
       '<button type="button" id="bpe-back" class="ghost back-to-board">' + icon('arrow-left') +
         ' <span>Back to Business Plan Execution</span></button>' +
-      '<div class="detail-title-row"><h3>' + esc(detail.project.project_name) + '</h3></div>' +
+      // The record's priority chip, in the maturation shell's exact position:
+      // beside the record name, one chip for the whole well (never per step).
+      '<div class="detail-title-row"><h3>' + esc(detail.project.project_name) + '</h3>' +
+        priorityChipHtml('bpe-priority-chip', detail.project.priority,
+                         (detail.role || currentRole()) === 'supervisor') + '</div>' +
+      // Card 3I: the maturation rail head carries the record's LEAD name under
+      // the title where the two differ (Card 3V's pairing), then the stage
+      // eyebrow, then the all-fields link -- same order, same elements.
+      (detail.project.lead_name && detail.project.lead_name !== detail.project.project_name
+        ? '<p id="bpe-detail-subtitle" class="detail-subtitle">' + esc(detail.project.lead_name) + '</p>'
+        : '') +
       '<p class="bpe-rail-eyebrow">' + esc(detail.detail.stage_label) + '</p>' +
+      // The maturation shell shows this as a rail link on a well; BPE hid it
+      // in the gear menu, which is the divergence the card names.
+      '<button type="button" id="bpe-rail-edit-all" class="link-button rail-all-fields">Edit all project fields</button>' +
     '</div>' +
     '<div class="component-list">' + detailNavMarkup() + '</div>' +
     '</aside>';
@@ -1121,76 +1389,145 @@ function assigneeOptions() {
   return [{ value: '', label: 'Not Assigned' }].concat(users.map(function (user) { return { value: user.name, label: user.name }; }));
 }
 
-// The editor head's two controls wear the maturation editor's compact select
-// chrome (.editor-assignee). They keep their captions -- there are TWO of them
-// here, and "Supervisor / High" side by side says nothing on its own.
+// The editor head's control wears the maturation editor's compact select
+// chrome (.editor-assignee). Assignee is the only control here: priority moved
+// to the click-to-cycle chip beside the record name, because it belongs to the
+// WELL and not to the step this editor is showing -- a per-step-looking
+// dropdown invited the reading that each step carries its own priority.
 function topControlsMarkup() {
   var role = state.detail.role || currentRole();
   return '<div class="bpe-detail-controls">' +
     '<label>Assignee<select id="bpe-assignee" class="editor-assignee" ' +
-    (role === 'employee' ? 'disabled' : '') + '>' + selectOptions(assigneeOptions(), state.detail.assignee) + '</select></label>' +
-    '<label>Priority<select id="bpe-priority" class="editor-assignee" ' +
-    (role !== 'supervisor' ? 'disabled' : '') + '>' +
-    selectOptions(['Low', 'Medium', 'High'], state.detail.project.priority) + '</select></label></div>';
+    (role === 'employee' ? 'disabled' : '') + '>' + selectOptions(assigneeOptions(), state.detail.assignee) + '</select></label></div>';
 }
 
+// Card 3I: the maturation editor head is a numbered chip, the step title, its
+// status chip and the top controls -- in that order. BPE had the title and a
+// CONDITIONAL status chip, so a step with no tracking item rendered a
+// differently-shaped head. The number is the rail's own numbering for this
+// step, so the head and the rail agree about which step you are on.
 function editorMarkup() {
   var detail = state.detail;
-  var chip = (detail.tracking || []).length
-    ? '<span class="bpe-detail-status state-' + esc(detail.tracking[0].color) + '">' +
-      statusIcon(detail.tracking[0]) + esc(detail.tracking[0].status) + '</span>'
-    : '';
+  var tracking = (detail.tracking || [])[0];
+  var chip = '<span class="bpe-detail-status state-' +
+    esc(tracking ? tracking.color : 'empty') + '">' +
+    (tracking ? statusIcon(tracking) : '') +
+    esc(tracking ? tracking.status : 'In Progress') + '</span>';
   return '<section class="component-editor bpe-detail-form">' +
-    '<div class="editor-head"><h2>' + esc(detail.detail.label) + '</h2>' + chip + topControlsMarkup() + '</div>' +
+    '<div class="editor-head">' +
+      '<span class="component-number">' + detailNumber(state.detailSlug) + '</span>' +
+      '<div><h2>' + esc(detail.detail.label) + '</h2></div>' +
+      chip + topControlsMarkup() +
+    '</div>' +
     bodyMarkup() +
     '</section>';
 }
 
+// The step's position in the rail's continuous 1..14 numbering -- the same
+// numbering the folder mapping's BP identifiers use.
+function detailNumber(slug) {
+  var number = 0;
+  var found = 0;
+  (state.detail.navigation || []).forEach(function (group) {
+    (group.details || []).forEach(function (item) {
+      number += 1;
+      if (item.slug === slug) found = number;
+    });
+  });
+  return found || 1;
+}
+
 /* -------------------------------------------------------------------------
-   The Well Summary. Its CONTENT is the original panel's, unchanged and in the
-   original order -- four label/value rows (Well, Field, Business Plan Year,
-   Stage Progress as completed/total) over the stage's tracking items, with the
-   gear menu -- and its CHROME is the redesign's Lead Summary card
-   (views/lead-summary.js: .ls-card / .ls-head / .ls-title / .ls-section /
-   .ls-gear / .ls-menu). No progress bar and no column grid: this panel reads
-   as a fact sheet, which is what it always was.
+   The Well Summary — Card 3E.
+
+   This panel is the SAME card the Segment Maturation shell shows beside a BP
+   well's step, not a BPE-shaped lookalike: the chrome is the Lead Summary
+   card's (.ls-card / .ls-head / .ls-title / .ls-gear / .ls-menu) and the BODY
+   is built by views/detail.js's wellSummaryBodyHtml, from the `well_summary`
+   bundle this step's own payload carries. So the content is Gas, Flowback
+   Results, Reservoir Properties and exactly two expandable sections
+   (Simulated Vs Actual Delta, then Lead Summary) -- one card, one builder,
+   in both shells.
+
+   What this replaced: four fact rows (Well, Field, Business Plan Year, Stage
+   Progress) over the stage's tracking items. The well's name and its lead name
+   are in the rail head above, the year is in the phase row here, and every
+   tracking item's own state is on its step page and on the board card -- so
+   what went is a duplicate reading of state, not the only reading of it.
    ------------------------------------------------------------------------- */
 
-// One fact row. The value is the value or the one "no value" glyph -- never
-// blank, because a blank cell reads as a layout bug where a dash reads as
-// "not recorded yet".
-function summaryFact(label, raw) {
-  return '<div><dt>' + esc(label) + '</dt>' +
-    '<dd>' + (isFilled(raw) ? esc(raw) : EM_DASH) + '</dd></div>';
-}
+// Fold open state for THIS shell's Well Summary, keyed by fold id, kept per
+// well: the maturation shell keeps its own map (views/detail.js), so a fold
+// opened on one page never silently opens on the other. Reset when the open
+// well changes, exactly as the rail accordion is.
+var summaryFolds = {};
+var summaryFoldsProjectId = null;
 
 function summaryMarkup() {
   var detail = state.detail;
   var project = detail.project || {};
   var items = detail.stage_items || [];
   var done = items.filter(function (item) { return item.status === 'Completed'; }).length;
+  var percent = items.length ? Math.round((done / items.length) * 100) : 0;
+  if (summaryFoldsProjectId !== state.projectId) {
+    summaryFolds = {};
+    summaryFoldsProjectId = state.projectId;
+  }
+  var bundle = detail.well_summary || {};
   return '<aside class="summary-panel"><div class="ls-card">' +
     '<div class="ls-head"><h3 class="ls-title">Well Summary</h3>' +
       '<button type="button" id="bpe-summary-gear" class="icon-btn ls-gear" aria-haspopup="menu"' +
       ' aria-expanded="false" title="Well Summary actions" aria-label="Well Summary actions">' + icon('settings') + '</button>' +
     '</div>' +
-    '<dl class="bpe-summary-facts">' +
-      summaryFact('Well', project.project_name) +
-      summaryFact('Field', project.field) +
-      summaryFact('Business Plan Year', project.business_plan_year) +
-      // The denominator is the stage's OWN item count, never a hard-coded six.
-      summaryFact('Stage Progress', done + ' / ' + items.length) +
-    '</dl>' +
-    '<section class="ls-section"><div class="ls-items">' + items.map(function (item) {
-      // The board's own dot vocabulary (views/board-widgets.js), so a step's
-      // state reads the same on the card and in this panel.
-      return '<span class="lead-item">' + leadItemHtml(item.status, item.label) +
-        '<span class="lead-item-label">' + esc(item.label) + '</span></span>';
-    }).join('') + '</div></section>' +
+    // Card 3I: the maturation summary opens with a progress bar and a phase
+    // row. Both were missing here, which is what made this panel read as a
+    // different component rather than the same one with well content. The
+    // denominator is the stage's OWN item count, never a hard-coded six.
+    '<div class="summary-progress"><div class="summary-progress-bar"><span style="width:' + percent + '%"></span></div>' +
+      '<div class="summary-progress-figures"><b>' + percent + '%</b><small>' + done + ' / ' + items.length + '</small></div></div>' +
+    '<div class="summary-phase"><span class="summary-phase-label">BP Well &middot; ' +
+      esc(project.business_plan_year || '') + '</span>' +
+      (project.lead_name && project.lead_name !== project.project_name
+        ? '<span class="summary-phase-well" title="Lead name">' + esc(project.lead_name) + '</span>' : '') +
+    '</div>' +
+    // The ids inside carry a prefix because both detail shells live in one
+    // document -- see wellSummaryBodyHtml.
+    wellSummaryBodyHtml({
+      fields: bundle.fields,
+      formations: bundle.formations,
+      leadSummary: bundle.lead_summary,
+      derisking: bundle.derisking
+    }, summaryFolds, 'bpe-') +
     '<div id="bpe-summary-menu" class="ls-menu hidden" role="menu" aria-labelledby="bpe-summary-gear">' +
+      drillingCheckHtml(project) +
       '<button type="button" id="bpe-edit-all" class="ls-menu-item" role="menuitem">Edit all project fields</button>' +
     '</div>' +
     '</div></aside>';
+}
+
+/* Card 3X's Active Drilling flag, on the step page's own gear.
+
+   Only a well whose CURRENT stage is Post-Drilling can be drilling: before that
+   it has not spudded, after it the well is done. The payload states both the
+   flag and whether it may be set (workflow/business_plan.py get_detail), and
+   the same rule is enforced on write -- this control is the convenience, not
+   the guard. The checkbox IS the accessible state; the animated border on the
+   board card is a second, redundant signal and never the only one. */
+function drillingCheckHtml(project) {
+  // Two conditions, and the label says WHICH one is missing rather than simply
+  // greying out: the stage rule, and the supervisor role the endpoint requires
+  // of this flag (main.py project_flags).
+  var supervisor = (state.detail.role || currentRole()) === 'supervisor';
+  var inStage = project.active_drilling_allowed !== false;
+  var allowed = inStage && supervisor;
+  var checked = Number(project.active_drilling || 0) === 1;
+  var reason = allowed ? 'Mark this well as actively drilling'
+    : !inStage ? 'Only a well in the Post-Drilling stage can be marked as actively drilling'
+    : 'Only a supervisor can change Active Drilling';
+  return '<label class="ls-menu-item ls-menu-check' + (allowed ? '' : ' is-disabled') + '"' +
+    ' title="' + esc(reason) + '">' +
+    '<input type="checkbox" id="bpe-active-drilling"' + (checked ? ' checked' : '') +
+    (allowed ? '' : ' disabled') + '> Active Drilling</label>';
 }
 
 function approvalMarkup() {
@@ -1311,7 +1648,11 @@ function ensureUsers() {
 
 // The house .save-state indicator's three moods. The TEXTS are the contract
 // (the save engine and the tests read them); the classes only color them.
-function setFeedback(text, error) {
+// `retryable` decides whether the Retry button comes with the error. It is
+// false when the server READ the request and refused it: re-sending the same
+// payload would be refused again, and the fix is in the form. Defaults to
+// true so every existing caller keeps the transport-failure behaviour.
+function setFeedback(text, error, retryable) {
   var feedback = byId('bpe-save-feedback');
   if (!feedback) return;
   feedback.textContent = text || '';
@@ -1319,7 +1660,7 @@ function setFeedback(text, error) {
   feedback.classList.toggle('is-saving', !error && text === 'Saving...');
   feedback.classList.toggle('is-saved', !error && text === 'Saved');
   var retry = byId('bpe-retry-save');
-  if (retry) retry.classList.toggle('hidden', !error);
+  if (retry) retry.classList.toggle('hidden', !error || retryable === false);
 }
 
 function copyRows(rows) {
@@ -1344,9 +1685,18 @@ function hasCurrentDrafts() {
     draftIsCurrent(state.structureDrafts.formations) || draftIsCurrent(state.structureDrafts.flowback);
 }
 
+// Only UNSAVED DATA blocks navigation, and this is the predicate that says so.
+//
+// It used to answer true for `state.retryCommand` as well, which is what froze
+// the page after a rejected Submit for Approval: a refused transition changes
+// nothing and leaves nothing unsaved, but every navigation entry point gates
+// on flushPendingSaves(), so the back button, the rail, other wells' cards and
+// even re-clicking Submit all became silent no-ops until the user happened to
+// edit a field (which clears retryCommand as a side effect). A failed field or
+// structure draft is different -- the user's typing really is only in the
+// browser -- so those still hold the page.
 function hasFailedCurrentDrafts() {
-  return !!(state.retryCommand && isCurrentContext(state.retryCommand.context)) ||
-    Object.keys(state.fieldDrafts).some(function (key) {
+  return Object.keys(state.fieldDrafts).some(function (key) {
     var draft = state.fieldDrafts[key];
     return draftIsCurrent(draft) && draft.failed;
   }) || ['formations', 'flowback'].some(function (key) {
@@ -1401,20 +1751,35 @@ function queueSave(work, options) {
     if (options.merge !== false) {
       var next = response.detail || response;
       mergeReturnedDetail(next);
+      // A status move rebuilds the page; anything else rebuilds the Well
+      // Summary only, because the card reads the record's values and a saved
+      // value must not sit behind the form that produced it.
       if (options.rerender || result.before !== detailStateSignature(state.detail)) renderDetail();
+      else renderSummaryPanel();
     }
     setFeedback(hasCurrentDrafts() ? 'Saving...' : 'Saved', false);
     return response;
   }).catch(function (error) {
     if (options.onFailure) options.onFailure(error);
     if (isCurrentContext(context)) {
-      setFeedback('Save failed', true);
+      if (options.failureText) setFeedback(options.failureText(error), true, isRetryable(error));
+      else setFeedback('Save failed', true);
       msg(error.message, 'error');
     }
     return null;
   });
   state.saveQueue = job;
   return job;
+}
+
+// A 4xx means the server read the request and refused it -- the approval
+// validators in workflow/business_plan.py _approval_errors, say, or a stale
+// revision. Sending the identical payload again cannot help. Anything else
+// (a rejected fetch, which carries no status, or a 5xx) is a transport
+// problem, where Retry is exactly the right offer.
+function isRetryable(error) {
+  var status = error && error.status;
+  return !(status >= 400 && status < 500);
 }
 
 function queueCommandSave(work, options) {
@@ -1431,8 +1796,16 @@ function queueCommandSave(work, options) {
         if (originalSuccess) originalSuccess(response);
       },
       onFailure: function (error) {
-        state.retryCommand = { context: context, run: run };
+        // Only arm Retry for a transport failure. A refusal leaves nothing
+        // pending, so there is nothing to re-send -- and arming it would put
+        // a button on screen whose only effect is to be refused again.
+        state.retryCommand = isRetryable(error) ? { context: context, run: run } : null;
         if (originalFailure) originalFailure(error);
+      },
+      // The command did not save anything, so "Save failed" would be a lie
+      // about the user's data as well as unhelpful about the actual problem.
+      failureText: options.failureText || function (error) {
+        return isRetryable(error) ? 'Save failed' : (error.message || 'Refused');
       }
     });
     return queueSave(work, commandOptions);
@@ -1503,11 +1876,84 @@ function queueFieldDraft(element, immediate, key, nextValue, payload) {
   else state.timers[key] = setTimeout(function () { enqueueFieldDraft(key, version); }, state.saveDelay);
 }
 
+/* Card 3T's dropdown, wired.
+
+   A toggle writes the whole array through the ordinary field-draft path, so it
+   auto-saves exactly like every other control on the page and never submits
+   anything for approval. The menu STAYS OPEN across toggles -- picking three
+   formations should be three clicks, not three round trips through the
+   trigger -- and only the option's own mark and the closed summary are
+   repainted, because re-rendering the form would tear the open menu down. */
+function coringSelection() {
+  var raw = value(CORING_FIELD);
+  if (Array.isArray(raw)) return raw.slice();
+  try { return JSON.parse(raw || '[]'); } catch (error) { return []; }
+}
+
+function renderCoringMenu() {
+  var menu = byId('bpe-coring-menu');
+  if (!menu) return;
+  var selected = coringSelection();
+  var options = coringOptions(state.detail.formation_options || [], selected);
+  menu.innerHTML = options.map(function (name) {
+    return filterOptionHtml({
+      multi: true,
+      chosen: selected.indexOf(name) >= 0,
+      value: name,
+      strong: false,
+      label: name
+    });
+  }).join('');
+  all('.lf-option', menu).forEach(function (option) {
+    option.addEventListener('click', function () {
+      toggleCoringFormation(option, option.getAttribute('data-value'));
+    });
+  });
+}
+
+function toggleCoringFormation(option, name) {
+  var selected = coringSelection();
+  var at = selected.indexOf(name);
+  var chosen = at < 0;
+  if (chosen) selected.push(name);
+  else selected.splice(at, 1);
+  var trigger = byId('bpe-coring-trigger');
+  queueFieldDraft(trigger, true, CORING_FIELD, selected,
+    { field_key: CORING_FIELD, value: selected, changed_by: currentUserName() });
+  // Update the CLICKED option in place rather than re-rendering the list.
+  // Re-rendering would detach the button the click came from, and the
+  // page-wide dismissal decides "was this click inside a menu?" by walking up
+  // from event.target -- a detached node has no ancestors, so the menu the
+  // user is still working in would be dismissed out from under them.
+  option.classList.toggle('is-chosen', chosen);
+  option.setAttribute('aria-checked', chosen ? 'true' : 'false');
+  if (trigger) {
+    trigger.querySelector('.lf-value').textContent = coringSummary(selected);
+    trigger.classList.toggle('is-active', selected.length > 0);
+  }
+}
+
+function bindCoringFormations() {
+  var trigger = byId('bpe-coring-trigger');
+  if (!trigger) return;
+  trigger.addEventListener('click', function () {
+    var menu = byId('bpe-coring-menu');
+    if (!menu.hidden) { closeBpeMenus(); return; }
+    closeBpeMenus();
+    renderCoringMenu();
+    announceOpen();   // the one-dropdown-at-a-time contract
+    menu.hidden = false;
+    placeFilterMenu(trigger, menu);
+    trigger.setAttribute('aria-expanded', 'true');
+  });
+}
+
 function bindFieldInputs() {
   all('[data-bpe-field]', byId('bpe-detail-view')).forEach(function (element) {
     var immediate = element.type === 'checkbox' || element.type === 'radio' || element.tagName === 'SELECT';
     element.addEventListener(immediate ? 'change' : 'input', function () {
       var key = element.dataset.bpeField;
+      if (!numericEditAllowed(element, key)) return;
       var nextValue = inputValue(element);
       var previous = value(key);
       var payload = { field_key: key, value: nextValue, changed_by: currentUserName() };
@@ -1653,6 +2099,8 @@ function rowIndexFor(rows, marker) {
 function bindFormationInputs() {
   all('[data-formation-field], [data-pay-field]', byId('bpe-detail-view')).forEach(function (element) {
     element.addEventListener(element.tagName === 'SELECT' ? 'change' : 'input', function () {
+      var cellKey = element.dataset.payField || element.dataset.formationField;
+      if (!numericEditAllowed(element, cellKey)) return;
       updateFormationBuffer(element);
       var version = markStructureDraft('formations', state.detail.formations || []);
       clearTimeout(state.timers.formations);
@@ -1660,6 +2108,17 @@ function bindFormationInputs() {
         enqueueStructureDraft('formations', version, false);
       }, element.tagName === 'SELECT' ? 0 : state.saveDelay);
     });
+  });
+  // Toggle in place: the sheet holds live inputs and a pending auto-save, so
+  // re-rendering the page to open a disclosure would be both wasteful and a
+  // way to lose a half-typed cell.
+  var formationsHead = byId('bpe-formations-head');
+  if (formationsHead) formationsHead.addEventListener('click', function () {
+    formationsFoldOpen = !formationsFoldOpen;
+    formationsHead.classList.toggle('open', formationsFoldOpen);
+    formationsHead.setAttribute('aria-expanded', String(formationsFoldOpen));
+    var body = byId('bpe-formations');
+    if (body) body.classList.toggle('collapsed', !formationsFoldOpen);
   });
   var addFormation = byId('bpe-add-formation');
   if (addFormation) addFormation.addEventListener('click', function () {
@@ -1742,6 +2201,7 @@ function saveFlowback(rerender) {
 function bindFlowbackInputs() {
   all('[data-flow-field]', byId('bpe-detail-view')).forEach(function (element) {
     element.addEventListener(element.tagName === 'SELECT' ? 'change' : 'input', function () {
+      if (!numericEditAllowed(element, element.dataset.flowField)) return;
       updateFlowBuffer(element);
       var version = markStructureDraft('flowback', state.detail.flowback_stages || []);
       clearTimeout(state.timers.flowback);
@@ -1851,6 +2311,80 @@ function wireBpeSummaryDismissOnce() {
   });
 }
 
+/* The Well Summary panel's own wiring, kept apart from bindDetail because the
+   panel is re-rendered on its own (see renderSummaryPanel): every listener here
+   belongs to a node that refresh replaces. */
+function openAllFields() {
+  closeBpeSummaryMenu();
+  flushPendingSaves().then(function (saved) {
+    if (!saved) return;
+    var projectId = state.projectId;
+    byId('bpe-detail-view').classList.add('hidden');
+    import('./project-editor.js').then(function (module) { module.openProjectEditor(projectId); });
+  });
+}
+
+function wireSummaryPanel() {
+  var panel = byId('bpe-detail-view') && byId('bpe-detail-view').querySelector('.summary-panel');
+  if (!panel) return;
+  var gear = byId('bpe-summary-gear');
+  var menu = byId('bpe-summary-menu');
+  if (gear && menu) gear.addEventListener('click', function (event) {
+    event.stopPropagation();
+    var open = menu.classList.toggle('hidden') === false;
+    gear.setAttribute('aria-expanded', String(open));
+  });
+  var edit = byId('bpe-edit-all');
+  if (edit) edit.addEventListener('click', openAllFields);
+  wireDrillingFlag();
+  // Card 3E's two expandable sections. Bound inside the panel, so this never
+  // reaches the editor's own Formation Interpretation fold, and toggling one
+  // writes nothing beyond the local open-state map.
+  wireWellSummaryFolds(panel, summaryFolds);
+}
+
+/* The Active Drilling checkbox writes through the SAME per-well flags endpoint
+   the maturation gear uses, so there is one write path and one audit event for
+   this flag however it was set. A refusal (the stage rule, or the supervisor
+   role) puts the box back where it was and says why -- the state on screen
+   never claims something the server did not store. */
+function wireDrillingFlag() {
+  var box = byId('bpe-active-drilling');
+  if (!box || box.disabled) return;
+  box.addEventListener('change', function () {
+    var wanted = box.checked;
+    box.disabled = true;
+    API.flags(state.projectId, { active_drilling: wanted, changed_by: currentUserName() })
+      .then(function () {
+        state.detail.project.active_drilling = wanted ? 1 : 0;
+        closeBpeSummaryMenu();
+        renderSummaryPanel();
+        msg(wanted ? 'Marked as actively drilling.' : 'Active Drilling turned off.', 'success');
+      })
+      .catch(function (error) {
+        box.checked = !wanted;
+        box.disabled = false;
+        msg(error.message, 'error');
+      });
+  });
+}
+
+/* Re-render the Well Summary ALONE.
+
+   The detail page as a whole is rebuilt only when its status signature moves
+   (see queueSave), which is deliberate -- rebuilding the editor mid-edit is
+   disruptive. But since Card 3E the panel reads the record's VALUES too, so a
+   saved formation or flowback row changes what it should show without changing
+   any status. Replacing just this node keeps the panel honest while leaving the
+   form the user is typing into exactly where it was. */
+function renderSummaryPanel() {
+  var view = byId('bpe-detail-view');
+  var panel = view && view.querySelector('.summary-panel');
+  if (!panel || !state.detail) return;
+  panel.outerHTML = summaryMarkup();
+  wireSummaryPanel();
+}
+
 function bindDetail() {
   byId('bpe-back').addEventListener('click', refreshBusinessPlan);
   // The stage accordion, mirroring views/detail.js wireRailHandlers: clicking
@@ -1867,6 +2401,7 @@ function bindDetail() {
     button.addEventListener('click', function () { openBusinessPlanDetail(state.projectId, button.dataset.detailSlug); });
   });
   bindFieldInputs();
+  bindCoringFormations();
   bindFormationInputs();
   bindFlowbackInputs();
   var retry = byId('bpe-retry-save');
@@ -1900,38 +2435,35 @@ function bindDetail() {
       context: context, rerender: true
     });
   });
-  var priority = byId('bpe-priority');
-  if (priority) priority.addEventListener('change', function () {
+  // The chip cycles Low -> Medium -> High -> Low, exactly as the maturation
+  // shell's does. It is rendered `disabled` for anyone but a supervisor, so
+  // the click can never fire for them.
+  var priorityChipEl = byId('bpe-priority-chip');
+  if (priorityChipEl) priorityChipEl.addEventListener('click', function () {
     var context = currentContext();
-    var selected = priority.value;
+    var selected = nextLeadPriority(state.detail.project.priority);
     queueCommandSave(function () {
       return API.projectPriority(context.projectId, { priority: selected, changed_by: currentUserName() });
     }, {
       context: context,
       merge: false,
       onSuccess: function () {
-        if (isCurrentContext(context)) state.detail.project.priority = selected;
+        if (!isCurrentContext(context)) return;
+        state.detail.project.priority = selected;
+        // Repaint in place: the chip is the only thing this change moves, and
+        // a full re-render would drop the focus ring off the button just
+        // clicked.
+        applyPriorityChip(byId('bpe-priority-chip'), selected,
+                          (state.detail.role || currentRole()) === 'supervisor');
       }
     });
   });
-  var gear = byId('bpe-summary-gear');
-  var menu = byId('bpe-summary-menu');
-  if (gear && menu) gear.addEventListener('click', function (event) {
-    event.stopPropagation();
-    var open = menu.classList.toggle('hidden') === false;
-    gear.setAttribute('aria-expanded', String(open));
-  });
+  wireSummaryPanel();
   wireBpeSummaryDismissOnce();
-  var edit = byId('bpe-edit-all');
-  if (edit) edit.addEventListener('click', function () {
-    closeBpeSummaryMenu();
-    flushPendingSaves().then(function (saved) {
-      if (!saved) return;
-      var projectId = state.projectId;
-      byId('bpe-detail-view').classList.add('hidden');
-      import('./project-editor.js').then(function (module) { module.openProjectEditor(projectId); });
-    });
-  });
+  // The rail's twin of the panel's own "Edit all project fields" -- Card 3I put
+  // the link where the maturation shell keeps it, and both run one handler.
+  var railEdit = byId('bpe-rail-edit-all');
+  if (railEdit) railEdit.addEventListener('click', openAllFields);
 }
 
 export function businessPlanTestHooks() {

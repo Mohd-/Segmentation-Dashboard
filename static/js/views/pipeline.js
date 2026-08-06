@@ -119,11 +119,20 @@ function trackedItemsHtml(project, stage) {
 
 function leadCardHtml(project, stage) {
   var priority = PRIORITY_RANK[project.lead_priority] === undefined ? 'Low' : project.lead_priority;
-  return '<button type="button" class="lead-card lead-card-' + statusSlug(priority) + '"' +
+  // Card 3X: the board already publishes active_drilling ONLY while the record
+  // sits in Post-Drilling, which is exactly the card's condition.
+  return '<button type="button" class="lead-card lead-card-' + statusSlug(priority) +
+    (Number(project.active_drilling || 0) === 1 ? ' is-active-drilling' : '') + '"' +
     ' data-project-id="' + project.project_id + '" data-pipeline="prospect"' +
     ' data-priority="' + esc(priority) + '">' +
     '<span class="lead-card-identity">' +
       '<span class="lead-card-name">' + esc(project.project_name) + '</span>' +
+      // Card 3V: a staked record is titled by the name it is KNOWN by, so the
+      // lead it was matured as rides underneath -- the pairing stays visible
+      // rather than being replaced. Shown only when the two actually differ.
+      (project.lead_name && project.lead_name !== project.project_name
+        ? '<span class="lead-card-lead-name" title="Lead name">' + esc(project.lead_name) + '</span>'
+        : '') +
       '<span class="lead-card-people">' + assigneesHtml(project) + '</span>' +
     '</span>' +
     '<span class="lead-card-items">' + trackedItemsHtml(project, stage) + '</span>' +

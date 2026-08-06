@@ -56,9 +56,13 @@
      spec: rgb(255,0,0) / rgb(255,204,216) / rgb(217,217,217)); the pale
      fills rely on the value+label text under each segment, never on the
      fill alone. Same hexes in both themes. --viz-dot is the cross-plot
-     series color, validated per mode against the panel surface. */
+     series color, validated per mode against the panel surface.
+     --viz-res-2b splits the pink undiscovered band in two, Staked (the
+     approved --viz-res-2) over Proposed (a lighter tint of it), so the two
+     read as one family with the nearer-to-drilling half the stronger. */
   --viz-res-1: #ff0000;
   --viz-res-2: #ffccd8;
+  --viz-res-2b: #ffe6ec;
   --viz-res-3: #d9d9d9;
   --viz-dot: #12879a;
 
@@ -340,6 +344,10 @@ a { color: var(--brand-700); }
 /* Icons stay the approved ASAS blue regardless of the button's own
    (state-driven) text color -- only the underline + label distinguish active. */
 .tabs button .lucide { width: 24px; height: 24px; color: var(--asas-blue); flex: 0 0 auto; }
+/* Composed marks with a non-square viewBox (the Segment Maturation glyph is a
+   growth chart and a derrick side by side in one 48x24 box). Every fixed
+   square rule in this file has to opt them out or they render at half scale. */
+.tabs button .lucide-wide { width: 48px; }
 .tabs button:hover { color: var(--asas-navy); background: transparent; }
 /* Active state: the approved deep ASAS navy, not the lighter teal/cyan brand
    accents -- reusable for any tab. */
@@ -433,10 +441,12 @@ button.danger:hover { background: var(--danger-600); }
 }
 button.icon-btn:hover { background: var(--brand-100); }
 
-/* Vendored Lucide icons (static/icons/, inlined via js/icons.js or the
-   markup): strokes follow currentColor; size follows the local font size,
-   with a fixed 16px inside the square icon buttons. */
+/* Inline icons (static/icons/, inlined via js/icons.js or the markup):
+   strokes follow currentColor; size follows the local font size, with a fixed
+   16px inside the square icon buttons. The `.lucide` class name predates the
+   ASAS icon set and is kept as the shared sizing hook. */
 .lucide { width: 1em; height: 1em; vertical-align: -0.15em; }
+.lucide-wide { width: 2em; }
 .icon-btn .lucide { width: 16px; height: 16px; }
 
 .toolbar {
@@ -496,5 +506,6 @@ tbody tr[data-index] { cursor: pointer; }
   .tabs { top: 56px; height: 52px; }
   .tabs button { min-width: 110px; font-size: var(--text-xs); gap: var(--space-1); padding: 0 var(--space-2); }
   .tabs button .lucide { width: 18px; height: 18px; }
+  .tabs button .lucide-wide { width: 36px; }
   .header-actions .user-chip { display: none; }
 }

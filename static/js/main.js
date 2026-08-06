@@ -9,6 +9,7 @@ import { initLeadCreate } from './views/lead-create.js';
 import { initHeaderMenus } from './views/header-menus.js';
 import { refreshPortfolio } from './views/portfolio.js';
 import { initPortfolioAnalysis } from './views/portfolio-analysis.js';
+import { initPortfolioWaterfall } from './views/portfolio-waterfall.js';
 import { refreshAudit } from './views/audit.js';
 import { refreshMap } from './views/map-view.js';
 import { initCalculators } from './views/calculators.js';
@@ -109,6 +110,9 @@ export function wire() {
   safeOn('submit-component', 'click', function () { transitionComponent('submit'); });
   safeOn('approve-component', 'click', function () { transitionComponent('approve'); });
   safeOn('return-component', 'click', function () { transitionComponent('return'); });
+  // Card 3S. Supervisor-gated server-side; the button is only rendered for an
+  // approved step (views/detail-form.js SPECIAL_ACTION_ROWS).
+  safeOn('reopen-component', 'click', function () { transitionComponent('reopen'); });
   safeOn('back-to-overview', 'click', backToBoard);
   safeOn('back-to-board', 'click', backToBoard);
   safeOn('open-project-editor', 'click', function () {
@@ -118,6 +122,7 @@ export function wire() {
   // Portfolio Analysis: cross plot dialog trigger, close, and filter selects.
   // (The portfolio table itself filters via its column menus -- portfolio.js.)
   initPortfolioAnalysis();
+  initPortfolioWaterfall();
   initCalculators();
 }
 

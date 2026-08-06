@@ -1,4 +1,4 @@
-import { byId, all, esc, msg, fmtNum } from '../dom.js';
+import { byId, all, esc, msg, fmtNum, isFilled } from '../dom.js';
 import { ICONS } from '../icons.js';
 import { API } from '../api.js';
 import { FLUID_TYPES } from '../schema.js';
@@ -9,7 +9,7 @@ import { openDetail } from './detail.js';
 // is a hoisted function declaration and only called from event handlers, same
 // as the existing detail → pipeline → portfolio chain.
 import { refreshAllBoards } from './pipeline.js';
-import { renderResourceBar, setCrossPlotRows } from './portfolio-analysis.js';
+import { renderResourceBar, setCrossPlotRows, quadrantOf } from './portfolio-analysis.js';
 
 // Exactly the 8 analysis columns, in this order. `filter` selects the
 // column-filter control rendered in the second thead row: 'text' = substring
@@ -29,35 +29,76 @@ var STATUS_OPTIONS = FLUID_TYPES.filter(function (value) { return value !== ''; 
   .concat(['Proposed', 'Staked']);
 
 var COLUMNS = [
+  // `well_name` is the name the record is KNOWN BY here: the staked well name
+  // once it has one, the lead name until then (workflow.display_record_name).
+  // The lead name is not a column of its own -- it appears under the well name
+  // only on the rows where the two differ, which is the whole lead <-> well
+  // map without a column that repeats the other one on every other row.
   { key: 'well_name', label: 'Well Name', numeric: false, filter: 'text' },
-  { key: 'gas_field', label: 'Field', numeric: false, filter: 'multi' },
-  { key: 'seismic_block', label: 'Seismic Block', numeric: false, filter: 'text' },
-  { key: 'classification', label: 'Classification', numeric: false, filter: 'multi' },
-  { key: 'year', label: 'BP Year', numeric: true, filter: 'multi' },
-  { key: 'status', label: 'Status', numeric: false, filter: 'multi', options: STATUS_OPTIONS },
+  // Card 3N's requested order. This is a PRESENTATION change only: every
+  // column keeps its data key, formatter and filter, and the export's column
+  // positions are a separate contract that does not follow this row.
+  //
+  // The card lists six of these plus a seventh, `nucd Area`, which is REPORTED
+  // BLOCKED: there is no field, config entry or data of that name anywhere in
+  // this application, and the card forbids guessing its source. Classification
+  // and BP Year are not in the card's list either; they are kept here rather
+  // than dropped, because removing working columns is not what "reorder" asks
+  // for and both are still filtered on.
   { key: 'mean_ogip', label: 'Mean OGIP (BCF)', numeric: true, filter: 'range' },
-  { key: 'total_cos', label: 'Total CoS (%)', numeric: true, filter: 'range' }
+  { key: 'total_cos', label: 'Total CoS (%)', numeric: true, filter: 'range' },
+  { key: 'status', label: 'Status', numeric: false, filter: 'multi', options: STATUS_OPTIONS },
+  { key: 'seismic_block', label: 'Seismic Block', numeric: false, filter: 'text' },
+  { key: 'gas_field', label: 'Field', numeric: false, filter: 'multi' },
+  { key: 'classification', label: 'Classification', numeric: false, filter: 'multi' },
+  { key: 'year', label: 'BP Year', numeric: true, filter: 'multi' }
 ];
+
+// The cross plot's four cutoff quadrants are NOT a column: they are a property
+// of the record, so the glyph rides in the name cell rather than taking a
+// column's worth of width to repeat one of four words down the page. The
+// dialog's Quadrant checklist remains the place to filter by them.
+
+// Every column read goes through here so a derived column behaves exactly
+// like a stored one in filtering, sorting and rendering.
+function cellValue(row, col) {
+  var raw = col.derive ? col.derive(row) : row[col.key];
+  return raw == null ? '' : raw;
+}
 
 // Module-level state per spec: fetched once per refreshPortfolio(), then
 // sort/filter changes re-render locally without refetching.
-var state = { rows: [], sortKey: null, sortDir: 1, filters: {} };
+//
+// `sortChain` is an ORDERED list of {key, dir}: the first entry decides, and
+// each later one breaks the ties the ones before it leave. One column was
+// never enough here -- "biggest volumes, grouped by field" is two -- and a
+// chain says exactly that instead of making the user sort twice and hope the
+// second pass is stable.
+var state = { rows: [], sortChain: [], filters: {} };
 
-// Stats follow the VISIBLE rowset (server + column filters applied) instead
-// of the fetch payload's server-computed summary, using the same is_lead
-// split reporting.get_portfolio_rows uses for its summary object
-// (business_plan_wells / leads).
-function renderPortfolioStats(rows) {
-  var element = byId('portfolio-stats');
-  if (!element) return;
-  var bpWells = 0;
-  var leads = 0;
-  rows.forEach(function (row) {
-    if (row.is_lead) leads += 1; else bpWells += 1;
-  });
-  element.innerHTML =
-    '<div class="portfolio-stat"><small>Business Plan Wells</small><b>' + esc(bpWells) + '</b></div>' +
-    '<div class="portfolio-stat"><small>Leads</small><b>' + esc(leads) + '</b></div>';
+function sortIndex(key) {
+  for (var i = 0; i < state.sortChain.length; i += 1) {
+    if (state.sortChain[i].key === key) return i;
+  }
+  return -1;
+}
+
+function sortEntry(key) {
+  var index = sortIndex(key);
+  return index < 0 ? null : state.sortChain[index];
+}
+
+/* Picking a direction APPENDS the column to the chain, or re-points it if it
+   is already there; picking the direction it already has REMOVES it. So one
+   control both adds and drops a level, and a column can never appear twice. */
+function toggleSort(key, dir) {
+  var entry = sortEntry(key);
+  if (entry && entry.dir === dir) {
+    state.sortChain = state.sortChain.filter(function (item) { return item.key !== key; });
+    return;
+  }
+  if (entry) { entry.dir = dir; return; }
+  state.sortChain.push({ key: key, dir: dir });
 }
 
 function distinctValues(key) {
@@ -93,10 +134,10 @@ function applyFilters(rows) {
     return COLUMNS.every(function (col) {
       var filterValue = state.filters[col.key];
       if (!col.filter || filterValue == null) return true;
-      var cellValue = String(row[col.key] == null ? '' : row[col.key]);
+      var text = String(cellValue(row, col));
       if (col.filter === 'text') {
         if (!filterValue) return true;
-        return cellValue.toLowerCase().indexOf(String(filterValue).toLowerCase()) >= 0;
+        return text.toLowerCase().indexOf(String(filterValue).toLowerCase()) >= 0;
       }
       // 'range': {min, max} strings; an unset bound doesn't constrain. Once
       // either bound is set, blank/non-numeric cells drop out (a row with no
@@ -105,40 +146,51 @@ function applyFilters(rows) {
         var hasMin = filterValue.min !== '' && isFinite(Number(filterValue.min));
         var hasMax = filterValue.max !== '' && isFinite(Number(filterValue.max));
         if (!hasMin && !hasMax) return true;
-        var numeric = Number(cellValue);
-        if (cellValue === '' || !isFinite(numeric)) return false;
+        var numeric = Number(text);
+        if (text === '' || !isFinite(numeric)) return false;
         return (!hasMin || numeric >= Number(filterValue.min)) &&
           (!hasMax || numeric <= Number(filterValue.max));
       }
       // 'multi': array of selected values; an empty/absent array = no filter.
-      return !filterValue.length || filterValue.indexOf(cellValue) >= 0;
+      return !filterValue.length || filterValue.indexOf(text) >= 0;
     });
   });
 }
 
-function compareRows(a, b, col) {
+function compareRows(a, b, col, dir) {
+  var av = cellValue(a, col);
+  var bv = cellValue(b, col);
   if (col.numeric) {
-    var an = Number(a[col.key]);
-    var bn = Number(b[col.key]);
-    var aBlank = a[col.key] === '' || a[col.key] == null || !isFinite(an);
-    var bBlank = b[col.key] === '' || b[col.key] == null || !isFinite(bn);
+    var an = Number(av);
+    var bn = Number(bv);
+    var aBlank = av === '' || !isFinite(an);
+    var bBlank = bv === '' || !isFinite(bn);
     if (aBlank && bBlank) return 0;
     if (aBlank) return 1;  // blanks/non-numeric always sort last, both directions
     if (bBlank) return -1;
-    return (an - bn) * state.sortDir;
+    return (an - bn) * dir;
   }
-  var at = String(a[col.key] == null ? '' : a[col.key]);
-  var bt = String(b[col.key] == null ? '' : b[col.key]);
-  return at.localeCompare(bt) * state.sortDir;
+  return String(av).localeCompare(String(bv)) * dir;
+}
+
+// Walk the chain and return the FIRST non-zero comparison; every level keeps
+// its own column's blanks-last and numeric/lexical rules unchanged.
+function compareByChain(a, b) {
+  for (var i = 0; i < state.sortChain.length; i += 1) {
+    var entry = state.sortChain[i];
+    var col = colByKey(entry.key);
+    if (!col) continue;
+    var result = compareRows(a, b, col, entry.dir);
+    if (result !== 0) return result;
+  }
+  return 0;
 }
 
 function visibleRows() {
   var rows = applyFilters(state.rows);
-  if (!state.sortKey) return rows;
-  var col = COLUMNS.filter(function (c) { return c.key === state.sortKey; })[0];
-  if (!col) return rows;
+  if (!state.sortChain.length) return rows;
   var sorted = rows.slice();
-  sorted.sort(function (a, b) { return compareRows(a, b, col); });
+  sorted.sort(compareByChain);
   return sorted;
 }
 
@@ -170,16 +222,59 @@ function yearCellMarkup(row) {
   return '<td>' + yearText + '</td>';
 }
 
+var QUADRANT_ICONS = {
+  'Super Stars': 'quadrant-superstar',
+  'Risk Takers': 'quadrant-risk-taker',
+  'Value Hunter': 'quadrant-value-hunter',
+  'Dogs': 'quadrant-dog'
+};
+
+// The quadrant mark that sits beside a record's name. Icon only -- the word is
+// carried by the title and the accessible label, because four names repeated
+// down a column is what made this a column in the first place. A record
+// missing either measure has no quadrant and gets no mark at all (an absent
+// classification is not a fifth class).
+function quadrantMarkMarkup(row) {
+  var quadrant = quadrantOf(row);
+  if (!quadrant) return '';
+  var key = QUADRANT_ICONS[quadrant];
+  return '<span class="pf-quadrant pf-' + esc(key) + '" role="img"' +
+    ' title="' + esc(quadrant) + '" aria-label="' + esc(quadrant) + '">' + ICONS[key] + '</span>';
+}
+
+/* The name cell: the quadrant mark, the name the record is known by, and --
+   only when staking gave it a different one -- the lead name it was matured
+   under, quietly beneath. That second line is the lead <-> well map, and it
+   costs nothing on the rows where the two names are the same. */
+function nameCellMarkup(row) {
+  var toBP = row.pipeline_type === 'bp';
+  var leadName = row.lead_name || '';
+  var showsLead = isFilled(leadName) && leadName !== row.well_name;
+  return '<td class="pf-name-cell">' +
+    quadrantMarkMarkup(row) +
+    '<span class="pf-name">' +
+      '<a href="#" class="well-link" data-project-id="' + esc(row.project_id) + '"' +
+      ' data-pipeline="' + (toBP ? 'bp' : 'prospect') + '"' +
+      ' title="Open in ' + (toBP ? 'Business Plan Execution' : 'Segment Maturation') + '">' +
+      esc(row.well_name || '') + '</a>' +
+      (showsLead ? '<small class="pf-lead-name" title="Lead name in Segment Maturation">' +
+        esc(leadName) + '</small>' : '') +
+    '</span></td>';
+}
+
+// Cell order follows COLUMNS. The two measured columns carry .pf-num rather
+// than relying on their POSITION for alignment -- a positional rule silently
+// pointed at the wrong columns the moment Card 3N reordered the table.
 function rowMarkup(row) {
   return '<tr>' +
-    '<td><a href="#" class="well-link" data-project-id="' + esc(row.project_id) + '" data-pipeline="' + esc(row.pipeline_type === 'bp' ? 'bp' : 'prospect') + '" title="Open in ' + (row.pipeline_type === 'bp' ? 'Business Plan Execution' : 'Prospect Maturation') + '">' + esc(row.well_name || '') + '</a></td>' +
-    '<td>' + esc(row.gas_field || '') + '</td>' +
+    nameCellMarkup(row) +
+    '<td class="pf-num">' + esc(fmtNum(row.mean_ogip) || '') + '</td>' +
+    '<td class="pf-num">' + esc(fmtNum(row.total_cos) || '') + '</td>' +
+    '<td>' + esc(row.status || '') + '</td>' +
     '<td>' + esc(row.seismic_block || '') + '</td>' +
+    '<td>' + esc(row.gas_field || '') + '</td>' +
     '<td>' + esc(row.classification || '') + '</td>' +
     yearCellMarkup(row) +
-    '<td>' + esc(row.status || '') + '</td>' +
-    '<td>' + esc(fmtNum(row.mean_ogip) || '') + '</td>' +
-    '<td>' + esc(fmtNum(row.total_cos) || '') + '</td>' +
     '</tr>';
 }
 
@@ -224,10 +319,11 @@ function renderBody(table) {
       }).catch(function (error) { msg(error.message, 'error'); });
     });
   });
-  renderPortfolioStats(rows);
-  // The resource bar tracks the same visible rowset as the stats, so the
-  // column filters re-scope it. (The cross plot dialog does NOT: it has its
-  // own selects over the full rowset -- see portfolio-analysis.js.)
+  // The resource bar tracks the VISIBLE rowset, so every column filter
+  // re-scopes it -- including the per-category segment/well counts in its
+  // legend, which is where the two deleted stat boxes' numbers went. (The
+  // cross plot does NOT: it has its own filters over the full rowset -- see
+  // portfolio-analysis.js.)
   renderResourceBar(rows);
 }
 
@@ -244,7 +340,8 @@ function sortLabels(col) {
 }
 
 function isSortActive(col, dir) {
-  return state.sortKey === col.key && state.sortDir === dir;
+  var entry = sortEntry(col.key);
+  return !!entry && entry.dir === dir;
 }
 
 function isFilledBound(value) { return value !== '' && value != null; }
@@ -290,9 +387,20 @@ function filterGroupMarkup(col) {
 // One column header: a title button that opens a pop-over combining Sort
 // (two directional options) and Filter (type-appropriate). The menu is placed
 // against the viewport when opened so table/panel overflow cannot clip it.
+// The header's sort mark: the column's RANK in the chain plus its arrow, so a
+// three-level sort is readable from the header row alone rather than only from
+// the strip below the table.
+function sortMarkHtml(key) {
+  var index = sortIndex(key);
+  if (index < 0) return '';
+  var entry = state.sortChain[index];
+  return '<span class="pf-sort-rank">' + (index + 1) + '</span>' +
+    (entry.dir === 1 ? ICONS['chevron-up'] : ICONS['chevron-down']);
+}
+
 function columnHeaderMarkup(col) {
   var labels = sortLabels(col);
-  var sortMark = state.sortKey === col.key ? (state.sortDir === 1 ? ICONS['chevron-up'] : ICONS['chevron-down']) : '';
+  var sortMark = sortMarkHtml(col.key);
   var filtered = columnIsFiltered(col);
   return '<th data-key="' + col.key + '" aria-sort="none">' +
     '<button type="button" class="pf-col-trigger" aria-haspopup="true" aria-expanded="false">' +
@@ -379,18 +487,82 @@ function refreshHeaderState(table) {
   all('th[data-key]', table).forEach(function (th) {
     var key = th.getAttribute('data-key');
     var col = colByKey(key);
-    var isSorted = key === state.sortKey;
-    th.classList.toggle('sorted-asc', isSorted && state.sortDir === 1);
-    th.classList.toggle('sorted-desc', isSorted && state.sortDir === -1);
-    th.setAttribute('aria-sort', isSorted ? (state.sortDir === 1 ? 'ascending' : 'descending') : 'none');
+    var entry = sortEntry(key);
+    th.classList.toggle('sorted-asc', !!entry && entry.dir === 1);
+    th.classList.toggle('sorted-desc', !!entry && entry.dir === -1);
+    // aria-sort is per-column and has no notion of rank; the chain's order is
+    // spoken by the "Sorted by" strip, which is a live region.
+    th.setAttribute('aria-sort', entry ? (entry.dir === 1 ? 'ascending' : 'descending') : 'none');
     var sortMark = th.querySelector('.pf-sort-mark');
-    if (sortMark) sortMark.innerHTML = isSorted ? (state.sortDir === 1 ? ICONS['chevron-up'] : ICONS['chevron-down']) : '';
+    if (sortMark) sortMark.innerHTML = sortMarkHtml(key);
     all('.pf-sort-opt', th).forEach(function (opt) {
-      opt.classList.toggle('is-active', isSorted && Number(opt.getAttribute('data-dir')) === state.sortDir);
+      opt.classList.toggle('is-active', !!entry && Number(opt.getAttribute('data-dir')) === entry.dir);
     });
     var filtered = col && columnIsFiltered(col);
     var filterMark = th.querySelector('.pf-filter-mark');
     if (filterMark) filterMark.classList.toggle('is-on', !!filtered);
+  });
+}
+
+/* The "Sorted by" strip above the table: the chain in order, each level
+   removable on the spot, plus Clear all. The header marks say WHICH columns
+   sort and in which direction; this says in what ORDER, which is the part a
+   per-column mark cannot show. It renders nothing at all when there is no
+   sort, so an unsorted table gains no chrome. Lives in a container the page
+   owns (#portfolio-sort-strip), created next to the table on first use. */
+function sortStripHost(table) {
+  // Scoped to THIS table's parent, not looked up by id document-wide: a
+  // re-mounted panel leaves the old strip detached from the new table, and a
+  // global lookup would keep rendering levels into the orphan.
+  var existing = table.parentNode.querySelector('#portfolio-sort-strip');
+  if (existing) return existing;
+  var host = document.createElement('div');
+  host.id = 'portfolio-sort-strip';
+  host.className = 'pf-sort-strip';
+  host.setAttribute('role', 'status');
+  host.setAttribute('aria-live', 'polite');
+  table.parentNode.insertBefore(host, table);
+  return host;
+}
+
+function renderSortStrip(table) {
+  var host = sortStripHost(table);
+  if (!state.sortChain.length) {
+    host.innerHTML = '';
+    host.hidden = true;
+    return;
+  }
+  host.hidden = false;
+  var levels = state.sortChain.map(function (entry, index) {
+    var col = colByKey(entry.key);
+    if (!col) return '';
+    var labels = sortLabels(col);
+    var direction = entry.dir === 1 ? labels.asc : labels.desc;
+    return '<button type="button" class="pf-sort-level" data-sort-key="' + esc(entry.key) + '"' +
+      ' title="Remove this sort level"' +
+      ' aria-label="' + esc('Sort level ' + (index + 1) + ': ' + col.label + ', ' + direction +
+        '. Activate to remove.') + '">' +
+      '<span class="pf-sort-rank" aria-hidden="true">' + (index + 1) + '</span>' +
+      esc(col.label) + ' <small>' + esc(direction) + '</small>' +
+      '<span class="pf-sort-drop" aria-hidden="true">' + ICONS.x + '</span></button>';
+  }).join('');
+  host.innerHTML = '<span class="pf-sort-strip-label">Sorted by</span>' + levels +
+    '<button type="button" id="portfolio-clear-sort" class="ghost pf-sort-clear">Clear all</button>';
+
+  all('.pf-sort-level', host).forEach(function (button) {
+    button.addEventListener('click', function () {
+      var key = button.getAttribute('data-sort-key');
+      state.sortChain = state.sortChain.filter(function (item) { return item.key !== key; });
+      refreshHeaderState(table);
+      renderSortStrip(table);
+      renderBody(table);
+    });
+  });
+  byId('portfolio-clear-sort').addEventListener('click', function () {
+    state.sortChain = [];
+    refreshHeaderState(table);
+    renderSortStrip(table);
+    renderBody(table);
   });
 }
 
@@ -417,13 +589,13 @@ function renderHead(table) {
         trigger.setAttribute('aria-expanded', 'true');
       }
     });
-    // Sort options: pick a direction, or click the active one again to clear.
+    // Sort options: pick a direction to add the column to the chain (or
+    // re-point it); pick the direction it already has to drop it out.
     all('.pf-sort-opt', th).forEach(function (opt) {
       opt.addEventListener('click', function () {
-        var dir = Number(opt.getAttribute('data-dir'));
-        if (state.sortKey === key && state.sortDir === dir) { state.sortKey = null; state.sortDir = 1; }
-        else { state.sortKey = key; state.sortDir = dir; }
+        toggleSort(key, Number(opt.getAttribute('data-dir')));
         refreshHeaderState(table);
+        renderSortStrip(table);
         renderBody(table);
       });
     });
@@ -471,13 +643,17 @@ function renderHead(table) {
   });
   wirePortfolioDismiss();
   refreshHeaderState(table);
+  renderSortStrip(table);
 }
 
 export function refreshPortfolio() {
   // Always the unfiltered fetch: the toolbar selects are gone, so scoping is
   // entirely client-side via the column-menu filters (BP Year and Status are
   // both 'multi' columns, replacing the old year/activity selects).
-  API.portfolioRows({ year: 'All', activity: 'All' }).then(function (payload) {
+  // The promise is RETURNED (it was not before) so a caller can wait for the
+  // table rather than poll for it; every existing call site ignores it, which
+  // is unchanged behaviour.
+  return API.portfolioRows({ year: 'All', activity: 'All' }).then(function (payload) {
     state.rows = (payload && payload.rows) || [];
     state.filters = {};
     // The cross plot dialog filters the full rowset independently of the

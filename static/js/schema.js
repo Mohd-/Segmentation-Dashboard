@@ -38,6 +38,13 @@ export var RESOURCE_SCENARIOS = [
   { id: 'condensate_field_b', label: 'Condensate - Field B', resource_type: 'condensate' }
 ];
 
+// Card 3A. The PDF confirmation reads on two steps (Quicklook Logs and Final
+// Log Analysis) and is rendered twice more by the BPE detail form, so the
+// approved wording lives here once rather than in four string literals that
+// can drift apart. The neighbouring LAS and Petrel labels are deliberately
+// untouched -- the card names this one only.
+export var PDF_LABEL = 'Logs as PDF loaded in shared folder';
+
 export function piip(prefix) {
   // Grouped layout: the gas P90/Mean/P10 trio sits under a 'Gas (BCF)' section
   // in one row; the liquid checkbox stands alone; the liquid trio is its own row
@@ -72,13 +79,15 @@ export var FLUID_TYPES = ['', 'Gas', 'Gas over Water', 'Water Bearing', 'Dry Hol
 // summary card (WS5). The keys address a flowback STAGE row first
 // (FLOWBACK_STAGE_COLUMNS reuses the same names) and the retired step-level
 // flat EAV keys as legacy fallback.
+// `label` names the rate on the Well Summary's Flowback Results section, so an
+// oil well does not read "Gas Rate"; `unit` is what the value is shown in.
 export var FLOWBACK_RATE_FIELDS = {
-  'Gas': { key: 'flowback_gas_rate_mmscfd', unit: 'MMSCFD' },
-  'Gas over Water': { key: 'flowback_gas_rate_mmscfd', unit: 'MMSCFD' },
-  'Oil': { key: 'flowback_liquid_rate_bpd', unit: 'BPD' },
-  'Oil over Gas': { key: 'flowback_liquid_rate_bpd', unit: 'BPD' },
-  'Oil over Water': { key: 'flowback_liquid_rate_bpd', unit: 'BPD' },
-  'Water Bearing': { key: 'flowback_water_rate_bwpd', unit: 'BWPD' }
+  'Gas': { key: 'flowback_gas_rate_mmscfd', unit: 'MMSCFD', label: 'Gas Rate' },
+  'Gas over Water': { key: 'flowback_gas_rate_mmscfd', unit: 'MMSCFD', label: 'Gas Rate' },
+  'Oil': { key: 'flowback_liquid_rate_bpd', unit: 'BPD', label: 'Liquid Rate' },
+  'Oil over Gas': { key: 'flowback_liquid_rate_bpd', unit: 'BPD', label: 'Liquid Rate' },
+  'Oil over Water': { key: 'flowback_liquid_rate_bpd', unit: 'BPD', label: 'Liquid Rate' },
+  'Water Bearing': { key: 'flowback_water_rate_bwpd', unit: 'BWPD', label: 'Water Rate' }
 };
 // One flowback stage (#1..#n) per row of the Flowback Results mini-sheet (EAV
 // key flowback_stages_rows, a JSON array exactly like reservoir_cos_rows).
@@ -109,13 +118,23 @@ export var FLOWBACK_STAGE_COLUMNS = [
 // readable in old data (see detail.js fluid/tops fallbacks) but are no longer
 // rendered as inputs.
 export var FORMATIONS = ['SARH', 'QASM', 'QWRH'];
+
+// The list is USER-MAINTAINED (config/lists.yaml) and served by /api/meta, so
+// the array above is a boot fallback -- exactly the relationship the stage
+// lists in this file already have with the server. Takes the meta payload
+// rather than importing Store, keeping this module free of app state.
+export function formationNames(meta) {
+  var served = meta && meta.formations;
+  return (Array.isArray(served) && served.length) ? served.slice() : FORMATIONS.slice();
+}
 export var FORMATION_METRICS = [
   // bigOk: true -- TVDSS depths run well past the generic 9999 cap (see
-  // validateStepFields). Declared for consistency/documentation: formation
-  // metric values are edited/saved through the separate well-level formations
-  // buffer (detail-form.js's formationEdits -> PUT /api/projects/<id>/
-  // formations), not the plain `fields` object validateStepFields checks, so
-  // this flag isn't currently read by any validator -- see the report note.
+  // validateStepFields). Formation metric values are edited/saved through the
+  // separate well-level formations buffer (detail-form.js's formationEdits ->
+  // PUT /api/projects/<id>/formations), not the plain `fields` object
+  // validateStepFields checks, so they are validated by that module's
+  // validateFormationRows -- which reads these same flags, and is mirrored
+  // server-side by workflow/formations.py _coerce_measurement.
   { key: 'top_tvdss_ft', label: 'Top TVDSS (ft)', type: 'number', bigOk: true },
   { key: 'base_tvdss_ft', label: 'Base TVDSS (ft)', type: 'number', bigOk: true },
   { key: 'thickness_ft', label: 'Formation Thickness (ft)', type: 'number' },
@@ -204,7 +223,10 @@ export var SCHEMA = {
     { key: 'grv_p10_thousand_acre_ft', label: 'GRV (10³ acre.ft) P10', type: 'number', bigOk: true, row: 'lead_grv' },
     // Reference information, not a checkpoint completion gate. TVDSS may be
     // negative; the dedicated Lead Assessment validator applies parse-only.
-    { key: 'top_formation_tvdss_ft', label: 'Top Formation TVDSS (ft)', type: 'number', bigOk: true, allowNegative: true, section: 'Structure' },
+    // Card 3H made TVDSS a magnitude like every other measure, so allowNegative
+    // is gone. bigOk stays: a depth runs past four digits, which the generic
+    // 9999 sanity cap would otherwise refuse.
+    { key: 'top_formation_tvdss_ft', label: 'Top Formation TVDSS (ft)', type: 'number', bigOk: true, section: 'Structure' },
     // PIIP output keys remain intentionally unregistered because the auto-run
     // writes them directly; this confirmation is the editable checkpoint input.
     { key: 'polygons_surfaces_loaded', label: 'Polygons and surfaces are placed in the shared folder', type: 'checkbox', section: 'Resource Assessment' }
@@ -323,6 +345,10 @@ export var SCHEMA = {
   // (reporting._approval_to_stake_map).
   'Approval to Stake': [
     { key: 'staking_well_created', label: 'Well creation and well folder are completed', type: 'checkbox' },
+    // Card 3V's handover confirmation. Persisted and audited like any other
+    // field, but absent from FIELD_COMPLETION: it is a record of something a
+    // person did on the share, not a gate.
+    { key: 'lead_folder_handover_confirmed', label: 'Lead Folder is moved to the Well Proposal Folder', type: 'checkbox' },
     { key: 'approval_stake_letter_loaded', label: 'The Approval to Stake letter is placed in the shared folder', type: 'checkbox' }
   ],
   // sarh_formation_prognosis_pre_drill keeps its key (renaming EAV keys
@@ -339,7 +365,7 @@ export var SCHEMA = {
   // checkboxes remain as normal task fields (grouped in one row).
   'Quicklook Logs': [
     { key: 'quicklook_formations', label: 'Formation Interpretation (Quicklook)', type: 'formations', phase: 'quicklook' },
-    { key: 'quicklook_pdf', label: 'Logs in PDF', type: 'checkbox', row: 'quicklook_logs' },
+    { key: 'quicklook_pdf', label: PDF_LABEL, type: 'checkbox', row: 'quicklook_logs' },
     { key: 'quicklook_las', label: 'Logs as LAS', type: 'checkbox', row: 'quicklook_logs' }
   ],
   'Aramco Picks': [{ key: 'aramco_picks_loaded', label: 'AAP are loaded in Petrel & GK', type: 'checkbox' }],
@@ -406,7 +432,7 @@ export var SCHEMA = {
   'Final Log Analysis': [
     { key: 'final_formations', label: 'Formation Interpretation (Final)', type: 'formations', phase: 'final' },
     { key: 'final_petrel', label: 'Logs in Petrel', type: 'checkbox', row: 'final_logs' },
-    { key: 'final_pdf', label: 'Logs in PDF', type: 'checkbox', row: 'final_logs' },
+    { key: 'final_pdf', label: PDF_LABEL, type: 'checkbox', row: 'final_logs' },
     { key: 'final_las', label: 'Logs as LAS', type: 'checkbox', row: 'final_logs' }
   ],
   'PVAD Structural MTR': [{ key: 'pvad_mtr_link', label: 'DRAS', type: 'link', value: 'https://DRAS/', linkText: 'Open PVAD Structural MTR (DRAS)' }],
@@ -531,14 +557,14 @@ function parseRowsForValidation(value) {
 // tables (Reservoir CoS's amplitude_ratio/base_tight_sarah, Flowback
 // Results' flowback_stages_rows columns) -- getFields() already hands those
 // rows back as a JSON string, so parseRowsForValidation reaches them cheaply.
-// NOT covered: the formations mini-sheet's own numeric metrics (top_tvdss_ft,
-// base_tvdss_ft, porosity_pct, ...) -- those live in detail-form.js's private
-// formationEdits buffer and save through PUT /api/projects/<id>/formations,
-// never through the `fields` object this function receives. Reaching them
-// would mean either passing that buffer in here or duplicating range checks
-// next to validateFormationRows; both are a restructuring beyond
-// "generalize the regular step forms", so it's intentionally skipped (their
-// bigOk flags above are declarative-only for now).
+// NOT covered here: the formations mini-sheet's own numeric metrics
+// (top_tvdss_ft, base_tvdss_ft, porosity_pct, ...) -- those live in
+// detail-form.js's private formationEdits buffer and save through
+// PUT /api/projects/<id>/formations, never through the `fields` object this
+// function receives. They run the SAME rules from where that buffer lives:
+// detail-form.js validateFormationRows calls numericFieldError below on every
+// metric and pay-interval cell, and workflow/formations.py mirrors it on the
+// way in. Nothing here needs to reach into that buffer.
 function genericFieldErrors(taskName, fields) {
   var stepFields = SCHEMA[taskName] || [];
   for (var i = 0; i < stepFields.length; i += 1) {
@@ -599,23 +625,48 @@ var CROSS_FIELD_RULES = {
 // reintroduces an editable lead_piip trio for free.
 var PIIP_PREFIXES = ['lead_piip', 'pre_drill_piip', 'post_drill_piip', 'resource_update'];
 
-// p90 <= mean <= p10, checked pairwise (not chained through a possibly-blank
-// middle value) and only when BOTH members of a pair are filled -- permissive
-// equality on purpose, manual deterministic entries may legitimately repeat
-// one value. `kind` ('gas'/'liquid') only decides the message's qualifier;
-// the liquid trio is naturally skipped whenever its values are blank (the
-// common case when "Liquid" is unchecked), with no need to read the
-// checkbox itself.
+// The P90/P10 PAIRS -- resource inputs with no mean between them, so the trio
+// rule has nothing to bite on. Same principle, one comparison instead of two:
+// a low estimate that is not below its high estimate is an entry mistake.
+// Addressed by key like the trios above, so a step that does not carry them
+// simply has nothing filled here. (Area and GRV on Lead Assessment already
+// have this check in CROSS_FIELD_RULES and are deliberately not repeated.)
+var RANGE_PAIRS = [
+  { p90: 'sad_area_km2_p90', p10: 'sad_area_km2_p10', label: 'SAD Area' },
+  { p90: 'sad_grv_p90', p10: 'sad_grv_p10', label: 'SAD GRV' },
+  { p90: 'sad_update_area_km2_p90', p10: 'sad_update_area_km2_p10', label: 'SAD Update Area' },
+  { p90: 'sad_update_grv_p90', p10: 'sad_update_grv_p10', label: 'SAD Update GRV' }
+];
+
+function rangePairError(fields, pair) {
+  if (!isFilled(fields[pair.p90]) || !isFilled(fields[pair.p10])) return null;
+  if (Number(fields[pair.p90]) >= Number(fields[pair.p10])) {
+    return pair.label + ' P90 must be lower than P10.';
+  }
+  return null;
+}
+
+// p90 < mean < p10, checked pairwise (not chained through a possibly-blank
+// middle value) and only when BOTH members of a pair are filled. The
+// comparison is STRICT: a resource distribution whose P90 equals its Mean is
+// not a distribution, and letting equality through was hiding copy-paste
+// mistakes (the same three numbers pasted into all three cells) behind a
+// clean save. This matches the strict pair rules already applied to Area and
+// GRV in CROSS_FIELD_RULES above and to every trio the engine itself
+// validates (resource_engine/models.py).
+// `kind` ('gas'/'liquid') only decides the message's qualifier; the liquid
+// trio is naturally skipped whenever its values are blank (the common case
+// when "Liquid" is unchecked), with no need to read the checkbox itself.
 function piipTrioError(fields, prefix, kind) {
   var p90 = fields[prefix + '_' + kind + '_p90'];
   var mean = fields[prefix + '_' + kind + '_mean'];
   var p10 = fields[prefix + '_' + kind + '_p10'];
   var qualifier = kind === 'gas' ? 'Gas' : 'Liquid';
-  if (isFilled(p90) && isFilled(mean) && Number(p90) > Number(mean)) {
-    return qualifier + ' P90 must not exceed Mean.';
+  if (isFilled(p90) && isFilled(mean) && Number(p90) >= Number(mean)) {
+    return qualifier + ' P90 must be lower than Mean.';
   }
-  if (isFilled(mean) && isFilled(p10) && Number(mean) > Number(p10)) {
-    return qualifier + ' Mean must not exceed P10.';
+  if (isFilled(mean) && isFilled(p10) && Number(mean) >= Number(p10)) {
+    return qualifier + ' Mean must be lower than P10.';
   }
   return null;
 }
@@ -638,6 +689,10 @@ export function validateStepFields(taskName, fields) {
     if (gasError) return gasError;
     var liquidError = piipTrioError(fields, PIIP_PREFIXES[p], 'liquid');
     if (liquidError) return liquidError;
+  }
+  for (var r = 0; r < RANGE_PAIRS.length; r += 1) {
+    var pairError = rangePairError(fields, RANGE_PAIRS[r]);
+    if (pairError) return pairError;
   }
   return null;
 }

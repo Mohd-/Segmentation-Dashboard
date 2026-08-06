@@ -51,6 +51,7 @@ import folders
 import map_layers
 import reporting
 import resource_calc
+import uploads
 import workflow
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -373,6 +374,11 @@ def meta():
         # Configured resource-assessment scenarios for the Resource
         # Assessment pop-up calculator's scenario dropdown.
         "resource_scenarios": resource_calc.scenario_options(),
+        # The petrophysical distributions each scenario runs on (porosity, Sg,
+        # NGR, geometric factor, 1/Bg), keyed by scenario id. Feeds the
+        # Calculator's Advanced settings panel, which prefills from them and
+        # may send edited copies back as `overrides` on a single run.
+        "resource_parameters": resource_calc.scenario_parameters(),
         # Card 2B, Section 1. row ("reservoir"/"formation") -> {m, b} for the
         # straight-line TWT (ms) <-> thickness (ft) conversion, from
         # config.TWT_THICKNESS_COEFFICIENTS. SHIPS EMPTY: a row with no entry
@@ -380,6 +386,12 @@ def meta():
         # configuration" note, so this endpoint is the single production switch
         # that turns derivation on (see that constant's own comment).
         "twt_thickness_coefficients": config.TWT_THICKNESS_COEFFICIENTS,
+        # The user-maintained pick lists (config/lists.yaml). Served here so
+        # the client has ONE source for them instead of a hand-kept copy in
+        # schema.js -- that array is now a boot fallback like the stage lists
+        # above. See config/lists.yaml for how to extend them.
+        "formations": list(config.formations()),
+        "hole_sections": list(config.hole_sections()),
     })
 
 
@@ -411,6 +423,10 @@ _PROJECT_LIST_FIELDS = (
     # the derived current_stage verbatim. assignees and
     # lead_priority are the board's own per-lead values.
     "assignees", "tracked_items", "display_stage", "lead_priority",
+    # Card 3V: project_name above is the CANONICAL name -- the staked well name
+    # once staking is confirmed. These carry the pairing alongside it, so a
+    # board card can show what the record was matured as without a second read.
+    "lead_name", "staked_well_name",
     # Card 1C: the record's field, DERIVED from the record name by the same
     # folders.parse_field_and_well split the share paths use -- there is no
     # stored field column. Feeds the board's Field filter.
@@ -578,12 +594,19 @@ def project_flags(project_id):
     # action; toggling only active_well_enabled stays ungated.
     if "business_plan_enabled" in payload:
         require_role("supervisor")
+    # Card 3X: Active Drilling is a well EDIT, so it takes the same authorized
+    # role as the other per-well gear controls. Enforced here, server-side --
+    # the menu item being hidden is not authorization.
+    if "active_drilling" in payload:
+        require_role("supervisor")
     workflow.update_project_flags(
         session,
         project_id,
         payload.get("business_plan_enabled") if "business_plan_enabled" in payload else None,
         payload.get("active_well_enabled") if "active_well_enabled" in payload else None,
         payload.get("business_plan_year"), actor(payload),
+        active_drilling=(payload.get("active_drilling")
+                         if "active_drilling" in payload else None),
     )
     return json_response({"ok": True})
 
@@ -657,14 +680,16 @@ def transition_task(task_id):
     """
     payload = request.get_json(silent=True) or {}
     action = str(payload.get("action") or "").strip().lower()
-    # The PUBLIC vocabulary is exactly workflow.TASK_TRANSITIONS. workflow.
-    # transition_task additionally honors the engine-only "reopen"
-    # (Approved -> In Progress, used by the field-completion engine); this
-    # check is what keeps that move off the HTTP surface, where it would be an
-    # ungated un-approve.
-    if action not in workflow.TASK_TRANSITIONS:
-        raise ValueError("Unknown action. Use one of: submit, approve, return.")
-    if action == "approve":
+    # The public vocabulary is workflow.TASK_TRANSITIONS plus "reopen", which
+    # Card 3S needs: the Business Plan Execution framework lets an authorized
+    # supervisor reopen an approved step, and Segmentation Slides now uses that
+    # framework. It stays SUPERVISOR-ONLY here -- an ungated un-approve is
+    # exactly what keeping it off this surface used to prevent -- and the
+    # earlier approval remains in the history either way, because task_history
+    # is append-only.
+    if action not in workflow.TASK_TRANSITIONS and action != "reopen":
+        raise ValueError("Unknown action. Use one of: submit, approve, return, reopen.")
+    if action in ("approve", "reopen"):
         require_role("supervisor")
     session = db.get_session()
     task_after = workflow.transition_task(
@@ -698,6 +723,15 @@ def resource_assessment(task_id):
     if task.get("task_name") not in {"Lead Assessment", "Resource Assessment"}:
         raise ValueError("Resource calculator is only available for Lead Assessment.")
     payload = request.get_json(silent=True) or {}
+    # Advanced settings are a Calculator-tab affordance only. This endpoint's
+    # results are STORED on the lead and compared across leads, so they must
+    # always come from the scenario's approved assumptions -- a stored number
+    # nobody can tell was computed on substituted inputs is worse than no
+    # number. Refused rather than ignored, so a caller is never misled.
+    if payload.get("overrides"):
+        raise ValueError(
+            "Advanced settings are available in the Calculator tab only: a lead's stored "
+            "assessment must use the scenario's approved assumptions.")
     return json_response(resource_calc.run(payload))
 
 
@@ -743,8 +777,20 @@ def project_dynamic_fields(project_id):
 
 @app.get("/api/projects/<int:project_id>/component-folder/<int:task_id>")
 def component_folder(project_id, task_id):
+    """Card 3AB: the approved destination for this step, or nothing.
+
+    ``requires_folder: 0`` is how "this step has no folder component" reaches
+    the client, which is the same signal it already honoured -- so an unmapped
+    step renders nothing at all rather than an empty card.
+    """
     session = db.get_session()
-    return json_response(folders.get_component_folder_link(session, project_id, task_id))
+    task = folders.task_row(session, task_id)
+    if not task or int(task.get("project_id") or 0) != int(project_id):
+        raise ValueError("Component folder could not be resolved.")
+    mapped = folders.mapped_step_folder(
+        session, project_id, task_name=task.get("task_name"),
+        canonical_name=workflow.canonical_record_name(session, project_id))
+    return json_response(mapped or {"requires_folder": 0})
 
 
 @app.get("/api/projects/<int:project_id>/folders/<section_key>")
@@ -820,7 +866,7 @@ def business_plan_dashboard():
         "field": request.args.get("field", "All Fields"),
         "status": request.args.get("status", "All Status"),
         "year": request.args.get("year", date.today().year),
-        "step": request.args.get("step", "business-plan-gate"),
+        "step": request.args.get("step", "all"),
     })
     payload["role"] = current_role()
     return json_response(payload)
@@ -831,8 +877,13 @@ def business_plan_detail(project_id, detail_slug):
     session = db.get_session()
     payload = workflow.get_bpe_detail(session, project_id, detail_slug)
     payload["role"] = current_role()
-    payload["folder"] = folders.get_component_folder_link(
-        session, project_id, payload["task"]["task_id"])
+    # Card 3AB keys the BPE side by DETAIL SLUG, not task name: sad-model-update
+    # and final-summary-slides share the "SAD Update" task and take different
+    # destinations. `folder` is absent when the step has no mapping, and the
+    # detail form renders no folder component for it.
+    payload["folder"] = folders.mapped_step_folder(
+        session, project_id, detail_slug=detail_slug,
+        canonical_name=payload["project"]["project_name"])
     return json_response(payload)
 
 
@@ -906,6 +957,45 @@ def business_plan_assign(project_id, detail_slug):
 def portfolio_rows():
     session = db.get_session()
     return json_response(reporting.get_portfolio_rows(session, request.args.get("year", "All"), request.args.get("activity", "All")))
+
+
+# ---------------------------------------------------------------------------
+# Portfolio waterfall diagram -- the app's only user-uploaded file
+# ---------------------------------------------------------------------------
+# ONE image for the whole portfolio, shared by everyone, so there is no id in
+# any of these paths. uploads.py owns every rule (type sniffed from the bytes,
+# size cap, our own stored name); this layer only moves bytes.
+
+@app.get("/api/portfolio/waterfall")
+def portfolio_waterfall_image():
+    """Serve the stored diagram, or 404 when none has been uploaded."""
+    session = db.get_session()
+    record = uploads.get_waterfall(session)
+    if not record:
+        return json_response({"detail": "No waterfall diagram has been uploaded."}, 404)
+    # download_name is OURS, not anything the uploader supplied.
+    return send_file(str(record["path"]), mimetype=record["content_type"],
+                     download_name="portfolio-waterfall." + record["extension"])
+
+
+@app.post("/api/portfolio/waterfall")
+def portfolio_waterfall_upload():
+    """Replace the portfolio's waterfall diagram (multipart 'file' part)."""
+    require_role("supervisor", "staff")
+    session = db.get_session()
+    uploaded = request.files.get("file")
+    if uploaded is None:
+        raise ValueError("Choose an image to upload.")
+    # actor() works on the form dict exactly as it does on a JSON body: a
+    # logged-in session name always wins over anything the client sent.
+    return json_response(uploads.save_waterfall(session, uploaded.read(), actor(request.form)))
+
+
+@app.delete("/api/portfolio/waterfall")
+def portfolio_waterfall_delete():
+    require_role("supervisor", "staff")
+    session = db.get_session()
+    return json_response(uploads.delete_waterfall(session))
 
 
 @app.get("/api/activity")

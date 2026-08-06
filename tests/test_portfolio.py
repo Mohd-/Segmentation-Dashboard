@@ -559,3 +559,206 @@ def test_year_floor_is_strict_on_promotion_but_wide_on_edits(client):
         "business_plan_enabled": True, "business_plan_year": 1989,
     })
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Staked well name -- what a record is CALLED, and where
+# ---------------------------------------------------------------------------
+# Staking does not REWRITE projects.project_name -- that stays the lead name and
+# the stable key, and only the explicit rename endpoint writes it. What staking
+# does is decide the name the record is KNOWN BY. Card 3V makes that name
+# canonical EVERYWHERE once staking is confirmed, Segment Maturation included;
+# the lead name travels alongside so the pairing stays recoverable.
+#
+# CONFIRMED is an event, not a keystroke: the Well Site Location letter filed
+# AND its coordinates recorded (the step's own completion predicate), plus a
+# stored name. _confirm_staking below is that whole act.
+
+def _confirm_staking(client, project_id, well_name):
+    _save_fields(client, project_id, "Well Site Location", {
+        "staked_well_name": well_name,
+        "wellsite_letter_loaded": "1",
+        "staked_x": "512340",
+        "staked_y": "2765410",
+    })
+
+def test_staking_sets_the_portfolio_well_name_without_renaming_the_lead(client):
+    pid = create_project(client, "STAKE-MAP-1", **BP_KWARGS)
+    row = _row_for(client, pid)
+    assert row["well_name"] == "STAKE-MAP-1", "falls back to the lead name while unstaked"
+    assert row["staked_well_name"] == ""
+    assert row["lead_name"] == "STAKE-MAP-1"
+
+    # A name TYPED but not confirmed renames nothing.
+    _save_fields(client, pid, "Well Site Location", {"staked_well_name": "STAKE-MAP-1ST2"})
+    row = _row_for(client, pid)
+    assert row["well_name"] == "STAKE-MAP-1", "an unconfirmed staking name is not canonical"
+    assert row["staked_well_name"] == "STAKE-MAP-1ST2", "but it is still carried"
+
+    _confirm_staking(client, pid, "STAKE-MAP-1ST2")
+    row = _row_for(client, pid)
+    # The Portfolio now calls it by its well name...
+    assert row["well_name"] == "STAKE-MAP-1ST2"
+    assert row["staked_well_name"] == "STAKE-MAP-1ST2"
+    # ...while the lead name is still carried.
+    assert row["lead_name"] == "STAKE-MAP-1"
+
+    # Card 3V: Segment Maturation calls it by the same canonical name -- ONE
+    # name source, so no surface disagrees about what a record is called. The
+    # lead name rides alongside, and the STORED column is untouched, which is
+    # what keeps relations and historical audit rows anchored.
+    project = client.get(f"/api/projects/{pid}/detail").get_json()["project"]
+    assert project["project_name"] == "STAKE-MAP-1ST2"
+    assert project["lead_name"] == "STAKE-MAP-1"
+    from conftest import raw_sqlite_connect
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        stored = conn.execute("SELECT project_name FROM projects WHERE project_id = ?",
+                              (pid,)).fetchone()["project_name"]
+    finally:
+        conn.close()
+    assert stored == "STAKE-MAP-1", "staking never rewrites the stable name"
+
+
+def test_business_plan_execution_calls_a_staked_record_by_its_well_name(client):
+    pid = create_project(client, "STAKE-BPE-1", **BP_KWARGS)
+    _confirm_staking(client, pid, "STAKE-BPE-1ST1")
+
+    # BP_KWARGS puts the well in 2027; the dashboard defaults to the current year.
+    wells = client.get("/api/business-plan/dashboard?year=2027").get_json()["wells"]
+    well = next(w for w in wells if w["project_id"] == pid)
+    assert well["project_name"] == "STAKE-BPE-1ST1"
+    assert well["lead_name"] == "STAKE-BPE-1"
+    # The FIELD still comes from the lead name: the field is where the segment
+    # is, and a staked name need not carry the same prefix.
+    assert well["field"] == "STAKE"
+
+    detail = client.get(f"/api/business-plan/wells/{pid}/steps/business-plan-gate").get_json()
+    assert detail["project"]["project_name"] == "STAKE-BPE-1ST1"
+    assert detail["project"]["lead_name"] == "STAKE-BPE-1"
+
+
+def test_export_names_a_staked_record_by_its_well_name_and_keeps_the_lead(client):
+    import io
+
+    import openpyxl
+
+    import portfolio_export
+
+    lead = create_project(client, "STAKE-XL-1")
+    _confirm_staking(client, lead, "STAKE-XL-1ST1")
+
+    resp = client.get("/api/export/excel")
+    assert resp.status_code == 200
+    workbook = openpyxl.load_workbook(io.BytesIO(resp.data))
+
+    portfolio = workbook["Portfolio Export"]
+    header = [cell.value for cell in portfolio[4]]
+    rows = [r for r in portfolio.iter_rows(min_row=5, max_row=portfolio.max_row, values_only=True)
+            if r[header.index("Lead Name")] == "STAKE-XL-1"]
+    assert len(rows) == 1
+    # Known by its well name, paired with the lead it came from.
+    assert rows[0][header.index("Well Name")] == "STAKE-XL-1ST1"
+
+    staking = workbook["Staking Options"]
+    staking_header = [cell.value for cell in staking[4]]
+    staking_rows = [r for r in staking.iter_rows(min_row=5, max_row=staking.max_row, values_only=True)
+                    if r[staking_header.index("Lead Name")] == "STAKE-XL-1"]
+    assert len(staking_rows) == 1
+    assert staking_rows[0][staking_header.index("Staked Well Name")] == "STAKE-XL-1ST1"
+
+    # The Portfolio sheet's historical column POSITIONS are a contract for
+    # external consumers, so the new column is appended, never inserted.
+    assert portfolio_export.PORTFOLIO_EXPORT_COLUMNS[-1] == "Lead Name"
+    assert portfolio_export.PORTFOLIO_EXPORT_COLUMNS[:3] == ["X", "Y", "Well Name"]
+
+
+# ---------------------------------------------------------------------------
+# Card 3V -- the canonical name, guarded and audited
+# ---------------------------------------------------------------------------
+
+def _history(client, project_id, action_type):
+    from conftest import raw_sqlite_connect
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        return [dict(row) for row in conn.execute(
+            "SELECT old_status, new_status, changed_by, comment FROM task_history "
+            "WHERE project_id = ? AND action_type = ? ORDER BY history_id",
+            (project_id, action_type))]
+    finally:
+        conn.close()
+
+
+def test_confirming_staking_writes_exactly_one_canonical_name_event(client):
+    pid = create_project(client, "AUDIT-1", **BP_KWARGS)
+    assert _history(client, pid, "Canonical Name Set") == []
+
+    _confirm_staking(client, pid, "AUDIT-1ST1")
+    events = _history(client, pid, "Canonical Name Set")
+    assert len(events) == 1
+    assert (events[0]["old_status"], events[0]["new_status"]) == ("AUDIT-1", "AUDIT-1ST1")
+    assert "AUDIT-1" in events[0]["comment"]
+
+    # Replaying the same save, and editing the step again afterwards, must not
+    # claim the record was renamed twice.
+    _confirm_staking(client, pid, "AUDIT-1ST1")
+    _save_fields(client, pid, "Well Site Location", {"staked_x": "512341"})
+    assert len(_history(client, pid, "Canonical Name Set")) == 1
+
+
+def test_an_unconfirmed_name_writes_no_event(client):
+    """The event records a thing that HAPPENED. Typing a name is not that."""
+    pid = create_project(client, "AUDIT-2", **BP_KWARGS)
+    _save_fields(client, pid, "Well Site Location", {"staked_well_name": "AUDIT-2ST1"})
+    assert _history(client, pid, "Canonical Name Set") == []
+
+
+def test_a_staking_name_another_record_already_answers_to_is_refused(client):
+    """A canonical name has to identify ONE record, or every surface showing it
+    is ambiguous. Nothing is numbered, merged or silently altered."""
+    other = create_project(client, "CLASH-TARGET-1", **BP_KWARGS)
+    pid = create_project(client, "CLASH-1", **BP_KWARGS)
+
+    task = get_task_by_name(client, pid, "Well Site Location")
+    resp = client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
+                        json={"fields": {"staked_well_name": "CLASH-TARGET-1"}})
+    assert resp.status_code == 400
+    assert "already the name of another record" in resp.get_json()["detail"]
+
+    # And against another record's STAKED name, which is equally a name people
+    # are already using.
+    _confirm_staking(client, other, "CLASH-TARGET-1ST9")
+    resp = client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
+                        json={"fields": {"staked_well_name": "clash-target-1st9"}})
+    assert resp.status_code == 400
+    assert "already the staked well name" in resp.get_json()["detail"]
+
+    # The record kept the name it had -- the save was rejected before any write.
+    assert _row_for(client, pid)["staked_well_name"] == ""
+
+
+def test_the_canonical_name_reaches_every_surface_at_once(client):
+    """Card 3V's point: ONE name source, so no tab disagrees with another."""
+    pid = create_project(client, "CROSS-1", **BP_KWARGS)
+    _confirm_staking(client, pid, "CROSS-1ST3")
+
+    # Segment Maturation board and detail (the surfaces that used to carve
+    # themselves out of this rule).
+    board = client.get("/api/projects").get_json()
+    row = next(r for r in board if r["project_id"] == pid)
+    assert (row["project_name"], row["lead_name"]) == ("CROSS-1ST3", "CROSS-1")
+
+    detail = client.get(f"/api/projects/{pid}/detail").get_json()["project"]
+    assert (detail["project_name"], detail["lead_name"]) == ("CROSS-1ST3", "CROSS-1")
+
+    # Portfolio.
+    assert _row_for(client, pid)["well_name"] == "CROSS-1ST3"
+
+    # Business Plan Execution.
+    wells = client.get("/api/business-plan/dashboard?year=2027").get_json()["wells"]
+    assert next(w for w in wells if w["project_id"] == pid)["project_name"] == "CROSS-1ST3"
+
+    # And the folder destinations resolve under the name the well carries.
+    folder = client.get(
+        f"/api/business-plan/wells/{pid}/steps/quicklook-logs").get_json()["folder"]
+    assert folder["unc_path"].endswith(r"WELLS\CROSS\CROSS-1ST3\LOGS\QUICKLOOK_LOGS")

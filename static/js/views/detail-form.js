@@ -1,7 +1,8 @@
 import { byId, all, esc, isFilled, truthy, msg } from '../dom.js';
 import { API } from '../api.js';
+import { ICONS } from '../icons.js';
 import { currentUserName, currentRole, canManageAssignments, isCurrentPipelineView, Store } from '../state.js';
-import { SCHEMA, FORMATIONS, FORMATION_METRICS, FLUID_TYPES, SEISMIC_BLOCKS, CHECKBOX_SUBMIT_STEPS, validateStepFields, submitBlockedMessage } from '../schema.js';
+import { SCHEMA, formationNames, FORMATION_METRICS, FLUID_TYPES, SEISMIC_BLOCKS, CHECKBOX_SUBMIT_STEPS, validateStepFields, numericFieldError, submitBlockedMessage } from '../schema.js';
 import { calculateTrapCos, calculateSealCos } from '../cos-rules.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { renderDetail, renderRightPanel, chooseInitialTask, tasksForPipeline, parseRepeatableRows, refreshAfterRecordChange, revealTaskStage } from './detail.js';
@@ -101,7 +102,7 @@ function renderAssigneeSelect(task, load) {
 // resetActionButtons puts them back on every render. That is what lets an
 // override be a small declarative function instead of a growing if-soup.
 
-var ACTION_BUTTON_IDS = ['return-component', 'submit-component', 'approve-component'];
+var ACTION_BUTTON_IDS = ['return-component', 'submit-component', 'approve-component', 'reopen-component'];
 var actionButtonDefaults = null;
 
 function actionButtons() {
@@ -168,9 +169,29 @@ function showActionButton(button, options) {
 //     -- the review controls are the point of the page for a supervisor, and a
 //     row that changes shape underneath them reads as a bug.
 var SPECIAL_ACTION_ROWS = {
+  // Card 3S moved this step onto the Business Plan Execution approval
+  // framework. What changed: an employee now SUBMITS explicitly instead of the
+  // ticked confirmation submitting on save -- a save is never a submission --
+  // and a supervisor may reopen an approved step.
+  //
+  // Approve and Return still render disabled rather than vanishing on a step
+  // nobody has submitted: the review controls are the point of this page for a
+  // supervisor, and a row that changes shape underneath them reads as a bug.
   'Segmentation Slides': function (context) {
     var pending = context.status === 'Ready';
-    if (context.role !== 'supervisor') return;
+    var approved = context.status === 'Approved';
+    if (context.role !== 'supervisor') {
+      // The employee's half: one action, and only when there is something to
+      // ask for. The confirmation is a REQUIREMENT the server checks, so a
+      // submit with the box unticked is refused with a message naming it.
+      if (!approved && !pending) {
+        showActionButton(context.buttons['submit-component'], {
+          enabled: context.editable && (context.isAssignee || context.manage),
+          title: 'Ask a supervisor to review the segmentation slides'
+        });
+      }
+      return;
+    }
     showActionButton(context.buttons['approve-component'], {
       text: 'Approved',
       className: 'ghost success-outline',
@@ -182,6 +203,12 @@ var SPECIAL_ACTION_ROWS = {
       enabled: context.editable && pending,
       title: pending ? 'Send the slides back for update' : 'Available once the slides are submitted for review'
     });
+    if (approved) {
+      showActionButton(context.buttons['reopen-component'], {
+        enabled: context.editable,
+        title: 'Reopen for update. The earlier approval stays in the history.'
+      });
+    }
   }
 };
 
@@ -208,7 +235,7 @@ export function renderActionButtons(task) {
   var special = SPECIAL_ACTION_ROWS[task.task_name];
   if (special) {
     special({ task: task, status: status, role: role, editable: editable,
-              isAssignee: isAssignee, buttons: buttons });
+              isAssignee: isAssignee, manage: manage, buttons: buttons });
     return;
   }
   // ITEM A3: with the server auto-approving prospect saves, the lifecycle
@@ -562,12 +589,13 @@ function makeFormationRow(name, isCustom, saved) {
 function seedFormationEdits(phase) {
   var saved = (Store.formations || []).filter(function (row) { return row.phase === phase; });
   var rows = [];
-  FORMATIONS.forEach(function (name) {
+  var canonical = formationNames(Store.meta);
+  canonical.forEach(function (name) {
     var match = saved.find(function (row) { return row.formation === name; });
     rows.push(makeFormationRow(name, false, match));
   });
   saved.forEach(function (row) {
-    if (FORMATIONS.indexOf(row.formation) < 0) rows.push(makeFormationRow(row.formation, true, row));
+    if (canonical.indexOf(row.formation) < 0) rows.push(makeFormationRow(row.formation, true, row));
   });
   formationEdits[phase] = rows;
   formationDirty[phase] = false;
@@ -606,6 +634,19 @@ export function formationRowsForSave(phase) {
 // (a) a custom row carrying metrics but no name (would silently vanish) and
 // (b) two rows normalizing to the same formation (the phase-scoped full
 // replacement would collapse/delete one, losing data).
+// The numeric rules over ONE formation cell. TVDSS depths are the only signed
+// measure (above datum reads negative) and the only ones that outrun the
+// generic 9999 cap, both of which the metric/column defs already declare --
+// this is where those declarations finally get read (they were documentation
+// only while this buffer had no numeric validation at all).
+function formationCellError(def, raw) {
+  // Card 3H: TVDSS is stored as a magnitude like every other measure here, so
+  // nothing on this sheet is signed. It keeps `bigOk` though -- a depth runs
+  // past four digits, which the generic 9999 sanity cap would otherwise refuse.
+  var isDepth = /tvdss/.test(def.key);
+  return numericFieldError(def.label, raw, !!def.bigOk || isDepth, /_pct$/.test(def.key), false);
+}
+
 export function validateFormationRows(phase) {
   var rows = formationEdits[phase] || [];
   for (var i = 0; i < rows.length; i += 1) {
@@ -614,6 +655,25 @@ export function validateFormationRows(phase) {
       (phaseHasPayIntervals(phase) && rowHasPayIntervals(row));
     if (row.isCustom && !isFilled(normalizeFormationName(row.formation)) && hasMetrics) {
       return 'Custom formation needs a name.';
+    }
+    // Same rules the plain step fields get: numeric, not negative, percentages
+    // within 100. Named per formation, because a message that only says
+    // "Porosity must not exceed 100%" is unhelpful in a four-formation sheet.
+    var name = normalizeFormationName(row.formation) || 'Formation ' + (i + 1);
+    for (var m = 0; m < FORMATION_METRICS.length; m += 1) {
+      var metric = FORMATION_METRICS[m];
+      if (metric.type !== 'number') continue;
+      var metricError = formationCellError(metric, row.values[metric.key]);
+      if (metricError) return name + ': ' + metricError;
+    }
+    var intervals = (phaseHasPayIntervals(phase) && row.intervals) || [];
+    for (var v = 0; v < intervals.length; v += 1) {
+      for (var c = 0; c < PAY_INTERVAL_COLUMNS.length; c += 1) {
+        var col = PAY_INTERVAL_COLUMNS[c];
+        if (col.type !== 'number') continue;
+        var intervalError = formationCellError(col, intervals[v][col.key]);
+        if (intervalError) return name + ' pay interval ' + (v + 1) + ': ' + intervalError;
+      }
     }
   }
   var seen = {};
@@ -672,7 +732,10 @@ function formationMetricControl(metric, row, index) {
     }).join('');
     return '<label>' + esc(metric.label) + '<select ' + attr + ' aria-label="' + esc(metric.label) + '">' + options + '</select></label>';
   }
-  return '<label>' + esc(metric.label) + '<input type="number" step="any" ' + attr + ' value="' + esc(value) + '" aria-label="' + esc(metric.label) + '"></label>';
+  // Card 3H: every measure here is a magnitude, TVDSS included -- above datum
+  // still reads negative in the field, but ASAS stores the depth's magnitude.
+  return '<label>' + esc(metric.label) + '<input type="number" step="any" min="0" ' +
+    attr + ' value="' + esc(value) + '" aria-label="' + esc(metric.label) + '"></label>';
 }
 function formationPanelMarkup(row, index) {
   return FORMATION_GROUPS.map(function (group) {
@@ -703,7 +766,8 @@ function payIntervalRowMarkup(interval, index, formationIndex) {
       }).join('');
       return '<select ' + attr + '>' + options + '</select>';
     }
-    return '<input type="number" step="any" ' + attr + ' value="' + esc(value) + '">';
+    return '<input type="number" step="any"' + (/tvdss/.test(col.key) ? '' : ' min="0"') +
+      ' ' + attr + ' value="' + esc(value) + '">';
   }).join('') + '<button type="button" class="icon-btn pay-interval-remove" data-pay-row="' + index +
     '" title="Remove pay interval" aria-label="Remove pay interval">&#10005;</button></div>';
 }
@@ -880,7 +944,7 @@ function bindFormationFields(root) {
 // value no longer in that set appended so old rows render selected instead of
 // silently blanking (same courtesy repeatableSelectOptions extends).
 function formationNameOptions(current) {
-  var names = FORMATIONS.slice();
+  var names = formationNames(Store.meta);
   (Store.formations || []).forEach(function (row) {
     if (row && row.formation && names.indexOf(row.formation) < 0) names.push(row.formation);
   });
@@ -929,7 +993,12 @@ function fieldMarkup(field, value, classes, showIfAttr) {
     // Link cards never toggle; data-show-if is intentionally omitted.
     return '<div class="summary-box' + classes + '"><p><a href="' + esc(field.value || '#') + '" target="_blank" rel="noreferrer">' + esc(field.linkText || 'New Request') + '</a></p></div>';
   }
-  return '<label class="' + classes + '"' + showIfAttr + '>' + esc(field.label) + '<input type="number" step="any" data-field="' + esc(field.key) + '" value="' + esc(value) + '"></label>';
+  // min="0" is the browser-level twin of numericFieldError's negative guard
+  // (schema.js): the ONE field that opts out is Top Formation TVDSS, which is
+  // legitimately signed above datum and carries allowNegative in the schema.
+  return '<label class="' + classes + '"' + showIfAttr + '>' + esc(field.label) +
+    '<input type="number" step="any"' + (field.allowNegative ? '' : ' min="0"') +
+    ' data-field="' + esc(field.key) + '" value="' + esc(value) + '"></label>';
 }
 // A field standing on its own (no row grouping): visibility lives on the field.
 function standaloneFieldMarkup(field, componentName, values) {
@@ -1136,14 +1205,27 @@ function renderResourceCalculatorSection(task, fields) {
 export function renderComponentFolder(info) {
   var previous = byId('component-folder-card');
   if (previous) previous.remove();
+  // Card 3AB: requires_folder is 0 for a step the approved mapping does not
+  // list, and that means NO component -- not a blank card, not a disabled one.
   if (!info || !Number(info.requires_folder)) return;
-  var path = info.unc_path || 'Folder path placeholder not configured.';
   var card = document.createElement('div');
   card.id = 'component-folder-card';
+  // A mapped step whose record is missing a name the destination needs says
+  // which name, rather than offering a link to a half-resolved location.
+  if (info.blocked) {
+    card.className = 'folder-card folder-card-blocked';
+    card.setAttribute('role', 'status');
+    card.innerHTML = '<span class="folder-glyph" aria-hidden="true">' + ICONS['folder'] + '</span>' +
+      '<span class="folder-path">' + esc(info.blocked) + '</span>';
+    var blockedAnchor = byId('comments-field');
+    blockedAnchor.parentNode.insertBefore(card, blockedAnchor.nextSibling);
+    return;
+  }
+  var path = info.unc_path;
   card.className = 'folder-card';
-  card.innerHTML = '<span class="folder-glyph" aria-hidden="true">📁</span>' +
+  card.innerHTML = '<span class="folder-glyph" aria-hidden="true">' + ICONS['folder'] + '</span>' +
     '<span class="folder-path" title="' + esc(path) + '">' + esc(path) + '</span>' +
-    '<button type="button" class="icon-btn" id="copy-component-folder" title="Copy folder link" aria-label="Copy folder link">⧉</button>';
+    '<button type="button" class="icon-btn" id="copy-component-folder" title="Copy folder link" aria-label="Copy folder link">' + ICONS['copy'] + '</button>';
   // Comments-above-file-location: the card sits directly after the comments
   // field instead of after the dynamic-fields grid.
   var anchor = byId('comments-field');
@@ -1416,8 +1498,12 @@ export function repeatableInputMarkup(field, row, rowIndex) {
       return '<select ' + attr + aria + '>' + repeatableSelectOptions(col, row, selectValue) + '</select>';
     }
     var ghost = col.placeholder ? ' placeholder="' + esc(col.placeholder) + '"' : '';
-    return '<input type="' + (col.type === 'number' ? 'number' : 'text') + '" step="any" ' + attr + aria + ghost + ' value="' + esc(value) + '">';
-  }).join('') + '<button type="button" class="icon-btn remove-repeatable-row" data-repeatable-key="' + esc(field.key) + '" data-repeatable-row="' + rowIndex + '" title="Remove row" aria-label="Remove row">✕</button></div>';
+    // Numeric columns get the same min="0" the standalone fields do; a column
+    // that is legitimately signed declares allowNegative, exactly as a field
+    // does (schema.js numericFieldError reads the same flag).
+    var floor = (col.type === 'number' && !col.allowNegative) ? ' min="0"' : '';
+    return '<input type="' + (col.type === 'number' ? 'number' : 'text') + '" step="any"' + floor + ' ' + attr + aria + ghost + ' value="' + esc(value) + '">';
+  }).join('') + '<button type="button" class="icon-btn remove-repeatable-row" data-repeatable-key="' + esc(field.key) + '" data-repeatable-row="' + rowIndex + '" title="Remove row" aria-label="Remove row">' + ICONS['x'] + '</button></div>';
 }
 export function renderRepeatableField(field, value) {
   var rows = parseRepeatableRows(value);
