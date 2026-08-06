@@ -1639,17 +1639,19 @@ button.ghost.success-outline:hover { background: var(--success-100); }
    and stretching the bar to match them would inflate a control that is three
    short lines tall into a half-empty panel. It sits at its natural height at
    the top of the row instead. */
-.portfolio-resource-card { align-self: flex-start; position: relative; flex: 1 1 440px; min-width: 300px; padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-sunken); }
+.portfolio-resource-card { align-self: flex-start; position: relative; flex: 3 1 520px; min-width: 320px; padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-sunken); }
 
 /* The two tiles share one anatomy: a small header (title + either a hint or
    its actions) over a body that fills the rest. Both are interactive surfaces,
    so both carry the same hover lift; the plot tile is itself a <button>. */
+/* Card 3M's approved layout puts these BESIDE the bar, not in front of it, so
+   they take a smaller share of the row and let the bar keep the width. */
 .portfolio-tile {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  flex: 1 1 280px;
-  min-width: 240px;
+  flex: 1 1 220px;
+  min-width: 200px;
   padding: var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -1702,38 +1704,66 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .waterfall-drop-lead { font-size: var(--text-sm); font-weight: 700; }
 .waterfall-drop-hint { color: var(--text-faint); font-size: var(--text-xs); }
 
-/* Resource progress bar (views/portfolio-analysis.js): segments sized
-   strictly proportional to their BCF values (inline flex weights, basis 0,
-   no min-width floor), separated by the 2px surface gap and rounded as one
-   track via the container. Captions sit in the legend row below -- swatch +
-   value + stage name, centered per entry (text tokens, never inside the
-   fill) -- so segment widths stay honest at any proportion. */
-.prb-title { margin: 0 0 var(--space-2); padding-right: 120px; font-size: var(--text-base); color: var(--text); }
-.prb-title b { font-family: var(--font-display); color: var(--brand-700); }
-.prb-bar { display: flex; gap: 2px; height: 24px; border-radius: var(--radius-md); overflow: hidden; }
-.prb-seg { min-width: 2px; }
+/* Resource bar (views/portfolio-analysis.js), rebuilt to the approved design:
+   a centred title over ONE bordered track whose blocks each print their own
+   BCF value, with the stage names and counts in a caption row beneath. Blocks
+   and captions share the same inline flex weights, so a caption always sits
+   under the block it names however the filters rescale the bar. */
+.prb-title { margin: 0 0 var(--space-2); text-align: center; font-size: var(--text-md); font-weight: 700; color: var(--text); }
+.prb-title b { font-family: var(--font-display); color: var(--danger-600); }
+.prb-bar {
+  display: flex;
+  height: 46px;
+  border: 2px solid var(--ink-800);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.prb-seg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2px;
+  overflow: hidden;
+}
+.prb-seg + .prb-seg { border-left: 2px solid var(--ink-800); }
+/* The value clips rather than widening its block: a segment's width IS its
+   share of the total, and letting the label push it wider would misreport
+   that. A block too narrow to hold its number still shows in the bar, and the
+   number is in the caption beneath it and the tooltip. */
+.prb-seg-value {
+  padding: 0 4px;
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+}
 .prb-seg.prb-empty { flex: 1 1 0%; background: var(--gray-100); }
 .prb-discovered { background: var(--viz-res-1); }
 .prb-staked { background: var(--viz-res-2); }
 .prb-proposed { background: var(--viz-res-2b); }
 .prb-ytf { background: var(--viz-res-3); }
-/* Four keys in ONE row: the whole point of this card is to be a slim readout,
-   and a legend that wraps to two rows made it as tall as the picture tiles
-   beside it. Equal columns rather than auto-fit, so it stays one row and the
-   labels shorten instead of the grid reflowing; it only drops to two columns
-   when the card itself is genuinely narrow (see the breakpoint below). */
-.prb-legend { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-2); margin-top: 6px; }
-.prb-key { min-width: 0; text-align: left; overflow-wrap: anywhere; }
-.prb-key b { display: block; font-family: var(--font-display); font-variant-numeric: tabular-nums; color: var(--text); font-size: var(--text-sm); }
-.prb-key small { display: block; color: var(--text-muted); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .05em; font-family: var(--font-display); font-weight: 700; }
-/* How MANY records make up the volume above -- the count the two deleted
-   stat boxes used to carry, now said per category. */
-.prb-key em { display: block; color: var(--text-faint); font-size: var(--text-xs); font-style: normal; font-variant-numeric: tabular-nums; }
+/* Discovered is the one saturated block, so its number goes white; the three
+   pale blocks keep dark text. Contrast is set per block rather than inherited,
+   because these fills are fixed brand colours in both themes. */
+.prb-discovered .prb-seg-value { color: #fff; }
+.prb-staked .prb-seg-value, .prb-proposed .prb-seg-value, .prb-ytf .prb-seg-value { color: var(--ink-800); }
+
+.prb-captions { display: flex; gap: var(--space-2); margin-top: 6px; }
+/* Equal columns. See the renderer: sharing the segment weights collapses a
+   caption to a few pixels whenever one block dominates, and a caption is text
+   -- it cannot be scaled the way a block can. */
+.prb-caption { flex: 1 1 0%; min-width: 0; text-align: left; overflow-wrap: anywhere; }
+.prb-caption small { display: block; color: var(--text); font-size: var(--text-xs); font-weight: 700; }
+.prb-caption .prb-swatch { display: inline-block; width: 9px; height: 9px; margin-right: 5px; border-radius: 2px; vertical-align: baseline; }
+/* How MANY records make up the volume above -- the count the two deleted stat
+   boxes used to carry, now said per category. */
+.prb-caption em { display: block; color: var(--text-muted); font-size: var(--text-xs); font-style: normal; font-variant-numeric: tabular-nums; }
 .prb-title-note { display: block; color: var(--text-faint); font-size: var(--text-xs); font-weight: 400; }
 /* Only appears when the selection has already accounted for more gas than the
    400 BCF/field assumption allows -- a fact about the assumption, not an error. */
 .prb-overrun { margin: var(--space-2) 0 0; color: var(--warning-500); font-size: var(--text-xs); font-weight: 700; }
-.prb-swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 2px; }
 
 /* Cross plot (views/portfolio-analysis.js), inside #crossplot-dialog:
    responsive SVG, hairline grid, red cutoff lines, one dot series with a
@@ -1782,7 +1812,16 @@ button.ghost.success-outline:hover { background: var(--success-100); }
    trigger's label-left/affix-right layout. */
 .portfolio-table th:nth-child(1), .portfolio-table td:nth-child(1) { min-width: 190px; }
 .portfolio-table th:nth-child(5), .portfolio-table td:nth-child(5) { width: 90px; }
-.portfolio-table td:nth-child(7), .portfolio-table td:nth-child(8) { text-align: right; white-space: nowrap; }
+/* Measured columns align right so their digits line up. Keyed by CLASS, not by
+   position: the positional rule this replaces pointed at whatever happened to
+   be columns 7 and 8, which stopped being the numbers when Card 3N reordered
+   the table. */
+.portfolio-table td.pf-num { text-align: right; white-space: nowrap; }
+/* Card 3O: every Portfolio INPUT reads from the left, including the numeric
+   range filters, so a partially typed bound does not drift away from its
+   label. Data cells above are a different question -- those are columns of
+   digits being compared, not fields being filled. */
+.portfolio-table input, .portfolio-filter input, .pf-filter-menu input { text-align: left; }
 
 /* Name cell: quadrant mark, the name the record is known by, and the lead name
    underneath on the rows where staking gave it a different one. */
@@ -2220,10 +2259,11 @@ button.ghost.success-outline:hover { background: var(--success-100); }
      so it needs no override there. */
   .lead-filter-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .lf-clear { width: 100%; }
-  /* The resource legend's four keys give up on one row here: at phone width a
-     quarter-column is narrower than "Discovered", and a 2x2 is legible where a
-     1x4 is a column of broken words. */
-  .prb-legend { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* At phone width a quarter-column is narrower than "Undiscovered: Proposed",
+     so the captions stack under the bar rather than shredding into columns of
+     broken words. The bar itself stays proportional -- it is the picture. */
+  .prb-captions { flex-wrap: wrap; }
+  .prb-caption { flex: 1 1 45%; }
   /* The band is already stacked (1100px block); here the KPI row additionally
      wraps its tiles, and the Add New Lead button takes the full width like
      every other stacked control. Its top-edge separator carries down. */

@@ -95,6 +95,12 @@ function countsLabel(bucket) {
   return bits.join(' · ') || 'no records';
 }
 
+// A block narrower than this share of the bar cannot hold its own value
+// legibly, so it goes unlabelled rather than showing a truncated number. Tuned
+// against the widest label the bar prints ("1,132.5 BCF") in the narrowest
+// supported card.
+var MIN_LABELLED_SHARE = 0.12;
+
 export function renderResourceBar(rows) {
   var element = byId('portfolio-resource-bar');
   if (!element) return;
@@ -105,57 +111,66 @@ export function renderResourceBar(rows) {
     { slug: 'discovered', label: 'Discovered', value: summary.discovered.bcf,
       counts: countsLabel(summary.discovered),
       hint: 'Sum of Mean OGIP over Gas and Gas over Water records in the current selection' },
-    { slug: 'staked', label: 'Staked', value: summary.staked.bcf,
+    { slug: 'staked', label: 'Undiscovered: Staked', value: summary.staked.bcf,
       counts: countsLabel(summary.staked),
       hint: 'Sum of Mean OGIP over Staked records in the current selection' },
-    { slug: 'proposed', label: 'Proposed', value: summary.proposed.bcf,
+    { slug: 'proposed', label: 'Undiscovered: Proposed', value: summary.proposed.bcf,
       counts: countsLabel(summary.proposed),
       hint: 'Sum of Mean OGIP over Proposed records in the current selection' },
-    { slug: 'ytf', label: 'Yet to Find', value: summary.ytf,
-      // The short form: this line sits in a quarter-width column, and the
-      // full phrase is already under the title and in the tooltip.
+    { slug: 'ytf', label: 'Undiscovered: YTF', value: summary.ytf,
+      // YTF has no wells and no segments to count -- it is what the field
+      // endowment has left over. The field count is the honest number, and it
+      // is what drives the figure.
       counts: fieldsShort,
       hint: YTF_BCF_PER_FIELD + ' BCF × ' + fieldsPhrase + ', less the ' +
         fmtBcf(summary.accounted) + ' BCF already discovered or booked as potential' }
   ];
-  // Segments are strictly proportional to their BCF share: inline flex
-  // weights with basis 0 (and no min-width floor), so width tracks value
-  // exactly however the filters re-scope the sums. A stage with no volume
-  // renders no segment at all. Captions live in a separate legend row
-  // (swatch + value + name, centered per entry) so a thin segment can never
-  // crush or overlap its caption.
-  var segments = stages.filter(function (stage) { return stage.value > 0; }).map(function (stage) {
-    return '<div class="prb-seg prb-' + stage.slug + '" style="flex:' + stage.value + ' 1 0%" title="' + esc(stage.hint) + '"></div>';
+  // Each block PRINTS its own value, as the approved design shows -- but only
+  // when it is wide enough to hold one. Widths are strictly proportional to
+  // BCF share, and a sliver clipping "116 BCF" down to "11" would state a
+  // number that is simply wrong. Below the threshold the block still shows in
+  // the bar and its value is in the caption beneath it and in the tooltip.
+  var shown = stages.filter(function (stage) { return stage.value > 0; });
+  var barTotal = shown.reduce(function (sum, stage) { return sum + stage.value; }, 0) || 1;
+  var segments = shown.map(function (stage) {
+    var roomy = (stage.value / barTotal) >= MIN_LABELLED_SHARE;
+    return '<div class="prb-seg prb-' + stage.slug + '" style="flex:' + stage.value + ' 1 0%"' +
+      ' title="' + esc(stage.hint) + '">' +
+      (roomy ? '<span class="prb-seg-value">' + esc(fmtBcf(stage.value)) + ' BCF</span>' : '') +
+      '</div>';
   }).join('');
   if (!segments) segments = '<div class="prb-seg prb-empty"></div>';
-  // Staked and Proposed drop the "Undiscovered · " prefix: they share the
-  // pink family in the bar, which already groups them, and the full sense is
-  // in each key's tooltip. Four keys have to sit in ONE row here -- a wrapped
-  // legend is what made this card as tall as the picture tiles beside it,
-  // and the bar is three short lines of content, not a panel.
-  var legend = stages.map(function (stage) {
-    return '<div class="prb-key" title="' + esc(stage.hint) + '">' +
-      '<b><span class="prb-swatch prb-' + stage.slug + '"></span>' + esc(fmtBcf(stage.value)) + ' BCF</b>' +
-      '<small>' + esc(stage.label) + '</small>' +
+  // The captions sit UNDER the bar, one column per stage, each carrying the
+  // stage name over its counts.
+  //
+  // They are EQUAL columns, not the segment weights. Matching the weights
+  // reads well on the mockup, where all four blocks are the same size -- but
+  // with real data one block routinely holds most of the total, and a caption
+  // in a 3px column shreds into a vertical column of single letters. Each
+  // caption instead carries its block's colour, so the tie to the bar is
+  // explicit rather than positional and survives any proportion.
+  var captions = shown.map(function (stage) {
+    return '<div class="prb-caption">' +
+      '<small><span class="prb-swatch prb-' + stage.slug + '"></span>' + esc(stage.label) + '</small>' +
       '<em>' + esc(stage.counts) + '</em></div>';
   }).join('');
-  // The title states the ESTIMATE the bar totals, which is the field
-  // endowment -- not the sum of the segments, since the segments now divide
-  // that estimate rather than adding up to a running total.
   var overrun = summary.exceedsEstimate
     ? '<p class="prb-overrun" role="status">Discovered and undiscovered volumes exceed the ' +
       esc(fmtBcf(summary.initialYtf)) + ' BCF estimate by ' +
       esc(fmtBcf(summary.accounted - summary.initialYtf)) + ' BCF — nothing is left to find under this assumption.</p>'
     : '';
+  // The title states the ESTIMATE the bar divides -- the field endowment --
+  // not a running total of the segments, which is why it reads "Total".
   element.innerHTML =
-    '<p class="prb-title">Estimated Original Gas Initially in Place is <b>' + esc(fmtBcf(summary.total)) + ' BCF</b>' +
+    '<p class="prb-title">Total Estimated Original Gas Initially in Place is <b>' +
+    esc(fmtBcf(summary.total)) + ' BCF</b>' +
     '<small class="prb-title-note">' + esc(YTF_BCF_PER_FIELD + ' BCF × ' + fieldsPhrase) + '</small></p>' +
     '<div class="prb-bar" role="img" aria-label="Of ' + esc(fmtBcf(summary.total)) +
     ' BCF estimated: discovered ' + esc(fmtBcf(summary.discovered.bcf)) +
-    ' BCF, staked ' + esc(fmtBcf(summary.staked.bcf)) +
-    ' BCF, proposed ' + esc(fmtBcf(summary.proposed.bcf)) +
+    ' BCF, undiscovered staked ' + esc(fmtBcf(summary.staked.bcf)) +
+    ' BCF, undiscovered proposed ' + esc(fmtBcf(summary.proposed.bcf)) +
     ' BCF, yet to find ' + esc(fmtBcf(summary.ytf)) + ' BCF">' + segments + '</div>' +
-    '<div class="prb-legend">' + legend + '</div>' + overrun;
+    '<div class="prb-captions">' + captions + '</div>' + overrun;
 }
 
 // ---------------------------------------------------------------------------

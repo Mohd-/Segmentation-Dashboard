@@ -17,7 +17,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/css/base.css?v=10">
-  <link rel="stylesheet" href="/static/css/components.css?v=56">
+  <link rel="stylesheet" href="/static/css/components.css?v=59">
 </head>
 <body>
   <section id="login-page" class="login-page hidden">
@@ -187,6 +187,12 @@
              filter change (views/portfolio-analysis.js). The tile chrome is
              static; only the two bodies and the bar re-render. -->
         <div class="portfolio-overview">
+          <!-- The approved design leads with the resource bar and puts the two
+               media tiles beside it: the bar is the headline reading, the
+               tiles are references you open when you want them. -->
+          <div class="portfolio-resource-card">
+            <div id="portfolio-resource-bar" class="portfolio-resource-bar" aria-live="polite"></div>
+          </div>
           <!-- Cross plot: a reduced-scale render of the SAME plot the dialog
                shows, so clicking it enlarges rather than navigates. -->
           <button type="button" id="open-crossplot" class="portfolio-tile portfolio-tile-plot">
@@ -202,9 +208,6 @@
               <span id="portfolio-waterfall-actions" class="portfolio-tile-actions"></span></span>
             <div id="portfolio-waterfall-body" class="portfolio-tile-body" aria-live="polite"></div>
             <input id="portfolio-waterfall-file" type="file" accept="image/png,image/jpeg,image/svg+xml" hidden>
-          </div>
-          <div class="portfolio-resource-card">
-            <div id="portfolio-resource-bar" class="portfolio-resource-bar" aria-live="polite"></div>
           </div>
         </div>
         <table id="portfolio-table" class="portfolio-table"></table>
@@ -496,6 +499,6 @@
     <img id="ra-lightbox-img" alt="">
   </dialog>
 
-  <script type="module" src="/static/js/main.js?v=55"></script>
+  <script type="module" src="/static/js/main.js?v=59"></script>
 </body>
 </html>

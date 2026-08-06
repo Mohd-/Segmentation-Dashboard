@@ -80,8 +80,8 @@ test('portfolio-analysis.renderResourceBar renders the estimate + proportional s
   var root = fixture('<div id="portfolio-resource-bar"></div>');
   renderResourceBar(sampleRows());
   var title = root.querySelector('.prb-title');
-  // The estimate, not a running total of the segments.
-  assert.match(title.textContent, /Estimated Original Gas Initially in Place is 1,200 BCF/);
+  // The estimate the bar DIVIDES, not a running total of the segments.
+  assert.match(title.textContent, /Total Estimated Original Gas Initially in Place is 1,200 BCF/);
   assert.match(title.textContent, /400 BCF × 3 fields/);
   var segments = root.querySelectorAll('.prb-seg');
   assert.equal(segments.length, 4, 'discovered, staked, proposed, yet-to-find');
@@ -90,41 +90,51 @@ test('portfolio-analysis.renderResourceBar renders the estimate + proportional s
   assert.equal(segments[2].style.flexGrow, '5', 'proposed is its own segment now');
   assert.equal(segments[3].style.flexGrow, '1132.5', 'the remaining estimate');
   assert.equal(segments[0].style.flexBasis, '0%', 'basis 0 so widths are purely proportional');
-  var keys = root.querySelectorAll('.prb-key');
-  assert.equal(keys.length, 4);
-  assert.match(keys[0].textContent, /42\.5 BCF/);
-  assert.match(keys[0].textContent, /Discovered/);
-  // Each key also says how MANY records make up its volume.
-  assert.match(keys[0].textContent, /1 segment · 2 wells/);
-  // Staked and Proposed drop the "Undiscovered · " prefix: they share the pink
-  // family in the bar, and four keys have to fit ONE row or the card grows as
-  // tall as the picture tiles beside it.
-  assert.match(keys[1].textContent, /Staked/);
-  assert.match(keys[1].textContent, /1 well/);
-  assert.match(keys[2].textContent, /Proposed/);
-  assert.match(keys[2].textContent, /1 segment/);
-  assert.match(keys[3].textContent, /Yet to Find/);
-  assert.match(keys[3].textContent, /3 fields/);
-  // The full sense of each key stays in its tooltip.
-  assert.match(keys[1].getAttribute('title'), /Staked records in the current selection/);
+  // A block prints its OWN value when it is wide enough to hold one. Here only
+  // yet-to-find is: the other three are slivers of a 1,200 BCF bar, and
+  // clipping "42.5 BCF" down to "42" would state a number that is wrong. Their
+  // values are in the captions beneath them.
+  assert.deepEqual(Array.prototype.map.call(segments, function (segment) {
+    var value = segment.querySelector('.prb-seg-value');
+    return value ? value.textContent : null;
+  }), [null, null, null, '1,133 BCF']);
+  // The names and counts sit UNDER the bar, on the same weights, so a caption
+  // is always beneath the block it names.
+  var captions = root.querySelectorAll('.prb-caption');
+  assert.equal(captions.length, 4);
+  assert.deepEqual(Array.prototype.map.call(captions, function (caption) {
+    return caption.querySelector('small').textContent;
+  }), ['Discovered', 'Undiscovered: Staked', 'Undiscovered: Proposed', 'Undiscovered: YTF']);
+  assert.deepEqual(Array.prototype.map.call(captions, function (caption) {
+    return caption.querySelector('em').textContent;
+  }), ['1 segment · 2 wells', '1 well', '1 segment', '3 fields']);
+  // Captions are EQUAL columns carrying their block's colour, not the block
+  // weights: a caption under a 3px block would shred into single letters, and
+  // text cannot be scaled the way a block can.
+  assert.equal(captions[0].style.flexGrow, '', 'no inline weight on a caption');
+  assert.ok(captions[0].querySelector('.prb-swatch.prb-discovered'),
+    'the colour ties the caption to its block');
   assert.equal(root.querySelectorAll('.prb-overrun').length, 0);
 });
 
-test('portfolio-analysis.renderResourceBar drops zero segments but keeps their legend entry', function () {
+test('portfolio-analysis.renderResourceBar drops a zero stage entirely', function () {
+  // A stage with no volume has no block AND no caption: an empty column under
+  // a bar with nothing above it reads as a rendering fault. The value is still
+  // recoverable -- it is zero -- and the tooltip on its neighbours says what
+  // each category means.
   var root = fixture('<div id="portfolio-resource-bar"></div>');
   renderResourceBar([{ well_name: 'X-1', gas_field: 'X', status: 'Gas', mean_ogip: 10, total_cos: 50, is_lead: 0 }]);
-  assert.equal(root.querySelectorAll('.prb-seg').length, 2, 'no segment for the two empty stages');
-  var keys = root.querySelectorAll('.prb-key');
-  assert.equal(keys.length, 4, 'legend always lists all four stages');
-  assert.match(keys[1].textContent, /0 BCF/);
-  assert.match(keys[1].textContent, /no records/);
+  assert.equal(root.querySelectorAll('.prb-seg').length, 2, 'discovered and yet-to-find only');
+  assert.deepEqual(Array.prototype.map.call(root.querySelectorAll('.prb-caption small'),
+    function (element) { return element.textContent; }),
+    ['Discovered', 'Undiscovered: YTF']);
 });
 
 test('portfolio-analysis.renderResourceBar shows an empty track when everything is zero', function () {
   var root = fixture('<div id="portfolio-resource-bar"></div>');
   renderResourceBar([]);
   assert.equal(root.querySelectorAll('.prb-seg.prb-empty').length, 1);
-  assert.equal(root.querySelectorAll('.prb-key').length, 4);
+  assert.equal(root.querySelectorAll('.prb-caption').length, 0);
 });
 
 test('portfolio-analysis.renderResourceBar names an over-run rather than hiding it', function () {
@@ -281,8 +291,10 @@ test('portfolio table marks each row with its quadrant beside the name', async f
   var heads = Array.prototype.map.call(
     host.querySelectorAll('#portfolio-table thead th'),
     function (th) { return th.getAttribute('data-key'); });
-  assert.deepEqual(heads, ['well_name', 'gas_field', 'seismic_block', 'classification',
-    'year', 'status', 'mean_ogip', 'total_cos']);
+  // Card 3N's requested order. `nucd Area` is absent and reported blocked --
+  // no field of that name exists anywhere in this application.
+  assert.deepEqual(heads, ['well_name', 'mean_ogip', 'total_cos', 'status',
+    'seismic_block', 'gas_field', 'classification', 'year']);
 
   var marks = host.querySelectorAll('#portfolio-table tbody .pf-quadrant');
   assert.equal(marks.length, 2, 'the row with neither measure gets no mark at all');
@@ -391,9 +403,12 @@ test('portfolio sort chain breaks ties with its later levels', function () {
     assert.deepEqual(namesInOrder(host), ['A-3', 'A-2', 'A-1']);
     // The header carries each column's RANK, so the order is readable without
     // the strip below.
+    // Read in COLUMN order, which Card 3N changed: Mean OGIP now precedes
+    // Field in the header, so its rank badge is read first. The ranks
+    // themselves are unchanged -- Mean OGIP is still level 1.
     var ranks = Array.prototype.map.call(host.querySelectorAll('.pf-sort-mark .pf-sort-rank'),
       function (badge) { return badge.textContent; });
-    assert.deepEqual(ranks, ['2', '1'], 'Field is level 2, Mean OGIP level 1');
+    assert.deepEqual(ranks, ['1', '2'], 'Mean OGIP is level 1, Field level 2');
   });
 });
 
@@ -443,4 +458,20 @@ test('portfolio each sort level keeps its own blanks-last rule', function () {
     pickSort(host, 'mean_ogip', 0);   // Low → High
     assert.deepEqual(namesInOrder(host), ['A-2', 'A-1'], 'blank last in BOTH directions');
   });
+});
+
+test('portfolio-analysis.renderResourceBar labels a block only when it can hold its value', function () {
+  // Four equal blocks -- the shape the approved design draws -- all get their
+  // number. This is the case the design was drawn for.
+  var root = fixture('<div id="portfolio-resource-bar"></div>');
+  renderResourceBar([
+    { well_name: 'A-1', gas_field: 'A', status: 'Gas', mean_ogip: 100, is_lead: 0 },
+    { well_name: 'A-2', gas_field: 'A', status: 'Staked', mean_ogip: 100, is_lead: 0 },
+    { well_name: 'A-3', gas_field: 'A', status: 'Proposed', mean_ogip: 100, is_lead: 1 }
+  ]);
+  var labelled = Array.prototype.map.call(root.querySelectorAll('.prb-seg'), function (segment) {
+    return !!segment.querySelector('.prb-seg-value');
+  });
+  assert.deepEqual(labelled, [true, true, true, true],
+    'a 400 BCF field split four ways gives every block room');
 });

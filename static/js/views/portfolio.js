@@ -35,13 +35,23 @@ var COLUMNS = [
   // only on the rows where the two differ, which is the whole lead <-> well
   // map without a column that repeats the other one on every other row.
   { key: 'well_name', label: 'Well Name', numeric: false, filter: 'text' },
-  { key: 'gas_field', label: 'Field', numeric: false, filter: 'multi' },
-  { key: 'seismic_block', label: 'Seismic Block', numeric: false, filter: 'text' },
-  { key: 'classification', label: 'Classification', numeric: false, filter: 'multi' },
-  { key: 'year', label: 'BP Year', numeric: true, filter: 'multi' },
-  { key: 'status', label: 'Status', numeric: false, filter: 'multi', options: STATUS_OPTIONS },
+  // Card 3N's requested order. This is a PRESENTATION change only: every
+  // column keeps its data key, formatter and filter, and the export's column
+  // positions are a separate contract that does not follow this row.
+  //
+  // The card lists six of these plus a seventh, `nucd Area`, which is REPORTED
+  // BLOCKED: there is no field, config entry or data of that name anywhere in
+  // this application, and the card forbids guessing its source. Classification
+  // and BP Year are not in the card's list either; they are kept here rather
+  // than dropped, because removing working columns is not what "reorder" asks
+  // for and both are still filtered on.
   { key: 'mean_ogip', label: 'Mean OGIP (BCF)', numeric: true, filter: 'range' },
-  { key: 'total_cos', label: 'Total CoS (%)', numeric: true, filter: 'range' }
+  { key: 'total_cos', label: 'Total CoS (%)', numeric: true, filter: 'range' },
+  { key: 'status', label: 'Status', numeric: false, filter: 'multi', options: STATUS_OPTIONS },
+  { key: 'seismic_block', label: 'Seismic Block', numeric: false, filter: 'text' },
+  { key: 'gas_field', label: 'Field', numeric: false, filter: 'multi' },
+  { key: 'classification', label: 'Classification', numeric: false, filter: 'multi' },
+  { key: 'year', label: 'BP Year', numeric: true, filter: 'multi' }
 ];
 
 // The cross plot's four cutoff quadrants are NOT a column: they are a property
@@ -252,16 +262,19 @@ function nameCellMarkup(row) {
     '</span></td>';
 }
 
+// Cell order follows COLUMNS. The two measured columns carry .pf-num rather
+// than relying on their POSITION for alignment -- a positional rule silently
+// pointed at the wrong columns the moment Card 3N reordered the table.
 function rowMarkup(row) {
   return '<tr>' +
     nameCellMarkup(row) +
-    '<td>' + esc(row.gas_field || '') + '</td>' +
+    '<td class="pf-num">' + esc(fmtNum(row.mean_ogip) || '') + '</td>' +
+    '<td class="pf-num">' + esc(fmtNum(row.total_cos) || '') + '</td>' +
+    '<td>' + esc(row.status || '') + '</td>' +
     '<td>' + esc(row.seismic_block || '') + '</td>' +
+    '<td>' + esc(row.gas_field || '') + '</td>' +
     '<td>' + esc(row.classification || '') + '</td>' +
     yearCellMarkup(row) +
-    '<td>' + esc(row.status || '') + '</td>' +
-    '<td>' + esc(fmtNum(row.mean_ogip) || '') + '</td>' +
-    '<td>' + esc(fmtNum(row.total_cos) || '') + '</td>' +
     '</tr>';
 }
 
