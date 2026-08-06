@@ -13,7 +13,7 @@ deployed, and nothing will be without an explicit instruction.
 | Branch | `asas-redesign` |
 | Base (last shared commit with `main`) | `e804d9f` |
 | Head | `ee30010` |
-| Commits in this batch | 14 (`df23a8c` … `ee30010`) |
+| Commits in this batch | 15 (`df23a8c` … head) |
 | Diff | 58 files, +3908 / −540 |
 | Remote | **nothing pushed** |
 | Target environment | **not identified** — see Blockers |
@@ -24,7 +24,6 @@ deployed, and nothing will be without an explicit instruction.
 |---|---|
 | `df23a8c` | 3G (labels), 3A, 3B, 3C — B90→P90, PDF wording, PICS→Picks, gear-menu exports, formation sheet open on arrival |
 | `b69e882` | The BPE 6 navigation lock |
-| `20069a9` | 3F — 18/18 Completed, All Years, the Pre-Drilling BP Gate toggle |
 | `2ba77a9` | 3E — Well Summary content |
 | `029d091` | 3H — TVDSS stored positive (**migration v11**) |
 | `5caea8d` | 3T — Coring Formations checkbox dropdown |
@@ -85,16 +84,13 @@ These are correct and intended, and someone will notice them on day one:
 1. **Record names.** A record whose staking is confirmed is now called by its
    staked well name **everywhere**, Segment Maturation included. The lead name
    is never lost — it shows beneath the canonical name where they differ.
-2. **The BPE step filter is gone.** Filtering by any of the other seventeen
-   tracking items is no longer possible. The Pre-Drilling column's BP Gate
-   toggle replaces its default behaviour.
-3. **Three folder cards disappeared** — Pre-Drilling GeoX Assessment, Moving
+2. **Three folder cards disappeared** — Pre-Drilling GeoX Assessment, Moving
    Tolerance and Aramco Picks are not in the approved mapping.
-4. **Segmentation Slides needs an explicit Submit.** Ticking the box and saving
+3. **Segmentation Slides needs an explicit Submit.** Ticking the box and saving
    no longer files the review request.
-5. **TVDSS reads as a magnitude.** Anyone reading a negative depth downstream
+4. **TVDSS reads as a magnitude.** Anyone reading a negative depth downstream
    will now see its positive value.
-6. **The Portfolio export's "Well Name" column** carries the staked name; the
+5. **The Portfolio export's "Well Name" column** carries the staked name; the
    lead name is an appended column. Column positions are unchanged.
 
 ## Blockers to release, not to the work
@@ -109,17 +105,19 @@ them are unknown here:
 - the change window;
 - the backup and rollback owner.
 
-## Two open questions for the reviewer
+## Cards deliberately not implemented
 
-- **The Active Drilling border is a proposal.** No agreed animation exists in
-  the repository; Card 3X says to report rather than invent one. What ships is a
-  slow sheen in the priority colour with a reduced-motion fallback. Say the word
-  and it changes or comes out.
-- **The BP Gate toggle's meaning is an interpretation.** Card 3F says it
-  "filters only Pre-Drilling visible wells", but every Pre-Drilling well
-  trivially has the gate among its items, so the literal reading makes the
-  control do nothing. It filters to wells *still at* the gate. One line to
-  change.
+**3F (BPE main-page filters)** was withdrawn by the owner as a no-op — doc and
+team planning rather than an application change. It had been implemented and is
+reverted: the step filter, the current-stage Completed semantics and the
+absence of an All Years option are all back as they were.
+
+## One open question for the reviewer
+
+**The Active Drilling border.** No agreed animation exists in the repository, so
+the treatment was chosen rather than specified: a light travelling around the
+card's border, in the card's own priority colour, with a static ring under
+`prefers-reduced-motion`. Say the word and it changes.
 
 ## Recommendation
 

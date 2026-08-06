@@ -865,13 +865,26 @@ function metricRow(label, value, note) {
   return '<div class="summary-metric"><div class="summary-metric-label"><span>' + esc(label) + '</span>' + small + '</div><div class="summary-metric-value">' + (isFilled(value) ? esc(fmtNum(value)) : '—') + '</div></div>';
 }
 
-// The same row, for values that are already display-ready strings -- a logging
-// program's name, or a number that has had its unit appended. metricRow runs
-// fmtNum over whatever it is handed, which would mangle both.
-function textRow(label, value) {
-  return '<div class="summary-metric"><div class="summary-metric-label"><span>' + esc(label) +
-    '</span></div><div class="summary-metric-value">' +
-    (isFilled(value) ? esc(value) : '—') + '</div></div>';
+/* One titled block of the well card, in the Lead Summary card's own anatomy
+   (.ls-section / .ls-section-title): a title-case navy heading over its
+   content, separated from the block above by a hairline. The two cards sit in
+   the same slot on the same page, so they read as one component with two
+   contents rather than two components. */
+function summarySection(title, bodyHtml) {
+  return '<section class="ls-section summary-section">' +
+    '<h4 class="ls-section-title">' + esc(title) + '</h4>' + bodyHtml + '</section>';
+}
+
+// A row of aligned label-over-value columns -- the Lead Summary's own grid, so
+// the well card's Gas trio lines up exactly as the lead card's does.
+function columnsHtml(columns) {
+  var cells = columns.map(function (column) {
+    return '<div class="ls-col"><span class="ls-col-label">' + esc(column.label) + '</span>' +
+      '<span class="ls-col-value">' + (isFilled(column.value) ? esc(fmtNum(column.value)) : EM_DASH) +
+      '</span></div>';
+  }).join('');
+  return '<div class="ls-grid" style="grid-template-columns:repeat(' +
+    columns.length + ',minmax(0,1fr))">' + cells + '</div>';
 }
 
 // A stat cluster: a quiet group label over a row of sub-label/value columns
@@ -880,15 +893,12 @@ function textRow(label, value) {
 // values at all still renders once with all dashes (it is never hidden). An
 // optional `context` line (e.g. the Reservoir CoS "Block · AR n" reference)
 // sits quietly below the grid. Numbers read larger than the sub-labels.
+// It renders through the SAME section/grid helpers the rest of the card now
+// uses, so the Lead Summary fold's trios read as "P90 Mean P10" like the trios
+// above them rather than "P90 MEAN P10" -- one card, one voice, open or shut.
 function statCluster(label, cols, context) {
-  var cells = cols.map(function (col) {
-    return '<div class="summary-cluster-col"><span class="summary-cluster-sub">' + esc(col.label) + '</span>' +
-      '<span class="summary-cluster-val">' + (isFilled(col.value) ? esc(fmtNum(col.value)) : '—') + '</span></div>';
-  }).join('');
   var contextHtml = isFilled(context) ? '<div class="summary-cluster-context">' + esc(context) + '</div>' : '';
-  return '<div class="summary-cluster"><div class="summary-cluster-label">' + esc(label) + '</div>' +
-    '<div class="summary-cluster-grid" style="grid-template-columns:repeat(' + cols.length + ',minmax(0,1fr))">' + cells + '</div>' +
-    contextHtml + '</div>';
+  return summarySection(label, columnsHtml(cols) + contextHtml);
 }
 
 // LEAD_PIIP_SOURCES (the lead half of LATEST_PIIP_SOURCES) and
@@ -1119,41 +1129,16 @@ export function renderRightPanel(tasks) {
     // sit here as two loose rows; they are predictions, and both already
     // appear -- against their actuals, which is the only way they mean
     // anything -- inside the Simulated vs Actual Delta fold below.
-    // Card 3E's core well info, in the card's own order. Every row is
-    // conditional on having a value -- an unrecorded rig or logging program is
-    // absent, not a row of dashes, because the card asks for these "when
-    // values exist". All four read the Business Plan Gate, which is where the
-    // well's plan is agreed; the Actual figures win over the Calculated ones
-    // because this card reports what the well IS, not what it was budgeted at.
-    //
-    // "Drilling Rig / Gear" has NO field in this application -- there is no
-    // rig or gear input on any step -- so it can never render. The card
-    // forbids new fields, so this is reported rather than invented.
-    var gate = Store.allFields['BP Execution Gate'] || {};
-    var drillingDays = firstFilledValue([gate.bp_gate_actual_drilling_days,
-      gate.bp_gate_calculated_drilling_days]);
-    var totalDepth = firstFilledValue([gate.bp_gate_actual_td_ft_md,
-      gate.bp_gate_calculated_td_ft_md]);
-    var wellInfoRows = [
-      ['Drilling Days', isFilled(drillingDays) ? fmtNum(drillingDays) + ' days' : ''],
-      ['TD', isFilled(totalDepth) ? fmtNum(totalDepth) + ' ft MD' : ''],
-      // A logging program is a name, not a measurement, so it prints verbatim.
-      ['Logging Requirement', gate.bp_gate_logging_program]
-    ].filter(function (row) { return isFilled(row[1]); });
-    var wellInfoHtml = wellInfoRows.length
-      ? '<div class="summary-section"><div class="summary-section-title">Well Information</div>' +
-        '<div class="summary-metrics">' + wellInfoRows.map(function (row) {
-          return textRow(row[0], row[1]);
-        }).join('') + '</div></div>'
-      : '';
-
-    var metricsHtml = '<div class="summary-metrics">' +
-      statCluster('Gas (BCF)', [
-        { label: 'P90', value: postDrillTrio.p90 },
-        { label: 'Mean', value: postDrillTrio.mean },
-        { label: 'P10', value: postDrillTrio.p10 }
-      ]) +
-      '</div>';
+    // Card 3E, as drawn: Gas leads the card as a titled section with the
+    // trio beneath it. Built from the SAME markup the Segment Maturation Lead
+    // Summary uses for its own trios (.ls-section / .ls-grid / .ls-col), so
+    // the two cards are one visual language rather than two that resemble
+    // each other.
+    var metricsHtml = summarySection('Gas (BCF)', columnsHtml([
+      { label: 'P90', value: postDrillTrio.p90 },
+      { label: 'Mean', value: postDrillTrio.mean },
+      { label: 'P10', value: postDrillTrio.p10 }
+    ]));
 
     // Reservoir Properties: a small table -- one header row over one row per
     // formation, name on the left. It replaces the run-on "120 ft · 8.5% φ ·
@@ -1165,12 +1150,12 @@ export function renderRightPanel(tasks) {
       if (name === 'SARH' || !formationHasData(deduped[name].row)) return;
       reservoirRows.push(formationPropertyRow(name, deduped[name].row));
     });
-    var reservoirsHtml = '<div class="summary-section"><div class="summary-section-title">Reservoir Properties</div>' +
+    var reservoirsHtml = summarySection('Reservoir Properties',
       '<div class="summary-props">' +
       '<div class="summary-props-head">' +
         '<span class="summary-props-name"></span>' +
         '<span>Pay Thickness</span><span>Porosity (φ)</span><span>Water Saturation (Sw)</span>' +
-      '</div>' + reservoirRows.join('') + '</div></div>';
+      '</div>' + reservoirRows.join('') + '</div>');
 
     // Flowback rate: the headline rate lives in a fluid-specific EAV field.
     // Petrophysical fluid precedence (newest authority first), mirroring the
@@ -1213,7 +1198,7 @@ export function renderRightPanel(tasks) {
     var flowValue = flowRead(flowEntry.key);
     var fwhp = flowRead('flowback_fwhp_psi');
     var choke = flowRead('flowback_choke_size_in');
-    var flowbackHtml = '<div class="summary-section"><div class="summary-section-title">Flowback Results</div>' +
+    var flowbackHtml = summarySection('Flowback Results',
       '<div class="summary-metrics">' +
       // The rate's label follows the well's fluid, so an oil well does not
       // read "Gas Rate" (the fluid itself rides along as the row's context).
@@ -1222,7 +1207,7 @@ export function renderRightPanel(tasks) {
         isFilled(fluid) ? fluid : 'Gas') +
       metricRow('Flowing Wellhead Pressure (FWHP)', isFilled(fwhp) ? fmtNum(fwhp) + ' psi' : '') +
       metricRow('Choke Size', isFilled(choke) ? fmtNum(choke) + ' in' : '') +
-      '</div></div>';
+      '</div>');
 
     // Folds are per-project, like the rail accordion: a fresh selection starts
     // with every fold collapsed.
@@ -1250,7 +1235,7 @@ export function renderRightPanel(tasks) {
       }
       return pvaRow('Area P' + bound + ' (km²)', predicted, actual);
     }
-    var pvaHtml = foldSection('pva', 'Simulated vs Actual Delta',
+    var pvaHtml = foldSection('pva', 'Simulated Vs Actual Delta',
       '<div class="summary-pva-head-row"><span class="summary-pva-label"></span><span class="summary-pva-cell summary-pva-colhead">Predicted</span><span class="summary-pva-cell summary-pva-colhead">Actual</span><span class="summary-pva-delta"></span></div>' +
       pvaRow('Top SARH', prognosis, topSarh) +
       pvaRow('Thickness (ft)', predThickness, sarh ? sarh.thickness_ft : '') +
@@ -1274,9 +1259,9 @@ export function renderRightPanel(tasks) {
     // carries its own shared-folder card (renderComponentFolder in
     // detail-form.js), which is where a folder link is actually wanted while
     // working a step.
-    // Order is Card 3E's own: the well's core information, then Gas, then how
-    // it flowed, then what the rock turned out to be, then the two folds.
-    bodyHtml = wellInfoHtml + metricsHtml + flowbackHtml + reservoirsHtml + pvaHtml + leadHtml;
+    // The card's order, as drawn: Gas, how it flowed, what the rock turned out
+    // to be, then the two expandable sections.
+    bodyHtml = metricsHtml + flowbackHtml + reservoirsHtml + pvaHtml + leadHtml;
   } else {
     // ---- Lead card ----------------------------------------------------------
     // Res CoS is the primary first-row percent; its "Block · AR n" reference

@@ -148,6 +148,7 @@ from .business_plan import (
     DETAILS as BPE_DETAILS,
     FLUIDS as BPE_FLUIDS,
     STAGES as BPE_STAGES,
+    STEP_OPTIONS as BPE_STEP_OPTIONS,
     assign_detail as assign_bpe_detail,
     get_dashboard as get_bpe_dashboard,
     get_detail as get_bpe_detail,
@@ -214,7 +215,7 @@ __all__ = [
     "log_task_event",
     # approved Business Plan Execution projection
     "BPE_APPROVAL_DETAILS", "BPE_CLASSIFICATIONS", "BPE_DETAILS", "BPE_FLUIDS",
-    "BPE_STAGES", "assign_bpe_detail", "get_bpe_dashboard",
+    "BPE_STAGES", "BPE_STEP_OPTIONS", "assign_bpe_detail", "get_bpe_dashboard",
     "get_bpe_detail", "save_bpe_field", "save_bpe_flowback_stages",
     "save_bpe_formations", "transition_bpe_approval",
 ]

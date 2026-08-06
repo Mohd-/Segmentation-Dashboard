@@ -181,14 +181,19 @@ function foldTitles(host) {
   return Array.prototype.map.call(host.querySelectorAll('.summary-fold-title'),
     function (element) { return element.textContent; });
 }
+// The card's blocks are .ls-section now -- the Lead Summary card's own
+// anatomy, which is what "consistent with the lead summary card" means.
+// Scoped to the card's OWN blocks: the folds' bodies use the same anatomy, so
+// an unscoped query would count what is inside them too.
 function sectionTitles(host) {
-  return Array.prototype.map.call(host.querySelectorAll('.summary-section-title'),
+  return Array.prototype.map.call(
+    host.querySelectorAll('#lead-summary > .ls-section > .ls-section-title'),
     function (element) { return element.textContent; });
 }
 function metricPairs(host, sectionTitle) {
   var section = Array.prototype.filter.call(host.querySelectorAll('.summary-section'),
     function (element) {
-      var title = element.querySelector('.summary-section-title');
+      var title = element.querySelector('.ls-section-title');
       return title && title.textContent === sectionTitle;
     })[0];
   if (!section) return null;
@@ -198,43 +203,14 @@ function metricPairs(host, sectionTitle) {
   });
 }
 
-test('detail the well card shows core well information from the Business Plan Gate', function () {
-  var host = mountWellCard({
-    'BP Execution Gate': {
-      bp_gate_actual_drilling_days: '31',
-      bp_gate_calculated_drilling_days: '28',
-      bp_gate_actual_td_ft_md: '12450',
-      bp_gate_logging_program: 'Optimized Standard B'
-    }
-  });
-  // ACTUAL beats CALCULATED: the card reports what the well is, not what it
-  // was budgeted at.
-  assert.deepEqual(metricPairs(host, 'Well Information'), [
-    ['Drilling Days', '31 days'],
-    ['TD', '12450 ft MD'],
-    ['Logging Requirement', 'Optimized Standard B']
-  ]);
-  // It leads the card, before Gas.
-  assert.equal(sectionTitles(host)[0], 'Well Information');
-});
 
 // The card asks for these rows "when values exist" -- so nothing entered at
 // the gate means no section at all, not a section full of dashes.
-test('detail a well with nothing entered at the gate shows no Well Information', function () {
-  var host = mountWellCard({});
-  assert.equal(metricPairs(host, 'Well Information'), null);
-  assert.equal(sectionTitles(host).indexOf('Well Information'), -1);
-});
 
-test('detail only the core values that exist get a row', function () {
-  var host = mountWellCard({ 'BP Execution Gate': { bp_gate_logging_program: 'Standard A' } });
-  assert.deepEqual(metricPairs(host, 'Well Information'),
-    [['Logging Requirement', 'Standard A']]);
-});
 
 test('detail the well card carries exactly two folds, both collapsed on arrival', function () {
   var host = mountWellCard({});
-  assert.deepEqual(foldTitles(host), ['Simulated vs Actual Delta', 'Lead Summary']);
+  assert.deepEqual(foldTitles(host), ['Simulated Vs Actual Delta', 'Lead Summary']);
   Array.prototype.forEach.call(host.querySelectorAll('.summary-fold-head'), function (head) {
     assert.equal(head.getAttribute('aria-expanded'), 'false');
   });
@@ -292,4 +268,32 @@ test('detail porosity and water saturation print bare, to two decimals', functio
     function (element) { return element.textContent; });
   assert.deepEqual(cells, ['SARH', '60.50 ft', '8.52', '35.00'],
     'two decimals, no percent sign, no conversion');
+});
+
+test('detail the well card is built from the Lead Summary card anatomy', function () {
+  // "Consistent with the segment maturation lead summary card" is a structural
+  // claim, not a resemblance: the blocks ARE .ls-section with .ls-section-title
+  // headings, and the Gas trio is the same .ls-grid of label-over-value columns
+  // the lead card uses for its own trios.
+  var host = mountWellCard({
+    'SAD Model': { post_drill_piip_gas_p90: '12', post_drill_piip_gas_mean: '20',
+                   post_drill_piip_gas_p10: '31' }
+  });
+  assert.deepEqual(sectionTitles(host),
+    ['Gas (BCF)', 'Flowback Results', 'Reservoir Properties']);
+
+  var gas = host.querySelectorAll('#lead-summary > .ls-section')[0];
+  assert.deepEqual(Array.prototype.map.call(gas.querySelectorAll('.ls-col-label'),
+    function (element) { return element.textContent; }), ['P90', 'Mean', 'P10']);
+  assert.deepEqual(Array.prototype.map.call(gas.querySelectorAll('.ls-col-value'),
+    function (element) { return element.textContent; }), ['12', '20', '31']);
+});
+
+test('detail the two expandable sections are the last thing on the card', function () {
+  var host = mountWellCard({});
+  var blocks = host.querySelectorAll('#lead-summary > .ls-section, #lead-summary > .summary-fold');
+  var last = Array.prototype.slice.call(blocks, -2);
+  assert.deepEqual(last.map(function (element) {
+    return element.querySelector('.summary-fold-title').textContent;
+  }), ['Simulated Vs Actual Delta', 'Lead Summary']);
 });
