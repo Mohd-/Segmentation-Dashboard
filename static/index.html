@@ -17,7 +17,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/css/base.css?v=10">
-  <link rel="stylesheet" href="/static/css/components.css?v=60">
+  <link rel="stylesheet" href="/static/css/components.css?v=61">
 </head>
 <body>
   <section id="login-page" class="login-page hidden">
@@ -233,11 +233,6 @@
         <div class="map-stage">
           <canvas id="map-canvas" class="map-canvas"></canvas>
 
-          <div id="map-summary" class="map-summary">
-            <button id="map-summary-toggle" type="button" class="map-summary-toggle" aria-expanded="true" aria-controls="map-summary-body">Map summary</button>
-            <div id="map-summary-body" class="map-summary-body" aria-live="polite"></div>
-          </div>
-
           <!-- The sidebar floats ON the stage like every other overlay here,
                so the canvas keeps the full panel width and collapsing the box
                never reflows it. -->
@@ -281,7 +276,17 @@
             </div>
           </aside>
 
-          <div class="map-toolbox" role="group" aria-label="Map tools">
+          <!-- Card 3Q: the Map Summary sits immediately LEFT of the Toolbox.
+               They are ONE overlay row, so DOM order matches visual order (and
+               so does keyboard order), and the toolbox stays anchored to the
+               right edge however wide the summary is. -->
+          <div class="map-overlay-top">
+            <div id="map-summary" class="map-summary">
+              <button id="map-summary-toggle" type="button" class="map-summary-toggle" aria-expanded="true" aria-controls="map-summary-body">Map summary</button>
+              <div id="map-summary-body" class="map-summary-body" aria-live="polite"></div>
+            </div>
+
+            <div class="map-toolbox" role="group" aria-label="Map tools">
             <div class="map-tool-row">
               <button id="map-tool-pointer" type="button" class="map-tool" aria-pressed="true" title="Pointer: hover for feature details">Pointer</button>
               <button id="map-tool-measure" type="button" class="map-tool" aria-pressed="false" title="Measure: click to add points, double-click or Escape to finish">Measure</button>
@@ -289,6 +294,7 @@
               <button id="map-colors-toggle" type="button" class="map-tool" aria-expanded="false" aria-controls="map-color-panel" title="Layer colors">Colors</button>
             </div>
             <div id="map-measure-readout" class="map-measure-readout" hidden></div>
+            </div>
           </div>
 
           <div id="map-color-panel" class="map-color-panel" hidden></div>
