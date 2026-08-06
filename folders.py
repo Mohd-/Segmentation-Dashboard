@@ -121,6 +121,11 @@ def _task_row(session, task_id: int):
                         {"task_id": task_id})
 
 
+def task_row(session, task_id: int):
+    """Public alias -- main.py needs the step's name to key the folder mapping."""
+    return _task_row(session, task_id)
+
+
 # A folder section resolves under ONE of three share roots, chosen by the
 # section key alone. Named once here (server side) and once below (Windows side)
 # so the two can never drift:
@@ -183,6 +188,88 @@ def get_component_folder_link(session, project_id: int, task_id: int) -> Dict[st
         "file_url": _windows_path_to_file_url(unc_path),
         "section": task_name,
         "server_path": str(server_path),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Card 3AB -- resolving the approved stage/step folder mapping
+# ---------------------------------------------------------------------------
+
+def _resolve_template(template: str, field_name: str, lead_name: str, well_name: str):
+    """Fill a mapped template, or report which authoritative value is missing.
+
+    Returns ``(unc_path, missing)``. A template is only usable when EVERY
+    placeholder it contains resolves: a half-resolved UNC path points somewhere
+    real and wrong, so a missing value blocks the link rather than shortening
+    it. Each part is passed through _safe_folder_name, which is what keeps a
+    stored name from injecting separators or traversal into the path.
+    """
+    values = {
+        "[FIELD]": field_name,
+        "[LEAD NAME]": lead_name,
+        "[WELL_NAME]": well_name,
+    }
+    missing = [name for name, value in values.items()
+               if name in template and not str(value or "").strip()]
+    if missing:
+        return "", missing
+    parts = []
+    for part in template.split("\\"):
+        for name, value in values.items():
+            if part == name:
+                part = str(value)
+                break
+        parts.append(_safe_folder_name(part))
+    return _windows_join(config.NAUGAD_SHARE_ROOT, *parts), []
+
+
+def mapped_step_folder(session, project_id: int, task_name=None, detail_slug=None):
+    """The approved shared folder for one step, or None when it has no mapping.
+
+    None means exactly that: the caller renders NO folder component. Card 3AB
+    is explicit that an unmapped step shows nothing -- not a blank card, not a
+    disabled one, not a placeholder destination.
+
+    A mapped step whose record is missing a required name comes back with
+    ``blocked`` set and no path, so the UI can say why instead of offering a
+    link that would open a partially-resolved location.
+    """
+    template = None
+    if detail_slug is not None:
+        template = config.BP_STEP_FOLDER_LINKS.get(detail_slug)
+    if template is None and task_name is not None:
+        template = config.LEAD_STEP_FOLDER_LINKS.get(task_name)
+    if template is None:
+        return None
+
+    project = _project_row(session, project_id)
+    if not project:
+        raise FileNotFoundError("Record not found.")
+    # The canonical name is what the record is KNOWN by, which after staking is
+    # its staked well name -- so a well-based destination resolves under the
+    # name the well actually carries. parse_field_and_well is the application's
+    # existing, approved split; this does not invent a second one.
+    canonical = project.get("project_name") or ""
+    field_name, well_name = parse_field_and_well(canonical)
+    lead_name = canonical
+    unc_path, missing = _resolve_template(template, field_name, lead_name, well_name)
+    if missing:
+        return {
+            "requires_folder": 1,
+            "blocked": "This step's folder needs " + ", ".join(
+                name.strip("[]").replace("_", " ").title() for name in missing) +
+                " on the record before it can be opened.",
+            "path": "",
+            "unc_path": "",
+            "file_url": "",
+            "section": task_name or detail_slug or "",
+        }
+    return {
+        "requires_folder": 1,
+        "path": unc_path,
+        "unc_path": unc_path,
+        "file_url": _windows_path_to_file_url(unc_path),
+        "section": task_name or detail_slug or "",
     }
 
 

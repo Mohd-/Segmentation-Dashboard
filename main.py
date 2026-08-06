@@ -764,8 +764,19 @@ def project_dynamic_fields(project_id):
 
 @app.get("/api/projects/<int:project_id>/component-folder/<int:task_id>")
 def component_folder(project_id, task_id):
+    """Card 3AB: the approved destination for this step, or nothing.
+
+    ``requires_folder: 0`` is how "this step has no folder component" reaches
+    the client, which is the same signal it already honoured -- so an unmapped
+    step renders nothing at all rather than an empty card.
+    """
     session = db.get_session()
-    return json_response(folders.get_component_folder_link(session, project_id, task_id))
+    task = folders.task_row(session, task_id)
+    if not task or int(task.get("project_id") or 0) != int(project_id):
+        raise ValueError("Component folder could not be resolved.")
+    mapped = folders.mapped_step_folder(
+        session, project_id, task_name=task.get("task_name"))
+    return json_response(mapped or {"requires_folder": 0})
 
 
 @app.get("/api/projects/<int:project_id>/folders/<section_key>")
@@ -851,8 +862,12 @@ def business_plan_detail(project_id, detail_slug):
     session = db.get_session()
     payload = workflow.get_bpe_detail(session, project_id, detail_slug)
     payload["role"] = current_role()
-    payload["folder"] = folders.get_component_folder_link(
-        session, project_id, payload["task"]["task_id"])
+    # Card 3AB keys the BPE side by DETAIL SLUG, not task name: sad-model-update
+    # and final-summary-slides share the "SAD Update" task and take different
+    # destinations. `folder` is absent when the step has no mapping, and the
+    # detail form renders no folder component for it.
+    payload["folder"] = folders.mapped_step_folder(
+        session, project_id, detail_slug=detail_slug)
     return json_response(payload)
 
 

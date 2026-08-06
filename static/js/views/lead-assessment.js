@@ -91,10 +91,6 @@ var LEGACY_KEY_OWNER = {
   polygons_surfaces_loaded: 'Resource Assessment'
 };
 
-// The folder section key card 2B's folder row resolves
-// (config.WELL_OVERVIEW_DIRECTORY_MAP / folders.LEAD_COMPONENT_SECTION_KEYS):
-// <leads share>\<field>\<lead>\Polygons__Surfaces.
-export var FOLDER_SECTION_KEY = 'polygons';
 
 // The scenario a page with nothing stored opens on -- same default the
 // standalone calculator uses.
@@ -1145,11 +1141,19 @@ function wirePlots(root) {
 // The lead's Polygons & Surfaces share row, in the shell's own folder-card slot
 // (directly under the comments box), with the same glyph/path/copy markup every
 // other folder card uses.
+//
+// Card 3AB: the destination now comes from the ONE approved stage/step mapping
+// (config.LEAD_STEP_FOLDER_LINKS), reached through the component-folder
+// endpoint keyed by this page's own task. It used to resolve the generic
+// `polygons` SECTION instead, which produced a differently-spelled path
+// (...\Leads\...\Polygons__Surfaces) that the approved table does not use.
 function renderFolderRow(onCopy) {
   var previous = byId('component-folder-card');
   if (previous) previous.remove();
   var anchor = byId('comments-field');
   if (!anchor) return;
+  var task = state.resourceTask;
+  if (!task) return;
   var card = document.createElement('div');
   card.id = 'component-folder-card';
   card.className = 'folder-card';
@@ -1158,8 +1162,15 @@ function renderFolderRow(onCopy) {
     '<button type="button" class="icon-btn" id="copy-component-folder" title="Copy folder link" aria-label="Copy folder link" disabled>⧉</button>';
   anchor.parentNode.insertBefore(card, anchor.nextSibling);
   var forProjectId = Store.projectId;
-  API.sectionFolder(forProjectId, FOLDER_SECTION_KEY).then(function (info) {
+  API.componentFolder(forProjectId, task.task_id).then(function (info) {
     if (Store.projectId !== forProjectId) return;
+    // An unmapped step has no folder component at all (Card 3AB), so the card
+    // is removed rather than left saying "not configured".
+    if (!info || !Number(info.requires_folder)) {
+      var placeholder = byId('component-folder-card');
+      if (placeholder) placeholder.remove();
+      return;
+    }
     var path = (info && info.unc_path) || '';
     var pathElement = byId('la-folder-path');
     var button = byId('copy-component-folder');

@@ -450,6 +450,70 @@ COMPONENT_FILE_SECTIONS = {
     "Resource Assessment Update", "Post-Drilling Resource Assessment",
 }
 
+# ---------------------------------------------------------------------------
+# Card 3AB -- the authoritative stage/step -> shared-folder mapping
+# ---------------------------------------------------------------------------
+#
+# ONE table, three columns (stage, step, folder), consumed by both detail pages
+# through folders.mapped_step_folder. A step that is not listed here renders NO
+# folder component at all -- not a blank one, not a disabled one, not an "N/A".
+#
+# This is a DIFFERENT question from COMPONENT_FILE_SECTIONS above, which says
+# which steps have a generated "Component Files" directory on the share. These
+# destinations are the approved operational folders people actually file into,
+# and they are not derived from the step name.
+#
+# Placeholders resolve at runtime from the record's authoritative values:
+#   [FIELD]      the lead/well's field
+#   [LEAD NAME]  the lead name (lead-based Segment Maturation paths)
+#   [WELL_NAME]  the well name (well-based paths -- see folders.parse_field_and_well,
+#                which is applied to the record's canonical name, so a staked
+#                well resolves under its staked name)
+#
+# The source spreadsheet carried auto-generated smart-card markup
+# ("[http://aramco.com](...)"). That is Excel metadata, not part of any
+# destination: these are internal UNC paths and must never become http links.
+NAUGAD_SHARE_ROOT = r"\\aramco.com\ecc\data\NAUGAD"
+
+# Segment Maturation, keyed by stable task name. "Staking Letters" in the card
+# is this application's consolidated staking page, which renders for BOTH of
+# its tracked items -- so both names carry the same destination.
+LEAD_STEP_FOLDER_LINKS = {
+    "Lead Assessment": r"LEADS\[FIELD]\[LEAD NAME]\POLYGONS_SURFACES",
+    "Reservoir CoS": r"LEADS\[FIELD]\[LEAD NAME]\SEGMENTATION",
+    "Trap and Seal CoS": r"LEADS\[FIELD]\[LEAD NAME]\SEGMENTATION",
+    "Seismic Signature Validation": r"LEADS\[FIELD]\[LEAD NAME]\SEGMENTATION",
+    "Segmentation Slides": r"LEADS\[FIELD]\[LEAD NAME]\SEGMENTATION",
+    "Approval to Stake": r"WELLS\[FIELD]\[WELL_NAME]\ADMINISTRATION",
+    "Well Site Location": r"WELLS\[FIELD]\[WELL_NAME]\ADMINISTRATION",
+}
+
+# Business Plan Execution, keyed by DETAIL SLUG rather than task name: two
+# slugs (sad-model-update and final-summary-slides) share the "SAD Update"
+# task and take different destinations, so the task name is not a key here.
+#
+# The card numbers these BP 1..BP 14, which is the rail's own numbering of the
+# fourteen detail pages (business-plan.js detailNavMarkup). BP 5 is Aramco
+# Picks and is intentionally absent -- picks load into PETREL and GeoKnowledge,
+# not into a shared folder. BP 2's ...\ADMINISTRATION\ destination is reported
+# unmapped: it and BP 1 both land on the Well Letters page, which carries one
+# folder card, and BP 1's WELL_PROPOSAL is the approved one for it.
+BP_STEP_FOLDER_LINKS = {
+    "well-letters": r"WELLS\[FIELD]\[WELL_NAME]\GEOLOGY_AND_GEOPHYSICS\WELL_PROPOSAL",
+    "gheer-inputs": r"WELLS\[FIELD]\[WELL_NAME]\ADMINISTRATION\APPROVED_GHEER",
+    "quicklook-logs": r"WELLS\[FIELD]\[WELL_NAME]\LOGS\QUICKLOOK_LOGS",
+    "sad-model": r"WELLS\[FIELD]\[WELL_NAME]\GEOLOGY_AND_GEOPHYSICS\PDA\SAD_MODEL",
+    "summary-slides": r"WELLS\[FIELD]\[WELL_NAME]\GEOLOGY_AND_GEOPHYSICS\PDA\EXECUTIVE_SUMMARY",
+    "post-drill-learning-review": r"WELLS\[FIELD]\[WELL_NAME]\GEOLOGY_AND_GEOPHYSICS\PDA",
+    "flowback-results": r"WELLS\[FIELD]\[WELL_NAME]\ENGINEERING\CONVENTIONAL_TESTING",
+    "sad-model-update": r"WELLS\[FIELD]\[WELL_NAME]\GEOLOGY_AND_GEOPHYSICS\PDA\SAD_MODEL_UPDATE",
+    "final-summary-slides": r"WELLS\[FIELD]\[WELL_NAME]\GEOLOGY_AND_GEOPHYSICS\PDA\EXECUTIVE_SUMMARY",
+    "final-log-analysis": r"WELLS\[FIELD]\[WELL_NAME]\LOGS\FINAL_PLOTS",
+    "structural-mtr": r"WELLS\[FIELD]\[WELL_NAME]\GEOLOGY_AND_GEOPHYSICS\PDA\MTR",
+    "pda-booking": r"WELLS\[FIELD]\[WELL_NAME]\GEOLOGY_AND_GEOPHYSICS\PDA",
+}
+
+
 # Business Plan Execution configuration.  The approved year selector is fixed;
 # historical values outside it remain stored and are reported by the API as a
 # data-quality condition rather than being silently coerced.  The three

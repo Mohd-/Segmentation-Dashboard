@@ -1126,6 +1126,12 @@ button.priority.priority-high:hover { background: var(--danger-100); }
   color: var(--text-muted);
 }
 .folder-card .icon-btn { flex: 0 0 auto; }
+/* Card 3AB. A mapped step whose record is missing a name the destination needs
+   shows why, in the warning treatment the rest of the app uses for "you cannot
+   do this yet" -- and carries no link or copy button, because there is no
+   resolved path to hand anyone. */
+.folder-card-blocked { border-color: var(--warning-500); background: var(--warning-100); }
+.folder-card-blocked .folder-path { color: var(--warning-700); white-space: normal; }
 .summary-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: grid; gap: var(--space-2); }
 .summary-list li { display: grid; grid-template-columns: 1.2fr 1fr; gap: var(--space-2); border-top: 1px solid var(--gray-100); padding-top: var(--space-2); }
 .summary-list span { color: var(--text-faint); }

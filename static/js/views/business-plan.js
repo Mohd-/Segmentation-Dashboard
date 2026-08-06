@@ -767,9 +767,20 @@ function commentsMarkup() {
 // path / copy-button row detail-form.js renderComponentFolder and the summary
 // panel's folder rows draw). The path stays a LINK here -- the BP share is
 // openable and always was -- wearing the house .folder-path chrome.
-function folderMarkup(omit) {
-  if (omit) return '';
-  var folder = state.detail.folder || {};
+/* Card 3AB decides this now, and it decides it in ONE place: the server sends
+   `folder` only for a step the approved mapping lists, so an unlisted step
+   renders nothing here -- no blank card, no disabled one, no placeholder
+   destination. A mapped step whose record is missing a name it needs comes
+   back blocked, and says which name, instead of offering a link that would
+   open a partially-resolved location. */
+function folderMarkup() {
+  var folder = state.detail.folder;
+  if (!folder) return '';
+  if (folder.blocked) {
+    return '<div class="folder-card folder-card-blocked" role="status">' +
+      '<span class="folder-glyph" aria-hidden="true">📁</span>' +
+      '<span class="folder-path">' + esc(folder.blocked) + '</span></div>';
+  }
   if (!folder.path) return '';
   return '<div class="folder-card">' +
     '<span class="folder-glyph" aria-hidden="true">📁</span>' +
@@ -781,7 +792,7 @@ function folderMarkup(omit) {
 
 function commonTail(options) {
   options = options || {};
-  return commentsMarkup() + folderMarkup(options.omitFolder) +
+  return commentsMarkup() + folderMarkup() +
     '<div class="bpe-save-line"><span>All changes are saved automatically</span>' +
     // The house auto-save indicator (components.css .save-state): ambient
     // status, not a toast. setFeedback() owns its is-saving/is-saved/is-error
@@ -917,7 +928,9 @@ function gheerForm() {
 function aapForm() {
   return checkbox('aap_petrel_loaded', 'Aramco Approved Picks are loaded into the PETREL repository.') +
     checkbox('aap_geoknowledge_loaded', 'Aramco Approved Picks are loaded into the GeoKnowledge database.') +
-    commonTail({ omitFolder: true });
+    // No omit flag: Aramco Picks (BP 5) is absent from the Card 3AB mapping,
+    // so the server sends no folder and this renders nothing on its own.
+    commonTail();
 }
 
 function summaryForm(finalSummary) {

@@ -119,29 +119,37 @@ def test_create_project_valid(client):
     assert "folder_path" in body
 
 
-def test_component_folder_uses_leads_for_prospect_steps_and_wells_for_bp_steps(client):
-    """Folder roots follow the component's stage, not just the record's current
-    pipeline, so historical prospect steps remain under Leads after promotion."""
+def test_component_folder_serves_the_approved_mapping_and_nothing_else(client):
+    """Card 3AB replaced the derived "Component Files / <step name>" location
+    with ONE authoritative stage/step -> folder table.
+
+    The old rule generated a destination for every step in
+    COMPONENT_FILE_SECTIONS by appending the step's own name. The approved
+    destinations are not derived from step names, and a step the table does not
+    list has no folder component at all -- which reaches the client as
+    requires_folder 0.
+    """
     pid = create_project(client, "PATH-1", pipeline_type="bp",
                          business_plan_enabled=True, business_plan_year=2030)
-    prospect_task = get_task_by_name(client, pid, "Lead Assessment")
-    bp_task = get_task_by_name(client, pid, "Well Proposal")
+    mapped_task = get_task_by_name(client, pid, "Lead Assessment")
+    unmapped_task = get_task_by_name(client, pid, "Pre-Drilling GeoX Assessment")
 
-    prospect = client.get(
-        f"/api/projects/{pid}/component-folder/{prospect_task['task_id']}"
+    mapped = client.get(
+        f"/api/projects/{pid}/component-folder/{mapped_task['task_id']}"
     ).get_json()
-    bp = client.get(
-        f"/api/projects/{pid}/component-folder/{bp_task['task_id']}"
+    unmapped = client.get(
+        f"/api/projects/{pid}/component-folder/{unmapped_task['task_id']}"
     ).get_json()
 
-    assert prospect["unc_path"].startswith("\\\\aramco.com\\ecc\\data\\NAUGAD\\Leads\\")
-    assert prospect["server_path"].startswith("/mnt/leads/")
-    assert prospect["unc_path"].endswith(
-        r"PATH\PATH-1\Component Files\Lead Assessment"
-    )
-    assert bp["unc_path"].startswith("\\\\aramco.com\\ecc\\data\\NAUGAD\\Wells\\")
-    assert bp["server_path"].startswith("/mnt/wells/")
-    assert bp["unc_path"].endswith(r"PATH\PATH-1\Component Files\Well Proposal")
+    assert mapped["requires_folder"] == 1
+    assert mapped["unc_path"] == (
+        r"\\aramco.com\ecc\data\NAUGAD\LEADS\PATH\PATH-1\POLYGONS_SURFACES")
+    # An internal share stays a UNC path -- never an http link.
+    assert mapped["file_url"].startswith("file:")
+    assert "aramco.com/ecc" not in mapped["unc_path"]
+
+    assert unmapped["requires_folder"] == 0
+    assert "unc_path" not in unmapped
 
 
 # ---------------------------------------------------------------------------

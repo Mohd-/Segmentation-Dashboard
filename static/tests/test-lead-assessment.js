@@ -13,7 +13,7 @@ import { Store } from '../js/state.js';
 import { SCHEMA } from '../js/schema.js';
 import { renderFields, getFields } from '../js/views/detail-form.js';
 import {
-  LEAD_ASSESSMENT_STEPS, LEGACY_LEAD_ASSESSMENT_STEPS, PRIMARY_STEP, KEY_OWNER, FOLDER_SECTION_KEY,
+  LEAD_ASSESSMENT_STEPS, LEGACY_LEAD_ASSESSMENT_STEPS, PRIMARY_STEP, KEY_OWNER,
   MESSAGES, HELPER_TEXT, PIIP_HEADING, POLYGONS_LABEL, LABELS, DEFAULT_SCENARIO,
   numberError, tvdssError, validateThicknessSection, validateVolumeSection,
   validateLeadAssessment, firstError,
@@ -87,7 +87,10 @@ test('lead-assessment: every edited key names its owning task', function () {
   assert.equal(PRIMARY_STEP, 'Lead Assessment');
   assert.equal(KEY_OWNER.polygons_surfaces_loaded, PRIMARY_STEP,
     'the polygons confirmation stores on the one lifecycle row');
-  assert.equal(FOLDER_SECTION_KEY, 'polygons');
+  // Card 3AB retired FOLDER_SECTION_KEY: the page's folder row no longer
+  // resolves the generic `polygons` SECTION (which spelled the path
+  // ...\Leads\...\Polygons__Surfaces) but the approved stage/step mapping,
+  // through the component-folder endpoint keyed by this page's own task.
 });
 
 /* -------------------------------------------------------------------------
@@ -696,7 +699,10 @@ function mountPage(fields, meta, respond) {
   mockFetch(function (url, options) {
     calls.push({ url: url, body: options && options.body ? JSON.parse(options.body) : null });
     if (url.indexOf('/resource-assessment') >= 0) return respond ? respond() : jsonResponse(RESULT);
-    if (url.indexOf('/folders/') >= 0) return jsonResponse({ unc_path: '\\\\share\\WWWW\\WWWW-44\\Polygons__Surfaces' });
+    if (url.indexOf('/component-folder/') >= 0) {
+      return jsonResponse({ requires_folder: 1,
+        unc_path: '\\\\aramco.com\\ecc\\data\\NAUGAD\\LEADS\\WWWW\\WWWW-44\\POLYGONS_SURFACES' });
+    }
     if (url.indexOf('/dynamic-fields') >= 0) return jsonResponse({ ok: true });
     if (url.indexOf('/detail') >= 0) return jsonResponse({ project: {}, tasks: Store.tasks, fields: Store.allFields });
     return jsonResponse({});
@@ -787,7 +793,7 @@ test('lead-assessment: mounting a lead with valid inputs but NO stored result st
   assert.equal(mounted.root.querySelector('.la-result-gas .la-result-box').textContent, '—');
   return settle().then(function () {
     assert.equal(mounted.calls.filter(function (call) {
-      return call.url.indexOf('/folders/') < 0;
+      return call.url.indexOf('/component-folder/') < 0;
     }).length, 0, 'the folder row is the ONLY thing a mount asks the server for');
     teardownLeadAssessment();
   });
@@ -934,14 +940,17 @@ test('lead-assessment: switching scenario clears the stale result and re-runs', 
   });
 });
 
-test('lead-assessment: the folder row resolves the lead-scoped Polygons & Surfaces path', function () {
+// Card 3AB: the destination comes from the ONE approved stage/step mapping,
+// reached by this page's own task, not from the generic `polygons` section
+// (which spelled the path ...\Leads\...\Polygons__Surfaces instead).
+test('lead-assessment: the folder row resolves the APPROVED Polygons & Surfaces path', function () {
   var mounted = mountPage({});
   return waitFor(function () {
     var element = document.getElementById('la-folder-path');
-    return element && element.textContent.indexOf('Polygons__Surfaces') >= 0;
+    return element && element.textContent.indexOf('POLYGONS_SURFACES') >= 0;
   }).then(function () {
-    var call = mounted.calls.filter(function (item) { return item.url.indexOf('/folders/') >= 0; })[0];
-    assert.match(call.url, /\/api\/projects\/7\/folders\/polygons/);
+    var call = mounted.calls.filter(function (item) { return item.url.indexOf('/component-folder/') >= 0; })[0];
+    assert.match(call.url, /\/api\/projects\/7\/component-folder\/\d+/);
     assert.equal(document.getElementById('copy-component-folder').disabled, false,
       'and the copy button arms once a path resolves');
     teardownLeadAssessment();

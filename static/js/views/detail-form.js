@@ -1178,10 +1178,23 @@ function renderResourceCalculatorSection(task, fields) {
 export function renderComponentFolder(info) {
   var previous = byId('component-folder-card');
   if (previous) previous.remove();
+  // Card 3AB: requires_folder is 0 for a step the approved mapping does not
+  // list, and that means NO component -- not a blank card, not a disabled one.
   if (!info || !Number(info.requires_folder)) return;
-  var path = info.unc_path || 'Folder path placeholder not configured.';
   var card = document.createElement('div');
   card.id = 'component-folder-card';
+  // A mapped step whose record is missing a name the destination needs says
+  // which name, rather than offering a link to a half-resolved location.
+  if (info.blocked) {
+    card.className = 'folder-card folder-card-blocked';
+    card.setAttribute('role', 'status');
+    card.innerHTML = '<span class="folder-glyph" aria-hidden="true">📁</span>' +
+      '<span class="folder-path">' + esc(info.blocked) + '</span>';
+    var blockedAnchor = byId('comments-field');
+    blockedAnchor.parentNode.insertBefore(card, blockedAnchor.nextSibling);
+    return;
+  }
+  var path = info.unc_path;
   card.className = 'folder-card';
   card.innerHTML = '<span class="folder-glyph" aria-hidden="true">📁</span>' +
     '<span class="folder-path" title="' + esc(path) + '">' + esc(path) + '</span>' +

@@ -813,7 +813,7 @@ function mountGate(detail, onPatch) {
       if (onPatch) onPatch(JSON.parse(options.body));
       return response({ ok: true, detail: detail });
     }
-    if (path.indexOf('/steps/business-plan-gate') >= 0 && method === 'GET') return response(detail);
+    if (/\/steps\/[a-z-]+(\?|$)/.test(path) && method === 'GET') return response(detail);
     if (path.indexOf('/api/users') >= 0) return response([]);
     throw new Error('Unexpected request: ' + method + ' ' + path);
   });
@@ -909,4 +909,39 @@ test('business-plan Coring Formations is disabled when the Coring Program is No'
   // The historical selection is preserved, not cleared -- it is still what the
   // well was planned with.
   assert.equal(trigger.querySelector('.lf-value').textContent, 'SARH');
+});
+
+// ---------------------------------------------------------------------------
+// Card 3AB -- only a mapped step shows a folder component
+// ---------------------------------------------------------------------------
+
+test('business-plan an unmapped step renders no folder component at all', async function () {
+  // The server sends no `folder` for a step the approved mapping omits (Aramco
+  // Picks is BP 5, intentionally absent). Nothing renders -- not a blank card,
+  // not a disabled one, not a placeholder destination.
+  var detail = detailPayload('aramco-approved-pics', {});
+  delete detail.folder;
+  var host = mountGate(detail);
+  await openBusinessPlanDetail(7, 'aramco-approved-pics');
+  assert.equal(host.querySelectorAll('.folder-card').length, 0);
+  assert.equal(host.textContent.indexOf('N/A'), -1);
+  assert.equal(host.textContent.indexOf('Coming'), -1);
+});
+
+test('business-plan a mapped step missing a required name says so instead of linking', async function () {
+  var detail = detailPayload('quicklook-logs', {});
+  detail.folder = {
+    requires_folder: 1,
+    blocked: 'This step’s folder needs Field, Well Name on the record before it can be opened.',
+    path: '', unc_path: '', file_url: ''
+  };
+  var host = mountGate(detail);
+  await openBusinessPlanDetail(7, 'quicklook-logs');
+  var card = host.querySelector('.folder-card');
+  assert.ok(card.classList.contains('folder-card-blocked'));
+  assert.match(card.textContent, /needs Field, Well Name/);
+  // Nothing to open and nothing to copy: a half-resolved UNC path points
+  // somewhere real and wrong.
+  assert.equal(card.querySelector('a'), null);
+  assert.equal(card.querySelector('#bpe-copy-folder'), null);
 });
