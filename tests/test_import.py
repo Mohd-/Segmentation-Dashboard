@@ -991,3 +991,44 @@ def test_a_sheet_without_a_lead_name_column_still_keys_on_the_well_name(client, 
         assert _export_by_name(session)["BARE-1"]["P90 Area (km2)"] == "7"
     finally:
         session.close()
+
+
+def test_the_importer_reports_each_row_as_it_lands(client, app_modules, tmp_path):
+    """A long run must be distinguishable from a hung one: the report is
+    composed and printed only at the END, so the CLI needs a per-row signal.
+    One call per row, whatever the outcome -- including the rows that never
+    reach the database."""
+    import import_excel
+
+    _write_sheet(tmp_path / "prog.xlsx", [
+        {"Well Name": "PROG-1", "Status": "Proposed"},
+        {"Well Name": "", "Status": "Proposed"},            # error: blank name
+        {"Well Name": "PROG-2", "Status": "Nonsense"},      # error: unknown status
+    ], header_row=1)
+
+    seen = []
+    session = _session(app_modules)
+    try:
+        report = import_excel.import_rows(
+            session, import_excel.parse_workbook(str(tmp_path / "prog.xlsx")),
+            progress=lambda index, total, result: seen.append((index, total, result.outcome)))
+        assert seen == [(1, 3, "created"), (2, 3, "error"), (3, 3, "error")]
+        # The callback sees exactly what the report ends up holding.
+        assert [r.outcome for r in report.results] == ["created", "error", "error"]
+    finally:
+        session.close()
+
+
+def test_progress_is_optional(client, app_modules, tmp_path):
+    """Every caller that just wants the report passes nothing and gets silence."""
+    import import_excel
+
+    _write_sheet(tmp_path / "quiet.xlsx", [{"Well Name": "QUIET-1", "Status": "Proposed"}],
+                 header_row=1)
+    session = _session(app_modules)
+    try:
+        report = import_excel.import_rows(
+            session, import_excel.parse_workbook(str(tmp_path / "quiet.xlsx")))
+        assert [r.outcome for r in report.results] == ["created"]
+    finally:
+        session.close()

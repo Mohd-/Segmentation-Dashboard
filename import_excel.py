@@ -930,8 +930,15 @@ def _record_staked_name(session, project_id, staked_name) -> str:
             "once Well Site Location is confirmed (letter loaded + coordinates)")
 
 
-def import_rows(session, rows, update=False) -> ImportReport:
+def import_rows(session, rows, update=False, progress=None) -> ImportReport:
     """Import a list of parsed rows; return a structured :class:`ImportReport`.
+
+    ``progress`` is an optional ``callable(index, total, RowResult)`` invoked as
+    each row finishes. The CLI passes a printer, because the report is composed
+    and printed only at the END: without it a long run is indistinguishable from
+    a hung one, which is exactly the case where you most want to know which
+    record it is sitting on. Callers that want the report alone (every test)
+    pass nothing and see no output.
 
     Each row is classified, validated (blank/duplicate/unknown-token/etc.), then
     created or upserted through :func:`_import_record`. A row whose write raises
@@ -944,6 +951,13 @@ def import_rows(session, rows, update=False) -> ImportReport:
     _ensure_import_user(session)
     report = ImportReport()
     seen_names: set = set()
+    total = len(rows)
+
+    def finish(**kwargs) -> None:
+        """Record one row's outcome and tell the caller a row went by."""
+        report.add(**kwargs)
+        if progress is not None:
+            progress(len(report.results), total, report.results[-1])
 
     for row in rows:
         record_type, errors, year, fluid = _analyze(row)
@@ -967,14 +981,14 @@ def import_rows(session, rows, update=False) -> ImportReport:
             seen_names.add(name)
 
         if errors:
-            report.add(well_name=well_name, record_type=record_type, outcome="error",
-                       reason="; ".join(errors))
+            finish(well_name=well_name, record_type=record_type, outcome="error",
+                   reason="; ".join(errors))
             continue
 
         existing = _find_project(session, name)
         if existing is not None and not update:
-            report.add(well_name=well_name, record_type=record_type, outcome="skipped",
-                       reason="already exists (use --update)")
+            finish(well_name=well_name, record_type=record_type, outcome="skipped",
+                   reason="already exists (use --update)")
             continue
 
         is_update = existing is not None  # --update on a new name still creates
@@ -1047,14 +1061,14 @@ def import_rows(session, rows, update=False) -> ImportReport:
                     reason += " (record left partially imported)"
             elif is_update:
                 reason += " (record left partially imported)"
-            report.add(well_name=well_name, record_type=record_type, outcome="error", reason=reason)
+            finish(well_name=well_name, record_type=record_type, outcome="error", reason=reason)
             continue
 
         # Reported under the sheet's OWN "Well Name" throughout, so a line in
         # the report is findable in the sheet that produced it.
-        report.add(well_name=well_name, record_type=record_type,
-                   outcome="updated" if is_update else "created",
-                   warnings=warnings, notes=notes)
+        finish(well_name=well_name, record_type=record_type,
+               outcome="updated" if is_update else "created",
+               warnings=warnings, notes=notes)
     return report
 
 
@@ -1105,9 +1119,19 @@ def main() -> None:
             db.init_db(real_path)
             print(f"Target database: {real_path}")
 
+        # Progress goes to STDERR, the report to stdout: piping the report to a
+        # file still shows the run moving, and the two never interleave in it.
+        # Without this the tool is silent from "Target database:" until the last
+        # row lands, so a slow run (a lock held by the running app, a long
+        # sheet) is indistinguishable from a hung one -- and you cannot see
+        # WHICH record it is on, which is the first thing you want to know.
+        def show(index, total, result):
+            print(f"  [{index}/{total}] {result.well_name or '(blank)'}: {result.outcome}",
+                  file=sys.stderr, flush=True)
+
         session = db.new_session()
         try:
-            report = import_rows(session, rows, update=args.update)
+            report = import_rows(session, rows, update=args.update, progress=show)
         finally:
             session.close()
         print(report.format())
