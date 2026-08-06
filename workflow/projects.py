@@ -894,9 +894,14 @@ def get_project(session, project_id):
     _annotate_derived_state(session, [project])
     annotate_canonical_names(session, [project])
     # Card 3X: the gear needs to open showing the flag's real state, so the
-    # detail payload carries it like the board rows do.
-    from .promotion import active_drilling_state
+    # detail payload carries it like the board rows do -- and whether the flag
+    # may be SET at all, since only a well in the Post-Drilling stage can be
+    # drilling. Both gear menus that offer the checkbox read this one fact, and
+    # the rule is enforced again on write (promotion._set_active_drilling).
+    # Local import: promotion imports this module for _sync_completed_at.
+    from .promotion import active_drilling_allowed, active_drilling_state
     project["active_drilling"] = 1 if active_drilling_state(session, project_id) else 0
+    project["active_drilling_allowed"] = active_drilling_allowed(session, project_id)
     return project
 
 

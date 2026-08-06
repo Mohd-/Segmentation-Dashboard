@@ -1398,6 +1398,7 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 }
 .summary-popover-check { flex-direction: row; align-items: center; gap: var(--space-2); color: var(--ink-800); font-weight: 700; font-size: var(--text-sm); }
 .summary-popover-check input { width: auto; }
+.summary-popover-check.is-disabled { color: var(--text-faint); cursor: not-allowed; }
 .summary-popover-actions { display: flex; gap: var(--space-2); margin-top: var(--space-1); }
 .summary-popover-actions button { flex: 1; min-width: 0; padding: 8px 10px; font-size: var(--text-sm); }
 /* Announced-but-unbuilt exports: stacked (the labels are long), muted, and
@@ -1512,6 +1513,14 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   text-align: left;
 }
 .ls-menu-item:hover { background: var(--surface-sunken); color: var(--asas-navy); }
+/* A menu row that is a CHECKBOX rather than an action (Active Drilling). It
+   wears the same row geometry as its neighbours, so the menu reads as one list;
+   only the control on the left says it is a state, not a verb. Unavailable, it
+   greys and explains itself through the label's title. */
+.ls-menu-check { display: flex; flex-direction: row; align-items: center; gap: var(--space-2); cursor: pointer; }
+.ls-menu-check input { width: auto; margin: 0; }
+.ls-menu-check.is-disabled { color: var(--text-faint); cursor: not-allowed; }
+.ls-menu-check.is-disabled:hover { background: none; color: var(--text-faint); }
 .ls-menu-item-danger { color: var(--danger-700); }
 .ls-menu-item-danger:hover { background: var(--danger-100); color: var(--danger-700); }
 

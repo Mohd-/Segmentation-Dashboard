@@ -47,8 +47,8 @@ documents, not code.
 
 | Check | Result |
 |---|---|
-| Back-end tests | **741 passed** (`pytest -q`) |
-| Front-end tests | **607 passed** (`run_frontend_tests.py --browser firefox`) |
+| Back-end tests | **744 passed** (`pytest -q`) |
+| Front-end tests | **610 passed** (`run_frontend_tests.py --browser firefox`) |
 | New failures | none |
 | Pre-existing failures | none |
 | Clean startup | yes, on a seeded scratch database |
@@ -106,7 +106,12 @@ These are correct and intended, and someone will notice them on day one:
 7. **The BPE Business Plan Year filter offers All Years**, which spans every
    year at once — the KPI tiles then report the whole population, since they are
    computed over whatever the filter admits.
-8. **The BPE board opens on every stage.** The Step filter's default moved from
+8. **Active Drilling is set from the step page's gear**, and only for a well
+   whose current stage is Post-Drilling. The rule is enforced on write, so a
+   direct PATCH meets it too; clearing the flag is never blocked. The animated
+   border on the board card is unchanged and still wears the card's priority
+   colour.
+9. **The BPE board opens on every stage.** The Step filter's default moved from
    Business Plan Gate to All Steps, so Post-Drilling and Post-Testing are
    populated on arrival instead of reading "No wells match these filters". The
    gate is now the Pre-Drilling column's own toggle, on by default, so that
@@ -136,8 +141,9 @@ the Business Plan Year filter: a real option at the head of the year list rather
 than a cleared filter, travelling to the server as the literal `all`. The
 default is still the current calendar year, and Clear puts the board back on it.
 
-Second, the Pre-Drilling column's own "BP Gate" toggle, on by default. It narrows that column to wells
-still at the gate and reaches nothing else — the other two columns and the
+Second, the Pre-Drilling column's own "BP Gate" toggle, on by default. It shows
+the wells whose gate has cleared the desk — approved, or submitted and waiting
+on a supervisor — and reaches nothing else — the other two columns and the
 global KPIs do not move, and it repaints client-side without a request. With
 the owner's decision, the step dropdown stays (so the other seventeen tracking
 items remain filterable) but now opens on **All Steps** and is captioned

@@ -380,6 +380,33 @@ def test_overview_lead_ogip_composed_from_lead_piip_gas_mean_at_read(client):
 # Card 3X -- Active Drilling
 # ---------------------------------------------------------------------------
 
+def _into_post_drilling(client, project_id):
+    """Put a BP well in the Post-Drilling stage, which is the only stage that
+    may be marked as actively drilling.
+
+    The gate is approved directly in the database: this file is about the FLAG,
+    not about the gate's own approval path (which tests/
+    test_business_plan_execution.py drives through the API end to end).
+    """
+    from conftest import get_task_by_name, raw_sqlite_connect
+    gate = get_task_by_name(client, project_id, "BP Execution Gate")
+    conn = raw_sqlite_connect(client.db_path)
+    with conn:
+        conn.execute("UPDATE project_tasks SET status = 'Approved' WHERE task_id = ?",
+                     (gate["task_id"],))
+    conn.close()
+    for slug, keys in (
+        ("well-letters", ("well_proposal_shared", "site_preparation_shared",
+                          "approval_to_drill_shared")),
+        ("gheer-inputs", ("gheer_geophysical_shared", "gheer_geomechanical_shared")),
+    ):
+        for key in keys:
+            response = client.patch(
+                f"/api/business-plan/wells/{project_id}/steps/{slug}/field",
+                json={"field_key": key, "value": True})
+            assert response.status_code == 200, response.get_json()
+
+
 def _drilling_events(client, project_id):
     from conftest import raw_sqlite_connect
     conn = raw_sqlite_connect(client.db_path)
@@ -396,6 +423,9 @@ def test_active_drilling_persists_and_audits_only_real_changes(client):
     pid = create_project(client, "DRILL-1", pipeline_type="bp",
                          business_plan_enabled=True, business_plan_year=2030)
     assert client.get(f"/api/projects/{pid}/detail").get_json()["project"]["active_drilling"] == 0
+    # Only a Post-Drilling well may be marked; the refusal has its own tests in
+    # tests/test_business_plan_execution.py.
+    _into_post_drilling(client, pid)
 
     resp = client.patch(f"/api/projects/{pid}/flags", json={"active_drilling": True})
     assert resp.status_code == 200, resp.get_json()

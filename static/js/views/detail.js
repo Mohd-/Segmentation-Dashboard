@@ -1356,12 +1356,21 @@ export function renderRightPanel(tasks) {
     }
     // Card 3X. Exact copy, no article. The checkbox IS the accessible state:
     // the animated border is a second, redundant signal, never the only one.
+    // Only a well whose current BPE stage is Post-Drilling may be marked, and
+    // the payload states that (workflow/projects.py get_project) rather than
+    // this shell guessing at a BPE stage from the maturation task list. The
+    // rule is enforced on write either way.
     var isDrilling = Number(Store.project.active_drilling || 0) === 1;
+    var canDrill = Store.project.active_drilling_allowed !== false;
     relocatedHtml =
       '<label class="summary-popover-check"><input id="summary-active-flag" type="checkbox" ' +
       (isActive ? 'checked' : '') + '> Active Well</label>' +
-      '<label class="summary-popover-check"><input id="summary-active-drilling" type="checkbox" ' +
-      (isDrilling ? 'checked' : '') + '> Active Drilling</label>' + phaseButtonHtml;
+      '<label class="summary-popover-check' + (canDrill ? '' : ' is-disabled') + '" title="' +
+      (canDrill ? 'Mark this well as actively drilling'
+                : 'Only a well in the Post-Drilling stage can be marked as actively drilling') +
+      '"><input id="summary-active-drilling" type="checkbox" ' +
+      (isDrilling ? 'checked' : '') + (canDrill ? '' : ' disabled') +
+      '> Active Drilling</label>' + phaseButtonHtml;
   }
   var popoverHtml =
     '<div id="summary-settings" class="summary-popover hidden" role="dialog" aria-label="Manage ' + recordKind.toLowerCase() + '">' +

@@ -23,7 +23,7 @@ from .constants import (
 from .history import log_task_event
 from .notifications import notify_transition
 from .projects import _sync_completed_at
-from .promotion import get_lead_summary_snapshot
+from .promotion import ACTIVE_DRILLING_FIELD, get_lead_summary_snapshot
 from .summary import get_project_overview
 
 
@@ -619,6 +619,17 @@ def _project_context(session, project_id):
     return project, tasks, fields, formations, effective
 
 
+def current_stage_key(session, project_id):
+    """The BPE stage this well is working right now ('pre_drilling', …).
+
+    Derived, never stored: it is the first stage with an item still open (see
+    _effective_state). Raises ValueError for anything that is not a BP record,
+    which is what callers asking "may this well be drilling?" want to hear.
+    """
+    _project, _tasks, _fields, _formations, effective = _project_context(session, project_id)
+    return effective["current_stage"]["key"]
+
+
 def _assignees(tasks):
     values = []
     for task_name in TASK_NAMES:
@@ -656,16 +667,16 @@ def _well_projection(project, tasks, fields, formations, effective):
         "completed_count": completed,
         "progress_percent": _round_whole(100 * completed / 6),
         "all_states": effective["states"],
-        # What the Pre-Drilling column's "BP Gate" toggle asks: is this well
-        # still sitting at the gate? Computed here so the client filters on a
-        # stated fact rather than re-deriving it from the item list.
-        "at_business_plan_gate":
-            effective["states"]["business-plan-gate"]["status"] != "Completed",
+        # The gate item's own effective status ("Completed" once a supervisor
+        # has approved it, "Pending Approval" while it waits, "In Progress"
+        # otherwise). Stated here so the Pre-Drilling column's "BP Gate" toggle
+        # filters on a fact rather than re-deriving one from the item list.
+        "bp_gate_status": effective["states"]["business-plan-gate"]["status"],
         # Card 3X. The animated border is shown only when this is on AND the
         # card sits under Post-Drilling, so the card carries both facts.
         "active_drilling": 1 if _truthy(
-            _value(fields, "Quicklook Logs", "active_drilling")
-            or _value(fields, "Quicklook Logs Interpretation", "active_drilling")) else 0,
+            _value(fields, "Quicklook Logs", ACTIVE_DRILLING_FIELD)
+            or _value(fields, "Quicklook Logs Interpretation", ACTIVE_DRILLING_FIELD)) else 0,
         "actual_drilling_days": _number(effective["values"].get("bp_gate_actual_drilling_days")),
         "gate_approved": (tasks.get("BP Execution Gate") or {}).get("status") == "Approved",
         "successful": effective["fluid"]["successful"],
@@ -885,6 +896,17 @@ def get_detail(session, project_id, detail_slug):
             "field": _field_from_name(project["project_name"]),
             "business_plan_year": project.get("business_plan_year"),
             "priority": project.get("priority") if project.get("priority") in PRIORITIES else "Low",
+            # Card 3X, as the owner scoped it: the step page's gear carries the
+            # Active Drilling checkbox, and only a well whose CURRENT stage is
+            # Post-Drilling may be marked. Both facts ride here so the control
+            # can render its state and its availability without a second call;
+            # the rule itself is enforced on write (promotion._set_active_
+            # drilling), never only here.
+            "stage_key": effective["current_stage"]["key"],
+            "active_drilling": 1 if _truthy(
+                _value(fields, "Quicklook Logs", ACTIVE_DRILLING_FIELD)
+                or _value(fields, "Quicklook Logs Interpretation", ACTIVE_DRILLING_FIELD)) else 0,
+            "active_drilling_allowed": effective["current_stage"]["key"] == "post_drilling",
         },
         "detail": detail,
         "task": task,

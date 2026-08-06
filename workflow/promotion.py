@@ -209,6 +209,23 @@ def active_drilling_state(session, project_id):
     return bool(row and int(row.get("flag") or 0))
 
 
+def active_drilling_allowed(session, project_id):
+    """May this record be marked as actively drilling?
+
+    Only a Business Plan well whose CURRENT BPE stage is Post-Drilling: a well
+    that has not finished Pre-Drilling has not spudded, and one in Post-Testing
+    has finished. The import is local because workflow.business_plan imports
+    this module (for the lead snapshot); both sides only touch the other at call
+    time, so the cycle never runs at import.
+    """
+    from .business_plan import current_stage_key
+    try:
+        return current_stage_key(session, project_id) == "post_drilling"
+    except ValueError:
+        # Not a BP record at all -- a lead cannot be drilling either.
+        return False
+
+
 def _set_active_drilling(session, project_id, enabled, changed_by):
     """Persist the flag and audit the CHANGE.
 
@@ -216,6 +233,13 @@ def _set_active_drilling(session, project_id, enabled, changed_by):
     not an event, and a trail full of no-ops hides the toggles that mattered.
     """
     previous = active_drilling_state(session, project_id)
+    # Enforced HERE, not only in the two gear menus that offer the checkbox: a
+    # rule about which wells can be drilling is a rule about the data, and a
+    # direct PATCH must meet it too. Turning the flag OFF is always allowed --
+    # a well that moved on should not be stuck reading "drilling".
+    if enabled and not previous and not active_drilling_allowed(session, project_id):
+        raise ValueError(
+            "Only a well in the Post-Drilling stage can be marked as actively drilling.")
     task = db.fetch_one(session, f"""
         SELECT task_id, task_name FROM project_tasks
         WHERE project_id = :project_id

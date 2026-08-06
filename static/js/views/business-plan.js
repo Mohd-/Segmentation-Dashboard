@@ -635,30 +635,38 @@ function wellCard(well) {
 
 /* The Pre-Drilling column's own BP Gate filter.
 
-   It narrows THAT COLUMN to the wells still sitting at the gate, and nothing
-   else: the other two columns keep their full population and the global KPIs,
-   which are computed over the filtered payload, never move. Selected by
-   default, so the board opens on the working set the old global "BP Gate"
-   dropdown used to produce -- but as a control that says which column it
-   governs, beside the count it changes.
+   ON, it shows the wells whose Business Plan Gate has CLEARED THE DESK: either
+   approved, or submitted and waiting on a supervisor. A well whose gate is
+   still being filled in is not shown. That is the question the column is
+   actually asked -- "what is through the gate?" -- and it is why the toggle
+   reads as doing nothing on a board where no gate has been submitted yet: with
+   the earlier rule ("still at the gate") every such well matched either way.
 
-   State is module-level and the filtering is client-side: the payload is
-   unfiltered by it, so toggling repaints from data already in hand rather than
-   asking the server the same question again. */
+   It reaches only the column it sits in: the other two keep their full
+   population and the global KPIs, which are computed over the fetched payload,
+   never move. The filtering is client-side, so toggling repaints from data
+   already in hand rather than asking the server the same question again. */
 var gateOnly = true;
+
+// The gate statuses the toggle admits. `bp_gate_status` is a stated fact on the
+// payload (workflow/business_plan.py _well_projection): "Completed" once a
+// supervisor has approved the gate, "Pending Approval" while it waits.
+var GATE_CLEARED_STATUSES = ['Completed', 'Pending Approval'];
+
+function gateCleared(well) {
+  return GATE_CLEARED_STATUSES.indexOf(well.bp_gate_status) >= 0;
+}
 
 function stageRows(wells, stageKey) {
   var rows = wells.filter(function (well) { return well.stage_key === stageKey; });
   if (stageKey !== 'pre_drilling' || !gateOnly) return rows;
-  // `at_business_plan_gate` is a stated fact on the payload (workflow/
-  // business_plan.py _well_projection), not re-derived here.
-  return rows.filter(function (well) { return well.at_business_plan_gate; });
+  return rows.filter(gateCleared);
 }
 
 function gateToggleHtml() {
   return '<button type="button" id="bpe-gate-toggle" class="lead-column-toggle"' +
     ' role="switch" aria-checked="' + (gateOnly ? 'true' : 'false') + '"' +
-    ' title="Show only wells still at the Business Plan Gate">BP Gate</button>';
+    ' title="Show only wells whose Business Plan Gate is approved or awaiting approval">BP Gate</button>';
 }
 
 function renderStageBoard(payload) {
@@ -1491,9 +1499,35 @@ function summaryMarkup() {
       derisking: bundle.derisking
     }, summaryFolds, 'bpe-') +
     '<div id="bpe-summary-menu" class="ls-menu hidden" role="menu" aria-labelledby="bpe-summary-gear">' +
+      drillingCheckHtml(project) +
       '<button type="button" id="bpe-edit-all" class="ls-menu-item" role="menuitem">Edit all project fields</button>' +
     '</div>' +
     '</div></aside>';
+}
+
+/* Card 3X's Active Drilling flag, on the step page's own gear.
+
+   Only a well whose CURRENT stage is Post-Drilling can be drilling: before that
+   it has not spudded, after it the well is done. The payload states both the
+   flag and whether it may be set (workflow/business_plan.py get_detail), and
+   the same rule is enforced on write -- this control is the convenience, not
+   the guard. The checkbox IS the accessible state; the animated border on the
+   board card is a second, redundant signal and never the only one. */
+function drillingCheckHtml(project) {
+  // Two conditions, and the label says WHICH one is missing rather than simply
+  // greying out: the stage rule, and the supervisor role the endpoint requires
+  // of this flag (main.py project_flags).
+  var supervisor = (state.detail.role || currentRole()) === 'supervisor';
+  var inStage = project.active_drilling_allowed !== false;
+  var allowed = inStage && supervisor;
+  var checked = Number(project.active_drilling || 0) === 1;
+  var reason = allowed ? 'Mark this well as actively drilling'
+    : !inStage ? 'Only a well in the Post-Drilling stage can be marked as actively drilling'
+    : 'Only a supervisor can change Active Drilling';
+  return '<label class="ls-menu-item ls-menu-check' + (allowed ? '' : ' is-disabled') + '"' +
+    ' title="' + esc(reason) + '">' +
+    '<input type="checkbox" id="bpe-active-drilling"' + (checked ? ' checked' : '') +
+    (allowed ? '' : ' disabled') + '> Active Drilling</label>';
 }
 
 function approvalMarkup() {
@@ -2302,10 +2336,37 @@ function wireSummaryPanel() {
   });
   var edit = byId('bpe-edit-all');
   if (edit) edit.addEventListener('click', openAllFields);
+  wireDrillingFlag();
   // Card 3E's two expandable sections. Bound inside the panel, so this never
   // reaches the editor's own Formation Interpretation fold, and toggling one
   // writes nothing beyond the local open-state map.
   wireWellSummaryFolds(panel, summaryFolds);
+}
+
+/* The Active Drilling checkbox writes through the SAME per-well flags endpoint
+   the maturation gear uses, so there is one write path and one audit event for
+   this flag however it was set. A refusal (the stage rule, or the supervisor
+   role) puts the box back where it was and says why -- the state on screen
+   never claims something the server did not store. */
+function wireDrillingFlag() {
+  var box = byId('bpe-active-drilling');
+  if (!box || box.disabled) return;
+  box.addEventListener('change', function () {
+    var wanted = box.checked;
+    box.disabled = true;
+    API.flags(state.projectId, { active_drilling: wanted, changed_by: currentUserName() })
+      .then(function () {
+        state.detail.project.active_drilling = wanted ? 1 : 0;
+        closeBpeSummaryMenu();
+        renderSummaryPanel();
+        msg(wanted ? 'Marked as actively drilling.' : 'Active Drilling turned off.', 'success');
+      })
+      .catch(function (error) {
+        box.checked = !wanted;
+        box.disabled = false;
+        msg(error.message, 'error');
+      });
+  });
 }
 
 /* Re-render the Well Summary ALONE.
