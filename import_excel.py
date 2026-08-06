@@ -30,6 +30,20 @@ the column set (imported, never re-listed here). Only "Well Name" is required.
 Header detection and column matching are case-insensitive (casefold), with
 matched headers mapped back to the canonical column names.
 
+Which column is the record's IDENTITY (Card 3V)
+-----------------------------------------------
+A record has two names: ``projects.project_name`` -- the lead name, the row
+this application stores -- and the name it is KNOWN BY, which becomes the
+staked well name once staking is confirmed. The export writes the second as
+"Well Name" and carries the first alongside as "Lead Name".
+
+So **"Lead Name" is the identity** whenever the sheet has one: matching on
+"Well Name" would fail to find a staked record and create a SECOND record for
+a well already here. A sheet without that column (a hand-made one) is
+unaffected -- its "Well Name" is the only name it has. When the two differ,
+the well name is recorded as the record's staked name, which becomes its
+canonical name under the app's own confirmation rule, never by import alone.
+
 Flagged assumptions (documented, cheap to change)
 -------------------------------------------------
 1. OGIP/Condensate trio destination step, by (record type, fluid presence):
@@ -882,6 +896,40 @@ def _find_project(session, name):
                         {"name": name})
 
 
+def _record_staked_name(session, project_id, staked_name) -> str:
+    """Store the sheet's well name as the record's staked name (Card 3V).
+
+    Called only when "Well Name" and "Lead Name" DIFFER, which is exactly the
+    export's way of saying "this lead was staked and is now known by that well
+    name". Dropping it would round-trip a staked well back into an
+    unrecognizable lead.
+
+    What this does NOT do is assert that staking happened: the name becomes the
+    record's canonical one through the app's own predicate (the Well Site
+    Location letter plus stored coordinates), and this sheet carries no
+    evidence of either. So the name is RECORDED and the record keeps its lead
+    name until a human confirms the step -- except on a record that is already
+    confirmed, where the value is simply already there.
+
+    Returns a note when it wrote something, '' when the record already had it.
+    A domain guard (a name another record answers to) raises ValueError, which
+    the caller reports as a row warning rather than losing the record.
+    """
+    task = next((t for t in workflow.get_project_tasks(session, project_id)
+                 if t["task_name"] == workflow.WELL_SITE_LOCATION_STEP), None)
+    if task is None:
+        return ""
+    stored = workflow.get_task_dynamic_fields(session, task["task_id"]).get(
+        workflow.STAKED_WELL_NAME_FIELD) or ""
+    if str(stored).strip() == staked_name:
+        return ""
+    workflow.save_task_dynamic_fields(
+        session, task["task_id"], {workflow.STAKED_WELL_NAME_FIELD: staked_name},
+        changed_by=IMPORT_USER, reconcile=False)
+    return (f"stored {staked_name!r} as the staked well name; the record is named by it "
+            "once Well Site Location is confirmed (letter loaded + coordinates)")
+
+
 def import_rows(session, rows, update=False) -> ImportReport:
     """Import a list of parsed rows; return a structured :class:`ImportReport`.
 
@@ -900,7 +948,18 @@ def import_rows(session, rows, update=False) -> ImportReport:
     for row in rows:
         record_type, errors, year, fluid = _analyze(row)
         errors = list(errors)
-        name = _text(row, "Well Name")
+        well_name = _text(row, "Well Name")
+        # A record has TWO names since Card 3V, and only one of them is its
+        # IDENTITY. "Well Name" is what the record is KNOWN BY -- the staked
+        # well name once staking is confirmed -- while projects.project_name
+        # (the sheet's "Lead Name") is the row this application stores and
+        # matches on. Matching a staked record on its well name finds nothing
+        # and creates a SECOND record for a well that is already here, so the
+        # lead name is the identity whenever the sheet carries one. A
+        # hand-made sheet with no "Lead Name" column is unchanged: its well
+        # name is the only name it has, so it is the identity.
+        lead_name = _text(row, "Lead Name")
+        name = lead_name or well_name
 
         if name:
             if name in seen_names:
@@ -908,13 +967,13 @@ def import_rows(session, rows, update=False) -> ImportReport:
             seen_names.add(name)
 
         if errors:
-            report.add(well_name=name, record_type=record_type, outcome="error",
+            report.add(well_name=well_name, record_type=record_type, outcome="error",
                        reason="; ".join(errors))
             continue
 
         existing = _find_project(session, name)
         if existing is not None and not update:
-            report.add(well_name=name, record_type=record_type, outcome="skipped",
+            report.add(well_name=well_name, record_type=record_type, outcome="skipped",
                        reason="already exists (use --update)")
             continue
 
@@ -955,8 +1014,18 @@ def import_rows(session, rows, update=False) -> ImportReport:
                     workflow.set_nucd_area(session, pid, nucd_area, changed_by=IMPORT_USER)
                 except ValueError as exc:
                     project_warnings.append(f"NUCD Area not stored: {exc}")
+            # Two different names on one row means the lead was staked.
+            project_notes: List[str] = []
+            if well_name and lead_name and well_name != lead_name:
+                try:
+                    staked_note = _record_staked_name(session, pid, well_name)
+                    if staked_note:
+                        project_notes.append(staked_note)
+                except ValueError as exc:
+                    project_warnings.append(f"Staked well name not stored: {exc}")
             warnings, notes = _import_record(session, row, record_type, year, fluid, pid, is_update)
             warnings = project_warnings + warnings
+            notes = project_notes + notes
         except Exception as exc:  # keep the batch going; report the failure verbatim
             # Recover the session FIRST: a failure can leave it mid-transaction
             # (worst case, a commit that died partway strands it in the
@@ -978,10 +1047,12 @@ def import_rows(session, rows, update=False) -> ImportReport:
                     reason += " (record left partially imported)"
             elif is_update:
                 reason += " (record left partially imported)"
-            report.add(well_name=name, record_type=record_type, outcome="error", reason=reason)
+            report.add(well_name=well_name, record_type=record_type, outcome="error", reason=reason)
             continue
 
-        report.add(well_name=name, record_type=record_type,
+        # Reported under the sheet's OWN "Well Name" throughout, so a line in
+        # the report is findable in the sheet that produced it.
+        report.add(well_name=well_name, record_type=record_type,
                    outcome="updated" if is_update else "created",
                    warnings=warnings, notes=notes)
     return report

@@ -866,3 +866,128 @@ def test_an_over_long_nucd_area_warns_without_losing_the_record(client, app_modu
         assert _export_by_name(session)["AREA-LONG-1"]["P90 Area (km2)"] == "4"
     finally:
         session.close()
+
+
+# ---------------------------------------------------------------------------
+# Card 3V: a record has two names, and only the lead name is its identity
+# ---------------------------------------------------------------------------
+
+def _confirm_staking(session, project_name, staked_name):
+    """Drive the record through the app's own staking confirmation, so the
+    export starts writing the staked name in its "Well Name" column."""
+    import db as db_module
+    import workflow
+
+    pid = db_module.fetch_one(session, "SELECT project_id FROM projects WHERE project_name = :n",
+                              {"n": project_name})["project_id"]
+    task = next(t for t in workflow.get_project_tasks(session, pid)
+                if t["task_name"] == workflow.WELL_SITE_LOCATION_STEP)
+    workflow.save_task_dynamic_fields(session, task["task_id"], {
+        "staked_well_name": staked_name, "wellsite_letter_loaded": "1",
+        "staked_x": "600000", "staked_y": "3100000",
+    }, changed_by="Supervisor")
+    return pid
+
+
+def test_a_staked_record_updates_itself_instead_of_becoming_a_second_record(client, app_modules, tmp_path):
+    """The export writes the STAKED name in "Well Name" once staking is
+    confirmed (Card 3V), and the lead name -- the row this app stores -- beside
+    it. Matching on the well name would find nothing and create a duplicate of
+    a well already here, so the identity is the lead name."""
+    import import_excel
+    import workflow
+    import db as db_module
+
+    _write_sheet(tmp_path / "stake1.xlsx", [{"Well Name": "STK-1", "Status": "Proposed",
+                                             "P90 Area (km2)": 4}], header_row=1)
+    session = _session(app_modules)
+    try:
+        assert import_excel.import_rows(
+            session, import_excel.parse_workbook(str(tmp_path / "stake1.xlsx"))).results[0].outcome == "created"
+        pid = _confirm_staking(session, "STK-1", "STK-1ST1")
+
+        # Exactly what our own export now emits for that record.
+        _write_sheet(tmp_path / "stake2.xlsx", [{"Well Name": "STK-1ST1", "Lead Name": "STK-1",
+                                                 "Status": "Proposed", "P10 Area (km2)": 9}],
+                     header_row=1)
+        report = import_excel.import_rows(
+            session, import_excel.parse_workbook(str(tmp_path / "stake2.xlsx")), update=True)
+        result = report.results[0]
+        assert result.outcome == "updated", result.reason
+        # Reported under the sheet's own Well Name, so the line is findable in
+        # the sheet that produced it.
+        assert result.well_name == "STK-1ST1"
+
+        names = [r["project_name"] for r in db_module.fetch_all(
+            session, "SELECT project_name FROM projects ORDER BY project_name", {})]
+        assert names == ["STK-1"], "no second record for a well already here"
+        # It updated the right record, and the canonical name is untouched.
+        assert workflow.canonical_record_name(session, pid) == "STK-1ST1"
+        assert _export_by_name(session)["STK-1ST1"]["P10 Area (km2)"] == "9"
+    finally:
+        session.close()
+
+
+def test_a_staked_name_is_recorded_on_a_record_that_does_not_have_one_yet(client, app_modules, tmp_path):
+    """Importing that same sheet into a database that has never seen the record
+    must not lose the well name -- but must not claim staking was confirmed
+    either, since the sheet carries no letter and no staked coordinates."""
+    import import_excel
+    import workflow
+    import db as db_module
+
+    _write_sheet(tmp_path / "stake3.xlsx", [{"Well Name": "STK-2ST1", "Lead Name": "STK-2",
+                                             "Status": "Proposed"}], header_row=1)
+    session = _session(app_modules)
+    try:
+        result = import_excel.import_rows(
+            session, import_excel.parse_workbook(str(tmp_path / "stake3.xlsx"))).results[0]
+        assert result.outcome == "created", result.reason
+        assert any("staked well name" in note for note in result.notes), result.notes
+
+        # Created under the LEAD name...
+        pid = db_module.fetch_one(session, "SELECT project_id FROM projects WHERE project_name = 'STK-2'", {})
+        assert pid is not None, "the record is stored under its lead name"
+        pid = pid["project_id"]
+        # ...with the well name kept as the staked name...
+        task = next(t for t in workflow.get_project_tasks(session, pid)
+                    if t["task_name"] == workflow.WELL_SITE_LOCATION_STEP)
+        assert workflow.get_task_dynamic_fields(session, task["task_id"])["staked_well_name"] == "STK-2ST1"
+        # ...but NOT adopted as the record's name: the import states a name, it
+        # does not assert that the step was completed.
+        assert workflow.canonical_record_name(session, pid) == "STK-2"
+    finally:
+        session.close()
+
+
+def test_a_sheet_without_a_lead_name_column_still_keys_on_the_well_name(client, app_modules, tmp_path):
+    """A hand-made sheet has one name per record, and it is the identity."""
+    import import_excel
+    import db as db_module
+
+    def sheet(path, value):
+        import openpyxl
+        workbook = openpyxl.Workbook()
+        sheet_ = workbook.active
+        sheet_.cell(row=1, column=1, value="Well Name")
+        sheet_.cell(row=1, column=2, value="Status")
+        sheet_.cell(row=1, column=3, value="P90 Area (km2)")
+        sheet_.cell(row=2, column=1, value="BARE-1")
+        sheet_.cell(row=2, column=2, value="Proposed")
+        sheet_.cell(row=2, column=3, value=value)
+        workbook.save(str(path))
+        return str(path)
+
+    session = _session(app_modules)
+    try:
+        assert import_excel.import_rows(
+            session, import_excel.parse_workbook(sheet(tmp_path / "bare1.xlsx", 4))).results[0].outcome == "created"
+        report = import_excel.import_rows(
+            session, import_excel.parse_workbook(sheet(tmp_path / "bare2.xlsx", 7)), update=True)
+        assert report.results[0].outcome == "updated", report.results[0].reason
+        names = [r["project_name"] for r in db_module.fetch_all(
+            session, "SELECT project_name FROM projects", {})]
+        assert names == ["BARE-1"]
+        assert _export_by_name(session)["BARE-1"]["P90 Area (km2)"] == "7"
+    finally:
+        session.close()

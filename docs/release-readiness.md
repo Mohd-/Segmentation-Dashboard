@@ -38,7 +38,8 @@ deployed, and nothing will be without an explicit instruction.
 | `f0a8177` | 3F reverted (owner call), the drilling border reworked, the maturation Well Summary redrawn |
 | `26e3b87` | 3E applied where the card asks for it — the **BPE** Well Summary |
 | `97ded4a` | The BP Gate toggle's real question, and Active Drilling from the step gear |
-| `8efd8b2` | 3N unblocked — NUCD Area on the record, in the sheet, in the Portfolio (**migration v12**) |
+| `cc72e41` | 3N unblocked — NUCD Area on the record, in the sheet, in the Portfolio (**migration v12**) |
+| `899a248` | The Excel importer keyed on the lead name, after Card 3V gave a record two |
 
 Excluded, per Card 3AA §3: every deferred formula, every image-dependent layout
 detail, the polygon linking rule, and anything else in
@@ -49,7 +50,7 @@ documents, not code.
 
 | Check | Result |
 |---|---|
-| Back-end tests | **751 passed** (`pytest -q`) |
+| Back-end tests | **754 passed** (`pytest -q`) |
 | Front-end tests | **611 passed** (`run_frontend_tests.py --browser firefox`) |
 | New failures | none |
 | Pre-existing failures | none |
@@ -134,7 +135,15 @@ These are correct and intended, and someone will notice them on day one:
    populated on arrival instead of reading "No wells match these filters". The
    gate is now the Pre-Drilling column's own toggle, on by default, so that
    column opens on the same working set as before.
-10. **The Portfolio's Classification column is now NUCD Area.** The area is a
+10. **The Excel importer keys on "Lead Name", not "Well Name".** Card 3V gave
+   a record two names and made the export write the staked one in "Well Name";
+   the importer still matched on it, so re-importing our own export created a
+   SECOND record for every staked well instead of updating it. The identity is
+   now the lead name (the row this app stores), falling back to the well name
+   for a hand-made sheet that has no such column. When the two differ, the well
+   name is recorded as the record's staked name — it becomes canonical under
+   the app's own confirmation rule, never by import alone.
+11. **The Portfolio's Classification column is now NUCD Area.** The area is a
    property of the record, fed only by the importer's `NUCD Area` sheet column
    — no screen writes it, so a record nobody has stated an area for reads
    blank. Classification did not go anywhere: the BP Execution Gate still owns
