@@ -102,7 +102,7 @@ function renderAssigneeSelect(task, load) {
 // resetActionButtons puts them back on every render. That is what lets an
 // override be a small declarative function instead of a growing if-soup.
 
-var ACTION_BUTTON_IDS = ['return-component', 'submit-component', 'approve-component'];
+var ACTION_BUTTON_IDS = ['return-component', 'submit-component', 'approve-component', 'reopen-component'];
 var actionButtonDefaults = null;
 
 function actionButtons() {
@@ -169,9 +169,29 @@ function showActionButton(button, options) {
 //     -- the review controls are the point of the page for a supervisor, and a
 //     row that changes shape underneath them reads as a bug.
 var SPECIAL_ACTION_ROWS = {
+  // Card 3S moved this step onto the Business Plan Execution approval
+  // framework. What changed: an employee now SUBMITS explicitly instead of the
+  // ticked confirmation submitting on save -- a save is never a submission --
+  // and a supervisor may reopen an approved step.
+  //
+  // Approve and Return still render disabled rather than vanishing on a step
+  // nobody has submitted: the review controls are the point of this page for a
+  // supervisor, and a row that changes shape underneath them reads as a bug.
   'Segmentation Slides': function (context) {
     var pending = context.status === 'Ready';
-    if (context.role !== 'supervisor') return;
+    var approved = context.status === 'Approved';
+    if (context.role !== 'supervisor') {
+      // The employee's half: one action, and only when there is something to
+      // ask for. The confirmation is a REQUIREMENT the server checks, so a
+      // submit with the box unticked is refused with a message naming it.
+      if (!approved && !pending) {
+        showActionButton(context.buttons['submit-component'], {
+          enabled: context.editable && (context.isAssignee || context.manage),
+          title: 'Ask a supervisor to review the segmentation slides'
+        });
+      }
+      return;
+    }
     showActionButton(context.buttons['approve-component'], {
       text: 'Approved',
       className: 'ghost success-outline',
@@ -183,6 +203,12 @@ var SPECIAL_ACTION_ROWS = {
       enabled: context.editable && pending,
       title: pending ? 'Send the slides back for update' : 'Available once the slides are submitted for review'
     });
+    if (approved) {
+      showActionButton(context.buttons['reopen-component'], {
+        enabled: context.editable,
+        title: 'Reopen for update. The earlier approval stays in the history.'
+      });
+    }
   }
 };
 
@@ -209,7 +235,7 @@ export function renderActionButtons(task) {
   var special = SPECIAL_ACTION_ROWS[task.task_name];
   if (special) {
     special({ task: task, status: status, role: role, editable: editable,
-              isAssignee: isAssignee, buttons: buttons });
+              isAssignee: isAssignee, manage: manage, buttons: buttons });
     return;
   }
   // ITEM A3: with the server auto-approving prospect saves, the lifecycle

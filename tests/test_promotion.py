@@ -172,6 +172,12 @@ def test_recall_of_fully_matured_lead_stays_off_the_board(client):
     pid = create_project(client, "RECALL-MATURE-1")
     for task in get_tasks(client, pid):
         if task["stage_group"] in workflow.PROSPECT_STAGES:
+            # A step may declare prerequisites for submitting (Card 3S gave
+            # Segmentation Slides one); satisfy whatever it declares.
+            required = workflow.REQUIRED_FIELDS_FOR_SUBMIT.get(task["task_name"], ())
+            if required:
+                client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
+                             json={"fields": {key: "1" for key, _label in required}})
             resp = client.post(f"/api/tasks/{task['task_id']}/assign",
                                json={"assignee": "Supervisor", "cascade": False})
             assert resp.status_code == 200, resp.get_json()

@@ -110,6 +110,9 @@ export function wire() {
   safeOn('submit-component', 'click', function () { transitionComponent('submit'); });
   safeOn('approve-component', 'click', function () { transitionComponent('approve'); });
   safeOn('return-component', 'click', function () { transitionComponent('return'); });
+  // Card 3S. Supervisor-gated server-side; the button is only rendered for an
+  // approved step (views/detail-form.js SPECIAL_ACTION_ROWS).
+  safeOn('reopen-component', 'click', function () { transitionComponent('reopen'); });
   safeOn('back-to-overview', 'click', backToBoard);
   safeOn('back-to-board', 'click', backToBoard);
   safeOn('open-project-editor', 'click', function () {

@@ -1625,11 +1625,17 @@ def test_segmentation_slides_ready_still_reads_pending_approval(client):
     task = None
     pid = create_project(client, "V5-PENDING-1")
     task = get_task_by_name(client, pid, "Segmentation Slides")
+    # Card 3S made the shared-folder confirmation a submit REQUIREMENT rather
+    # than the submission itself, so it is ticked before asking for review.
+    client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
+                 json={"fields": {"segmentation_slides_loaded": "1"}})
+    task = get_task_by_name(client, pid, "Segmentation Slides")
     task = client.post(f"/api/tasks/{task['task_id']}/assign",
                        json={"assignee": "Employee", "cascade": False,
                              "revision": task["revision"]}).get_json()["task"]
-    client.post(f"/api/tasks/{task['task_id']}/transition",
-                json={"action": "submit", "revision": task["revision"]})
+    resp = client.post(f"/api/tasks/{task['task_id']}/transition",
+                       json={"action": "submit", "revision": task["revision"]})
+    assert resp.status_code == 200, resp.get_json()
     items = {i["label"]: i["status"] for i in
              client.get(f"/api/projects/{pid}").get_json()["tracked_items"]}
     assert items["Segmentation Slides"] == "Pending Approval"

@@ -680,14 +680,16 @@ def transition_task(task_id):
     """
     payload = request.get_json(silent=True) or {}
     action = str(payload.get("action") or "").strip().lower()
-    # The PUBLIC vocabulary is exactly workflow.TASK_TRANSITIONS. workflow.
-    # transition_task additionally honors the engine-only "reopen"
-    # (Approved -> In Progress, used by the field-completion engine); this
-    # check is what keeps that move off the HTTP surface, where it would be an
-    # ungated un-approve.
-    if action not in workflow.TASK_TRANSITIONS:
-        raise ValueError("Unknown action. Use one of: submit, approve, return.")
-    if action == "approve":
+    # The public vocabulary is workflow.TASK_TRANSITIONS plus "reopen", which
+    # Card 3S needs: the Business Plan Execution framework lets an authorized
+    # supervisor reopen an approved step, and Segmentation Slides now uses that
+    # framework. It stays SUPERVISOR-ONLY here -- an ungated un-approve is
+    # exactly what keeping it off this surface used to prevent -- and the
+    # earlier approval remains in the history either way, because task_history
+    # is append-only.
+    if action not in workflow.TASK_TRANSITIONS and action != "reopen":
+        raise ValueError("Unknown action. Use one of: submit, approve, return, reopen.")
+    if action in ("approve", "reopen"):
         require_role("supervisor")
     session = db.get_session()
     task_after = workflow.transition_task(

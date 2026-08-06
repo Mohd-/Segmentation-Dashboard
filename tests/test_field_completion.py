@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 
+import workflow
 from conftest import create_project, get_task_by_name, raw_sqlite_connect
 
 SUPERVISOR = "Supervisor"
@@ -88,9 +89,15 @@ def drive_to_approved(client, pid, step):
     """Drive a step to Approved the MANUAL way (assign -> submit -> approve).
 
     Builds the LEGACY shape the grandfather rule protects: a step that is
-    Approved while carrying none of the new confirmations.
+    Approved while carrying none of the new confirmations -- except where the
+    step declares a submit REQUIREMENT, which the submit checks. Card 3S gave
+    Segmentation Slides one, so its box is ticked here first; that is the
+    requirement being satisfied, not a confirmation the step is completed by.
     """
     task = get_task_by_name(client, pid, step)
+    required = workflow.REQUIRED_FIELDS_FOR_SUBMIT.get(step, ())
+    if required:
+        task = _save_step(client, pid, step, {key: "1" for key, _label in required})
     return _transition(client, _transition(client, _assign(client, task, EMPLOYEE), "submit"), "approve")
 
 
@@ -174,14 +181,29 @@ def test_reopen_is_not_a_public_transition():
     assert workflow.ENGINE_TRANSITIONS["reopen"] == ("Approved", "In Progress")
 
 
-def test_reopen_is_rejected_by_the_transition_endpoint(client):
+def test_reopen_is_published_but_supervisor_only(client):
+    """Card 3S published this move, which used to be engine-only.
+
+    The reason it was withheld -- an ungated Approved -> In Progress is an
+    un-approve anyone could reach -- is answered by the route's supervisor
+    gate rather than by hiding the action, because the shared approval
+    framework needs it.
+    """
     pid = create_project(client, "FC-REOPEN-ROUTE")
     task = drive_to_approved(client, pid, "Seismic Signature Validation")
+
+    login(client, EMPLOYEE)
     resp = client.post(f"/api/tasks/{task['task_id']}/transition",
                        json={"action": "reopen", "revision": task["revision"]})
-    assert resp.status_code == 400
-    assert "Unknown action" in resp.get_json()["detail"]
+    assert resp.status_code == 403
     assert get_task_by_name(client, pid, "Seismic Signature Validation")["status"] == "Approved"
+
+    login(client, SUPERVISOR)
+    fresh = get_task_by_name(client, pid, "Seismic Signature Validation")
+    resp = client.post(f"/api/tasks/{fresh['task_id']}/transition",
+                       json={"action": "reopen", "revision": fresh["revision"]})
+    assert resp.status_code == 200, resp.get_json()
+    assert get_task_by_name(client, pid, "Seismic Signature Validation")["status"] == "In Progress"
 
 
 # ---------------------------------------------------------------------------
@@ -631,6 +653,7 @@ def test_a_manual_submit_still_notifies_supervisors(client):
     untouched."""
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-NOTIFY-2")
+    _save_step(client, pid, "Segmentation Slides", {"segmentation_slides_loaded": "1"})
     task = _assign(client, get_task_by_name(client, pid, "Segmentation Slides"), EMPLOYEE)
     login(client, EMPLOYEE)
     _transition(client, task, "submit")
@@ -1628,8 +1651,11 @@ def test_pre_well_delivery_four_of_four_matures_the_whole_lead(client):
     _save_step(client, pid, "Trap and Seal CoS",
                dict(SEAL_INPUTS, sarah_quwarah_thickness_ft="120", seal_slides_loaded="1"))
     _save_step(client, pid, "Seismic Signature Validation", {"seismic_slides_loaded": "1"})
-    # Card 3D keeps its human approval: the save submits, a supervisor approves.
+    # Card 3D keeps its human approval, and Card 3S made the request for it
+    # explicit: the save is a draft, the submit asks, a supervisor approves.
     slides = _save_step(client, pid, "Segmentation Slides", {"segmentation_slides_loaded": "1"})
+    assert slides["status"] == "In Progress", "a save is never a submission"
+    slides = _transition(client, slides, "submit")
     assert slides["status"] == "Ready"
     _transition(client, get_task_by_name(client, pid, "Segmentation Slides"), "approve")
 

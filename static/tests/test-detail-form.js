@@ -19,6 +19,7 @@ var ACTION_ROW =
   '<button id="return-component" type="button" class="ghost hidden">Return for Update</button>' +
   '<button id="submit-component" type="button" class="hidden">Submit for Approval</button>' +
   '<button id="approve-component" type="button" class="hidden">Approve</button>' +
+  '<button id="reopen-component" type="button" class="ghost hidden">Reopen</button>' +
   '<button id="save-component" type="submit">Save Updates</button>' +
   '</div></form>';
 
@@ -65,6 +66,7 @@ var DETAIL_SHELL =
   '<button id="return-component" type="button" class="ghost hidden">Return for Update</button>' +
   '<button id="submit-component" type="button" class="hidden">Submit for Approval</button>' +
   '<button id="approve-component" type="button" class="hidden">Approve</button>' +
+  '<button id="reopen-component" type="button" class="ghost hidden">Reopen</button>' +
   '<button id="save-component" type="submit">Save Updates</button>' +
   '</div></form><div id="summary-card-head"></div><div id="lead-summary"></div></div>';
 
@@ -254,22 +256,46 @@ test('detail-form action row: the Save button is hidden on prospect pages and pr
 
 // --- card 3D: Segmentation Slides -------------------------------------------
 
-test('detail-form action row: an employee on Segmentation Slides sees no buttons at all', function () {
+// Card 3S put this step on the shared approval framework, which changed the
+// employee's half: a save is never a submission, so there IS a Submit button
+// now, and it appears only while there is something to ask for.
+test('detail-form action row: an employee on Segmentation Slides submits explicitly', function () {
   withStore(function () {
     mount('employee', 'Employee');
-    ['Not Assigned', 'In Progress', 'Ready', 'Approved'].forEach(function (status) {
+    ['Not Assigned', 'In Progress'].forEach(function (status) {
       renderActionButtons(task('Segmentation Slides', status));
-      assert.equal(visible('submit-component'), false,
-        'no Submit button at ' + status + ' — saving the ticked box IS the submission');
+      assert.equal(visible('submit-component'), true,
+        'the employee asks for review explicitly at ' + status);
       assert.equal(visible('approve-component'), false,
         'an employee is never offered Approve (' + status + ')');
       assert.equal(visible('return-component'), false,
         'an employee is never offered Return (' + status + ')');
+      assert.equal(visible('reopen-component'), false,
+        'reopening is a supervisor decision (' + status + ')');
     });
-    // Item A: the Save button is gone from prospect pages too — auto-save
-    // (views/autosave.js) persists the checkbox tick, and the tick IS the
-    // submission (CHECKBOX_SUBMIT_STEPS).
+    // Already asked, or already decided: nothing left to submit.
+    ['Ready', 'Approved'].forEach(function (status) {
+      renderActionButtons(task('Segmentation Slides', status));
+      assert.equal(visible('submit-component'), false,
+        'no second request for the same review at ' + status);
+      assert.equal(visible('reopen-component'), false);
+    });
+    // The Save button stays gone from prospect pages -- auto-save persists the
+    // inputs, and Card 3S is explicit that auto-save is never submission.
     assert.equal(button('save-component').classList.contains('hidden'), true);
+  });
+});
+
+test('detail-form action row: a supervisor may reopen an APPROVED Segmentation Slides', function () {
+  withStore(function () {
+    mount('supervisor', 'Supervisor');
+    renderActionButtons(task('Segmentation Slides', 'Approved'));
+    assert.equal(visible('reopen-component'), true);
+    // Only from Approved -- there is nothing to reopen before that.
+    ['Not Assigned', 'In Progress', 'Ready'].forEach(function (status) {
+      renderActionButtons(task('Segmentation Slides', status));
+      assert.equal(visible('reopen-component'), false, 'nothing to reopen at ' + status);
+    });
   });
 });
 

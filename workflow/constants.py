@@ -474,6 +474,13 @@ REQUIRED_FIELDS_FOR_SUBMIT = {
         ("sad_update_done", "SAD Update"),
         ("final_exec_summary_done", "Final Executive Summary"),
     ),
+    # Card 3S. The confirmation used to BE the submission: ticking it and
+    # saving filed the request for review. Under the Business Plan Execution
+    # approval framework a save is never a submission, so the box became what
+    # it reads as -- a REQUIREMENT the explicit Submit for Approval checks.
+    "Segmentation Slides": (
+        ("segmentation_slides_loaded", "Segmentation slides are placed in the shared folder"),
+    ),
 }
 
 # Checkbox truthiness, matching dom.js truthy() and the SQL CASE used by the
@@ -860,9 +867,16 @@ def lead_assessment_checkpoint_met(checkpoint, fields):
 # there is no "withdraw" in the lifecycle, and inventing one would silently
 # cancel a review the supervisor may already be reading. Reopening a submitted
 # step stays the supervisor's "return" action.
-CHECKBOX_SUBMIT_STEPS = {
-    "Segmentation Slides": "segmentation_slides_loaded",
-}
+# Card 3S emptied this table. It used to hold Segmentation Slides, whose ticked
+# confirmation submitted the step on save because the page offered no Submit
+# button. That step now uses the shared approval framework -- an explicit
+# Submit for Approval, with the box as a REQUIRED_FIELDS_FOR_SUBMIT
+# prerequisite -- so nothing here auto-submits any more.
+#
+# The table and its hook stay: they are the mechanism for "a save IS the
+# request for review", and emptying it is a policy change, not a deletion of
+# the capability.
+CHECKBOX_SUBMIT_STEPS = {}
 
 # The statuses a checkbox-driven submission may move FROM (see above).
 CHECKBOX_SUBMIT_FROM_STATUSES = frozenset({"Not Assigned", "In Progress"})

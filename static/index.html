@@ -369,6 +369,11 @@
             <button id="return-component" type="button" class="ghost hidden">Return for Update</button>
             <button id="submit-component" type="button" class="hidden">Submit for Approval</button>
             <button id="approve-component" type="button" class="hidden">Approve</button>
+            <!-- Card 3S: an authorized supervisor may reopen an approved step.
+                 The earlier approval stays in the history -- task_history is
+                 append-only, so reopening adds an event rather than erasing
+                 one. -->
+            <button id="reopen-component" type="button" class="ghost hidden">Reopen</button>
             <button id="save-component" type="submit">Save Updates</button>
           </div>
         </form>
@@ -505,6 +510,6 @@
     <img id="ra-lightbox-img" alt="">
   </dialog>
 
-  <script type="module" src="/static/js/main.js?v=60"></script>
+  <script type="module" src="/static/js/main.js?v=61"></script>
 </body>
 </html>
