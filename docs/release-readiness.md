@@ -39,7 +39,7 @@ deployed, and nothing will be without an explicit instruction.
 | `26e3b87` | 3E applied where the card asks for it — the **BPE** Well Summary |
 | `97ded4a` | The BP Gate toggle's real question, and Active Drilling from the step gear |
 | `cc72e41` | 3N unblocked — NUCD Area on the record, in the sheet, in the Portfolio (**migration v12**) |
-| `899a248` | The Excel importer keyed on the lead name, after Card 3V gave a record two |
+| `074c63d` | The Excel importer keyed on the lead name, after Card 3V gave a record two |
 
 Excluded, per Card 3AA §3: every deferred formula, every image-dependent layout
 detail, the polygon linking rule, and anything else in
