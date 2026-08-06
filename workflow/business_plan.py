@@ -651,6 +651,11 @@ def _well_projection(project, tasks, fields, formations, effective):
         "completed_count": completed,
         "progress_percent": _round_whole(100 * completed / 6),
         "all_states": effective["states"],
+        # What the Pre-Drilling column's "BP Gate" toggle asks: is this well
+        # still sitting at the gate? Computed here so the client filters on a
+        # stated fact rather than re-deriving it from the item list.
+        "at_business_plan_gate":
+            effective["states"]["business-plan-gate"]["status"] != "Completed",
         # Card 3X. The animated border is shown only when this is on AND the
         # card sits under Post-Drilling, so the card carries both facts.
         "active_drilling": 1 if _truthy(
@@ -699,7 +704,11 @@ def _matches_filters(well, filters):
             return False
     except (TypeError, ValueError):
         return False
-    step = filters.get("step", "business-plan-gate")
+    # "all" is the default, not "business-plan-gate": this is the STEP filter,
+    # and defaulting it to the gate quietly restricted every caller to
+    # Pre-Drilling wells. Narrowing to the gate is the Pre-Drilling column's own
+    # toggle (static/js/views/business-plan.js), which reaches one column.
+    step = filters.get("step", "all")
     status = filters.get("status", "All Status")
     current_keys = {item["key"] for item in well["items"]}
     if step != "all" and step not in current_keys:
@@ -717,7 +726,7 @@ def get_dashboard(session, filters=None):
     filters.setdefault("field", "All Fields")
     filters.setdefault("status", "All Status")
     filters.setdefault("year", date.today().year)
-    filters.setdefault("step", "business-plan-gate")
+    filters.setdefault("step", "all")
 
     projects = db.fetch_all(session, """
         SELECT * FROM projects

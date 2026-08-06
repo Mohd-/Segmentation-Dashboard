@@ -866,7 +866,7 @@ def business_plan_dashboard():
         "field": request.args.get("field", "All Fields"),
         "status": request.args.get("status", "All Status"),
         "year": request.args.get("year", date.today().year),
-        "step": request.args.get("step", "business-plan-gate"),
+        "step": request.args.get("step", "all"),
     })
     payload["role"] = current_role()
     return json_response(payload)

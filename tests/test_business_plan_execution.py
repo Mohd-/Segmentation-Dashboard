@@ -834,3 +834,34 @@ def test_detail_carries_the_well_summary_bundle_for_the_card_beside_the_step(cli
     # Total CoS is computed server-side (there is no client-side second formula)
     # and is blank until the lead CoS steps are scored.
     assert bundle["derisking"] == ""
+
+
+def test_the_board_opens_on_every_step_and_states_whether_a_well_is_at_the_gate(client):
+    """The Step filter defaults to `all`; narrowing to the gate is the
+    Pre-Drilling column's own toggle, which reads `at_business_plan_gate`.
+
+    The default used to be `business-plan-gate`, which is a STEP filter wearing
+    a gate's name: it restricted every caller to wells whose current stage still
+    holds that item, so Post-Drilling and Post-Testing looked permanently empty.
+    """
+    project_id = _bp_project(client, "BPE-GATE")
+    year = date.today().year
+
+    default_body = client.get(f"/api/business-plan/dashboard?year={year}").get_json()
+    explicit_all = client.get(f"/api/business-plan/dashboard?year={year}&step=all").get_json()
+    assert [row["project_id"] for row in default_body["wells"]] == \
+        [row["project_id"] for row in explicit_all["wells"]], \
+        "omitting the step filter is the same request as asking for all steps"
+
+    well = next(row for row in default_body["wells"] if row["project_id"] == project_id)
+    # The toggle filters on a stated fact, not on a re-derivation in the browser.
+    assert well["at_business_plan_gate"] is True
+    assert well["at_business_plan_gate"] == (
+        well["all_states"]["business-plan-gate"]["status"] != "Completed")
+
+    # The filter itself is untouched -- asking for one step still narrows to it.
+    narrowed = client.get(
+        f"/api/business-plan/dashboard?year={year}&step=business-plan-gate").get_json()
+    assert project_id in [row["project_id"] for row in narrowed["wells"]]
+    assert all("business-plan-gate" in {item["key"] for item in row["items"]}
+               for row in narrowed["wells"])

@@ -47,8 +47,8 @@ documents, not code.
 
 | Check | Result |
 |---|---|
-| Back-end tests | **739 passed** (`pytest -q`) |
-| Front-end tests | **606 passed** (`run_frontend_tests.py --browser firefox`) |
+| Back-end tests | **740 passed** (`pytest -q`) |
+| Front-end tests | **607 passed** (`run_frontend_tests.py --browser firefox`) |
 | New failures | none |
 | Pre-existing failures | none |
 | Clean startup | yes, on a seeded scratch database |
@@ -103,6 +103,11 @@ These are correct and intended, and someone will notice them on day one:
    name are in the rail head above it, the year is in the phase row, the
    progress bar keeps the stage count, and every tracking item's own state is
    on its step page and on the board card.
+7. **The BPE board opens on every stage.** The Step filter's default moved from
+   Business Plan Gate to All Steps, so Post-Drilling and Post-Testing are
+   populated on arrival instead of reading "No wells match these filters". The
+   gate is now the Pre-Drilling column's own toggle, on by default, so that
+   column opens on the same working set as before.
 
 ## Blockers to release, not to the work
 
@@ -120,8 +125,18 @@ them are unknown here:
 
 **3F (BPE main-page filters)** was withdrawn by the owner as a no-op — doc and
 team planning rather than an application change. It had been implemented and is
-reverted: the step filter, the current-stage Completed semantics and the
-absence of an All Years option are all back as they were.
+reverted: the current-stage Completed semantics and the absence of an All Years
+option are back as they were, and the step filter is back in the row.
+
+**One piece of it the owner later asked for by name:** the Pre-Drilling
+column's own "BP Gate" toggle, on by default. It narrows that column to wells
+still at the gate and reaches nothing else — the other two columns and the
+global KPIs do not move, and it repaints client-side without a request. With
+the owner's decision, the step dropdown stays (so the other seventeen tracking
+items remain filterable) but now opens on **All Steps** and is captioned
+**Step**: its old default silently restricted the whole board to Pre-Drilling
+wells, and two controls named "BP Gate" doing different things is exactly the
+confusion the caption caused.
 
 ## One open question for the reviewer
 

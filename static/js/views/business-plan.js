@@ -81,7 +81,7 @@ function currentFilters() {
     field: (byId('bp-field-filter') && byId('bp-field-filter').value) || 'All Fields',
     status: (byId('bp-status-filter') && byId('bp-status-filter').value) || 'All Status',
     year: (byId('bp-year-filter') && byId('bp-year-filter').value) || String(new Date().getFullYear()),
-    step: (byId('bp-step-filter') && byId('bp-step-filter').value) || 'business-plan-gate'
+    step: (byId('bp-step-filter') && byId('bp-step-filter').value) || 'all'
   };
 }
 
@@ -97,7 +97,7 @@ function initialize() {
   setSelect('bp-step-filter', [
     { value: 'all', label: 'All Steps' },
     { value: 'business-plan-gate', label: 'Business Plan Gate' }
-  ], 'business-plan-gate');
+  ], 'all');
   // Card BP1: this module owns all five filters -- populating them (above)
   // AND binding their change handler, so there is exactly one fill and one
   // listener per select, never main.js's boot() racing this initialize().
@@ -140,8 +140,12 @@ var BP_FILTERS = [
   // repeats it. Only this filter qualifies -- "All Assignees" still says more
   // than "Assignee", and the Year's default is a real selection, not the
   // absence of one.
-  { key: 'step', id: 'bp-step-filter', caption: 'BP Gate', ariaCaption: 'BP Gate',
-    fallback: 'business-plan-gate', captionAtRest: true },
+  // Captioned "Step", not "BP Gate": it filters by TRACKING ITEM, and the one
+  // it happened to default to is the gate. Narrowing to the gate is now the
+  // Pre-Drilling column's own toggle, and two controls of the same name doing
+  // different things is how the old caption misled.
+  { key: 'step', id: 'bp-step-filter', caption: 'Step',
+    fallback: 'all', captionAtRest: true },
   { key: 'field', id: 'bp-field-filter', caption: 'Field', fallback: 'All Fields' },
   { key: 'status', id: 'bp-status-filter', caption: 'Status', fallback: 'All Status' },
   { key: 'year', id: 'bp-year-filter', caption: 'Year', fallback: null },
@@ -469,7 +473,7 @@ export function syncBusinessPlanPromotion(year) {
       'bp-field-filter': 'All Fields',
       'bp-status-filter': 'All Status',
       'bp-year-filter': String(selectedYear),
-      'bp-step-filter': 'business-plan-gate'
+      'bp-step-filter': 'all'
     };
     Object.keys(defaults).forEach(function (id) {
       var element = byId(id);
@@ -612,11 +616,39 @@ function wellCard(well) {
     '</button>';
 }
 
+/* The Pre-Drilling column's own BP Gate filter.
+
+   It narrows THAT COLUMN to the wells still sitting at the gate, and nothing
+   else: the other two columns keep their full population and the global KPIs,
+   which are computed over the filtered payload, never move. Selected by
+   default, so the board opens on the working set the old global "BP Gate"
+   dropdown used to produce -- but as a control that says which column it
+   governs, beside the count it changes.
+
+   State is module-level and the filtering is client-side: the payload is
+   unfiltered by it, so toggling repaints from data already in hand rather than
+   asking the server the same question again. */
+var gateOnly = true;
+
+function stageRows(wells, stageKey) {
+  var rows = wells.filter(function (well) { return well.stage_key === stageKey; });
+  if (stageKey !== 'pre_drilling' || !gateOnly) return rows;
+  // `at_business_plan_gate` is a stated fact on the payload (workflow/
+  // business_plan.py _well_projection), not re-derived here.
+  return rows.filter(function (well) { return well.at_business_plan_gate; });
+}
+
+function gateToggleHtml() {
+  return '<button type="button" id="bpe-gate-toggle" class="lead-column-toggle"' +
+    ' role="switch" aria-checked="' + (gateOnly ? 'true' : 'false') + '"' +
+    ' title="Show only wells still at the Business Plan Gate">BP Gate</button>';
+}
+
 function renderStageBoard(payload) {
   var wells = payload.wells || [];
   var board = byId('bp-pipeline');
   board.innerHTML = STAGE_META.map(function (stage) {
-    var rows = wells.filter(function (well) { return well.stage_key === stage.key; });
+    var rows = stageRows(wells, stage.key);
     var body = rows.length ? rows.map(wellCard).join('') :
       '<div class="pipeline-empty">No wells match these filters.</div>';
     // Plain navy headers, uniform across the three columns: the stage is named
@@ -625,11 +657,17 @@ function renderStageBoard(payload) {
       '<header>' +
         '<span class="lead-column-icon" aria-hidden="true">' + icon(stage.icon) + '</span>' +
         '<h3>' + esc(stage.label) + '</h3>' +
+        (stage.key === 'pre_drilling' ? gateToggleHtml() : '') +
         '<span class="lead-column-count">' + rows.length + '</span>' +
       '</header>' +
       '<div class="lead-cards">' + body + '</div>' +
       '</section>';
   }).join('');
+  var gateToggle = byId('bpe-gate-toggle');
+  if (gateToggle) gateToggle.addEventListener('click', function () {
+    gateOnly = !gateOnly;
+    renderStageBoard(payload);
+  });
   all('.lead-card', board).forEach(function (card) {
     card.addEventListener('click', function () {
       openBusinessPlanDetail(Number(card.dataset.projectId), card.dataset.step);

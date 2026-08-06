@@ -91,7 +91,8 @@ test('business-plan renders the approved dashboard and one auto-save approval de
     stage_counts: { pre_drilling: 1, post_drilling: 0, post_testing: 0 },
     wells: [{ project_id: 7, project_name: 'MDFT-7', field: 'MDFT', business_plan_year: currentYear,
       priority: 'High', assignees: ['Supervisor'], assignee_label: 'Supervisor', stage_key: 'pre_drilling',
-      stage_label: 'Pre-Drilling', items: items, completed_count: 1, progress_percent: 17 }]
+      stage_label: 'Pre-Drilling', items: items, completed_count: 1, progress_percent: 17,
+      at_business_plan_gate: true }]
   };
   var detail = {
     role: 'supervisor',
@@ -138,18 +139,20 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   assert.equal(host.querySelector('#bp-assignee-filter').value, 'All Assignees');
   assert.equal(host.querySelector('#bp-status-filter').value, 'All Status');
   assert.equal(host.querySelector('#bp-year-filter').value, String(currentYear));
-  assert.equal(host.querySelector('#bp-step-filter').value, 'business-plan-gate');
+  // The STEP filter opens on All Steps: it filters by tracking item, and
+  // defaulting it to the gate used to restrict the whole board to Pre-Drilling.
+  // Narrowing to the gate is the Pre-Drilling column's own toggle now.
+  assert.equal(host.querySelector('#bp-step-filter').value, 'all');
   assert.equal(host.querySelectorAll('#bp-year-filter option').length, 37);
   // One visible trigger per hidden select, and the board in the maturation
   // board's own vocabulary: three .lead-column blocks, one .lead-card, its six
   // tracked items as dots.
   assert.equal(host.querySelectorAll('#bpe-filter-row .lf-trigger').length, 5);
-  // An initialism keeps its spelling in the spoken label.
   assert.equal(host.querySelector('.lead-filter[data-bp-filter="step"] .lf-trigger')
-    .getAttribute('aria-label'), 'Filter by BP Gate');
+    .getAttribute('aria-label'), 'Filter by step');
   // A filter resting on its default shows its caption, not the option text
   // that repeats it (the maturation row's own rule).
-  assert.equal(host.querySelector('.lead-filter[data-bp-filter="step"] .lf-value').textContent, 'BP Gate');
+  assert.equal(host.querySelector('.lead-filter[data-bp-filter="step"] .lf-value').textContent, 'Step');
   assert.equal(host.querySelector('.lead-filter[data-bp-filter="year"] .lf-value').textContent, String(currentYear));
   assert.equal(host.querySelector('.lead-filter[data-bp-filter="field"] .lf-trigger')
     .getAttribute('aria-label'), 'Filter by field');
@@ -213,7 +216,7 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   assert.equal(host.querySelector('#bp-assignee-filter').value, 'All Assignees');
   assert.equal(host.querySelector('#bp-field-filter').value, 'All Fields');
   assert.equal(host.querySelector('#bp-status-filter').value, 'All Status');
-  assert.equal(host.querySelector('#bp-step-filter').value, 'business-plan-gate');
+  assert.equal(host.querySelector('#bp-step-filter').value, 'all');
   assert.match(dashboardRequests[dashboardRequests.length - 1], /year=2027/,
     'the synchronized dashboard fetches the promoted year immediately');
 
@@ -1096,4 +1099,101 @@ test('business-plan refreshes the Well Summary alone when a saved value changes 
   // The refreshed panel is live, not a detached copy: its gear still opens.
   host.querySelector('#bpe-summary-gear').click();
   assert.equal(host.querySelector('#bpe-summary-menu').classList.contains('hidden'), false);
+});
+
+// ---------------------------------------------------------------------------
+// The Pre-Drilling column's own BP Gate toggle
+// ---------------------------------------------------------------------------
+//
+// It reaches only the column it sits in and filters from the payload already in
+// hand, which is what separates it from the global Step filter: no round trip,
+// the other two columns never move, and the KPIs -- computed over the fetched
+// population -- never move either.
+
+test('business-plan the BP Gate toggle narrows only the Pre-Drilling column', async function () {
+  var host = fixture(
+    '<div id="bpe-main-view" class="panel"><div class="lead-controls">' +
+      '<select id="bp-assignee-filter" hidden></select>' +
+      '<select id="bp-field-filter" hidden></select>' +
+      '<select id="bp-status-filter" hidden></select>' +
+      '<select id="bp-year-filter" hidden></select>' +
+      '<select id="bp-step-filter" hidden></select>' +
+      '<div id="bpe-filter-row"></div><div id="bpe-kpis"></div></div>' +
+      '<div id="bpe-data-notice" class="hidden"></div>' +
+      '<div id="bp-pipeline"></div></div>' +
+      '<section id="bpe-detail-view" class="hidden"></section>'
+  );
+  resetBusinessPlanState();
+  var currentYear = new Date().getFullYear();
+  function well(id, name, stageKey, atGate) {
+    return { project_id: id, project_name: name, field: 'MDFT', business_plan_year: currentYear,
+      priority: 'Medium', assignees: [], assignee_label: 'Not Assigned', stage_key: stageKey,
+      stage_label: stageKey, items: stageItems(), completed_count: 0, progress_percent: 0,
+      at_business_plan_gate: atGate };
+  }
+  var fetches = [];
+  mockFetch(function (url) {
+    var path = String(url);
+    if (path.indexOf('/api/business-plan/dashboard') >= 0) {
+      fetches.push(path);
+      return response({
+        role: 'supervisor',
+        options: { assignees: ['All Assignees'], fields: ['All Fields'],
+          statuses: ['All Status'], years: [currentYear],
+          steps: [{ value: 'all', label: 'All Steps' }] },
+        kpis: { rig_inventory_days: 12, rig_target_days: 20, success_rate_pct: 50,
+          actual_mean_ogip_bcf: 40, simulated_mean_ogip_bcf: 80 },
+        data_quality: { missing_simulated_mean_project_ids: [], unsuccessful_with_actual_project_ids: [] },
+        out_of_range_years: [],
+        wells: [
+          well(1, 'AT-GATE-1', 'pre_drilling', true),
+          well(2, 'PAST-GATE-1', 'pre_drilling', false),
+          well(3, 'DRILLED-1', 'post_drilling', false)
+        ]
+      });
+    }
+    if (path.indexOf('/api/users') >= 0) return response([]);
+    throw new Error('Unexpected request: ' + path);
+  });
+
+  await refreshBusinessPlan();
+  // The board is fetched unnarrowed: the Step filter opens on All Steps, so the
+  // gate is not a condition on the request.
+  assert.match(fetches[0], /step=all/);
+  var toggle = host.querySelector('#bpe-gate-toggle');
+  assert.ok(toggle, 'the toggle lives in the Pre-Drilling column header');
+  assert.equal(host.querySelectorAll('.lead-column')[0].querySelector('#bpe-gate-toggle'), toggle,
+    'and only in that one');
+  assert.equal(host.querySelectorAll('.lead-column')[1].querySelector('#bpe-gate-toggle'), null);
+  assert.equal(toggle.getAttribute('role'), 'switch');
+
+  function columnNames(index) {
+    return Array.prototype.map.call(
+      host.querySelectorAll('.lead-column')[index].querySelectorAll('.lead-card-name'),
+      function (element) { return element.textContent; });
+  }
+  function columnCount(index) {
+    return host.querySelectorAll('.lead-column')[index].querySelector('.lead-column-count').textContent;
+  }
+
+  // Selected by default: Pre-Drilling shows only the well still at the gate.
+  assert.equal(toggle.getAttribute('aria-checked'), 'true');
+  assert.deepEqual(columnNames(0), ['AT-GATE-1']);
+  assert.equal(columnCount(0), '1', 'the column count follows the toggle');
+  // The other columns are fully populated -- the old global default emptied them.
+  assert.deepEqual(columnNames(1), ['DRILLED-1']);
+
+  var kpisBefore = host.querySelector('#bpe-kpis').textContent;
+  var fetchesBefore = fetches.length;
+  toggle.click();
+  assert.equal(host.querySelector('#bpe-gate-toggle').getAttribute('aria-checked'), 'false');
+  assert.deepEqual(columnNames(0), ['AT-GATE-1', 'PAST-GATE-1']);
+  assert.equal(columnCount(0), '2');
+  assert.deepEqual(columnNames(1), ['DRILLED-1'], 'the other columns still do not move');
+  assert.equal(fetches.length, fetchesBefore, 'toggling repaints from data already in hand');
+  assert.equal(host.querySelector('#bpe-kpis').textContent, kpisBefore,
+    'global KPIs are not a function of this toggle');
+  // Back on, so the next test starts where the board opens.
+  host.querySelector('#bpe-gate-toggle').click();
+  assert.equal(host.querySelector('#bpe-gate-toggle').getAttribute('aria-checked'), 'true');
 });
