@@ -42,6 +42,11 @@ CLASSIFICATIONS = ("Development", "Appraisal", "Exploration")
 LOGGING_PROGRAMS = ("Standard A", "Standard B", "Optimized Standard B")
 PRIORITIES = ("Low", "Medium", "High")
 
+# The Business Plan Year filter's "show every year" sentinel. It is a string on
+# purpose: the filter's other values arrive from the query string as strings
+# too, so there is one comparison and no int/str ambiguity.
+ALL_YEARS = "all"
+
 
 STAGES = (
     {
@@ -699,11 +704,12 @@ def _matches_filters(well, filters):
     field = filters.get("field", "All Fields")
     if field != "All Fields" and well["field"] != field:
         return False
-    try:
-        if int(well.get("business_plan_year") or 0) != int(filters["year"]):
+    if str(filters.get("year") or "") != ALL_YEARS:
+        try:
+            if int(well.get("business_plan_year") or 0) != int(filters["year"]):
+                return False
+        except (TypeError, ValueError):
             return False
-    except (TypeError, ValueError):
-        return False
     # "all" is the default, not "business-plan-gate": this is the STEP filter,
     # and defaulting it to the gate quietly restricted every caller to
     # Pre-Drilling wells. Narrowing to the gate is the Pre-Drilling column's own

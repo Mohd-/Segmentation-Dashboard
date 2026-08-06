@@ -75,6 +75,24 @@ function setSelect(id, values, selected) {
   element.value = String(selected);
 }
 
+/* "All Years" is a real OPTION, not a cleared filter, so it lives in the same
+   list as the years themselves and travels to the server as the literal `all`
+   (workflow/business_plan.py ALL_YEARS). The 1999-2035 span is
+   config.BPE_YEAR_MIN/MAX; `years` arrives on the dashboard payload, and the
+   hardcoded span here is only the pre-first-fetch fallback. */
+var ALL_YEARS = 'all';
+
+function yearOptions(years) {
+  var list = years && years.length ? years : (function () {
+    var span = [];
+    for (var year = 1999; year <= 2035; year += 1) span.push(year);
+    return span;
+  }());
+  return [{ value: ALL_YEARS, label: 'All Years' }].concat(list.map(function (year) {
+    return { value: String(year), label: String(year) };
+  }));
+}
+
 function currentFilters() {
   return {
     assignee: (byId('bp-assignee-filter') && byId('bp-assignee-filter').value) || 'All Assignees',
@@ -88,8 +106,7 @@ function currentFilters() {
 function initialize() {
   if (state.initialized) return;
   state.initialized = true;
-  var years = [];
-  for (var year = 1999; year <= 2035; year += 1) years.push(String(year));
+  var years = yearOptions();
   setSelect('bp-assignee-filter', ['All Assignees', 'Unassigned'], 'All Assignees');
   setSelect('bp-field-filter', ['All Fields'], 'All Fields');
   setSelect('bp-status-filter', ['All Status', 'Completed', 'Pending Approval', 'In Progress'], 'All Status');
@@ -488,7 +505,7 @@ function renderDashboard(payload, selected) {
   setSelect('bp-assignee-filter', options.assignees || [], selected.assignee);
   setSelect('bp-field-filter', options.fields || [], selected.field);
   setSelect('bp-status-filter', options.statuses || [], selected.status);
-  setSelect('bp-year-filter', (options.years || []).map(String), String(selected.year));
+  setSelect('bp-year-filter', yearOptions(options.years), String(selected.year));
   setSelect('bp-step-filter', options.steps || [], selected.step);
   // The triggers read their labels off the selects, so they are redrawn AFTER
   // the repopulation above -- never before it.

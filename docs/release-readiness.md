@@ -47,7 +47,7 @@ documents, not code.
 
 | Check | Result |
 |---|---|
-| Back-end tests | **740 passed** (`pytest -q`) |
+| Back-end tests | **741 passed** (`pytest -q`) |
 | Front-end tests | **607 passed** (`run_frontend_tests.py --browser firefox`) |
 | New failures | none |
 | Pre-existing failures | none |
@@ -103,7 +103,10 @@ These are correct and intended, and someone will notice them on day one:
    name are in the rail head above it, the year is in the phase row, the
    progress bar keeps the stage count, and every tracking item's own state is
    on its step page and on the board card.
-7. **The BPE board opens on every stage.** The Step filter's default moved from
+7. **The BPE Business Plan Year filter offers All Years**, which spans every
+   year at once — the KPI tiles then report the whole population, since they are
+   computed over whatever the filter admits.
+8. **The BPE board opens on every stage.** The Step filter's default moved from
    Business Plan Gate to All Steps, so Post-Drilling and Post-Testing are
    populated on arrival instead of reading "No wells match these filters". The
    gate is now the Pre-Drilling column's own toggle, on by default, so that
@@ -125,11 +128,15 @@ them are unknown here:
 
 **3F (BPE main-page filters)** was withdrawn by the owner as a no-op — doc and
 team planning rather than an application change. It had been implemented and is
-reverted: the current-stage Completed semantics and the absence of an All Years
-option are back as they were, and the step filter is back in the row.
+reverted: the current-stage Completed semantics are back as they were, and the
+step filter is back in the row.
 
-**One piece of it the owner later asked for by name:** the Pre-Drilling
-column's own "BP Gate" toggle, on by default. It narrows that column to wells
+**Two pieces of it the owner later asked for by name.** First, **All Years** on
+the Business Plan Year filter: a real option at the head of the year list rather
+than a cleared filter, travelling to the server as the literal `all`. The
+default is still the current calendar year, and Clear puts the board back on it.
+
+Second, the Pre-Drilling column's own "BP Gate" toggle, on by default. It narrows that column to wells
 still at the gate and reaches nothing else — the other two columns and the
 global KPIs do not move, and it repaints client-side without a request. With
 the owner's decision, the step dropdown stays (so the other seventeen tracking

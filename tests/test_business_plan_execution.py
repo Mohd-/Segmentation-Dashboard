@@ -865,3 +865,26 @@ def test_the_board_opens_on_every_step_and_states_whether_a_well_is_at_the_gate(
     assert project_id in [row["project_id"] for row in narrowed["wells"]]
     assert all("business-plan-gate" in {item["key"] for item in row["items"]}
                for row in narrowed["wells"])
+
+
+def test_all_years_shows_wells_from_every_year_at_once(client):
+    """The year filter defaults to the current year and always did. "All Years"
+    is a real option rather than a cleared filter, so it travels as the literal
+    `all` and the year comparison is skipped entirely.
+    """
+    near = _bp_project(client, "BPE-YEAR-NEAR", year=date.today().year)
+    far = _bp_project(client, "BPE-YEAR-FAR", year=2033)
+
+    this_year = client.get(
+        f"/api/business-plan/dashboard?year={date.today().year}").get_json()
+    visible = {row["project_id"] for row in this_year["wells"]}
+    assert near in visible and far not in visible
+
+    every_year = client.get("/api/business-plan/dashboard?year=all").get_json()
+    visible = {row["project_id"] for row in every_year["wells"]}
+    assert near in visible and far in visible
+
+    # A year that is neither a number nor the sentinel still matches nothing,
+    # rather than falling through to "show everything".
+    nonsense = client.get("/api/business-plan/dashboard?year=every").get_json()
+    assert nonsense["wells"] == []

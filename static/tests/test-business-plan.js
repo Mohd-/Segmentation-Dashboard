@@ -143,7 +143,14 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   // defaulting it to the gate used to restrict the whole board to Pre-Drilling.
   // Narrowing to the gate is the Pre-Drilling column's own toggle now.
   assert.equal(host.querySelector('#bp-step-filter').value, 'all');
-  assert.equal(host.querySelectorAll('#bp-year-filter option').length, 37);
+  // 1999-2035 plus "All Years", which is a real option rather than a cleared
+  // filter, so it lives in the same list as the years and leads it.
+  assert.equal(host.querySelectorAll('#bp-year-filter option').length, 38);
+  assert.equal(host.querySelector('#bp-year-filter option').value, 'all');
+  assert.equal(host.querySelector('#bp-year-filter option').textContent, 'All Years');
+  // The default is still the current calendar year, not All Years.
+  assert.equal(host.querySelector('.lead-filter[data-bp-filter="year"] .lf-value').textContent,
+    String(currentYear));
   // One visible trigger per hidden select, and the board in the maturation
   // board's own vocabulary: three .lead-column blocks, one .lead-card, its six
   // tracked items as dots.
@@ -205,6 +212,23 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   assert.equal(host.querySelector('#bp-field-filter').value, 'All Fields');
   assert.equal(host.querySelector('#bpe-filter-row .lf-clear').disabled, true);
   await waitFor(function () { return dashboardRequests.length === 3; });
+
+  // All Years is a SELECTION, so it counts as an active filter and Clear puts
+  // the board back on the current year rather than leaving it spanning all of
+  // them. It travels to the server as the literal `all`.
+  host.querySelector('.lead-filter[data-bp-filter="year"] .lf-trigger').click();
+  var yearMenu = host.querySelector('.lead-filter[data-bp-filter="year"] .lf-menu');
+  assert.equal(yearMenu.querySelector('.lf-option').getAttribute('data-value'), 'all');
+  yearMenu.querySelector('.lf-option').click();
+  assert.equal(host.querySelector('#bp-year-filter').value, 'all');
+  assert.equal(host.querySelector('.lead-filter[data-bp-filter="year"] .lf-value').textContent, 'All Years');
+  assert.equal(host.querySelector('#bpe-filter-row .lf-clear').disabled, false);
+  await waitFor(function () { return dashboardRequests.length === 4; });
+  assert.match(dashboardRequests[dashboardRequests.length - 1], /year=all/);
+  host.querySelector('#bpe-filter-row .lf-clear').click();
+  assert.equal(host.querySelector('#bp-year-filter').value, String(currentYear));
+  assert.equal(host.querySelector('#bpe-filter-row .lf-clear').disabled, true);
+  await waitFor(function () { return dashboardRequests.length === 5; });
 
   host.querySelector('#bp-assignee-filter').value = 'Supervisor';
   host.querySelector('#bp-field-filter').value = 'MDFT';
