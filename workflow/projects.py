@@ -893,6 +893,10 @@ def get_project(session, project_id):
         project["lead_folder_path"] = folders.default_lead_folder_path(project.get("project_name") or "")
     _annotate_derived_state(session, [project])
     annotate_canonical_names(session, [project])
+    # Card 3X: the gear needs to open showing the flag's real state, so the
+    # detail payload carries it like the board rows do.
+    from .promotion import active_drilling_state
+    project["active_drilling"] = 1 if active_drilling_state(session, project_id) else 0
     return project
 
 

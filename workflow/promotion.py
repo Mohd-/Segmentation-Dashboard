@@ -158,8 +158,8 @@ def set_business_plan(session, project_id, enabled, year=None, changed_by="Admin
         _sync_completed_at(session, project_id)
 
 
-def update_project_flags(session, project_id, business_plan_enabled=None, active_well_enabled=None, business_plan_year=None, changed_by="Web User", allow_historical_year=False):
-    """Apply BP promotion/demotion and/or the active-well flag for a project."""
+def update_project_flags(session, project_id, business_plan_enabled=None, active_well_enabled=None, business_plan_year=None, changed_by="Web User", allow_historical_year=False, active_drilling=None):
+    """Apply BP promotion/demotion and/or the per-well flags for a project."""
     old = get_project(session, project_id)
     if not old:
         raise ValueError("Lead / well not found.")
@@ -179,3 +179,64 @@ def update_project_flags(session, project_id, business_plan_enabled=None, active
                                       {"project_id": project_id})
             if first_task and new_active != int(old.get("active_well_enabled") or 0):
                 log_task_event(session, first_task["task_id"], project_id, first_task["task_name"], "Active Well Flag", old.get("active_well_enabled") or 0, new_active, changed_by, "Active well flag updated.")
+    if active_drilling is not None:
+        _set_active_drilling(session, project_id, bool(active_drilling), changed_by)
+
+
+# ---------------------------------------------------------------------------
+# Card 3X -- Active Drilling
+# ---------------------------------------------------------------------------
+
+# The flag has been stored here since before this card: a dynamic field on the
+# well's Quicklook Logs row, which the board already reads (see
+# workflow.projects.get_projects' active_drilling subquery). Reusing it means no
+# migration and no data to move -- and it IS canonical server state, which is
+# what the card asks for, as opposed to something the browser remembers.
+ACTIVE_DRILLING_FIELD = "active_drilling"
+ACTIVE_DRILLING_EVENT = "Active Drilling Flag"
+_ACTIVE_DRILLING_STEPS = ("Quicklook Logs", "Quicklook Logs Interpretation")
+
+
+def active_drilling_state(session, project_id):
+    """Is this well flagged as actively drilling? (any owning row counts)"""
+    row = db.fetch_one(session, """
+        SELECT MAX(CASE WHEN LOWER(COALESCE(d.field_value, '')) IN ('1', 'true', 'yes', 'on')
+                        THEN 1 ELSE 0 END) AS flag
+        FROM project_tasks t
+        JOIN task_dynamic_fields d ON d.task_id = t.task_id
+        WHERE t.project_id = :project_id AND d.field_key = :key
+    """, {"project_id": project_id, "key": ACTIVE_DRILLING_FIELD})
+    return bool(row and int(row.get("flag") or 0))
+
+
+def _set_active_drilling(session, project_id, enabled, changed_by):
+    """Persist the flag and audit the CHANGE.
+
+    An unchanged state writes nothing: repeatedly saving "still drilling" is
+    not an event, and a trail full of no-ops hides the toggles that mattered.
+    """
+    previous = active_drilling_state(session, project_id)
+    task = db.fetch_one(session, f"""
+        SELECT task_id, task_name FROM project_tasks
+        WHERE project_id = :project_id
+          AND task_name IN ({", ".join(f"'{name}'" for name in _ACTIVE_DRILLING_STEPS)})
+        ORDER BY sequence_no LIMIT 1
+    """, {"project_id": project_id})
+    if not task:
+        raise ValueError("This record has no Quicklook Logs step to record drilling against.")
+    if previous == bool(enabled):
+        return previous
+    now = utc_now_str()
+    with db.write_transaction(session):
+        db.execute(session, """
+            INSERT INTO task_dynamic_fields (task_id, field_key, field_value, updated_at)
+            VALUES (:task_id, :key, :value, :now)
+            ON CONFLICT(task_id, field_key) DO UPDATE
+            SET field_value = excluded.field_value, updated_at = excluded.updated_at
+        """, {"task_id": task["task_id"], "key": ACTIVE_DRILLING_FIELD,
+              "value": "1" if enabled else "0", "now": now})
+        log_task_event(session, task["task_id"], project_id, task["task_name"],
+                       ACTIVE_DRILLING_EVENT, "1" if previous else "0",
+                       "1" if enabled else "0", changed_by,
+                       "Active Drilling turned " + ("on." if enabled else "off."))
+    return bool(enabled)

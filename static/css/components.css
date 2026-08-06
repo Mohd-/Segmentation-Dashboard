@@ -722,6 +722,42 @@
 .lead-card-medium { border-color: var(--warning-500); }
 .lead-card-low { border-color: var(--border-strong); }
 
+/* Card 3X -- Active Drilling.
+   The border KEEPS its priority colour: the animation is a slow sheen that
+   travels along the existing border, not a second colour competing with it, so
+   changing priority while drilling changes the animated colour immediately and
+   for free (the sheen is white-over-currentColor).
+   Dimensions do not change -- the glow is an inset box-shadow and an ::after
+   overlay, so nothing reflows and a board of animated cards does not thrash
+   layout. Content, text and status glyphs are untouched.
+   PROPOSED treatment: no agreed animation exists in the repository, so this is
+   offered for review rather than asserted as approved. */
+.lead-card.is-active-drilling { position: relative; }
+.lead-card.is-active-drilling::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+  border: 2px solid currentColor;
+  color: inherit;
+  opacity: .55;
+  animation: drilling-sheen 2.8s ease-in-out infinite;
+}
+.lead-card-high.is-active-drilling::after { color: var(--danger-500); }
+.lead-card-medium.is-active-drilling::after { color: var(--warning-500); }
+.lead-card-low.is-active-drilling::after { color: var(--border-strong); }
+@keyframes drilling-sheen {
+  0%, 100% { opacity: .25; }
+  50% { opacity: .85; }
+}
+/* Reduced motion keeps the STATE readable and drops the movement: a steady
+   ring in the same priority colour. The gear's checked state is the accessible
+   source of truth either way -- this is never the only signal. */
+@media (prefers-reduced-motion: reduce) {
+  .lead-card.is-active-drilling::after { animation: none; opacity: .7; }
+}
+
 .lead-card-identity { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
 .lead-card-name {
   font-family: var(--font-display);

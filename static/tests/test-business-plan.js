@@ -945,3 +945,67 @@ test('business-plan a mapped step missing a required name says so instead of lin
   assert.equal(card.querySelector('a'), null);
   assert.equal(card.querySelector('#bpe-copy-folder'), null);
 });
+
+// ---------------------------------------------------------------------------
+// Card 3X -- the Active Drilling border
+// ---------------------------------------------------------------------------
+//
+// Shown only when the well is FLAGGED and its card sits under Post-Drilling.
+// Outside that stage the flag is preserved but the card wears its ordinary
+// priority border -- and the border keeps the priority colour either way, so
+// the animation never replaces a state signal, it rides one.
+
+test('business-plan only a flagged well under Post-Drilling gets the drilling border', async function () {
+  var host = fixture(
+    '<div id="bpe-main-view" class="panel"><div class="lead-controls">' +
+      '<select id="bp-assignee-filter" hidden></select>' +
+      '<select id="bp-field-filter" hidden></select>' +
+      '<select id="bp-status-filter" hidden></select>' +
+      '<select id="bp-year-filter" hidden></select>' +
+      '<div id="bpe-filter-row"></div><div id="bpe-kpis"></div></div>' +
+      '<div id="bpe-data-notice" class="hidden"></div>' +
+      '<div id="bp-pipeline"></div></div>' +
+      '<section id="bpe-detail-view" class="hidden"></section>');
+  resetBusinessPlanState();
+  var year = new Date().getFullYear();
+  function well(id, name, stageKey, drilling, priority) {
+    return { project_id: id, project_name: name, field: 'MDFT', business_plan_year: year,
+      priority: priority || 'Medium', assignees: [], assignee_label: 'Not Assigned',
+      stage_key: stageKey, stage_label: stageKey, items: stageItems(),
+      completed_count: 0, progress_percent: 0, at_business_plan_gate: true,
+      active_drilling: drilling ? 1 : 0 };
+  }
+  mockFetch(function (url) {
+    var path = String(url);
+    if (path.indexOf('/api/business-plan/dashboard') >= 0) {
+      return response({
+        role: 'supervisor',
+        options: { assignees: ['All Assignees'], fields: ['All Fields'],
+          statuses: ['All Status'], years: [year] },
+        kpis: { rig_inventory_days: 0, rig_target_days: 0, success_rate_pct: 0,
+          actual_mean_ogip_bcf: 0, simulated_mean_ogip_bcf: 0 },
+        data_quality: { missing_simulated_mean_project_ids: [], unsuccessful_with_actual_project_ids: [] },
+        out_of_range_years: [],
+        wells: [
+          well(1, 'DRILLING-NOW', 'post_drilling', true, 'High'),
+          well(2, 'FLAGGED-ELSEWHERE', 'pre_drilling', true),
+          well(3, 'QUIET', 'post_drilling', false)
+        ]
+      });
+    }
+    if (path.indexOf('/api/users') >= 0) return response([]);
+    throw new Error('Unexpected request: ' + path);
+  });
+
+  await refreshBusinessPlan();
+  var animated = Array.prototype.map.call(
+    host.querySelectorAll('.lead-card.is-active-drilling .lead-card-name'),
+    function (element) { return element.textContent; });
+  assert.deepEqual(animated, ['DRILLING-NOW'],
+    'flagged AND in Post-Drilling -- not flagged elsewhere, not unflagged here');
+
+  // The priority class is still on the card, so the animation rides the
+  // priority colour rather than replacing it.
+  var card = host.querySelector('.lead-card.is-active-drilling');
+  assert.ok(card.classList.contains('lead-card-high'));
+});

@@ -652,6 +652,11 @@ def _well_projection(project, tasks, fields, formations, effective):
         "completed_count": completed,
         "progress_percent": _round_whole(100 * completed / 6),
         "all_states": effective["states"],
+        # Card 3X. The animated border is shown only when this is on AND the
+        # card sits under Post-Drilling, so the card carries both facts.
+        "active_drilling": 1 if _truthy(
+            _value(fields, "Quicklook Logs", "active_drilling")
+            or _value(fields, "Quicklook Logs Interpretation", "active_drilling")) else 0,
         # Card 3F. What the Pre-Drilling column's "BP Gate" toggle asks: is this
         # well still sitting at the gate? Computed here so the client filters on
         # a stated fact rather than re-deriving it from the item list.

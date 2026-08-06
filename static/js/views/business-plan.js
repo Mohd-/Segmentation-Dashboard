@@ -597,7 +597,12 @@ function trackedItemsHtml(well) {
 }
 
 function wellCard(well) {
-  return '<button type="button" class="lead-card lead-card-' + cardPriority(well) + '"' +
+  // Card 3X: animated only when the well is flagged AND its card sits under
+  // Post-Drilling. Outside that stage the flag is preserved but the card wears
+  // its ordinary priority border.
+  var drilling = Number(well.active_drilling || 0) === 1 && well.stage_key === 'post_drilling';
+  return '<button type="button" class="lead-card lead-card-' + cardPriority(well) +
+    (drilling ? ' is-active-drilling' : '') + '"' +
     ' data-project-id="' + well.project_id + '" data-step="' + esc(firstIncompleteSlug(well)) + '">' +
     '<span class="lead-card-identity">' +
       '<span class="lead-card-name">' + esc(well.project_name) + '</span>' +

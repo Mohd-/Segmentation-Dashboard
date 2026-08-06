@@ -119,7 +119,10 @@ function trackedItemsHtml(project, stage) {
 
 function leadCardHtml(project, stage) {
   var priority = PRIORITY_RANK[project.lead_priority] === undefined ? 'Low' : project.lead_priority;
-  return '<button type="button" class="lead-card lead-card-' + statusSlug(priority) + '"' +
+  // Card 3X: the board already publishes active_drilling ONLY while the record
+  // sits in Post-Drilling, which is exactly the card's condition.
+  return '<button type="button" class="lead-card lead-card-' + statusSlug(priority) +
+    (Number(project.active_drilling || 0) === 1 ? ' is-active-drilling' : '') + '"' +
     ' data-project-id="' + project.project_id + '" data-pipeline="prospect"' +
     ' data-priority="' + esc(priority) + '">' +
     '<span class="lead-card-identity">' +

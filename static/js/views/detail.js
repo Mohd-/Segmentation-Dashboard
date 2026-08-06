@@ -1306,9 +1306,14 @@ export function renderRightPanel(tasks) {
         ? '<button id="summary-phase-action" type="button" class="ghost danger-outline">Recall to Lead Phase…</button>'
         : '<button id="summary-phase-action" type="button" class="ghost">Promote to BP Well…</button>') + '</div>';
     }
+    // Card 3X. Exact copy, no article. The checkbox IS the accessible state:
+    // the animated border is a second, redundant signal, never the only one.
+    var isDrilling = Number(Store.project.active_drilling || 0) === 1;
     relocatedHtml =
       '<label class="summary-popover-check"><input id="summary-active-flag" type="checkbox" ' +
-      (isActive ? 'checked' : '') + '> Active Well</label>' + phaseButtonHtml;
+      (isActive ? 'checked' : '') + '> Active Well</label>' +
+      '<label class="summary-popover-check"><input id="summary-active-drilling" type="checkbox" ' +
+      (isDrilling ? 'checked' : '') + '> Active Drilling</label>' + phaseButtonHtml;
   }
   var popoverHtml =
     '<div id="summary-settings" class="summary-popover hidden" role="dialog" aria-label="Manage ' + recordKind.toLowerCase() + '">' +
@@ -1336,6 +1341,10 @@ export function renderRightPanel(tasks) {
 
   var activeFlag = byId('summary-active-flag');
   if (activeFlag) activeFlag.addEventListener('change', function () { saveProjectFlags({ active_well_enabled: activeFlag.checked }); });
+  var drillingFlag = byId('summary-active-drilling');
+  if (drillingFlag) drillingFlag.addEventListener('change', function () {
+    saveProjectFlags({ active_drilling: drillingFlag.checked });
+  });
   var phaseAction = byId('summary-phase-action');
   if (phaseAction) phaseAction.addEventListener('click', function () {
     // Hand off to the confirm dialog with the popover already dismissed, so a

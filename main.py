@@ -594,12 +594,19 @@ def project_flags(project_id):
     # action; toggling only active_well_enabled stays ungated.
     if "business_plan_enabled" in payload:
         require_role("supervisor")
+    # Card 3X: Active Drilling is a well EDIT, so it takes the same authorized
+    # role as the other per-well gear controls. Enforced here, server-side --
+    # the menu item being hidden is not authorization.
+    if "active_drilling" in payload:
+        require_role("supervisor")
     workflow.update_project_flags(
         session,
         project_id,
         payload.get("business_plan_enabled") if "business_plan_enabled" in payload else None,
         payload.get("active_well_enabled") if "active_well_enabled" in payload else None,
         payload.get("business_plan_year"), actor(payload),
+        active_drilling=(payload.get("active_drilling")
+                         if "active_drilling" in payload else None),
     )
     return json_response({"ok": True})
 
