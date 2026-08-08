@@ -84,6 +84,7 @@ import shutil
 import sys
 import tempfile
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Callable, Dict, List, Optional, Tuple
 
 import openpyxl
@@ -332,7 +333,13 @@ def _analyze(row: Dict[str, str]) -> Tuple[Optional[str], List[str], Optional[in
     non-empty. ``fluid`` is the canonical fluid casing ('' if the Status is not a
     fluid). Only checks derivable from the row alone live here; duplicate-name
     and already-in-DB checks need cross-row / DB context and live in
-    :func:`import_rows`."""
+    :func:`import_rows`.
+
+    A well with BP year < current year is classified as 'historical' and must
+    have a known fluid status (Gas, Water Bearing, Dry Hole, etc.) -- it is a
+    drilled well placed in the post-testing phase with everything marked
+    complete. The current year is determined at runtime, not hardcoded.
+    """
     errors: List[str] = []
     name = _text(row, "Well Name")
     if not name:
@@ -377,11 +384,20 @@ def _analyze(row: Dict[str, str]) -> Tuple[Optional[str], List[str], Optional[in
     if status_kind == "fluid" and year is None and not year_raw:
         errors.append("a drilled well needs a BP Year")
 
+    # A well with a past BP year must be a drilled well with known fluid status
+    # (Gas, Water Bearing, Dry Hole, etc.) -- it is placed in the post-testing
+    # phase with everything marked complete. An undrilled well cannot have a
+    # past BP year.
+    current_year = datetime.now().year
+    if year is not None and year < current_year and status_kind != "fluid":
+        errors.append("a well with a past BP year must have a known fluid status "
+                      "(Gas, Water Bearing, Dry Hole, etc.)")
+
     if errors:
         return None, errors, year, fluid
 
     if year is not None:
-        record_type = "historical" if year < 2026 else "bp"
+        record_type = "historical" if year < current_year else "bp"
     elif status_kind == "staked":
         record_type = "mature"
     else:  # "proposed" or blank
@@ -773,9 +789,10 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
             # when only the YEAR changed: set_business_plan handles a year-only
             # change, and it re-captures the snapshot only for a non-bp
             # pipeline_type, so an already-promoted well keeps its snapshot.
-            # (Year < 2026 for historicals relies on the guard's 1990 floor --
-            # allow_historical_year=True skips the promotion-only current-year
-            # floor, since imports legitimately land historical BP wells.)
+            # (Year < current year for historicals relies on the guard's 1990
+            # floor -- allow_historical_year=True skips the promotion-only
+            # current-year floor, since imports legitimately land historical
+            # BP wells.)
             workflow.update_project_flags(
                 session, pid, business_plan_enabled=True, business_plan_year=year,
                 changed_by=IMPORT_USER, allow_historical_year=True)

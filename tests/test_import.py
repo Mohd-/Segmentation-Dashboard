@@ -17,6 +17,7 @@ Where a case depends on those, it is noted in a comment.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 import openpyxl
 import pytest
@@ -75,12 +76,17 @@ def test_four_record_types_placed_correctly(client, app_modules, tmp_path):
     import import_excel
     import reporting
     import workflow
+    from workflow.constants import BP_EXECUTION_STAGES
 
+    current_year = datetime.now().year
+    bp_year = current_year + 1
     rows = [
-        # historical: BP Year < 2026 (relies on the 1990-2040 year guard).
-        {"Well Name": "HIST-1", "BP Year": 2019, "P90 Area (km2)": 2, "P10 Area (km2)": 6},
-        # bp well with a fluid status.
-        {"Well Name": "BPWL-2", "BP Year": 2027, "Status": "Gas", "Classification": "Exploration",
+        # historical: BP Year < current year (relies on the 1990-2040 year guard).
+        # Must have a known fluid status (drilled well).
+        {"Well Name": "HIST-1", "BP Year": 2019, "Status": "Gas",
+         "P90 Area (km2)": 2, "P10 Area (km2)": 6},
+        # bp well with a fluid status (future year so it stays bp regardless of when test runs).
+        {"Well Name": "BPWL-2", "BP Year": bp_year, "Status": "Gas", "Classification": "Exploration",
          "OGIP Mean (BCF)": 10, "Reservoir CoS (%)": 45, "Trap CoS (%)": 50,
          "P50 Pay Thickness (ft)": 40, "Gas Rate (MMSCFD)": 8},
         # mature lead: Staked, no BP Year.
@@ -123,6 +129,14 @@ def test_four_record_types_placed_correctly(client, app_modules, tmp_path):
         # Approved -> completed; relies on the completed-wells-exit rule).
         assert "HIST-1" in portfolio
         assert "HIST-1" not in bp_names
+
+        # Direct contract: EVERY BP_EXECUTION_STAGES task for HIST-1 is Approved.
+        # This is the explicit BPE auto-completion assertion (not just "off the board").
+        hist_tasks = _tasks_by_name(session, "HIST-1")
+        for task_name, task_data in hist_tasks.items():
+            if task_data["stage_group"] in BP_EXECUTION_STAGES:
+                assert task_data["status"] == "Approved", \
+                    f"HIST-1 task '{task_name}' ({task_data['stage_group']}) should be Approved"
 
         # The escape hatch: HIST-1's 2019 year is well before today, yet the
         # import path (allow_historical_year=True) still enabled it -- a
@@ -426,6 +440,40 @@ def test_year_before_1990_is_row_error_with_no_project(client, app_modules, tmp_
         assert report.results[0].outcome == "error"
         assert "before 1990" in report.results[0].reason
         assert _pid(session, "OLD-1") is None  # nothing was created
+    finally:
+        session.close()
+
+
+def test_historical_well_without_fluid_is_rejected(client, app_modules, tmp_path):
+    """A well with BP year < current year must have a known fluid status.
+
+    Historical wells are drilled wells placed in post-testing with everything
+    complete. An undrilled well (no fluid) cannot be historical -- it has not
+    been drilled yet. The importer must reject such a row with a clear error."""
+    from datetime import datetime
+    import import_excel
+
+    past_year = datetime.now().year - 1
+    # No fluid status -- should be rejected.
+    record_type, errors = import_excel.classify_row({"Well Name": "PAST-1", "BP Year": str(past_year)})
+    assert record_type is None
+    assert any("past BP year" in e for e in errors)
+    assert any("fluid status" in e for e in errors)
+
+    _write_sheet(tmp_path / "past.xlsx", [
+        {"Well Name": "PAST-1", "BP Year": past_year, "P90 Area (km2)": 2}], header_row=1)
+    session = _session(app_modules)
+    try:
+        report = import_excel.import_rows(session, import_excel.parse_workbook(str(tmp_path / "past.xlsx")))
+        assert report.results[0].outcome == "error"
+        assert "fluid status" in report.results[0].reason
+        assert _pid(session, "PAST-1") is None
+
+        # With a fluid status, it imports as historical.
+        record_type2, errors2 = import_excel.classify_row(
+            {"Well Name": "PAST-2", "BP Year": str(past_year), "Status": "Gas"})
+        assert record_type2 == "historical"
+        assert not errors2
     finally:
         session.close()
 
