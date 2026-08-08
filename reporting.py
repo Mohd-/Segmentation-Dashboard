@@ -18,6 +18,7 @@ comparisons).
 """
 from __future__ import annotations
 
+import math
 from typing import Dict
 
 import config
@@ -26,6 +27,7 @@ import db
 import folders
 import workflow
 from helpers import to_float_or_none
+from workflow.flowback import primary_flowback_stage
 
 
 def dashboard_metrics(session):
@@ -191,6 +193,9 @@ _BP_TASK_FIELD_KEYS = [
     # (workflow.staking_confirmed), which is the Well Site Location step's own
     # completion predicate. These three are what that predicate reads.
     "wellsite_letter_loaded", "staked_x", "staked_y",
+    # Flowback Results stages (JSON list). The map tooltip shows the shared
+    # primary measured stage with its gas/liquid/FWHP/choke values.
+    "flowback_stages_rows",
 ]
 
 
@@ -392,6 +397,28 @@ def record_status(fields, staked, fluid=None):
     return "Staked" if staked else "Proposed"
 
 
+def _primary_flowback_stage(flowback_json):
+    """Return tooltip values from the shared primary measured stage.
+
+    ``workflow.flowback`` normalizes the historical ``flowback_*`` row aliases
+    and applies the measurement-only primary predicate also used by the Well
+    Summary and Portfolio export.  The map must not quietly choose a different
+    stage for the same well.
+    """
+    stage = primary_flowback_stage(flowback_json)
+    if not stage:
+        return {}
+    def number(value):
+        parsed = to_float_or_none(value)
+        return parsed if parsed is not None and math.isfinite(parsed) else None
+    return {
+        "flowback_gas_rate": number(stage.get("gas_rate_mmscfd")),
+        "flowback_liquid_rate": number(stage.get("liquid_rate_bpd")),
+        "flowback_fwhp": number(stage.get("fwhp_psi")),
+        "flowback_choke_size": number(stage.get("choke_size_in")),
+    }
+
+
 def map_attributes_by_project(session, project_ids):
     """Reporting attributes for every requested map project, keyed by id.
 
@@ -404,6 +431,7 @@ def map_attributes_by_project(session, project_ids):
     ``record_status`` and ``total_cos`` are the exact Portfolio semantics.
     Area values are stripped stored strings (not coerced numbers), leaving the
     client to validate/aggregate them just as it does the percentage string.
+    Flowback data comes from the shared primary measured stage.
     """
     ids = list(project_ids or [])
     if not ids:
@@ -415,6 +443,7 @@ def map_attributes_by_project(session, project_ids):
     for project_id in ids:
         fields = task_fields.get(project_id, {})
         fluid = resolve_well_fluid(fields, sarh_formations.get(project_id, {}))
+        flowback = _primary_flowback_stage(fields.get("flowback_stages_rows"))
         result[project_id] = {
             "record_status": record_status(
                 fields, stake_map.get(project_id, False), fluid=fluid),
@@ -426,6 +455,7 @@ def map_attributes_by_project(session, project_ids):
             "p90_area_km2": _first_filled(fields.get("p90_area_km2")),
             "p10_area_km2": _first_filled(fields.get("p10_area_km2")),
         }
+        result[project_id].update(flowback)
     return result
 
 

@@ -335,7 +335,7 @@ export class MapCanvas {
     var colors = this._colors();
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.clearRect(0, 0, this.width, this.height);
-    ctx.fillStyle = colors.canvas;
+    ctx.fillStyle = this.store.backgroundColor || colors.canvas;
     ctx.fillRect(0, 0, this.width, this.height);
 
     // Bottom -> top exactly as the store orders it (borders pinned bottom).
@@ -371,7 +371,7 @@ export class MapCanvas {
       }
     }
     if (fill) {
-      ctx.fillStyle = withAlpha(layer.color, 0.18);
+      ctx.fillStyle = withAlpha(layer.fillColor || layer.color, 0.18);
       ctx.fill('evenodd');
     }
     ctx.lineJoin = 'round';

@@ -235,7 +235,9 @@ def test_missing_borders_file_returns_an_empty_feature_collection(client, map_di
 # board row it is composed from carries dates, folder paths and revisions the
 # map has no business publishing).
 WELL_ROW_KEYS = [
-    "coord_source", "display_stage", "field", "gas_field", "mean_gas_bcf",
+    "coord_source", "display_stage", "field", "flowback_choke_size",
+    "flowback_fwhp", "flowback_gas_rate", "flowback_liquid_rate",
+    "gas_field", "mean_gas_bcf",
     "overall_status", "p10_area_km2", "p90_area_km2", "pipeline_type",
     "project_id", "project_name", "record_status", "total_cos", "x", "y",
     "year",
@@ -464,3 +466,42 @@ def test_map_reporting_reads_are_batched_for_the_whole_overlay(client, app_modul
     assert len(field_reads) == 3, field_reads
     assert len(formation_reads) == 1, formation_reads
     assert len(stake_reads) == 1, stake_reads
+
+
+def test_wells_include_flowback_from_primary_stage(client):
+    """Map wells use the same first measured stage as Well Summary/export.
+
+    The reader must also normalize historical ``flowback_*`` keys inside a
+    stage row. The four tooltip fields are null when no measured stage exists.
+    """
+    import json
+
+    pid = create_project(client, "MAPPY-FB", lead_x="512000", lead_y="2903000")
+
+    # No flowback data yet -> all four fields are null.
+    well = _well_for(client, pid)
+    assert well["flowback_gas_rate"] is None
+    assert well["flowback_liquid_rate"] is None
+    assert well["flowback_fwhp"] is None
+    assert well["flowback_choke_size"] is None
+
+    # A depth-only first row is skipped. The second row uses the historical
+    # aliases and is the primary result; a later higher-liquid row must not
+    # make the map disagree with Well Summary or export.
+    stages = [
+        {"id": "depth-only", "formation": "F1", "top_md": "11000", "base_md": "11200"},
+        {"_id": "legacy-primary", "flowback_formation": "F1",
+         "flowback_gas_rate_mmscfd": "10", "flowback_liquid_rate_bpd": "500",
+         "flowback_fwhp_psi": "2000", "flowback_choke_size_in": "0.25"},
+        {"id": "later-stage", "formation": "F2", "gas_rate_mmscfd": "20",
+         "liquid_rate_bpd": "1500", "fwhp_psi": "3500", "choke_size_in": "0.5"},
+    ]
+    _save_fields(client, pid, "Flowback Results", {
+        "flowback_stages_rows": json.dumps(stages),
+    })
+
+    well = _well_for(client, pid)
+    assert well["flowback_gas_rate"] == 10.0
+    assert well["flowback_liquid_rate"] == 500.0
+    assert well["flowback_fwhp"] == 2000.0
+    assert well["flowback_choke_size"] == 0.25

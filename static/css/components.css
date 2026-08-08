@@ -2933,7 +2933,7 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 /* Left of the sidebar box, at the same top offset as it. */
 .map-color-panel {
   position: absolute; top: 62px; right: calc(var(--space-3) * 2 + var(--map-sidebar-w)); z-index: 4;
-  width: 218px; max-height: 320px; overflow-y: auto;
+  width: 280px; max-height: 400px; overflow-y: auto;
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
   padding: var(--space-2);
@@ -2954,6 +2954,16 @@ button.ghost.success-outline:hover { background: var(--success-100); }
   flex: none; width: 26px; height: 20px; padding: 0;
   border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
   background: none; cursor: pointer;
+}
+.map-color-reset {
+  flex: none; background: transparent; border: 0; box-shadow: none;
+  padding: 0 var(--space-1); border-radius: var(--radius-sm);
+  font-size: var(--text-xs); color: var(--text-muted); cursor: pointer;
+}
+.map-color-reset:hover { color: var(--asas-blue); background: var(--brand-050); }
+.map-filters-actions { padding: var(--space-2) 0 0; }
+.map-filters-clear {
+  width: 100%; font-size: var(--text-sm); padding: var(--space-1) var(--space-2);
 }
 
 /* ---- Zoom pad, coordinate readout, tooltip ------------------------------ */

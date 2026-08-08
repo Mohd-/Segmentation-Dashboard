@@ -525,7 +525,7 @@ test('map: unreadable or hostile stored state degrades to defaults instead of th
   assert.equal(normalized.visible.a, true);
   assert.equal(normalized.colors.a, undefined, 'a non-hex color is not persisted');
   assert.equal(normalized.colors.b, '#aabbcc');
-  assert.equal(normalizeState(null).version, 1);
+  assert.equal(normalizeState(null).version, 2);
 });
 
 /* -------------------------------------------------------------------------
@@ -859,6 +859,126 @@ test('map: wellLabel falls back to the project id, then to a generic label', fun
 });
 
 /* -------------------------------------------------------------------------
+   Well tooltip — flowback details
+   ------------------------------------------------------------------------- */
+
+test('map: well tooltip shows mean OGIP and primary-stage flowback data', function () {
+  var well = {
+    project_name: 'W1',
+    display_stage: 'Staking',
+    overall_status: 'In Progress',
+    field: 'North',
+    mean_gas_bcf: 10.5,
+    flowback_gas_rate: 5.25,
+    flowback_liquid_rate: 1200.5,
+    flowback_fwhp: 3500,
+    flowback_choke_size: 0.5
+  };
+  var html = wellTooltipHtml(well, []);
+  assert.match(html, /Mean OGIP: 10\.50 BCF/);
+  assert.match(html, /Flowback \(primary stage\)/);
+  assert.match(html, /Gas Rate.*5\.25 MMSCFD/);
+  assert.match(html, /Liquid Rate.*1200\.50 bpd/);
+  assert.match(html, /FWHP.*3500\.00 psi/);
+  assert.match(html, /Choke Size.*0\.50 in/);
+});
+
+test('map: well tooltip hides flowback section when no flowback data is present', function () {
+  var well = {
+    project_name: 'W1',
+    mean_gas_bcf: 10.5,
+    flowback_gas_rate: null,
+    flowback_liquid_rate: null,
+    flowback_fwhp: null,
+    flowback_choke_size: null
+  };
+  var html = wellTooltipHtml(well, []);
+  assert.match(html, /Mean OGIP: 10\.50 BCF/);
+  assert.equal(/Flowback/.test(html), false, 'no flowback section when all values are null');
+});
+
+test('map: well tooltip escapes hostile flowback values', function () {
+  var well = {
+    project_name: 'W1',
+    mean_gas_bcf: 10,
+    flowback_gas_rate: '<img src=x onerror=alert(1)>',
+    flowback_liquid_rate: null,
+    flowback_fwhp: null,
+    flowback_choke_size: null
+  };
+  var html = wellTooltipHtml(well, []);
+  assert.equal(/<img/.test(html), false, 'no live img tag');
+  var host = document.createElement('div');
+  host.innerHTML = html;
+  assert.equal(host.querySelectorAll('img').length, 0);
+});
+
+/* -------------------------------------------------------------------------
+   Store: background color and fill color persistence
+   ------------------------------------------------------------------------- */
+
+test('map: store persists background color and restores it', function () {
+  var storage = memStorage();
+  var store = new LayerStore();
+  store.setLayers(layerMeta());
+  store.setBackgroundColor('#123456');
+  writeMapState(store.toState(), storage);
+  var restored = readMapState(storage);
+  assert.equal(restored.backgroundColor, '#123456');
+  var store2 = new LayerStore();
+  store2.applyState(restored);
+  assert.equal(store2.backgroundColor, '#123456');
+});
+
+test('map: store persists fill color per layer and restores it', function () {
+  var storage = memStorage();
+  var store = new LayerStore();
+  store.setLayers(layerMeta());
+  store.setFillColor('blocks', '#aabbcc');
+  writeMapState(store.toState(), storage);
+  var restored = readMapState(storage);
+  assert.equal(restored.fillColors.blocks, '#aabbcc');
+  var store2 = new LayerStore();
+  store2.setLayers(layerMeta());
+  store2.applyState(restored);
+  assert.equal(store2.layers.get('blocks').fillColor, '#aabbcc');
+  assert.equal(store2.layers.get('fields').fillColor, null, 'unset layers have no fill color');
+});
+
+test('map: setBackgroundColor null resets to theme default', function () {
+  var store = new LayerStore();
+  store.setBackgroundColor('#123456');
+  assert.equal(store.backgroundColor, '#123456');
+  store.setBackgroundColor(null);
+  assert.equal(store.backgroundColor, null);
+});
+
+test('map: setFillColor null resets to border color', function () {
+  var store = new LayerStore();
+  store.setLayers(layerMeta());
+  store.setFillColor('blocks', '#aabbcc');
+  assert.equal(store.layers.get('blocks').fillColor, '#aabbcc');
+  store.setFillColor('blocks', null);
+  assert.equal(store.layers.get('blocks').fillColor, null);
+});
+
+/* -------------------------------------------------------------------------
+   Clear all filters
+   ------------------------------------------------------------------------- */
+
+test('map: setWellFilters with empty object clears all filters', function () {
+  var store = new LayerStore();
+  store.setWells([
+    { gas_field: 'North', year: 2025, record_status: 'Active', total_cos: 50, mean_gas_bcf: 10, x: 1, y: 1 },
+    { gas_field: 'South', year: 2026, record_status: 'Draft', total_cos: 40, mean_gas_bcf: 20, x: 2, y: 2 }
+  ]);
+  store.setWellFilters({ field: ['North'], year: ['2025'] });
+  assert.equal(store.wells.length, 1, 'filters reduce the wells');
+  store.setWellFilters({});
+  assert.equal(store.wells.length, 2, 'clearing filters restores all wells');
+});
+
+/* -------------------------------------------------------------------------
    Summary panel markup
    ------------------------------------------------------------------------- */
 
@@ -1038,15 +1158,17 @@ test('map: refreshMap boots the tab — sidebar order, summary figures, toolbox 
     document.getElementById('map-tool-pointer').click();
     assert.equal(document.getElementById('map-tool-pointer').getAttribute('aria-pressed'), 'true');
 
-    // The color panel: one native <input type="color"> per row, wells included.
+    // The color panel: background + border input per layer, plus a fill input for each polygon layer.
+    // wells (1) + fields (2: border+fill) + blocks (2: border+fill) + borders (1) + background (1) = 7.
     document.getElementById('map-colors-toggle').click();
     var panel = document.getElementById('map-color-panel');
     assert.equal(panel.hidden, false);
     var inputs = panel.querySelectorAll('input[type="color"]');
-    assert.equal(inputs.length, 4, 'wells + three layers');
-    assert.equal(inputs[0].getAttribute('data-layer'), WELLS_ID);
-    inputs[0].value = '#0a0b0c';
-    inputs[0].dispatchEvent(new Event('input', { bubbles: true }));
+    assert.equal(inputs.length, 7, 'background + border/fill inputs per layer');
+    var wellsInput = panel.querySelector('input[data-layer="' + WELLS_ID + '"]');
+    assert.ok(wellsInput, 'wells has a border color input');
+    wellsInput.value = '#0a0b0c';
+    wellsInput.dispatchEvent(new Event('input', { bubbles: true }));
     assert.equal(JSON.parse(window.localStorage.getItem(MAP_STATE_KEY)).colors[WELLS_ID], '#0a0b0c');
 
     // Collapsing the summary is persisted too.

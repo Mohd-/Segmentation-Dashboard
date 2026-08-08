@@ -82,8 +82,9 @@ export function wellLabel(well) {
 }
 
 /* The hovered WELL's tooltip: who it is, where it is in the workflow, its
-   mean OGIP, and which visible polygon(s) contain it. Every value is escaped
-   — these strings are project names and shapefile attributes, i.e. data. */
+   mean OGIP, Flowback details (from the primary measured stage), and which
+   visible polygon(s) contain it. Every value is escaped — these strings are
+   project names and shapefile attributes, i.e. data. */
 export function wellTooltipHtml(well, hits) {
   var rows = [
     ['Stage', well && well.display_stage],
@@ -95,11 +96,41 @@ export function wellTooltipHtml(well, hits) {
   var inside = (hits || []).length
     ? (hits || []).map(function (hit) { return esc(hit.label || hit.layerName); }).join(', ')
     : '—';
+  var ogipText = formatOgip(well && well.mean_gas_bcf);
+  var ogipDisplay = ogipText === '—' ? '' : ' BCF';
+  var flowbackSection = buildFlowbackSection(well);
   return '<div class="map-tt-title">' + esc(wellLabel(well)) + '</div>'
     + (rows ? '<table>' + rows + '</table>' : '')
-    + '<div class="map-tt-metric">Mean OGIP: ' + esc(formatOgip(well && well.mean_gas_bcf))
-    + (formatOgip(well && well.mean_gas_bcf) === '—' ? '' : ' BCF') + '</div>'
+    + '<div class="map-tt-metric">Mean OGIP: ' + esc(ogipText) + ogipDisplay + '</div>'
+    + flowbackSection
     + '<div class="map-tt-inside"><span class="k">Inside</span> ' + inside + '</div>';
+}
+
+function formatFlowbackValue(value, unit) {
+  if (value === null || value === undefined || value === '') return '';
+  var numeric = Number(value);
+  if (!isFinite(numeric)) return '';
+  return numeric.toFixed(2) + (unit || '');
+}
+
+function buildFlowbackSection(well) {
+  if (!well) return '';
+  var gasRate = formatFlowbackValue(well.flowback_gas_rate, ' MMSCFD');
+  var liquidRate = formatFlowbackValue(well.flowback_liquid_rate, ' bpd');
+  var fwhp = formatFlowbackValue(well.flowback_fwhp, ' psi');
+  var chokeSize = formatFlowbackValue(well.flowback_choke_size, ' in');
+  if (!gasRate && !liquidRate && !fwhp && !chokeSize) return '';
+  var rows = [];
+  if (gasRate) rows.push(['Gas Rate', gasRate]);
+  if (liquidRate) rows.push(['Liquid Rate', liquidRate]);
+  if (fwhp) rows.push(['FWHP', fwhp]);
+  if (chokeSize) rows.push(['Choke Size', chokeSize]);
+  if (!rows.length) return '';
+  var tableRows = rows.map(function (row) {
+    return '<tr><td class="k">' + esc(row[0]) + '</td><td class="n">' + esc(row[1]) + '</td></tr>';
+  }).join('');
+  return '<div class="map-tt-section"><div class="map-tt-section-head">Flowback (primary stage)</div>'
+    + '<table class="map-tt-wells">' + tableRows + '</table></div>';
 }
 
 /* The hovered POLYGON's tooltip: the ported attribute table, plus the wells
@@ -159,7 +190,9 @@ function wellFilterHtml() {
           return '<label class="portfolio-filter-option map-well-filter-option"><input type="checkbox" value="' + esc(value) + '"'
             + (selected.indexOf(value) >= 0 ? ' checked' : '') + '><span>' + esc(value) + '</span></label>';
         }).join('') + '</div></fieldset>';
-    }).join('') + '</div>';
+    }).join('')
+    + '<div class="map-filters-actions"><button type="button" class="map-filters-clear ghost">Clear all</button></div>'
+    + '</div>';
 }
 
 function selectionsFromSidebar(list) {
@@ -184,6 +217,7 @@ function sidebarRows() {
     label: 'Wells (projects)',
     count: store.plottedWells().length,
     color: store.wellsColor,
+    fillColor: null,
     visible: store.wellsVisible,
     pinned: true,
     layer: null
@@ -194,6 +228,7 @@ function sidebarRows() {
       label: layer.isBorders ? 'Country borders' : layer.name,
       count: layer.featureCount,
       color: layer.color,
+      fillColor: layer.fillColor,
       visible: layer.visible,
       pinned: !!layer.isBorders,
       error: layer.error || '',
@@ -246,6 +281,15 @@ function renderSidebar() {
       afterDataChange();
     });
   });
+
+  var clearBtn = filters.querySelector('.map-filters-clear');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', function () {
+      store.setWellFilters({});
+      renderSidebar();
+      afterDataChange();
+    });
+  }
 
   all('.map-layer', list).forEach(function (rowEl) {
     var id = rowEl.getAttribute('data-layer');
@@ -367,16 +411,58 @@ function renderColorPanel() {
   var panel = byId('map-color-panel');
   if (!panel) return;
   var rows = sidebarRows();
-  panel.innerHTML = '<div class="map-color-head">Layer colors</div>' + rows.map(function (row, index) {
+  var bgValue = store.backgroundColor || '';
+  var html = '<div class="map-color-head">Layer colors</div>';
+  html += '<label class="map-color-row" for="map-color-bg">'
+    + '<input type="color" id="map-color-bg" value="' + esc(bgValue || '#f6f9fb') + '" data-role="background">'
+    + '<span>Background</span>'
+    + (store.backgroundColor ? ' <button type="button" class="map-color-reset" data-role="background-reset" title="Reset to theme default">Reset</button>' : '')
+    + '</label>';
+  html += rows.map(function (row, index) {
     var inputId = 'map-color-' + index;
+    var isPolygonLayer = row.layer && !row.layer.isBorders && row.layer.geomType === 'polygon';
+    if (isPolygonLayer) {
+      var fillId = 'map-fill-' + index;
+      var fillValue = row.layer.fillColor || row.color;
+      return '<label class="map-color-row" for="' + inputId + '">'
+        + '<input type="color" id="' + inputId + '" value="' + esc(row.color) + '" data-layer="' + esc(row.id) + '" data-role="border">'
+        + '<input type="color" id="' + fillId + '" value="' + esc(fillValue) + '" data-layer="' + esc(row.id) + '" data-role="fill">'
+        + '<span>' + esc(row.label) + '</span>'
+        + (row.layer.fillColor ? ' <button type="button" class="map-color-reset" data-layer="' + esc(row.id) + '" data-role="fill-reset" title="Reset fill to border color">Reset fill</button>' : '')
+        + '</label>';
+    }
     return '<label class="map-color-row" for="' + inputId + '">'
-      + '<input type="color" id="' + inputId + '" value="' + esc(row.color) + '" data-layer="' + esc(row.id) + '">'
+      + '<input type="color" id="' + inputId + '" value="' + esc(row.color) + '" data-layer="' + esc(row.id) + '" data-role="border">'
       + '<span>' + esc(row.label) + '</span></label>';
   }).join('');
+  panel.innerHTML = html;
   all('input[type="color"]', panel).forEach(function (input) {
     input.addEventListener('input', function () {
-      if (!store.setColor(input.getAttribute('data-layer'), input.value)) return;
+      var role = input.getAttribute('data-role');
+      if (role === 'background') {
+        store.setBackgroundColor(input.value);
+      } else if (role === 'fill') {
+        store.setFillColor(input.getAttribute('data-layer'), input.value);
+      } else {
+        if (!store.setColor(input.getAttribute('data-layer'), input.value)) return;
+      }
       persist();
+      renderSidebar();
+      view.requestRender();
+    });
+  });
+  all('.map-color-reset', panel).forEach(function (button) {
+    button.addEventListener('click', function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      var role = button.getAttribute('data-role');
+      if (role === 'background-reset') {
+        store.setBackgroundColor(null);
+      } else if (role === 'fill-reset') {
+        store.setFillColor(button.getAttribute('data-layer'), null);
+      }
+      persist();
+      renderColorPanel();
       renderSidebar();
       view.requestRender();
     });

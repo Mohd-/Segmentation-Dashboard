@@ -34,7 +34,7 @@ export var WELLS_DEFAULT_COLOR = '#e05252';
 export var BORDERS_DEFAULT_COLOR = '#8fa3b8';
 
 export var MAP_STATE_KEY = 'asas.map.state';
-export var MAP_STATE_VERSION = 1;
+export var MAP_STATE_VERSION = 2;
 
 // The map and portfolio cross-plot intentionally use the same four quadrant
 // names and inclusive cutoffs.  `total_cos` is delivered as a percentage, so
@@ -341,11 +341,15 @@ export function writeMapState(state, storage) {
 export function normalizeState(raw) {
   var input = raw && typeof raw === 'object' ? raw : {};
   var order = Array.isArray(input.order) ? input.order.filter(function (name) { return typeof name === 'string'; }) : [];
+  var backgroundColor = typeof input.backgroundColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(input.backgroundColor)
+    ? input.backgroundColor.toLowerCase() : null;
   return {
     version: MAP_STATE_VERSION,
     order: order,
     visible: plainMap(input.visible, function (value) { return !!value; }),
     colors: plainMap(input.colors, function (value) { return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value) ? value.toLowerCase() : null; }),
+    fillColors: plainMap(input.fillColors, function (value) { return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value) ? value.toLowerCase() : null; }),
+    backgroundColor: backgroundColor,
     summaryCollapsed: !!input.summaryCollapsed,
     sidebarCollapsed: typeof input.sidebarCollapsed === 'boolean' ? input.sidebarCollapsed : null,
     filtersCollapsed: !!input.filtersCollapsed,
@@ -381,6 +385,7 @@ export class LayerStore {
     this.wellFilters = { field: [], year: [], status: [], quadrant: [] };
     this.wellsVisible = true;
     this.wellsColor = WELLS_DEFAULT_COLOR;
+    this.backgroundColor = null;      // null = use theme default
     this.summaryCollapsed = false;
     this.sidebarCollapsed = null;   // tri-state: null = the user has never chosen
     this.filtersCollapsed = false;
@@ -402,19 +407,29 @@ export class LayerStore {
     this.sidebarCollapsed = this.prefs.sidebarCollapsed;
     this.filtersCollapsed = this.prefs.filtersCollapsed;
     this.layersCollapsed = this.prefs.layersCollapsed;
+    this.backgroundColor = this.prefs.backgroundColor;
     if (Object.prototype.hasOwnProperty.call(this.prefs.visible, WELLS_ID)) {
       this.wellsVisible = this.prefs.visible[WELLS_ID];
     }
     if (this.prefs.colors[WELLS_ID]) this.wellsColor = this.prefs.colors[WELLS_ID];
+    // Apply fill colors to any layers already loaded. setLayers also reads
+    // prefs.fillColors, but applyState can be called after setLayers (test
+    // seam, or a reload where the order is reversed).
+    var self = this;
+    this.layers.forEach(function (layer, name) {
+      if (self.prefs.fillColors[name]) layer.fillColor = self.prefs.fillColors[name];
+    });
     return this;
   }
 
   toState() {
     var visible = {};
     var colors = {};
+    var fillColors = {};
     this.layers.forEach(function (layer, name) {
       visible[name] = !!layer.visible;
       colors[name] = layer.color;
+      if (layer.fillColor) fillColors[name] = layer.fillColor;
     });
     visible[WELLS_ID] = !!this.wellsVisible;
     colors[WELLS_ID] = this.wellsColor;
@@ -423,6 +438,8 @@ export class LayerStore {
       order: this.order.slice(),
       visible: visible,
       colors: colors,
+      fillColors: fillColors,
+      backgroundColor: this.backgroundColor,
       summaryCollapsed: !!this.summaryCollapsed,
       sidebarCollapsed: this.sidebarCollapsed === null ? null : !!this.sidebarCollapsed,
       filtersCollapsed: !!this.filtersCollapsed,
@@ -451,6 +468,7 @@ export class LayerStore {
       if (!isBorders && !(old && old.color) && !prefs.colors[meta.name]) palette += 1;
       var visible = old ? old.visible
         : (Object.prototype.hasOwnProperty.call(prefs.visible, meta.name) ? prefs.visible[meta.name] : true);
+      var fillColor = (old && old.fillColor) || prefs.fillColors[meta.name] || null;
       self.layers.set(meta.name, {
         name: meta.name,
         geomType: meta.geom_type,
@@ -458,6 +476,7 @@ export class LayerStore {
         featureCount: meta.feature_count,
         isBorders: isBorders,
         color: color,
+        fillColor: fillColor,
         visible: visible,
         features: old ? old.features : null,
         loading: false
@@ -543,6 +562,31 @@ export class LayerStore {
     var layer = this.layers.get(name);
     if (!layer) return false;
     layer.color = value;
+    return true;
+  }
+
+  setFillColor(name, color) {
+    if (color === null || color === '' || color === undefined) {
+      var layer = this.layers.get(name);
+      if (!layer) return false;
+      layer.fillColor = null;
+      return true;
+    }
+    if (!/^#[0-9a-fA-F]{6}$/.test(String(color))) return false;
+    var value = String(color).toLowerCase();
+    var layer = this.layers.get(name);
+    if (!layer) return false;
+    layer.fillColor = value;
+    return true;
+  }
+
+  setBackgroundColor(color) {
+    if (color === null || color === '' || color === undefined) {
+      this.backgroundColor = null;
+      return true;
+    }
+    if (!/^#[0-9a-fA-F]{6}$/.test(String(color))) return false;
+    this.backgroundColor = String(color).toLowerCase();
     return true;
   }
 

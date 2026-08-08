@@ -156,6 +156,13 @@ def map_wells(session) -> List[Dict[str, Any]]:
             "p90_area_km2": attrs["p90_area_km2"],
             "p10_area_km2": attrs["p10_area_km2"],
             "mean_gas_bcf": project.get("mean_gas_bcf"),
+            # Flowback details from the shared primary measured stage. None
+            # when no stage result is recorded; the tooltip hides the section
+            # entirely when all four are absent.
+            "flowback_gas_rate": attrs.get("flowback_gas_rate"),
+            "flowback_liquid_rate": attrs.get("flowback_liquid_rate"),
+            "flowback_fwhp": attrs.get("flowback_fwhp"),
+            "flowback_choke_size": attrs.get("flowback_choke_size"),
             "x": position[0],
             "y": position[1],
             "coord_source": source,
