@@ -483,9 +483,9 @@ def test_update_merges_json_minisheets_preserving_siblings(client, app_modules, 
                                           changed_by="Test")
         stages = json.loads(workflow.get_task_dynamic_fields(
             session, tasks["Flowback Results"]["task_id"])["flowback_stages_rows"])
-        # Fresh import writes the SARH default in-row (per-stage), not step-level.
+        # Fresh import writes the canonical SARH key in-row, not a flat task field.
         assert len(stages) == 1
-        assert stages[0]["flowback_formation"] == "SARH"
+        assert stages[0]["formation"] == "SARH"
         stages.append({"flowback_gas_rate_mmscfd": "3", "flowback_formation": "KHUFF"})
         workflow.save_task_dynamic_fields(session, tasks["Flowback Results"]["task_id"],
                                           {"flowback_stages_rows": json.dumps(stages)},
@@ -513,13 +513,13 @@ def test_update_merges_json_minisheets_preserving_siblings(client, app_modules, 
         merged_stages = json.loads(workflow.get_task_dynamic_fields(
             session, tasks["Flowback Results"]["task_id"])["flowback_stages_rows"])
         assert len(merged_stages) == 2                       # second stage preserved
-        assert merged_stages[0]["flowback_choke_size_in"] == "0.5"
-        assert str(merged_stages[0]["flowback_gas_rate_mmscfd"]) == "8"   # sibling keys intact
-        assert str(merged_stages[0]["flowback_water_rate_bwpd"]) == "200"
-        # The update merge never sets flowback_formation, so the in-row values
-        # (primary's SARH default + the user-chosen KHUFF on stage 2) survive.
-        assert merged_stages[0]["flowback_formation"] == "SARH"
-        assert merged_stages[1]["flowback_formation"] == "KHUFF"
+        assert merged_stages[0]["choke_size_in"] == "0.5"
+        assert str(merged_stages[0]["gas_rate_mmscfd"]) == "8"   # sibling keys intact
+        assert str(merged_stages[0]["water_rate_bwpd"]) == "200"
+        # The update normalizes any historical aliases while retaining both
+        # the imported SARH value and the user-chosen KHUFF sibling stage.
+        assert merged_stages[0]["formation"] == "SARH"
+        assert merged_stages[1]["formation"] == "KHUFF"
     finally:
         session.close()
 

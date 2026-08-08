@@ -3,7 +3,7 @@ import { ICONS } from '../icons.js';
 import { API } from '../api.js';
 import { currentUserName, currentRole, currentProjectPipeline, isCurrentPipelineView, Store, resetSelection } from '../state.js';
 import { activateTab } from '../navigation.js';
-import { BP_STAGES, PROSPECT_STAGES, STATUSES, DONE, SEISMIC_BLOCKS, FLOWBACK_RATE_FIELDS } from '../schema.js';
+import { BP_STAGES, PROSPECT_STAGES, STATUSES, DONE, SEISMIC_BLOCKS, FLOWBACK_RATE_FIELDS, primaryFlowbackStage } from '../schema.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { canTransitionPhase, promoteProject, recallProject } from './transitions.js';
 import { loadComponent, LATEST_PIIP_SOURCES, POST_DRILL_PIIP_SOURCES, LEAD_PIIP_SOURCES, copyText } from './detail-form.js';
@@ -562,7 +562,6 @@ var THICKNESS_STEPS = ['Lead Assessment', 'Thickness Estimation'];
 // newest authority first, the same rule POST_DRILL_PIIP_SOURCES follows: SAD
 // Update supersedes SAD Model, and each merged step is followed by the retired
 // step it absorbed so wells written before the merge still resolve.
-var AREA_STEPS = ['Lead Assessment', 'Area Definition'];
 var SAD_AREA_SOURCES = [
   ['SAD Update', 'sad_update_area_km2_'],
   ['Resource Assessment Update', 'sad_update_area_km2_'],
@@ -653,6 +652,68 @@ function liquidTrio(sources, fieldMap) {
 // post_drill > quicklook), matching the plan's flagged precedence.
 var FORMATION_ACTUAL_PHASES = ['final', 'resource_update', 'post_drill', 'quicklook'];
 var FORMATION_VALUE_KEYS = ['top_tvdss_ft', 'base_tvdss_ft', 'thickness_ft', 'porosity_pct', 'swt_pct', 'pay_ft', 'ngr_pct', 'fluid'];
+var PRODUCTIVE_INTERVAL_FLUIDS = {
+  'Gas': true, 'Gas over Water': true, 'Oil': true, 'Oil over Gas': true, 'Oil over Water': true
+};
+
+function intervalThickness(interval) {
+  if (!interval || !isFilled(interval.top_tvdss_ft) || !isFilled(interval.base_tvdss_ft)) return null;
+  var top = Number(interval.top_tvdss_ft);
+  var base = Number(interval.base_tvdss_ft);
+  if (!isFinite(top) || !isFinite(base)) return null;
+  var thickness = Math.abs(base - top);
+  return thickness > 0 ? thickness : null;
+}
+
+function summaryPayIntervals(row) {
+  var valid = (row.pay_intervals || []).filter(function (interval) {
+    return interval && typeof interval === 'object' && intervalThickness(interval) !== null;
+  });
+  var productive = valid.filter(function (interval) {
+    return !!PRODUCTIVE_INTERVAL_FLUIDS[String(interval.fluid || '').trim()];
+  });
+  return productive.length ? productive : valid;
+}
+
+function weightedIntervalValue(intervals, key) {
+  var totalThickness = 0;
+  var total = 0;
+  (intervals || []).forEach(function (interval) {
+    if (!isFilled(interval[key])) return;
+    var value = Number(interval[key]);
+    var thickness = intervalThickness(interval);
+    if (!isFinite(value) || thickness === null) return;
+    total += value * thickness;
+    totalThickness += thickness;
+  });
+  return totalThickness ? total / totalThickness : '';
+}
+
+// BPE records the actual reservoir measurements on ordered pay intervals;
+// legacy/standard rows keep them on the formation envelope. Project the
+// former onto the same summary shape before all phase and fluid readers run.
+function formationForWellSummary(row) {
+  var projected = Object.assign({}, row || {});
+  var intervals = summaryPayIntervals(projected);
+  if (!intervals.length) return projected;
+  projected.pay_ft = intervals.reduce(function (total, interval) {
+    return total + intervalThickness(interval);
+  }, 0);
+  projected.porosity_pct = weightedIntervalValue(intervals, 'phit_pct');
+  projected.swt_pct = weightedIntervalValue(intervals, 'swt_pct');
+  projected.ngr_pct = weightedIntervalValue(intervals, 'ngr_pct');
+  for (var i = 0; i < intervals.length; i += 1) {
+    if (isFilled(intervals[i].fluid)) {
+      projected.fluid = intervals[i].fluid;
+      break;
+    }
+  }
+  return projected;
+}
+
+function formationsForWellSummary(rows) {
+  return (rows || []).map(function (row) { return formationForWellSummary(row); });
+}
 
 // Collapse a formation list to one row per formation name, each taken at its
 // highest-precedence phase. Names compare upper-cased (custom names are stored
@@ -1000,7 +1061,7 @@ function leadMetricsHtml(fieldMap, gasSources, derisking) {
 export function wellSummaryBodyHtml(source, folds, prefix) {
   var data = source || {};
   var fields = data.fields || {};
-  var formations = data.formations || [];
+  var formations = formationsForWellSummary(data.formations || []);
   var leadSummary = data.leadSummary || null;
   var deduped = dedupeFormationsByPhase(formations);
   var sarh = deduped['SARH'] ? deduped['SARH'].row : null;
@@ -1074,27 +1135,22 @@ export function wellSummaryBodyHtml(source, folds, prefix) {
     (fields['Quicklook Logs'] || {}).quicklook_fluid_type
   ]);
   var flowEntry = FLOWBACK_RATE_FIELDS[fluid] || FLOWBACK_RATE_FIELDS['Gas'];
-  // Primary flowback values are stage #1 -- the first non-empty row of the
-  // Flowback Results stages mini-sheet (whose column keys reuse the retired
-  // flat key names). Only when NO stage row exists does the read fall back
-  // to the retired step-level flat key, so a stage row and legacy flat data
-  // never mix (single-vintage rule, like the Reservoir CoS primary row).
+  // Primary flowback values are the first stage with a measurement. Formation
+  // and depth-only rows identify intervals, not results, so they cannot hide a
+  // later measured stage. The shared normalizer accepts legacy prefixed rows.
   var flowbackFields = fields['Flowback Results'] || {};
-  var primaryStage = null;
-  parseRepeatableRows(flowbackFields.flowback_stages_rows || '[]').forEach(function (stage) {
-    if (primaryStage || !stage) return;
-    if (Object.keys(stage).some(function (key) { return isFilled(stage[key]); })) primaryStage = stage;
-  });
+  var primaryStage = primaryFlowbackStage(
+    parseRepeatableRows(flowbackFields.flowback_stages_rows || '[]'));
   // Flowback Results: the headline rate plus the two figures that say under
   // what conditions it was measured. A rate without its wellhead pressure
   // and choke size is not a comparable number, and both were already
   // recorded on the stage row -- they simply had no surface here.
-  var flowRead = function (key) {
-    return primaryStage ? primaryStage[key] : flowbackFields[key];
+  var flowRead = function (stageKey, flatKey) {
+    return primaryStage ? primaryStage[stageKey] : flowbackFields[flatKey];
   };
-  var flowValue = flowRead(flowEntry.key);
-  var fwhp = flowRead('flowback_fwhp_psi');
-  var choke = flowRead('flowback_choke_size_in');
+  var flowValue = flowRead(flowEntry.key, flowEntry.legacyKey);
+  var fwhp = flowRead('fwhp_psi', 'flowback_fwhp_psi');
+  var choke = flowRead('choke_size_in', 'flowback_choke_size_in');
   var flowbackHtml = summarySection('Flowback Results',
     '<div class="summary-metrics">' +
     // The rate's label follows the well's fluid, so an oil well does not

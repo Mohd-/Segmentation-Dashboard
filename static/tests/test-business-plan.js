@@ -108,7 +108,10 @@ test('business-plan renders the approved dashboard and one auto-save approval de
     well_summary: {
       fields: {
         'SAD Model': { post_drill_piip_gas_p90: 90, post_drill_piip_gas_mean: 116, post_drill_piip_gas_p10: 140 },
-        'Flowback Results': { flowback_gas_rate_mmscfd: 12.5, flowback_fwhp_psi: 3200, flowback_choke_size_in: 0.5 },
+        'Flowback Results': { flowback_stages_rows: JSON.stringify([
+          { id: 'bpe-stage-1', formation: 'SARH', gas_rate_mmscfd: 12.5,
+            fwhp_psi: 3200, choke_size_in: 0.5 }
+        ]) },
         'Well Proposal': { sarh_formation_prognosis_pre_drill: 8000 }
       },
       formations: [{ formation: 'SARH', phase: 'final', top_tvdss_ft: 8120, thickness_ft: 96,

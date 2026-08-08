@@ -5,6 +5,7 @@ import {
   piip, SCHEMA, PROSPECT_STAGES, BP_STAGES, STATUSES, DONE,
   SEISMIC_BLOCKS, FLUID_TYPES, FORMATIONS, formationNames, FORMATION_METRICS,
   RESERVOIR_COS_COLUMNS, FLOWBACK_STAGE_COLUMNS, FLOWBACK_RATE_FIELDS,
+  normalizeFlowbackStage, primaryFlowbackStage,
   RESOURCE_SCENARIOS, validateStepFields, numericFieldError,
   SAD_FORMATION_COLUMNS, REQUIRED_FIELDS_FOR_SUBMIT, CHECKBOX_SUBMIT_STEPS,
   submitBlockedMessage
@@ -218,14 +219,29 @@ test('schema.FLOWBACK_RATE_FIELDS routes every producing fluid to its own rate',
     keyByFluid[fluid] = FLOWBACK_RATE_FIELDS[fluid].key;
   });
   assert.deepEqual(keyByFluid, {
-    'Gas': 'flowback_gas_rate_mmscfd',
-    'Gas over Water': 'flowback_gas_rate_mmscfd',
-    'Oil': 'flowback_liquid_rate_bpd',
-    'Oil over Gas': 'flowback_liquid_rate_bpd',
-    'Oil over Water': 'flowback_liquid_rate_bpd',
-    'Water Bearing': 'flowback_water_rate_bwpd'
+    'Gas': 'gas_rate_mmscfd',
+    'Gas over Water': 'gas_rate_mmscfd',
+    'Oil': 'liquid_rate_bpd',
+    'Oil over Gas': 'liquid_rate_bpd',
+    'Oil over Water': 'liquid_rate_bpd',
+    'Water Bearing': 'water_rate_bwpd'
   });
   assert.equal(FLOWBACK_RATE_FIELDS['Dry Hole'], undefined);
+});
+
+test('schema Flowback normalizer reads prefixed legacy rows and picks a measured stage', function () {
+  var stage = normalizeFlowbackStage({
+    _id: 'old-row', flowback_formation: 'SARH', flowback_top_md: '11200',
+    flowback_gas_rate_mmscfd: '6.1', flowback_choke_size_in: '0.5', future_key: 'kept'
+  });
+  assert.deepEqual(stage, {
+    id: 'old-row', formation: 'SARH', top_md: '11200', gas_rate_mmscfd: '6.1',
+    choke_size_in: '0.5', future_key: 'kept'
+  });
+  var primary = primaryFlowbackStage([
+    { formation: 'SARH', top_md: '11000', base_md: '11200' }, stage
+  ]);
+  assert.equal(primary.gas_rate_mmscfd, '6.1', 'a depth-only first stage is not primary');
 });
 
 // GET /api/meta's resource_scenarios boot fallback: labels are verbatim

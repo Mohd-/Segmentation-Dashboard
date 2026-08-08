@@ -951,7 +951,7 @@ def test_export_reservoir_cos_columns_read_one_primary_row(client):
 
 
 def test_export_flowback_columns_read_primary_stage(client):
-    """The flowback columns come from the FIRST non-empty stage of the
+    """The flowback columns come from the first measured canonical stage of the
     flowback_stages_rows mini-sheet, as one unit: a well that also carries the
     retired flat keys must not mix them in (single-vintage rule, mirroring the
     Reservoir CoS primary row) -- even for a measurement the stage left blank."""
@@ -961,12 +961,12 @@ def test_export_flowback_columns_read_primary_stage(client):
     resp = client.patch(f"/api/tasks/{flowback_task['task_id']}/dynamic-fields",
                          json={"fields": {
                              "flowback_stages_rows": json.dumps([
-                                 {"flowback_gas_rate_mmscfd": "", "flowback_water_rate_bwpd": "",
-                                  "flowback_choke_size_in": "", "flowback_fwhp_psi": ""},
-                                 {"flowback_gas_rate_mmscfd": "9.5", "flowback_water_rate_bwpd": "120",
-                                  "flowback_liquid_rate_bpd": "75",
-                                  "flowback_choke_size_in": "0.5", "flowback_fwhp_psi": ""},
-                                 {"flowback_gas_rate_mmscfd": "4.2"},
+                                 {"gas_rate_mmscfd": "", "water_rate_bwpd": "",
+                                  "choke_size_in": "", "fwhp_psi": ""},
+                                 {"gas_rate_mmscfd": "9.5", "water_rate_bwpd": "120",
+                                  "liquid_rate_bpd": "75",
+                                  "choke_size_in": "0.5", "fwhp_psi": ""},
+                                 {"gas_rate_mmscfd": "4.2"},
                              ]),
                              # Retired flat keys: must lose to the stage row wholesale.
                              "flowback_gas_rate_mmscfd": "1.1",

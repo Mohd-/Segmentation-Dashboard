@@ -1674,6 +1674,65 @@ def test_migration_v12_adds_the_nucd_area_column_and_replays(client, app_modules
     assert _stored_nucd_area(client.db_path, pid) == "North Jafurah"
 
 
+def test_migration_v13_normalizes_flowback_stage_rows_and_replays(client, app_modules):
+    """v13 converts old prefixed stage keys without losing stable IDs, unknown
+    fields, order, or a non-empty BPE/v10 canonical value on a mixed row."""
+    _, dbmod = app_modules
+    import migrations
+
+    pid = create_project(client, "V13-FLOWBACK-1")
+    flowback = get_task_by_name(client, pid, "Flowback Results")
+    legacy_rows = [
+        {"_id": "legacy-a", "flowback_formation": "SARH", "flowback_top_md": "9000",
+         "flowback_gas_rate_mmscfd": "15", "gas_rate_mmscfd": "16", "future_key": "kept"},
+        {"id": "current-b", "formation": "QASM", "liquid_rate_bpd": "75"},
+        {"flowback_formation": "QWRH", "flowback_water_rate_bwpd": "90"},
+        "malformed-list-member",
+    ]
+    conn = raw_sqlite_connect(client.db_path)
+    with conn:
+        conn.execute("""
+            INSERT INTO task_dynamic_fields (task_id, field_key, field_value, updated_at)
+            VALUES (?, 'flowback_stages_rows', ?, '2026-01-01 00:00:00')
+        """, (flowback["task_id"], json.dumps(legacy_rows)))
+        conn.execute("UPDATE app_settings SET value = '12' WHERE key = 'schema_version'")
+    conn.close()
+
+    _rebootstrap(dbmod, client.db_path)
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        stored = conn.execute("""
+            SELECT field_value FROM task_dynamic_fields
+            WHERE task_id = ? AND field_key = 'flowback_stages_rows'
+        """, (flowback["task_id"],)).fetchone()["field_value"]
+        version = conn.execute(
+            "SELECT value FROM app_settings WHERE key = 'schema_version'").fetchone()["value"]
+    finally:
+        conn.close()
+    expected = [
+        {"id": "legacy-a", "formation": "SARH", "top_md": "9000",
+         "gas_rate_mmscfd": "16", "future_key": "kept"},
+        {"id": "current-b", "formation": "QASM", "liquid_rate_bpd": "75"},
+        {"id": "legacy-{}-3".format(flowback["task_id"]), "formation": "QWRH",
+         "water_rate_bwpd": "90"},
+        "malformed-list-member",
+    ]
+    assert json.loads(stored) == expected
+    assert version == str(migrations.LATEST_SCHEMA_VERSION)
+
+    _stamp_schema_version(client.db_path, 12)
+    _rebootstrap(dbmod, client.db_path)
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        replayed = conn.execute("""
+            SELECT field_value FROM task_dynamic_fields
+            WHERE task_id = ? AND field_key = 'flowback_stages_rows'
+        """, (flowback["task_id"],)).fetchone()["field_value"]
+    finally:
+        conn.close()
+    assert json.loads(replayed) == expected
+
+
 def test_segmentation_slides_ready_still_reads_pending_approval(client):
     """The one display rule that survived the restructure verbatim."""
     task = None

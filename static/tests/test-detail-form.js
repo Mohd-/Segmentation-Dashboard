@@ -8,9 +8,10 @@
 import { test, assert, fixture, mockFetch } from './harness.js';
 import {
   renderActionButtons, savedMessage, renderFields, getFields, loadComponent,
-  stepHostsResourceCalculator
+  stepHostsResourceCalculator, renderRepeatableField
 } from '../js/views/detail-form.js';
 import { Store } from '../js/state.js';
+import { FLOWBACK_STAGE_COLUMNS } from '../js/schema.js';
 
 // The action row copied verbatim from static/index.html (classes included --
 // the override restyles them, and the reset has to put them back).
@@ -105,6 +106,21 @@ test('detail-form ownership: GeoX can never host the Resource Assessment calcula
   assert.equal(stepHostsResourceCalculator('Resource Assessment'), true);
   assert.equal(stepHostsResourceCalculator('Pre-Drilling GeoX Assessment'), false);
   assert.equal(stepHostsResourceCalculator('Well Site Location'), false);
+});
+
+test('detail-form normalizes legacy Flowback rows without losing opaque IDs', function () {
+  var field = { key: 'flowback_stages_rows', label: 'Flowback Stages', type: 'repeatable',
+    columns: FLOWBACK_STAGE_COLUMNS };
+  var host = fixture('<div id="dynamic-fields">' + renderRepeatableField(field, JSON.stringify([
+    { _id: 'legacy-stage', flowback_formation: 'SARH', flowback_gas_rate_mmscfd: '8.2',
+      flowback_choke_size_in: '0.5', future_key: 'retain' }
+  ])) + '</div>');
+  var rows = JSON.parse(getFields(host).flowback_stages_rows);
+  assert.deepEqual(rows, [{
+    id: 'legacy-stage', formation: 'SARH', top_md: '', base_md: '', dynamic_area_km2: '',
+    dynamic_ogip_bcf: '', gas_rate_mmscfd: '8.2', water_rate_bwpd: '', liquid_rate_bpd: '',
+    choke_size_in: '0.5', fwhp_psi: '', future_key: 'retain'
+  }]);
 });
 
 test('detail-form GeoX: loadComponent renders the seven manual external-result controls', async function () {

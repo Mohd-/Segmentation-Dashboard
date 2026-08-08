@@ -91,6 +91,10 @@ import openpyxl
 import config
 import db
 import workflow
+from workflow.flowback import (
+    normalize_flowback_stage,
+    stage_has_measurement,
+)
 from helpers import utc_now_str
 from portfolio_export import PORTFOLIO_EXPORT_COLUMNS
 
@@ -148,16 +152,6 @@ _COS_STEP = workflow.MERGED_COS_TASK_NAME
 # Assessment into one active row. Their EAV keys stay unchanged and now share
 # this owner, so every lead import writes the consolidated workspace directly.
 _LEAD_ASSESSMENT_STEP = "Lead Assessment"
-
-# The per-stage measurement keys of the flowback_stages_rows mini-sheet
-# (schema.js FLOWBACK_STAGE_COLUMNS); must track portfolio_export's own
-# _FLOWBACK_STAGE_KEYS so this module's primary-stage predicate agrees with
-# the export's.
-_FLOWBACK_STAGE_KEYS = (
-    "flowback_gas_rate_mmscfd", "flowback_water_rate_bwpd",
-    "flowback_liquid_rate_bpd", "flowback_choke_size_in", "flowback_fwhp_psi",
-)
-
 
 # ---------------------------------------------------------------------------
 # Cell / value normalization
@@ -446,11 +440,11 @@ def _reservoir_primary(json_row: dict) -> bool:
 
 def _flowback_primary(json_row: dict) -> bool:
     """The export's primary-stage predicate: any measurement non-blank."""
-    return any(str(json_row.get(key) or "").strip() for key in _FLOWBACK_STAGE_KEYS)
+    return stage_has_measurement(normalize_flowback_stage(json_row))
 
 
 def _merge_primary_json_row(stored_json, contribution: dict,
-                            is_primary: Callable[[dict], bool]) -> Optional[List[dict]]:
+                            is_primary: Callable[[dict], bool], normalize_row=None) -> Optional[List[dict]]:
     """Merge a sheet contribution into the PRIMARY row of a stored JSON blob.
 
     The primary row is the first row satisfying ``is_primary`` (the export's own
@@ -467,8 +461,15 @@ def _merge_primary_json_row(stored_json, contribution: dict,
         return None
     if not isinstance(rows, list) or not rows:
         return None
-    index = next((i for i, r in enumerate(rows) if is_primary(r or {})), 0)
-    merged = dict(rows[index] or {})
+    if normalize_row:
+        rows = [normalize_row(row) if isinstance(row, dict) else row for row in rows]
+    index = next((i for i, item in enumerate(rows)
+                  if isinstance(item, dict) and is_primary(item)), None)
+    if index is None:
+        index = next((i for i, item in enumerate(rows) if isinstance(item, dict)), None)
+    if index is None:
+        return None
+    merged = dict(rows[index])
     merged.update(contribution)
     rows[index] = merged
     return rows
@@ -512,11 +513,11 @@ def _flowback_contribution(row: Dict[str, str], warnings: List[str]) -> Tuple[Op
     primary read everywhere) and carries only the non-blank cells."""
     ogip = _num(row, "Dynamic Mean (BCF)", warnings)
     stage: dict = {}
-    for col, key in (("Gas Rate (MMSCFD)", "flowback_gas_rate_mmscfd"),
-                     ("Water Rate (BWPD)", "flowback_water_rate_bwpd"),
-                     ("Condensate Rate (BPD)", "flowback_liquid_rate_bpd"),
-                     ("Choke Size (in)", "flowback_choke_size_in"),
-                     ("WHP (psi)", "flowback_fwhp_psi")):
+    for col, key in (("Gas Rate (MMSCFD)", "gas_rate_mmscfd"),
+                     ("Water Rate (BWPD)", "water_rate_bwpd"),
+                     ("Condensate Rate (BPD)", "liquid_rate_bpd"),
+                     ("Choke Size (in)", "choke_size_in"),
+                     ("WHP (psi)", "fwhp_psi")):
         cell = _num(row, col, warnings)
         if cell is not None:
             stage[key] = cell
@@ -795,12 +796,13 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
         if stage_contribution:
             stored_blob = (workflow.get_task_dynamic_fields(session, tid("Flowback Results"))
                            .get("flowback_stages_rows") if is_update else None)
-            stages = _merge_primary_json_row(stored_blob, stage_contribution, _flowback_primary)
+            stages = _merge_primary_json_row(
+                stored_blob, stage_contribution, _flowback_primary, normalize_flowback_stage)
             if stages is None:
                 # Fresh flowback: the sole stage row carries its own formation
                 # (SARH default). The --update merge path never sets this, so an
                 # update cannot clobber a user-chosen per-stage formation.
-                stage_contribution["flowback_formation"] = "SARH"
+                stage_contribution["formation"] = "SARH"
                 stages = [stage_contribution]
             flowback_payload["flowback_stages_rows"] = json.dumps(stages, separators=(",", ":"))
         if flowback_payload:

@@ -425,8 +425,8 @@ def _staking_fields():
 def _flowback_fields(legacy=False):
     """Full Flowback Results field set. New-style wells carry 1-3 stage rows in
     the flowback_stages_rows JSON mini-sheet, each row carrying its own
-    per-stage Formation column (SARH, the schema default); stage #1 is the primary read
-    everywhere); ``legacy=True`` writes the per-stage measurements ONLY
+    per-stage Formation column (SARH, the schema default); ``legacy=True`` writes
+    the per-stage measurements ONLY
     through the retired step-level flat keys instead -- like a well written
     before the stages sheet existed -- exercising the readers' flat-key
     fallback (detail.js flowback rate, portfolio_export flowback columns).
@@ -435,19 +435,27 @@ def _flowback_fields(legacy=False):
     the BPD path for the oil-bearing fluids)."""
     def _stage():
         return {
-            "flowback_formation": "SARH",
-            "flowback_gas_rate_mmscfd": round(random.uniform(1, 15), 2),
-            "flowback_water_rate_bwpd": round(random.uniform(50, 800), 1),
-            "flowback_liquid_rate_bpd": round(random.uniform(100, 2500), 1),
-            "flowback_choke_size_in": round(random.uniform(0.25, 1.5), 3),
-            "flowback_fwhp_psi": round(random.uniform(500, 4500), 1),
+            "formation": "SARH",
+            "gas_rate_mmscfd": round(random.uniform(1, 15), 2),
+            "water_rate_bwpd": round(random.uniform(50, 800), 1),
+            "liquid_rate_bpd": round(random.uniform(100, 2500), 1),
+            "choke_size_in": round(random.uniform(0.25, 1.5), 3),
+            "fwhp_psi": round(random.uniform(500, 4500), 1),
         }
     fields = {
         "flowback_dynamic_area_km2": round(random.uniform(1, 20), 2),
         "flowback_dynamic_ogip_bcf": round(random.uniform(5, 60), 2),
     }
     if legacy:
-        fields.update(_stage())
+        stage = _stage()
+        fields.update({
+            "flowback_formation": stage["formation"],
+            "flowback_gas_rate_mmscfd": stage["gas_rate_mmscfd"],
+            "flowback_water_rate_bwpd": stage["water_rate_bwpd"],
+            "flowback_liquid_rate_bpd": stage["liquid_rate_bpd"],
+            "flowback_choke_size_in": stage["choke_size_in"],
+            "flowback_fwhp_psi": stage["fwhp_psi"],
+        })
     else:
         fields["flowback_stages_rows"] = json.dumps(
             [_stage() for _ in range(random.randint(1, 3))])

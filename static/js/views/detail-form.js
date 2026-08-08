@@ -2,7 +2,7 @@ import { byId, all, esc, isFilled, truthy, msg } from '../dom.js';
 import { API } from '../api.js';
 import { ICONS } from '../icons.js';
 import { currentUserName, currentRole, canManageAssignments, isCurrentPipelineView, Store } from '../state.js';
-import { SCHEMA, formationNames, FORMATION_METRICS, FLUID_TYPES, SEISMIC_BLOCKS, CHECKBOX_SUBMIT_STEPS, validateStepFields, numericFieldError, submitBlockedMessage } from '../schema.js';
+import { SCHEMA, formationNames, FORMATION_METRICS, FLUID_TYPES, SEISMIC_BLOCKS, CHECKBOX_SUBMIT_STEPS, normalizeFlowbackStages, validateStepFields, numericFieldError, submitBlockedMessage } from '../schema.js';
 import { calculateTrapCos, calculateSealCos } from '../cos-rules.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { renderDetail, renderRightPanel, chooseInitialTask, tasksForPipeline, parseRepeatableRows, refreshAfterRecordChange, revealTaskStage } from './detail.js';
@@ -1261,6 +1261,10 @@ export function getFields(root) {
     var rows = [];
     all('.repeatable-row', container).forEach(function (row) {
       var data = {};
+      var preserved = row.getAttribute('data-repeatable-preserved');
+      if (preserved) {
+        try { data = JSON.parse(preserved); } catch (error) { data = {}; }
+      }
       all('[data-repeatable-input]', row).forEach(function (element) {
         data[element.getAttribute('data-repeatable-column')] = element.value;
       });
@@ -1465,12 +1469,26 @@ function repeatableSelectOptions(col, row, value) {
     return '<option value="' + esc(option) + '" ' + (String(value) === String(option) ? 'selected' : '') + '>' + esc(option || 'Select') + '</option>';
   }).join('');
 }
+
+function repeatablePreservedData(field, row) {
+  if (field.key !== 'flowback_stages_rows') return '';
+  var visible = {};
+  (field.columns || []).forEach(function (col) { visible[col.key] = true; });
+  var preserved = {};
+  Object.keys(row || {}).forEach(function (key) {
+    if (!visible[key]) preserved[key] = row[key];
+  });
+  return Object.keys(preserved).length ? JSON.stringify(preserved) : '';
+}
+
 export function repeatableInputMarkup(field, row, rowIndex) {
   var cols = field.columns || [];
   // No per-row column template: the row is display:contents and inherits the
   // single grid declared once on .repeatable-rows, so header labels, inputs and
   // calc chips all share one track set and stay column-aligned.
-  return '<div class="repeatable-row" data-repeatable-row="' + rowIndex + '">' + cols.map(function (col) {
+  var preserved = repeatablePreservedData(field, row);
+  var preservedAttr = preserved ? ' data-repeatable-preserved="' + esc(preserved) + '"' : '';
+  return '<div class="repeatable-row" data-repeatable-row="' + rowIndex + '"' + preservedAttr + '>' + cols.map(function (col) {
     var value = row[col.key] == null ? '' : row[col.key];
     // A dependent column (AR) carries data-depends-on so bindRepeatableFields can
     // rebuild its options when the sibling (block) select changes.
@@ -1507,6 +1525,7 @@ export function repeatableInputMarkup(field, row, rowIndex) {
 }
 export function renderRepeatableField(field, value) {
   var rows = parseRepeatableRows(value);
+  if (field.key === 'flowback_stages_rows') rows = normalizeFlowbackStages(rows);
   if (!rows.length) rows = [{}];
   var cols = field.columns || [];
   // One muted header row of column labels (kept out of the .repeatable-row set

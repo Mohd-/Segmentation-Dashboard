@@ -270,6 +270,45 @@ test('detail porosity and water saturation print bare, to two decimals', functio
     'two decimals, no percent sign, no conversion');
 });
 
+test('detail Well Summary projects BPE pay intervals and generic Flowback stages', function () {
+  var host = mountWellCard({
+    'Flowback Results': { flowback_stages_rows: JSON.stringify([
+      { formation: 'SARH', top_md: '11200', base_md: '11450' },
+      { formation: 'SARH', gas_rate_mmscfd: '6.1', liquid_rate_bpd: '325',
+        choke_size_in: '0.5', fwhp_psi: '2100' }
+    ]) }
+  });
+  Store.formations = [{
+    formation: 'SARH', phase: 'quicklook', top_tvdss_ft: '1000', base_tvdss_ft: '1120',
+    thickness_ft: '120', pay_intervals: [
+      { top_tvdss_ft: '1010', base_tvdss_ft: '1050', phit_pct: '10', swt_pct: '30', fluid: 'Oil' },
+      { top_tvdss_ft: '1050', base_tvdss_ft: '1110', phit_pct: '20', swt_pct: '50', fluid: 'Oil' }
+    ]
+  }];
+  renderRightPanel([{ status: 'Approved' }]);
+  var cells = Array.prototype.map.call(
+    host.querySelectorAll('.summary-props-row:not(.summary-props-row-empty) span'),
+    function (element) { return element.textContent; });
+  assert.deepEqual(cells, ['SARH', '100.00 ft', '16.00', '42.00']);
+  assert.deepEqual(metricPairs(host, 'Flowback Results'), [
+    ['Liquid Rate', '325 BPD'], ['Flowing Wellhead Pressure (FWHP)', '2100 psi'], ['Choke Size', '0.5 in']
+  ]);
+});
+
+test('detail Well Summary retains Reservoir Area Definition for legacy snapshots', function () {
+  var host = mountWellCard({
+    'Reservoir Area Definition': { p90_area_km2: '4', p10_area_km2: '10' },
+    'SAD Model': { sad_area_km2_p90: '5', sad_area_km2_p10: '9' }
+  });
+  var rows = Array.prototype.map.call(host.querySelectorAll('.summary-pva-row'), function (row) {
+    return [row.querySelector('.summary-pva-label').textContent,
+      row.querySelectorAll('.summary-pva-cell')[0].textContent];
+  });
+  assert.deepEqual(rows.filter(function (row) { return row[0].indexOf('Area') === 0; }), [
+    ['Area P90 (km²)', '4'], ['Area P10 (km²)', '10']
+  ]);
+});
+
 test('detail the well card is built from the Lead Summary card anatomy', function () {
   // "Consistent with the segment maturation lead summary card" is a structural
   // claim, not a resemblance: the blocks ARE .ls-section with .ls-section-title

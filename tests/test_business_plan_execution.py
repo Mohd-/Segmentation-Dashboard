@@ -402,6 +402,30 @@ def test_flowback_last_stage_deletion_persists_an_initialized_empty_collection(c
     assert removed["old_status"] == "persistent-stage"
 
 
+def test_bpe_flowback_stage_reaches_well_summary_in_canonical_shape(client):
+    """The BPE writer and its record-level Well Summary bundle carry the same
+    concise row keys the shared card reads; no flat EAV alias is required."""
+    project_id = _bp_project(client, "BPE-SUMMARY-FLOWBACK-1")
+    saved = client.put(
+        f"/api/business-plan/wells/{project_id}/flowback-stages", json={"rows": [{
+            "id": "summary-stage", "formation": "SARH", "top_md": 11200,
+            "base_md": 11450, "gas_rate_mmscfd": 6.1,
+            "choke_size_in": 0.5, "fwhp_psi": 2100,
+        }]})
+    assert saved.status_code == 200, saved.get_json()
+
+    detail = client.get(
+        f"/api/business-plan/wells/{project_id}/steps/business-plan-gate").get_json()
+    flowback = detail["well_summary"]["fields"]["Flowback Results"]
+    rows = json.loads(flowback["flowback_stages_rows"])
+    assert rows == [{
+        "id": "summary-stage", "formation": "SARH", "top_md": "11200",
+        "base_md": "11450", "dynamic_area_km2": "", "dynamic_ogip_bcf": "",
+        "gas_rate_mmscfd": "6.1", "water_rate_bwpd": "", "liquid_rate_bpd": "",
+        "choke_size_in": "0.5", "fwhp_psi": "2100",
+    }]
+
+
 def test_dashboard_kpis_share_filters_and_preserve_zero_actual_precedence(client):
     project_id = _bp_project(client, "KPI-1")
     _raw_fields(client, project_id, "BP Execution Gate", {"bp_gate_actual_drilling_days": "12.5"})

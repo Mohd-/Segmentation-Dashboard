@@ -43,8 +43,9 @@ import config
 import db
 from helpers import utc_now_str
 from models import Base
+from workflow.flowback import normalize_flowback_rows
 
-LATEST_SCHEMA_VERSION = 12
+LATEST_SCHEMA_VERSION = 13
 
 
 # ---------------------------------------------------------------------------
@@ -1124,6 +1125,46 @@ def _migrate_v12_project_nucd_area(session, engine) -> None:
         db.execute(session, "ALTER TABLE projects ADD COLUMN nucd_area TEXT")
 
 
+def _migrate_v13_flowback_stage_rows(session, engine) -> None:
+    """v13: normalize legacy prefixed Flowback stage rows.
+
+    Standard-editor and Excel-import rows written before this release used
+    retired flat EAV names (``flowback_gas_rate_mmscfd`` and peers) inside the
+    JSON stage collection.  BPE and v10 use concise per-row keys.  Rewrite
+    well-formed arrays to the latter while preserving ordering, IDs, and
+    unknown future properties.  Malformed blobs are left untouched so a data
+    migration never destroys a recoverable historical value.
+    """
+    rows = db.fetch_all(session, """
+        SELECT d.task_id AS task_id, d.field_value AS value
+        FROM task_dynamic_fields d
+        JOIN project_tasks t ON t.task_id = d.task_id
+        WHERE t.task_name = :task_name AND d.field_key = :field_key
+    """, {"task_name": "Flowback Results", "field_key": "flowback_stages_rows"})
+    now = utc_now_str()
+    for row in rows:
+        try:
+            parsed = json.loads(row["value"])
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(parsed, list):
+            continue
+        normalized = normalize_flowback_rows(parsed)
+        for index, stage in enumerate(normalized, start=1):
+            if isinstance(stage, dict) and not str(stage.get("id") or "").strip():
+                # Prefix-row writers predate BPE's stable repeatable IDs. A
+                # deterministic migration ID preserves their row identity for
+                # later BPE edits and structural audit entries.
+                stage["id"] = f"legacy-{row['task_id']}-{index}"
+        if normalized == parsed:
+            continue
+        db.execute(session, """
+            UPDATE task_dynamic_fields SET field_value = :value, updated_at = :now
+            WHERE task_id = :task_id AND field_key = :field_key
+        """, {"value": json.dumps(normalized, separators=(",", ":")), "now": now,
+              "task_id": row["task_id"], "field_key": "flowback_stages_rows"})
+
+
 # List of (version, fn) dispatched by run() in ascending order against the
 # stored schema_version. Append new steps with the next integer version and
 # bump LATEST_SCHEMA_VERSION to match; never edit or remove a shipped step.
@@ -1139,6 +1180,7 @@ MIGRATIONS = [
     (10, _migrate_v10_business_plan_execution),
     (11, _migrate_v11_tvdss_positive),
     (12, _migrate_v12_project_nucd_area),
+    (13, _migrate_v13_flowback_stage_rows),
 ]
 
 

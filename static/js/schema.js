@@ -71,43 +71,99 @@ export function piip(prefix) {
 // are one vocabulary and drift between them is a bug.
 export var FLUID_TYPES = ['', 'Gas', 'Gas over Water', 'Water Bearing', 'Dry Hole', 'Oil',
                           'Oil over Gas', 'Oil over Water'];
+// Canonical keys inside one flowback_stages_rows entry. Retired flat task EAV
+// fields deliberately retain their flowback_* names; those names are aliases
+// only when reading historical stage rows.
+export var FLOWBACK_STAGE_FIELDS = [
+  'formation', 'top_md', 'base_md', 'dynamic_area_km2', 'dynamic_ogip_bcf',
+  'gas_rate_mmscfd', 'water_rate_bwpd', 'liquid_rate_bpd', 'choke_size_in', 'fwhp_psi'
+];
+export var FLOWBACK_STAGE_ALIASES = {
+  formation: 'flowback_formation',
+  top_md: 'flowback_top_md',
+  base_md: 'flowback_base_md',
+  gas_rate_mmscfd: 'flowback_gas_rate_mmscfd',
+  water_rate_bwpd: 'flowback_water_rate_bwpd',
+  liquid_rate_bpd: 'flowback_liquid_rate_bpd',
+  choke_size_in: 'flowback_choke_size_in',
+  fwhp_psi: 'flowback_fwhp_psi'
+};
+export var FLOWBACK_MEASUREMENT_KEYS = [
+  'gas_rate_mmscfd', 'water_rate_bwpd', 'liquid_rate_bpd', 'choke_size_in', 'fwhp_psi'
+];
+
+function flowbackFilled(value) {
+  return value !== null && value !== undefined && String(value).trim() !== '';
+}
+
+// Preserve opaque IDs and unknown future properties, but collapse the known
+// legacy aliases onto their canonical keys. A populated canonical value wins a
+// conflicting alias; a blank canonical value inherits a populated alias.
+export function normalizeFlowbackStage(row) {
+  var source = (row && typeof row === 'object' && !Array.isArray(row)) ? row : {};
+  var normalized = Object.assign({}, source);
+  if (!flowbackFilled(normalized.id) && flowbackFilled(normalized._id)) normalized.id = normalized._id;
+  delete normalized._id;
+  Object.keys(FLOWBACK_STAGE_ALIASES).forEach(function (canonical) {
+    var legacy = FLOWBACK_STAGE_ALIASES[canonical];
+    if (!flowbackFilled(normalized[canonical]) && flowbackFilled(source[legacy])) {
+      normalized[canonical] = source[legacy];
+    }
+    delete normalized[legacy];
+  });
+  return normalized;
+}
+
+export function normalizeFlowbackStages(rows) {
+  return Array.isArray(rows) ? rows.map(function (row) {
+    return (row && typeof row === 'object' && !Array.isArray(row)) ? normalizeFlowbackStage(row) : row;
+  }) : [];
+}
+
+export function isMeasuredFlowbackStage(row) {
+  return !!row && FLOWBACK_MEASUREMENT_KEYS.some(function (key) { return flowbackFilled(row[key]); });
+}
+
+export function primaryFlowbackStage(rows) {
+  var normalized = normalizeFlowbackStages(rows);
+  for (var i = 0; i < normalized.length; i += 1) {
+    if (isMeasuredFlowbackStage(normalized[i])) return normalized[i];
+  }
+  return null;
+}
+
 // Flowback rate key + unit keyed by fluid type -- a well's headline flowback
-// rate lives under a different key depending on what it produced. Gas / Gas
-// over Water report gas (MMSCFD); every oil-bearing result reports liquid
-// (BPD); Water Bearing reports water (BWPD). Dry Hole/blank have no dedicated
-// key -- the call site falls back to the gas entry. Imported by the well
-// summary card (WS5). The keys address a flowback STAGE row first
-// (FLOWBACK_STAGE_COLUMNS reuses the same names) and the retired step-level
-// flat EAV keys as legacy fallback.
+// rate lives under a different key depending on what it produced. ``key`` is
+// the canonical stage-row key; ``legacyKey`` is used only when no measured
+// stage exists and the retired flat task fields are the sole source.
 // `label` names the rate on the Well Summary's Flowback Results section, so an
 // oil well does not read "Gas Rate"; `unit` is what the value is shown in.
 export var FLOWBACK_RATE_FIELDS = {
-  'Gas': { key: 'flowback_gas_rate_mmscfd', unit: 'MMSCFD', label: 'Gas Rate' },
-  'Gas over Water': { key: 'flowback_gas_rate_mmscfd', unit: 'MMSCFD', label: 'Gas Rate' },
-  'Oil': { key: 'flowback_liquid_rate_bpd', unit: 'BPD', label: 'Liquid Rate' },
-  'Oil over Gas': { key: 'flowback_liquid_rate_bpd', unit: 'BPD', label: 'Liquid Rate' },
-  'Oil over Water': { key: 'flowback_liquid_rate_bpd', unit: 'BPD', label: 'Liquid Rate' },
-  'Water Bearing': { key: 'flowback_water_rate_bwpd', unit: 'BWPD', label: 'Water Rate' }
+  'Gas': { key: 'gas_rate_mmscfd', legacyKey: 'flowback_gas_rate_mmscfd', unit: 'MMSCFD', label: 'Gas Rate' },
+  'Gas over Water': { key: 'gas_rate_mmscfd', legacyKey: 'flowback_gas_rate_mmscfd', unit: 'MMSCFD', label: 'Gas Rate' },
+  'Oil': { key: 'liquid_rate_bpd', legacyKey: 'flowback_liquid_rate_bpd', unit: 'BPD', label: 'Liquid Rate' },
+  'Oil over Gas': { key: 'liquid_rate_bpd', legacyKey: 'flowback_liquid_rate_bpd', unit: 'BPD', label: 'Liquid Rate' },
+  'Oil over Water': { key: 'liquid_rate_bpd', legacyKey: 'flowback_liquid_rate_bpd', unit: 'BPD', label: 'Liquid Rate' },
+  'Water Bearing': { key: 'water_rate_bwpd', legacyKey: 'flowback_water_rate_bwpd', unit: 'BWPD', label: 'Water Rate' }
 };
 // One flowback stage (#1..#n) per row of the Flowback Results mini-sheet (EAV
-// key flowback_stages_rows, a JSON array exactly like reservoir_cos_rows).
-// The column keys deliberately reuse the retired step-level flat keys so
-// FLOWBACK_RATE_FIELDS and every reader address a stage row and legacy flat
-// data with the same name; readers treat the FIRST non-empty stage as the
-// well's primary flowback values, falling back to the flat keys only when no
-// stage row exists. The index column is display-only (the stage number).
+// key flowback_stages_rows, a JSON array exactly like reservoir_cos_rows). It
+// writes every canonical field, including BPE's dynamic values, so a standard
+// editor save cannot strip stage data created by BPE. The index is display-only.
 export var FLOWBACK_STAGE_COLUMNS = [
   { key: 'stage', label: 'Stage', type: 'index' },
   // bigOk: true -- see validateStepFields below. Measured depths (MD) routinely
   // run into the thousands of feet, well past the generic 9999 sanity cap.
-  { key: 'flowback_top_md', label: 'Top', type: 'number', placeholder: 'Depth (MD)', bigOk: true },
-  { key: 'flowback_base_md', label: 'Base', type: 'number', placeholder: 'Depth (MD)', bigOk: true },
-  { key: 'flowback_formation', label: 'Formation', type: 'select', optionsFrom: 'formations', value: 'SARH' },
-  { key: 'flowback_gas_rate_mmscfd', label: 'Gas Rate (MMSCFD)', type: 'number' },
-  { key: 'flowback_water_rate_bwpd', label: 'Water Rate (BWPD)', type: 'number' },
-  { key: 'flowback_liquid_rate_bpd', label: 'Liquid Rate (BPD)', type: 'number' },
-  { key: 'flowback_choke_size_in', label: 'Choke Size (in)', type: 'number' },
-  { key: 'flowback_fwhp_psi', label: 'FWHP (psi)', type: 'number' }
+  { key: 'top_md', label: 'Top', type: 'number', placeholder: 'Depth (MD)', bigOk: true },
+  { key: 'base_md', label: 'Base', type: 'number', placeholder: 'Depth (MD)', bigOk: true },
+  { key: 'formation', label: 'Formation', type: 'select', optionsFrom: 'formations', value: 'SARH' },
+  { key: 'dynamic_area_km2', label: 'Dynamic Area (km²)', type: 'number' },
+  { key: 'dynamic_ogip_bcf', label: 'Dynamic OGIP (BCF)', type: 'number' },
+  { key: 'gas_rate_mmscfd', label: 'Gas Rate (MMSCFD)', type: 'number' },
+  { key: 'water_rate_bwpd', label: 'Water Rate (BWPD)', type: 'number' },
+  { key: 'liquid_rate_bpd', label: 'Liquid Rate (BPD)', type: 'number' },
+  { key: 'choke_size_in', label: 'Choke Size (in)', type: 'number' },
+  { key: 'fwhp_psi', label: 'FWHP (psi)', type: 'number' }
 ];
 // Formation data is well-level (project_formations via /api/projects/<id>/
 // formations), edited per phase across four steps -- phases quicklook /

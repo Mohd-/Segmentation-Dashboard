@@ -20,6 +20,7 @@ from .constants import (
     FORMATIONS, STAKED_WELL_NAME_FIELD, StaleRevisionError, display_record_name,
     staking_confirmed,
 )
+from .flowback import FLOWBACK_STAGE_FIELDS, normalize_flowback_rows
 from .history import log_task_event
 from .notifications import notify_transition
 from .projects import _sync_completed_at
@@ -452,7 +453,8 @@ def _sad_complete(values, update=False):
 
 
 def _flowback_rows(fields):
-    return _json_list(_value(fields, "Flowback Results", "flowback_stages_rows"))
+    return normalize_flowback_rows(
+        _json_list(_value(fields, "Flowback Results", "flowback_stages_rows")))
 
 
 def _flowback_complete(values, rows):
@@ -1636,10 +1638,7 @@ def save_formations(session, project_id, detail_slug, rows, actor="Web User", ro
     return get_detail(session, project_id, detail_slug)
 
 
-FLOWBACK_KEYS = (
-    "formation", "top_md", "base_md", "dynamic_area_km2", "dynamic_ogip_bcf",
-    "gas_rate_mmscfd", "water_rate_bwpd", "liquid_rate_bpd", "choke_size_in", "fwhp_psi",
-)
+FLOWBACK_KEYS = FLOWBACK_STAGE_FIELDS
 
 
 def _clean_flowback_rows(rows):
@@ -1650,11 +1649,17 @@ def _clean_flowback_rows(rows):
     for row in rows:
         if not isinstance(row, dict):
             raise ValueError("Each Flowback stage must be an object.")
+        row = normalize_flowback_rows([row])[0]
         stable_id = str(row.get("id") or row.get("_id") or uuid.uuid4()).strip()
         if stable_id in seen:
             raise ValueError("Duplicate Flowback stage identifier.")
         seen.add(stable_id)
-        item = {"id": stable_id, "formation": str(row.get("formation") or "").strip()}
+        # Keep fields a newer writer may have added even when this endpoint
+        # does not yet render them. Known measurements are validated and
+        # serialized below; opaque future values round-trip untouched.
+        item = {key: value for key, value in row.items()
+                if key not in FLOWBACK_KEYS and key not in ("id", "_id")}
+        item.update({"id": stable_id, "formation": str(row.get("formation") or "").strip()})
         for key in FLOWBACK_KEYS[1:]:
             raw = row.get(key)
             if raw is None or str(raw).strip() == "":
