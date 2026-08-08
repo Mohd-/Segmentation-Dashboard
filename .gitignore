@@ -39,3 +39,6 @@ data/map/layers/
 # deployment data dropped on the share, like the shapefile layers above —
 # never versioned.
 data/map/surfaces/
+
+#random assets
+*.zip
