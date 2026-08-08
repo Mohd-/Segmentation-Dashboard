@@ -7,9 +7,9 @@ technical inputs (Chance-of-Success calculations, resource estimates), an
 audit trail, and portfolio-level reporting. The backend is Flask + SQLite
 (SQLAlchemy underneath); the front-end is vanilla JS served from `static/`.
 
-New to the codebase? Read `ARCHITECTURE.md` for the module map and
+New to the codebase? Read `docs/ARCHITECTURE.md` for the module map and
 `CONTRIBUTING.md` for step-by-step recipes for common changes. Confirmed defects
-awaiting implementation are tracked in `KNOWN_ISSUES.md`.
+awaiting implementation are tracked in `docs/KNOWN_ISSUES.md`.
 
 ## Quickstart
 
@@ -191,7 +191,7 @@ Scores may be stored as decimals or whole percentages. The dashboard displays an
 
 v16 also ships a full backend refactor:
 
-- The backend was restructured from one monolithic `database.py` into small single-purpose modules on SQLAlchemy (see `ARCHITECTURE.md`); the SQLite data files are unchanged and upgrade in place.
+- The backend was restructured from one monolithic `database.py` into small single-purpose modules on SQLAlchemy (see `docs/ARCHITECTURE.md`); the SQLite data files are unchanged and upgrade in place.
 - Error handling is centralized: validation errors return their message with HTTP 400, optimistic-lock conflicts 409, and internal failures a generic 500 (details go to the server log, never to the client).
 - Completed wells now carry an explicit `completed_at` timestamp, so monthly "wells completed" reporting no longer shifts when a completed well is edited later.
 - New identity endpoints (`/api/login`, `/api/logout`, `/api/me`) let users sign their changes; an optional `AUTH_REQUIRED` mode can enforce login API-wide.
@@ -268,4 +268,4 @@ describe was deleted wholesale rather than carried forward:
 - Dead columns were dropped; coordinates and formation measurements became
   real numeric columns with input validation.
 
-See `ARCHITECTURE.md` ("Derive, don't store") for the design rationale.
+See `docs/ARCHITECTURE.md` ("Derive, don't store") for the design rationale.

@@ -21,9 +21,9 @@ Input file: JSON, e.g.
 (Numeric AR entries are accepted and normalized to strings.)
 
 Usage:
-    .venv/bin/python import_seismic_blocks.py new_blocks.json            # merge (default)
-    .venv/bin/python import_seismic_blocks.py new_blocks.json --replace  # overwrite the file
-    .venv/bin/python import_seismic_blocks.py new_blocks.json --dry-run  # validate + report only
+    .venv/bin/python scripts/import_seismic_blocks.py new_blocks.json            # merge (default)
+    .venv/bin/python scripts/import_seismic_blocks.py new_blocks.json --replace  # overwrite the file
+    .venv/bin/python scripts/import_seismic_blocks.py new_blocks.json --dry-run  # validate + report only
 
 Merge unions each block's AR list into the existing file (existing order kept,
 new ARs appended, new blocks added); --replace discards the existing contents.
@@ -35,6 +35,10 @@ import argparse
 import json
 import sys
 from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
 import config
 

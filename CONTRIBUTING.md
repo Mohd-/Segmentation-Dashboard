@@ -1,7 +1,7 @@
 # Contributing — the cookbook
 
 Recipes for the changes you will actually be asked to make. Read
-`ARCHITECTURE.md` first if you don't yet know which module owns what.
+`docs/ARCHITECTURE.md` first if you don't yet know which module owns what.
 
 ## Rules of the road
 

@@ -15,7 +15,7 @@ final and none was invented.
 | `portfolio_export.py` → `GET /api/portfolio/export.xlsx` | ASAS → Excel | A multi-sheet workbook: Portfolio Export, a Staking sheet, and per-area sheets. Column POSITIONS are an external contract — downstream readers index by position, so columns are appended, never inserted. |
 | `export_excel.py` | ASAS → Excel | The older whole-database dump behind the gear menu's "Export to Excel". |
 | `import_excel.py` | Excel → ASAS | A one-off loader for historical wells. Writes with `reconcile=False` (a bulk writer: it lays down partial field sets then drives status explicitly). |
-| `import_seismic_blocks.py` | JSON → config | Refreshes the seismic-block/AR map. |
+| `scripts/import_seismic_blocks.py` | JSON → config | Refreshes the seismic-block/AR map. |
 
 None is a two-way sync, none is scheduled, and none writes to a shared folder.
 

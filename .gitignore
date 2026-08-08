@@ -5,6 +5,10 @@
 *.db
 *.db-shm
 *.db-wal
+# ...and any named scratch/rehearsal copy of it (e.g. manual migration
+# rehearsals like pipeline_tracker.db.v11-rehearsal(-shm|-wal)) — the two
+# patterns above only match the bare filename, not a qualified copy.
+pipeline_tracker.db.*
 
 # Secrets — never version credentials.
 .env
@@ -14,6 +18,9 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# macOS Finder junk.
+.DS_Store
 
 # Approved model binary is deployed out-of-band, not versioned.
 RF_model.joblib

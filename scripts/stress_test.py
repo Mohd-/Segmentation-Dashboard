@@ -3,7 +3,7 @@
 
 Run with the project venv interpreter:
 
-    .venv/bin/python stress_test.py
+    .venv/bin/python scripts/stress_test.py
 
 SAFETY: the repo's ./pipeline_tracker.db holds REAL production data and is
 NEVER touched. This script boots its own server subprocess against a scratch
@@ -48,7 +48,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = Path(__file__).resolve().parent.parent
 REAL_DB = (REPO_ROOT / "pipeline_tracker.db").resolve()
 VENV_PY = REPO_ROOT / ".venv" / "bin" / "python"
 

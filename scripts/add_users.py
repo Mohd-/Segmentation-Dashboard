@@ -19,9 +19,9 @@ Spec format (one user per argument, or per line with ``--file``):
   absent the user logs in by name alone, exactly like the SEED_USERS rows.
 
 Usage:
-    .venv/bin/python add_users.py "Alice Smith:supervisor:s3cret" "Bob:employee"
-    .venv/bin/python add_users.py --file team_roster.txt
-    SEGMENT_TRACKER_DB_PATH=/tmp/seed.db .venv/bin/python add_users.py --file roster.txt --update
+    .venv/bin/python scripts/add_users.py "Alice Smith:supervisor:s3cret" "Bob:employee"
+    .venv/bin/python scripts/add_users.py --file team_roster.txt
+    SEGMENT_TRACKER_DB_PATH=/tmp/seed.db .venv/bin/python scripts/add_users.py --file roster.txt --update
 
 ``--file`` lines are stripped; blank lines and ``#`` comments are ignored.
 The whole batch is validated before anything is written: one bad spec aborts
@@ -32,6 +32,10 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
 from werkzeug.security import generate_password_hash
 

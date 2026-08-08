@@ -1,4 +1,4 @@
-"""Tests for the operator CLI tools (add_users.py, import_seismic_blocks.py)
+"""Tests for the operator CLI tools (scripts/add_users.py, scripts/import_seismic_blocks.py)
 and the per-user password login they enable.
 
 The tool modules are imported lazily inside tests (never at module level) per
@@ -17,18 +17,18 @@ import pytest
 # ---------------------------------------------------------------------------
 
 def test_parse_user_spec_name_role_password(client):
-    import add_users
+    from scripts import add_users
     assert add_users.parse_user_spec("Alice Smith:supervisor:s3cret") == \
         ("Alice Smith", "supervisor", "s3cret")
 
 
 def test_parse_user_spec_password_optional_and_role_case_insensitive(client):
-    import add_users
+    from scripts import add_users
     assert add_users.parse_user_spec("Bob:Employee") == ("Bob", "employee", None)
 
 
 def test_parse_user_spec_password_may_contain_colons(client):
-    import add_users
+    from scripts import add_users
     assert add_users.parse_user_spec("Bob:staff:a:b:c") == ("Bob", "staff", "a:b:c")
 
 
@@ -40,7 +40,7 @@ def test_parse_user_spec_password_may_contain_colons(client):
     ("Alice:staff:", "password may not be blank"),
 ])
 def test_parse_user_spec_rejects_bad_specs(client, spec, match):
-    import add_users
+    from scripts import add_users
     with pytest.raises(ValueError, match=match):
         add_users.parse_user_spec(spec)
 
@@ -50,7 +50,7 @@ def test_parse_user_spec_rejects_bad_specs(client, spec, match):
 # ---------------------------------------------------------------------------
 
 def _run_add_users(users, update_existing=False):
-    import add_users
+    from scripts import add_users
     import db
     session = db.new_session()
     try:
@@ -155,7 +155,7 @@ def _write_json(path, data):
 
 
 def test_load_block_map_normalizes_and_dedupes(client, tmp_path):
-    import import_seismic_blocks as isb
+    from scripts import import_seismic_blocks as isb
     source = _write_json(tmp_path / "blocks.json",
                          {" Block A ": [2525, "2525", " 88421 "], "Block B": []})
     assert isb.load_block_map(source) == {"Block A": ["2525", "88421"], "Block B": []}
@@ -169,14 +169,14 @@ def test_load_block_map_normalizes_and_dedupes(client, tmp_path):
     ({"Block A": [["nested"]]}, "non-scalar AR entry"),
 ])
 def test_load_block_map_rejects_bad_shapes(client, tmp_path, payload, match):
-    import import_seismic_blocks as isb
+    from scripts import import_seismic_blocks as isb
     source = _write_json(tmp_path / "bad.json", payload)
     with pytest.raises(ValueError, match=match):
         isb.load_block_map(source)
 
 
 def test_merge_block_maps_unions_preserving_order(client):
-    import import_seismic_blocks as isb
+    from scripts import import_seismic_blocks as isb
     existing = {"Block A": ["1", "2"], "Block B": ["3"]}
     incoming = {"Block A": ["2", "4"], "Block C": ["5"]}
     assert isb.merge_block_maps(existing, incoming) == {
@@ -185,6 +185,6 @@ def test_merge_block_maps_unions_preserving_order(client):
 
 
 def test_duplicate_ars_across_blocks_reported(client):
-    import import_seismic_blocks as isb
+    from scripts import import_seismic_blocks as isb
     dupes = isb.duplicate_ars_across_blocks({"Block A": ["1", "2"], "Block B": ["2"]})
     assert dupes == {"2": ["Block A", "Block B"]}

@@ -19,7 +19,7 @@ directly from the route.
 Identity: POST /api/login matches the supplied name (case-insensitively)
 against the ``users`` table (seeded from config.SEED_USERS) and stores the
 canonical name plus role in the signed Flask session; unknown names are 401.
-Rows with a per-user password_hash (add_users.py) require that password;
+Rows with a per-user password_hash (scripts/add_users.py) require that password;
 otherwise the shared passcode (config.SHARED_PASSCODE) applies when
 configured. ``actor()`` stamps the session name into every changed_by, falling
 back to the client-supplied value for anonymous users so the unmodified
@@ -279,7 +279,7 @@ def login():
     Name is required (trimmed, 1-80 chars) and must match an active row in the
     ``users`` table (case-insensitive); unknown names get 401. The single
     front-end Passcode input then satisfies exactly ONE check:
-    - a row with a ``password_hash`` (set via add_users.py) requires that
+    - a row with a ``password_hash`` (set via scripts/add_users.py) requires that
       per-user password (``passcode`` carries it; a ``password`` key is
       accepted too) -- the shared passcode does NOT also apply, because the
       login form has only one secret box;

@@ -198,7 +198,7 @@ SESSION_COOKIE_SECURE = os.environ.get("SEGMENT_TRACKER_COOKIE_SECURE", "false")
 # with ``UPDATE users SET is_active = 0`` rather than deleting them).
 # Roles: 'supervisor' (approve/return), 'staff', 'employee'.
 # Batch-adding the real roster (optionally with per-user passwords) is what
-# add_users.py is for -- see its docstring for the name:role[:password] format.
+# scripts/add_users.py is for -- see its docstring for the name:role[:password] format.
 SEED_USERS = [
     ("Supervisor", "supervisor"),
     ("Staff Member", "staff"),
@@ -263,15 +263,15 @@ STEP_ASSIGNMENT_RULES = {
 # dependent Block/AR dropdowns)
 # ---------------------------------------------------------------------------
 # !!! PLACEHOLDER FILE -- EDIT/REPLACE BEFORE DEPLOYING !!!
-# Production swaps out seismic_blocks.json (block name -> list of AR-number
-# strings) without touching code; import_seismic_blocks.py validates and
-# merges/replaces the file from a same-shaped JSON source. SEISMIC_BLOCK_AR_MAP is that file's parsed
-# contents, loaded once at import time; AR_TO_SEISMIC_BLOCK is the reverse
-# index (AR -> block name) it's built from, used to label the Portfolio
-# "Seismic Block" column. AR numbers not found in the map fall back to
-# displaying the raw AR number, so an incomplete/missing file degrades
-# gracefully instead of crashing the app.
-SEISMIC_BLOCKS_FILE = Path(__file__).resolve().parent / "seismic_blocks.json"
+# Production swaps out config/seismic_blocks.json (block name -> list of
+# AR-number strings) without touching code; scripts/import_seismic_blocks.py
+# validates and merges/replaces the file from a same-shaped JSON source.
+# SEISMIC_BLOCK_AR_MAP is that file's parsed contents, loaded once at import
+# time; AR_TO_SEISMIC_BLOCK is the reverse index (AR -> block name) it's built
+# from, used to label the Portfolio "Seismic Block" column. AR numbers not
+# found in the map fall back to displaying the raw AR number, so an
+# incomplete/missing file degrades gracefully instead of crashing the app.
+SEISMIC_BLOCKS_FILE = Path(__file__).resolve().parent / "config" / "seismic_blocks.json"
 
 
 def _load_seismic_block_ar_map(path: Path) -> dict:

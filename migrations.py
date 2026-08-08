@@ -88,7 +88,7 @@ def _ensure_base_data(session) -> None:
 
 def _migrate_v2_users_password_hash(session, engine) -> None:
     """v2: add the nullable ``users.password_hash`` column (per-user login
-    passwords, written by add_users.py, checked by POST /api/login).
+    passwords, written by scripts/add_users.py, checked by POST /api/login).
 
     Guarded on column existence: a database already ALTERed by hand (the
     documented one-liner) passes through unchanged instead of hitting a
