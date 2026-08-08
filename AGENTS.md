@@ -3,8 +3,8 @@
 ## Verification (run before considering work done)
 
 ```bash
-.venv/bin/pytest tests/ -q                     # backend: 532 tests
-.venv/bin/python run_frontend_tests.py         # frontend: 416 tests (headless Firefox)
+.venv/bin/pytest tests/ -q                     # backend: 744 tests
+.venv/bin/python run_frontend_tests.py         # frontend: 610 tests (headless Firefox)
 ```
 
 Both suites are the contract. Frontend tests live in `static/tests/test-*.js` and are registered in `static/tests/runner.html` (unregistered files never run). No linter exists.
@@ -25,7 +25,7 @@ Fresh DB: stop the app, delete `pipeline_tracker.db` (and `-wal`/`-shm`); bootst
 
 **SQL goes through `db` helpers.** `db.fetch_one`, `db.fetch_all`, `db.execute`, `db.execute_many` with **named binds** (`:param_name`, dict params). Never interpolate values. For dynamic IN-lists, pass a Python list and write `IN :stages` (the helpers expand it). Writes run inside `with db.write_transaction(session):` (takes the write lock up front). Reads need no transaction.
 
-**Two test suites, both required.** Backend `pytest tests/ -q` (532 tests). Frontend `.venv/bin/python run_frontend_tests.py` (416 tests, 18 modules in `static/tests/`). A frontend change lands with `static/tests/test-*.js` + registration in `runner.html`.
+**Two test suites, both required.** Backend `pytest tests/ -q` (744 tests). Frontend `.venv/bin/python run_frontend_tests.py` (610 tests, 25 modules in `static/tests/`). A frontend change lands with `static/tests/test-*.js` + registration in `runner.html`.
 
 ## Domain conventions
 

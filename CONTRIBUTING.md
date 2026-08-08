@@ -28,8 +28,8 @@ Recipes for the changes you will actually be asked to make. Read
    a shipped step — append a new numbered one.
 5. **Every behavior change lands with a test** in the same change. There are
    TWO required suites and both are the contract: the backend
-   `.venv/bin/pytest tests/ -q` (532 tests) and the front-end harness
-   `.venv/bin/python run_frontend_tests.py` (416 tests). A front-end change
+   `.venv/bin/pytest tests/ -q` (744 tests) and the front-end harness
+   `.venv/bin/python run_frontend_tests.py` (610 tests). A front-end change
    lands with a `static/tests/test-*.js` test, registered in
    `static/tests/runner.html`.
 6. **Domain function conventions:** `session` is always the first argument,
@@ -174,9 +174,9 @@ lead/well data and upgrade **in place** at startup:
 ## Recipe 6: Run and debug locally
 
 ```bash
-.venv/bin/pytest tests/ -q                 # the whole backend suite (532 tests)
+.venv/bin/pytest tests/ -q                 # the whole backend suite (744 tests)
 .venv/bin/pytest tests/ -q -k "promotion"  # just tests matching a keyword
-.venv/bin/python run_frontend_tests.py     # the front-end harness (416 tests)
+.venv/bin/python run_frontend_tests.py     # the front-end harness (610 tests)
 python main.py                             # live server on 127.0.0.1:8020
 ```
 
