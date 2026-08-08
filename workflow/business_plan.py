@@ -779,6 +779,11 @@ def get_dashboard(session, filters=None):
     rig_target = sum(well["actual_drilling_days"] or 0 for well in visible)
     rig_inventory = sum((well["actual_drilling_days"] or 0) for well in visible if well["gate_approved"])
     successful = sum(1 for well in visible if well["successful"])
+    classified_count = sum(1 for well in visible if well["fluid_decision"] != "incomplete")
+    classified_successful = sum(
+        1 for well in visible
+        if well["successful"] and well["fluid_decision"] != "incomplete"
+    )
     simulated_total = 0.0
     actual_total = 0.0
     missing_simulated = []
@@ -814,7 +819,8 @@ def get_dashboard(session, filters=None):
         "kpis": {
             "rig_inventory_days": rig_inventory,
             "rig_target_days": rig_target,
-            "success_rate_pct": _round_whole(100 * successful / len(visible)) if visible else 0,
+            "success_rate_pct": _round_whole(100 * classified_successful / classified_count) if classified_count else None,
+            "classified_rate": classified_count,
             "actual_mean_ogip_bcf": _round_whole(actual_total),
             "simulated_mean_ogip_bcf": _round_whole(simulated_total),
         },

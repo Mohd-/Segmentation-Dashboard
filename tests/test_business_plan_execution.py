@@ -453,9 +453,114 @@ def test_dashboard_kpis_share_filters_and_preserve_zero_actual_precedence(client
         "rig_inventory_days": 12.5,
         "rig_target_days": 12.5,
         "success_rate_pct": 100,
+        "classified_rate": 1,
         "actual_mean_ogip_bcf": 0,
         "simulated_mean_ogip_bcf": 80,
     }
+
+
+def _insert_quicklook_fluid(client, project_id, fluid):
+    conn = raw_sqlite_connect(client.db_path)
+    with conn:
+        conn.execute("""
+            INSERT INTO project_formations
+              (project_id, formation, phase, top_tvdss_ft, base_tvdss_ft, thickness_ft, fluid)
+            VALUES (?, 'SARH', 'quicklook', 1000, 1100, 100, ?)
+        """, (project_id, fluid or ""))
+        conn.execute("""
+            INSERT INTO project_formation_pay_intervals
+              (project_id, formation, phase, seq, top_tvdss_ft, base_tvdss_ft,
+               phit_pct, swt_pct, ngr_pct, kint_md, fluid)
+            VALUES (?, 'SARH', 'quicklook', 1, 1010, 1060, 13, 35, 18, 2.5, ?)
+        """, (project_id, fluid or ""))
+    conn.close()
+
+
+def test_success_rate_dry_hole_counts_as_failure(client):
+    _bp_project(client, "SR-DRY-1")
+    body = client.get(f"/api/business-plan/dashboard?year={date.today().year}&step=all").get_json()
+    assert body["kpis"]["success_rate_pct"] is None
+    assert body["kpis"]["classified_rate"] == 0
+    _insert_quicklook_fluid(client, body["wells"][0]["project_id"], "Dry Hole")
+    body = client.get(f"/api/business-plan/dashboard?year={date.today().year}&step=all").get_json()
+    assert body["kpis"]["success_rate_pct"] == 0
+    assert body["kpis"]["classified_rate"] == 1
+
+
+def test_success_rate_water_bearing_counts_as_failure(client):
+    project_id = _bp_project(client, "SR-WB-1")
+    _insert_quicklook_fluid(client, project_id, "Water Bearing")
+    body = client.get(f"/api/business-plan/dashboard?year={date.today().year}&step=all").get_json()
+    well = next(w for w in body["wells"] if w["project_id"] == project_id)
+    assert well["fluid_decision"] == "all_water_or_dry"
+    assert well["successful"] is False
+    assert body["kpis"]["success_rate_pct"] == 0
+    assert body["kpis"]["classified_rate"] == 1
+
+
+def test_success_rate_productive_fluid_counts_as_success(client):
+    project_id = _bp_project(client, "SR-GAS-1")
+    _insert_quicklook_fluid(client, project_id, "Gas")
+    body = client.get(f"/api/business-plan/dashboard?year={date.today().year}&step=all").get_json()
+    well = next(w for w in body["wells"] if w["project_id"] == project_id)
+    assert well["fluid_decision"] == "productive"
+    assert well["successful"] is True
+    assert body["kpis"]["success_rate_pct"] == 100
+    assert body["kpis"]["classified_rate"] == 1
+
+
+def test_success_rate_no_fluid_excluded_from_calculation(client):
+    project_id = _bp_project(client, "SR-NOF-1")
+    body = client.get(f"/api/business-plan/dashboard?year={date.today().year}&step=all").get_json()
+    well = next(w for w in body["wells"] if w["project_id"] == project_id)
+    assert well["fluid_decision"] == "incomplete"
+    assert body["kpis"]["success_rate_pct"] is None
+    assert body["kpis"]["classified_rate"] == 0
+
+
+def test_success_rate_mixed_classified_and_unclassified(client):
+    pid_classified = _bp_project(client, "SR-MIX-C")
+    pid_unclassified = _bp_project(client, "SR-MIX-U")
+    _insert_quicklook_fluid(client, pid_classified, "Oil")
+    body = client.get(f"/api/business-plan/dashboard?year={date.today().year}&step=all").get_json()
+    assert body["kpis"]["success_rate_pct"] == 100
+    assert body["kpis"]["classified_rate"] == 1
+
+
+def test_success_rate_filters_recalculate_kpi(client):
+    year_a = date.today().year
+    year_b = year_a + 1
+    pid_a = _bp_project(client, "SR-F-A", year=year_a)
+    pid_b = _bp_project(client, "SR-F-B", year=year_b)
+    _insert_quicklook_fluid(client, pid_a, "Gas")
+    _insert_quicklook_fluid(client, pid_b, "Dry Hole")
+    body_a = client.get(f"/api/business-plan/dashboard?year={year_a}&step=all").get_json()
+    assert body_a["kpis"]["success_rate_pct"] == 100
+    assert body_a["kpis"]["classified_rate"] == 1
+    body_b = client.get(f"/api/business-plan/dashboard?year={year_b}&step=all").get_json()
+    assert body_b["kpis"]["success_rate_pct"] == 0
+    assert body_b["kpis"]["classified_rate"] == 1
+
+
+def test_success_rate_eight_of_ten_is_eighty_percent(client):
+    year = date.today().year
+    for i in range(8):
+        pid = _bp_project(client, f"SR-8OF10-S{i}", year=year)
+        _insert_quicklook_fluid(client, pid, "Gas")
+    for i in range(2):
+        pid = _bp_project(client, f"SR-8OF10-F{i}", year=year)
+        _insert_quicklook_fluid(client, pid, "Dry Hole")
+    body = client.get(f"/api/business-plan/dashboard?year={year}&step=all").get_json()
+    assert body["kpis"]["classified_rate"] == 10
+    assert body["kpis"]["success_rate_pct"] == 80
+
+
+def test_success_rate_empty_population_returns_none(client):
+    _bp_project(client, "SR-EMPTY-1")
+    _bp_project(client, "SR-EMPTY-2")
+    body = client.get(f"/api/business-plan/dashboard?year={date.today().year}&step=all").get_json()
+    assert body["kpis"]["success_rate_pct"] is None
+    assert body["kpis"]["classified_rate"] == 0
 
 
 def test_audit_records_field_tracking_progress_and_no_event_for_unchanged_replay(client):

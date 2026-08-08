@@ -530,16 +530,29 @@ function dayValue(value) {
 function renderKpis(kpis) {
   var host = byId('bpe-kpis');
   if (!host) return;
-  // The dash array IS the percentage, so it must be a bounded whole number:
-  // a missing or malformed rate reads 0%, never NaN and never a runaway arc.
-  var percent = Math.min(Math.max(Math.round(Number(kpis.success_rate_pct) || 0), 0), 100);
+  var rate = kpis.success_rate_pct;
+  var hasRate = rate != null && typeof Number(rate) === 'number' && !isNaN(Number(rate));
+  var percent = hasRate ? Math.min(Math.max(Math.round(Number(rate)), 0), 100) : 0;
+  var successRateContent;
+  if (hasRate) {
+    successRateContent =
+      '<div class="kpi-donut-group">' +
+        kpiDonutHtml(percent, 'Success Rate ' + percent + '%') +
+        '<small class="kpi-label">Success Rate</small>' +
+      '</div>';
+  } else {
+    successRateContent =
+      '<div class="kpi-donut-group">' +
+        '<div class="kpi-donut" role="img" aria-label="Success Rate N/A">' +
+          '<span class="kpi-donut-value" aria-hidden="true">N/A</span>' +
+        '</div>' +
+        '<small class="kpi-label">Success Rate</small>' +
+      '</div>';
+  }
   host.innerHTML =
     kpiTileHtml(dayValue(kpis.rig_inventory_days), 'Rig Inventory', '', 'calendar-days') +
     kpiTileHtml(dayValue(kpis.rig_target_days), 'Rig Target', '', 'flag') +
-    '<div class="kpi-donut-group">' +
-      kpiDonutHtml(percent, 'Success Rate ' + percent + '%') +
-      '<small class="kpi-label">Success Rate</small>' +
-    '</div>' +
+    successRateContent +
     kpiTileHtml((kpis.actual_mean_ogip_bcf || 0) + '/' + (kpis.simulated_mean_ogip_bcf || 0) + ' BCF',
       'Total Mean OGIP', 'kpi-tile-ogip', 'flame', 'Actual/Simulated');
 }

@@ -84,8 +84,8 @@ test('business-plan renders the approved dashboard and one auto-save approval de
       years: years,
       steps: [{ value: 'all', label: 'All Steps' }, { value: 'business-plan-gate', label: 'Business Plan Gate' }]
     },
-    kpis: { rig_inventory_days: 12, rig_target_days: 20, success_rate_pct: 50,
-      actual_mean_ogip_bcf: 40, simulated_mean_ogip_bcf: 80 },
+    kpis: { rig_inventory_days: 12, rig_target_days: 20, success_rate_pct: 100,
+      classified_rate: 1, actual_mean_ogip_bcf: 40, simulated_mean_ogip_bcf: 80 },
     data_quality: { missing_simulated_mean_project_ids: [], unsuccessful_with_actual_project_ids: [] },
     out_of_range_years: [],
     stage_counts: { pre_drilling: 1, post_drilling: 0, post_testing: 0 },
@@ -990,8 +990,8 @@ test('business-plan only a flagged well under Post-Drilling gets the drilling bo
         role: 'supervisor',
         options: { assignees: ['All Assignees'], fields: ['All Fields'],
           statuses: ['All Status'], years: [year] },
-        kpis: { rig_inventory_days: 0, rig_target_days: 0, success_rate_pct: 0,
-          actual_mean_ogip_bcf: 0, simulated_mean_ogip_bcf: 0 },
+        kpis: { rig_inventory_days: 0, rig_target_days: 0, success_rate_pct: null,
+          classified_rate: 0, actual_mean_ogip_bcf: 0, simulated_mean_ogip_bcf: 0 },
         data_quality: { missing_simulated_mean_project_ids: [], unsuccessful_with_actual_project_ids: [] },
         out_of_range_years: [],
         wells: [
@@ -1326,8 +1326,8 @@ test('business-plan the board draws the drilling indicator only under Post-Drill
         role: 'supervisor',
         options: { assignees: ['All Assignees'], fields: ['All Fields'],
           statuses: ['All Status'], years: [currentYear], steps: [{ value: 'all', label: 'All Steps' }] },
-        kpis: { rig_inventory_days: 0, rig_target_days: 0, success_rate_pct: 0,
-          actual_mean_ogip_bcf: 0, simulated_mean_ogip_bcf: 0 },
+        kpis: { rig_inventory_days: 0, rig_target_days: 0, success_rate_pct: null,
+          classified_rate: 0, actual_mean_ogip_bcf: 0, simulated_mean_ogip_bcf: 0 },
         data_quality: { missing_simulated_mean_project_ids: [], unsuccessful_with_actual_project_ids: [] },
         out_of_range_years: [],
         wells: [
@@ -1347,4 +1347,89 @@ test('business-plan the board draws the drilling indicator only under Post-Drill
   var lit = Array.prototype.map.call(host.querySelectorAll('.lead-card.is-active-drilling'),
     function (card) { return card.querySelector('.lead-card-name').textContent; });
   assert.deepEqual(lit, ['DRILLING-NOW']);
+});
+
+test('business-plan success rate renders N/A when no classified wells', async function () {
+  var host = fixture(
+    '<div id="bpe-main-view" class="panel"><div class="lead-controls">' +
+      '<select id="bp-assignee-filter" hidden></select>' +
+      '<select id="bp-field-filter" hidden></select>' +
+      '<select id="bp-status-filter" hidden></select>' +
+      '<select id="bp-year-filter" hidden></select>' +
+      '<select id="bp-step-filter" hidden></select>' +
+      '<div id="bpe-filter-row"></div><div id="bpe-kpis"></div></div>' +
+      '<div id="bpe-data-notice" class="hidden"></div>' +
+      '<div id="bp-pipeline"></div></div>' +
+      '<section id="bpe-detail-view" class="hidden"></section>'
+  );
+  resetBusinessPlanState();
+  var currentYear = new Date().getFullYear();
+  mockFetch(function (url) {
+    var path = String(url);
+    if (path.indexOf('/api/business-plan/dashboard') >= 0) {
+      return response({
+        role: 'supervisor',
+        options: { assignees: ['All Assignees'], fields: ['All Fields'],
+          statuses: ['All Status'], years: [currentYear],
+          steps: [{ value: 'all', label: 'All Steps' }] },
+        kpis: { rig_inventory_days: 0, rig_target_days: 0, success_rate_pct: null,
+          classified_rate: 0, actual_mean_ogip_bcf: 0, simulated_mean_ogip_bcf: 0 },
+        data_quality: { missing_simulated_mean_project_ids: [], unsuccessful_with_actual_project_ids: [] },
+        out_of_range_years: [],
+        wells: []
+      });
+    }
+    if (path.indexOf('/api/users') >= 0) return response([]);
+    throw new Error('Unexpected request: ' + path);
+  });
+
+  await refreshBusinessPlan();
+  var kpis = host.querySelector('#bpe-kpis');
+  assert.equal(kpis.textContent.indexOf('N/A') >= 0, true,
+    'success rate shows N/A when there are no classified wells');
+  assert.equal(kpis.querySelectorAll('.kpi-donut').length, 1,
+    'the N/A slot still occupies the donut position');
+});
+
+test('business-plan success rate renders the donut when classified wells exist', async function () {
+  var host = fixture(
+    '<div id="bpe-main-view" class="panel"><div class="lead-controls">' +
+      '<select id="bp-assignee-filter" hidden></select>' +
+      '<select id="bp-field-filter" hidden></select>' +
+      '<select id="bp-status-filter" hidden></select>' +
+      '<select id="bp-year-filter" hidden></select>' +
+      '<select id="bp-step-filter" hidden></select>' +
+      '<div id="bpe-filter-row"></div><div id="bpe-kpis"></div></div>' +
+      '<div id="bpe-data-notice" class="hidden"></div>' +
+      '<div id="bp-pipeline"></div></div>' +
+      '<section id="bpe-detail-view" class="hidden"></section>'
+  );
+  resetBusinessPlanState();
+  var currentYear = new Date().getFullYear();
+  mockFetch(function (url) {
+    var path = String(url);
+    if (path.indexOf('/api/business-plan/dashboard') >= 0) {
+      return response({
+        role: 'supervisor',
+        options: { assignees: ['All Assignees'], fields: ['All Fields'],
+          statuses: ['All Status'], years: [currentYear],
+          steps: [{ value: 'all', label: 'All Steps' }] },
+        kpis: { rig_inventory_days: 0, rig_target_days: 0, success_rate_pct: 80,
+          classified_rate: 10, actual_mean_ogip_bcf: 0, simulated_mean_ogip_bcf: 0 },
+        data_quality: { missing_simulated_mean_project_ids: [], unsuccessful_with_actual_project_ids: [] },
+        out_of_range_years: [],
+        wells: []
+      });
+    }
+    if (path.indexOf('/api/users') >= 0) return response([]);
+    throw new Error('Unexpected request: ' + path);
+  });
+
+  await refreshBusinessPlan();
+  var kpis = host.querySelector('#bpe-kpis');
+  assert.equal(kpis.textContent.indexOf('80%') >= 0, true,
+    'success rate shows the computed percentage when classified wells exist');
+  assert.equal(kpis.querySelectorAll('.kpi-donut').length, 1);
+  assert.equal(kpis.querySelectorAll('.kpi-donut-arc').length, 1,
+    'the donut arc is drawn when the rate is a number');
 });
