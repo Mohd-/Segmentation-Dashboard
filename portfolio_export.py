@@ -64,6 +64,10 @@ PORTFOLIO_EXPORT_COLUMNS: List[str] = [
     # sheet's column POSITIONS are a contract for external consumers, pinned by
     # tests/test_api_contract.py.
     "Lead Name",
+    # Record-level (projects.nucd_area), and the sheet is the ONLY way it is
+    # fed -- no UI writes it. Appended for the same positional reason as "Lead
+    # Name"; it belongs beside "Field" by meaning, not by column number.
+    "NUCD Area",
 ]
 
 STAKING_EXPORT_COLUMNS: List[str] = [
@@ -420,6 +424,10 @@ def get_portfolio_export_rows(session) -> List[dict]:
             "Condensate Rate (BPD)": _first_filled(flowback_src.get("flowback_liquid_rate_bpd")),
             "Choke Size (in)": _first_filled(flowback_src.get("flowback_choke_size_in")),
             "WHP (psi)": _first_filled(flowback_src.get("flowback_fwhp_psi")),
+            # Straight off the project row (reporting._portfolio_projects
+            # selects it), so an export round-trips back through import_excel
+            # with the area intact.
+            "NUCD Area": str(item.get("nucd_area") or ""),
         })
     return rows
 

@@ -817,8 +817,11 @@ def test_business_plan_rows_and_portfolio_rows(client):
     # WS7: every row carries exactly the 8 analysis columns (plus internals).
     assert len(body["rows"]) == 1
     row = body["rows"][0]
+    # classification is still published (the export composes its own, but the
+    # row has always carried it) even though NUCD Area took its place as a
+    # table column.
     for key in ("well_name", "gas_field", "seismic_block", "classification",
-                "year", "fluid", "mean_ogip", "total_cos"):
+                "nucd_area", "year", "fluid", "mean_ogip", "total_cos"):
         assert key in row, key
 
 

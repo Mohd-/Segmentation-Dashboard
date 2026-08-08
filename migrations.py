@@ -44,7 +44,7 @@ import db
 from helpers import utc_now_str
 from models import Base
 
-LATEST_SCHEMA_VERSION = 11
+LATEST_SCHEMA_VERSION = 12
 
 
 # ---------------------------------------------------------------------------
@@ -1106,6 +1106,24 @@ def _migrate_v11_tvdss_positive(session, engine) -> None:
                  raw, text, _V11_FIELD_KEY)
 
 
+def _migrate_v12_project_nucd_area(session, engine) -> None:
+    """v12: add the nullable ``projects.nucd_area`` TEXT column.
+
+    Record-level free text (the operating area a lead/well sits in), fed by
+    import_excel's "NUCD Area" column and read by the Portfolio Analysis table.
+    There is nothing to backfill and nothing to derive it from: the column
+    arrives NULL everywhere, and a blank stays blank until an import states an
+    area. Inventing one from the field or seismic block would be a guess
+    presented as data.
+
+    Guarded on column existence (the v6 ground_elevation pattern), so a
+    database already carrying the column replays unchanged.
+    """
+    columns = {column["name"] for column in inspect(engine).get_columns("projects")}
+    if "nucd_area" not in columns:
+        db.execute(session, "ALTER TABLE projects ADD COLUMN nucd_area TEXT")
+
+
 # List of (version, fn) dispatched by run() in ascending order against the
 # stored schema_version. Append new steps with the next integer version and
 # bump LATEST_SCHEMA_VERSION to match; never edit or remove a shipped step.
@@ -1120,6 +1138,7 @@ MIGRATIONS = [
     (9, _migrate_v9_project_priority),
     (10, _migrate_v10_business_plan_execution),
     (11, _migrate_v11_tvdss_positive),
+    (12, _migrate_v12_project_nucd_area),
 ]
 
 

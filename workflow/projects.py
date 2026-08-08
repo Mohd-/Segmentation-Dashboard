@@ -953,6 +953,58 @@ def set_project_priority(session, project_id, priority_value, changed_by="Admin"
     return new_priority
 
 
+def set_nucd_area(session, project_id, area_value, changed_by="Admin"):
+    """Set the record-level NUCD Area (projects.nucd_area) and log the change.
+
+    Free text, deliberately unvalidated against any vocabulary: no list of
+    areas has been supplied, so an unrecognized value is STORED, not rejected
+    -- the alternative is an importer that silently drops real areas because
+    this application had not heard of them yet. Whitespace is trimmed and
+    internal runs collapsed; a blank value CLEARS the area (stored NULL)
+    rather than writing an empty string, so "not stated" has one
+    representation. An unchanged value writes nothing (no history noise).
+
+    The audit event anchors on the project's first active task, the same
+    anchor set_project_priority and "Lead Created" use.
+
+    Returns the stored area after the call ('' when cleared or absent).
+    """
+    project = db.fetch_one(session,
+                           "SELECT project_id, nucd_area FROM projects WHERE project_id = :project_id",
+                           {"project_id": project_id})
+    if not project:
+        raise ValueError("Lead / well not found.")
+    new_area = " ".join(str(area_value or "").split())
+    if len(new_area) > 120:
+        raise ValueError("NUCD Area must be 120 characters or less.")
+    old_area = str(project.get("nucd_area") or "").strip()
+    if new_area == old_area:
+        return old_area
+    with db.write_transaction(session):
+        db.execute(session, """
+            UPDATE projects SET nucd_area = :area, last_updated = :now
+            WHERE project_id = :project_id
+        """, {"area": new_area or None, "now": utc_now_str(), "project_id": project_id})
+        anchor = db.fetch_one(session, """
+            SELECT task_id, task_name FROM project_tasks
+            WHERE project_id = :project_id AND is_active = 1
+            ORDER BY sequence_no LIMIT 1
+        """, {"project_id": project_id})
+        if anchor:
+            log_task_event(
+                session,
+                task_id=anchor["task_id"],
+                project_id=project_id,
+                task_name=anchor["task_name"],
+                action_type="NUCD Area Changed",
+                old_status=old_area,
+                new_status=new_area,
+                changed_by=changed_by,
+                comment=(f"NUCD Area set to {new_area}." if new_area else "NUCD Area cleared."),
+            )
+    return new_area
+
+
 def project_completion_percent(session, project_id):
     """Percent of the current pipeline's communicated work that is done.
 

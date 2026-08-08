@@ -189,8 +189,11 @@ def test_unparseable_text_is_left_exactly_as_it_is(client):
     assert _events(client, pid) == []
 
 
-def test_the_step_is_registered_at_the_current_schema_version(client):
+def test_the_step_is_registered_and_still_runs(client):
     versions = [version for version, _fn in migrations.MIGRATIONS]
     assert versions == sorted(versions), "steps run in ascending order"
     assert (11, migrations._migrate_v11_tvdss_positive) in migrations.MIGRATIONS
-    assert migrations.LATEST_SCHEMA_VERSION == 11
+    # Steps are append-only, so LATEST_SCHEMA_VERSION moves past 11 as later
+    # ones land; what must stay true is that a database older than 11 still
+    # gets this one.
+    assert migrations.LATEST_SCHEMA_VERSION >= 11

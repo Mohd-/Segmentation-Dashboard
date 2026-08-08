@@ -78,6 +78,12 @@ class Project(Base):
     # reads normalize NULL to 'Low'. Distinct from the legacy per-task
     # project_tasks.priority, which remains for server compatibility.
     priority = Column(Text)
+    # The operating area a lead/well belongs to, free text. Record-level like
+    # priority, NOT a workflow step input: no UI feeds it today -- it arrives
+    # through import_excel's "NUCD Area" column and is read by the Portfolio
+    # Analysis table. Nullable everywhere; blank means "not stated", never a
+    # default area.
+    nucd_area = Column(Text)
     revision = Column(Integer, nullable=False, server_default=text("0"))
     # Set by workflow._sync_completed_at exactly when the applicable task set
     # becomes fully approved; cleared (NULL) when the project reopens. Kept

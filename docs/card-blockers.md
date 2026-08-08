@@ -1,8 +1,10 @@
 # Blocked cards — what is missing, and what would unblock each
 
-Seven cards in the Bug/Feature batch cannot be built from what exists. Each
-names a reference that has not been supplied and tells us to stop and report
-rather than guess. This is that report.
+Seven cards in the Bug/Feature batch could not be built from what existed.
+Each named a reference that had not been supplied and told us to stop and
+report rather than guess. This is that report. **One of the seven (3N) has
+since been unblocked by the owner and built** -- its entry records what the
+missing piece turned out to be.
 
 Nothing here was partially built, stubbed or approximated. A placeholder column,
 an invented colour or a derived formula would each be a claim the data does not
@@ -25,24 +27,24 @@ replace and enlarge path. Only the third tile is absent.
 
 ---
 
-## 2. Card 3N — the `nucd Area` column
+## 2. Card 3N — the NUCD Area column — **RESOLVED 6 Aug 2026**
 
-**Asked for:** a seventh Portfolio column labelled exactly `nucd Area`.
+**Was blocked because:** a case-insensitive search over every `.py`, `.js`,
+`.html`, `.css`, `.json` and `.yaml` file, plus the seeded database, returned
+**zero** matches for "nucd". There was no field, config entry, import column or
+stored value to point the column at, and the card forbade guessing one.
 
-**Missing:** any such thing in this application. A case-insensitive search over
-every `.py`, `.js`, `.html`, `.css`, `.json` and `.yaml` file, plus the seeded
-database, returns **zero** matches for "nucd". There is no field, no config
-entry, no import column and no stored value. The card is explicit: "Do not
-silently change `nucd Area` to `NUCD Area`, `NUCD acreage`, or another label. Do
-not guess its backend data key or unit."
+**Unblocked by the owner**, who named it: NUCD Area is a **record-level
+property** of a lead/well — not a workflow step input, not a unit of area. It
+is stored on the project row (`projects.nucd_area`, migration v12), fed only by
+the importer's `NUCD Area` sheet column, and it **replaces** Classification in
+the Portfolio table on the owner's instruction. No UI writes it, by decision:
+a record nobody has stated an area for reads blank rather than being given a
+guessed one.
 
-**Built anyway:** the other six columns are in the card's requested order, and
-multi-column sorting works as the card describes.
-
-**To unblock:** name the source — which value it holds, in what unit. If it is
-an area the app already stores (`p90_area_km2` / `p10_area_km2` live on Lead
-Assessment and feed the Map, and the SAD steps carry their own pair), say which
-one and it is a one-line addition.
+Classification itself is untouched — the BP Execution Gate still owns it, the
+Portfolio row still carries it and the export still has its column. Only the
+table column changed hands.
 
 ---
 

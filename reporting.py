@@ -317,7 +317,11 @@ def _portfolio_projects(session):
                p.business_plan_year AS year,
                COALESCE(p.pipeline_type, 'prospect') AS pipeline_type,
                COALESCE(p.business_plan_enabled, 0) AS business_plan_enabled,
-               COALESCE(p.active_well_enabled, 0) AS active_well_enabled
+               COALESCE(p.active_well_enabled, 0) AS active_well_enabled,
+               -- Record-level (projects.nucd_area), not a step input: no UI
+               -- writes it, import_excel does. Both the Portfolio table and
+               -- the export read it from here.
+               COALESCE(p.nucd_area, '') AS nucd_area
         FROM projects p
         WHERE COALESCE(p.archived, 0) = 0
         ORDER BY p.business_plan_year, p.project_name COLLATE NOCASE
@@ -436,7 +440,9 @@ def get_portfolio_rows(session, year="All", activity="All"):
     well name, gas field (project-name prefix before the first hyphen),
     seismic block (FIRST non-empty Reservoir CoS AR number mapped through
     config.AR_TO_SEISMIC_BLOCK, raw AR fallback), classification (BP Execution
-    Gate input -> legacy GHEER fallback), BP year, status (fluid -> 'Staked'
+    Gate input -> legacy GHEER fallback -- still published for the export, no
+    longer a Portfolio column), NUCD area (projects.nucd_area, the column that
+    replaced Classification in the table), BP year, status (fluid -> 'Staked'
     when Approval to Stake is approved -> 'Proposed'), raw fluid
     (resolve_well_fluid: SARH 'final'-phase formation fluid -> legacy
     final_fluid_type -> resource_update -> post_drill -> SARH 'quicklook'-phase
@@ -513,6 +519,11 @@ def get_portfolio_rows(session, year="All", activity="All"):
             "seismic_block": config.AR_TO_SEISMIC_BLOCK.get(ar_number, ar_number) if ar_number else "",
             "classification": _first_filled(fields.get("bp_gate_classification"),
                                             fields.get("gheer_classification")),
+            # The Portfolio table's own column since the Classification column
+            # was replaced by it. Read straight off the project row -- unlike
+            # every other column here it is composed from nothing, because it
+            # is stored on the record rather than assembled from step inputs.
+            "nucd_area": str(item.get("nucd_area") or ""),
             "year": item["year"],
             "status": record_status(fields, stake_map.get(item["project_id"], False),
                                     fluid=well_fluid),

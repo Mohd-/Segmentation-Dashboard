@@ -39,18 +39,20 @@ var COLUMNS = [
   // column keeps its data key, formatter and filter, and the export's column
   // positions are a separate contract that does not follow this row.
   //
-  // The card lists six of these plus a seventh, `nucd Area`, which is REPORTED
-  // BLOCKED: there is no field, config entry or data of that name anywhere in
-  // this application, and the card forbids guessing its source. Classification
-  // and BP Year are not in the card's list either; they are kept here rather
-  // than dropped, because removing working columns is not what "reorder" asks
-  // for and both are still filtered on.
+  // NUCD Area is the card's seventh column, unblocked once the owner named its
+  // source: it is a RECORD-level property (projects.nucd_area), fed only by
+  // import_excel's "NUCD Area" column -- no step, no UI input. It REPLACES
+  // Classification here rather than joining it, on the owner's instruction.
+  // The classification value still travels on the row and in the export, so
+  // this is a table change, not a data one. BP Year is not in the card's list
+  // either; it is kept because removing a working, filtered column is not what
+  // "reorder" asks for.
   { key: 'mean_ogip', label: 'Mean OGIP (BCF)', numeric: true, filter: 'range' },
   { key: 'total_cos', label: 'Total CoS (%)', numeric: true, filter: 'range' },
   { key: 'status', label: 'Status', numeric: false, filter: 'multi', options: STATUS_OPTIONS },
   { key: 'seismic_block', label: 'Seismic Block', numeric: false, filter: 'text' },
   { key: 'gas_field', label: 'Field', numeric: false, filter: 'multi' },
-  { key: 'classification', label: 'Classification', numeric: false, filter: 'multi' },
+  { key: 'nucd_area', label: 'NUCD Area', numeric: false, filter: 'multi' },
   { key: 'year', label: 'BP Year', numeric: true, filter: 'multi' }
 ];
 
@@ -273,7 +275,7 @@ function rowMarkup(row) {
     '<td>' + esc(row.status || '') + '</td>' +
     '<td>' + esc(row.seismic_block || '') + '</td>' +
     '<td>' + esc(row.gas_field || '') + '</td>' +
-    '<td>' + esc(row.classification || '') + '</td>' +
+    '<td>' + esc(row.nucd_area || '') + '</td>' +
     yearCellMarkup(row) +
     '</tr>';
 }

@@ -1,4 +1,4 @@
-"""Excel importer for the 41-column "Portfolio Export" sheet -- the inverse of
+"""Excel importer for the 43-column "Portfolio Export" sheet -- the inverse of
 ``portfolio_export.get_portfolio_export_rows``.
 
 What this does
@@ -29,6 +29,20 @@ Column contract
 the column set (imported, never re-listed here). Only "Well Name" is required.
 Header detection and column matching are case-insensitive (casefold), with
 matched headers mapped back to the canonical column names.
+
+Which column is the record's IDENTITY (Card 3V)
+-----------------------------------------------
+A record has two names: ``projects.project_name`` -- the lead name, the row
+this application stores -- and the name it is KNOWN BY, which becomes the
+staked well name once staking is confirmed. The export writes the second as
+"Well Name" and carries the first alongside as "Lead Name".
+
+So **"Lead Name" is the identity** whenever the sheet has one: matching on
+"Well Name" would fail to find a staked record and create a SECOND record for
+a well already here. A sheet without that column (a hand-made one) is
+unaffected -- its "Well Name" is the only name it has. When the two differ,
+the well name is recorded as the record's staked name, which becomes its
+canonical name under the app's own confirmation rule, never by import alone.
 
 Flagged assumptions (documented, cheap to change)
 -------------------------------------------------
@@ -882,8 +896,49 @@ def _find_project(session, name):
                         {"name": name})
 
 
-def import_rows(session, rows, update=False) -> ImportReport:
+def _record_staked_name(session, project_id, staked_name) -> str:
+    """Store the sheet's well name as the record's staked name (Card 3V).
+
+    Called only when "Well Name" and "Lead Name" DIFFER, which is exactly the
+    export's way of saying "this lead was staked and is now known by that well
+    name". Dropping it would round-trip a staked well back into an
+    unrecognizable lead.
+
+    What this does NOT do is assert that staking happened: the name becomes the
+    record's canonical one through the app's own predicate (the Well Site
+    Location letter plus stored coordinates), and this sheet carries no
+    evidence of either. So the name is RECORDED and the record keeps its lead
+    name until a human confirms the step -- except on a record that is already
+    confirmed, where the value is simply already there.
+
+    Returns a note when it wrote something, '' when the record already had it.
+    A domain guard (a name another record answers to) raises ValueError, which
+    the caller reports as a row warning rather than losing the record.
+    """
+    task = next((t for t in workflow.get_project_tasks(session, project_id)
+                 if t["task_name"] == workflow.WELL_SITE_LOCATION_STEP), None)
+    if task is None:
+        return ""
+    stored = workflow.get_task_dynamic_fields(session, task["task_id"]).get(
+        workflow.STAKED_WELL_NAME_FIELD) or ""
+    if str(stored).strip() == staked_name:
+        return ""
+    workflow.save_task_dynamic_fields(
+        session, task["task_id"], {workflow.STAKED_WELL_NAME_FIELD: staked_name},
+        changed_by=IMPORT_USER, reconcile=False)
+    return (f"stored {staked_name!r} as the staked well name; the record is named by it "
+            "once Well Site Location is confirmed (letter loaded + coordinates)")
+
+
+def import_rows(session, rows, update=False, progress=None) -> ImportReport:
     """Import a list of parsed rows; return a structured :class:`ImportReport`.
+
+    ``progress`` is an optional ``callable(index, total, RowResult)`` invoked as
+    each row finishes. The CLI passes a printer, because the report is composed
+    and printed only at the END: without it a long run is indistinguishable from
+    a hung one, which is exactly the case where you most want to know which
+    record it is sitting on. Callers that want the report alone (every test)
+    pass nothing and see no output.
 
     Each row is classified, validated (blank/duplicate/unknown-token/etc.), then
     created or upserted through :func:`_import_record`. A row whose write raises
@@ -896,11 +951,29 @@ def import_rows(session, rows, update=False) -> ImportReport:
     _ensure_import_user(session)
     report = ImportReport()
     seen_names: set = set()
+    total = len(rows)
+
+    def finish(**kwargs) -> None:
+        """Record one row's outcome and tell the caller a row went by."""
+        report.add(**kwargs)
+        if progress is not None:
+            progress(len(report.results), total, report.results[-1])
 
     for row in rows:
         record_type, errors, year, fluid = _analyze(row)
         errors = list(errors)
-        name = _text(row, "Well Name")
+        well_name = _text(row, "Well Name")
+        # A record has TWO names since Card 3V, and only one of them is its
+        # IDENTITY. "Well Name" is what the record is KNOWN BY -- the staked
+        # well name once staking is confirmed -- while projects.project_name
+        # (the sheet's "Lead Name") is the row this application stores and
+        # matches on. Matching a staked record on its well name finds nothing
+        # and creates a SECOND record for a well that is already here, so the
+        # lead name is the identity whenever the sheet carries one. A
+        # hand-made sheet with no "Lead Name" column is unchanged: its well
+        # name is the only name it has, so it is the identity.
+        lead_name = _text(row, "Lead Name")
+        name = lead_name or well_name
 
         if name:
             if name in seen_names:
@@ -908,14 +981,14 @@ def import_rows(session, rows, update=False) -> ImportReport:
             seen_names.add(name)
 
         if errors:
-            report.add(well_name=name, record_type=record_type, outcome="error",
-                       reason="; ".join(errors))
+            finish(well_name=well_name, record_type=record_type, outcome="error",
+                   reason="; ".join(errors))
             continue
 
         existing = _find_project(session, name)
         if existing is not None and not update:
-            report.add(well_name=name, record_type=record_type, outcome="skipped",
-                       reason="already exists (use --update)")
+            finish(well_name=well_name, record_type=record_type, outcome="skipped",
+                   reason="already exists (use --update)")
             continue
 
         is_update = existing is not None  # --update on a new name still creates
@@ -923,10 +996,12 @@ def import_rows(session, rows, update=False) -> ImportReport:
         # X/Y are project-level (projects.lead_x/lead_y), not step fields, so
         # they ride on the create call itself / a coordinates-only rename on
         # update. Blank cells never erase stored coordinates (rename only
-        # writes a coordinate it was actually given).
-        xy_warnings: List[str] = []
-        lead_x = _num(row, "X", xy_warnings)
-        lead_y = _num(row, "Y", xy_warnings)
+        # writes a coordinate it was actually given). project_warnings collects
+        # every PROJECT-level cell's complaint (X, Y, NUCD Area) so they lead
+        # the row's warning list ahead of the step-field ones.
+        project_warnings: List[str] = []
+        lead_x = _num(row, "X", project_warnings)
+        lead_y = _num(row, "Y", project_warnings)
         try:
             if is_update:
                 pid = existing["project_id"]
@@ -942,8 +1017,29 @@ def import_rows(session, rows, update=False) -> ImportReport:
                 pid = workflow.add_project(session, name, changed_by=IMPORT_USER,
                                            lead_x=lead_x, lead_y=lead_y, auto_assign=False)
                 created_pid = pid
+            # NUCD Area is project-level too (projects.nucd_area) and this
+            # sheet is its ONLY input -- nothing in the UI writes it. A blank
+            # cell never erases a stored area, matching the X/Y rule above; an
+            # over-long value is reported as a cell warning rather than losing
+            # the whole record over one field the sheet got wrong.
+            nucd_area = _text(row, "NUCD Area")
+            if nucd_area:
+                try:
+                    workflow.set_nucd_area(session, pid, nucd_area, changed_by=IMPORT_USER)
+                except ValueError as exc:
+                    project_warnings.append(f"NUCD Area not stored: {exc}")
+            # Two different names on one row means the lead was staked.
+            project_notes: List[str] = []
+            if well_name and lead_name and well_name != lead_name:
+                try:
+                    staked_note = _record_staked_name(session, pid, well_name)
+                    if staked_note:
+                        project_notes.append(staked_note)
+                except ValueError as exc:
+                    project_warnings.append(f"Staked well name not stored: {exc}")
             warnings, notes = _import_record(session, row, record_type, year, fluid, pid, is_update)
-            warnings = xy_warnings + warnings
+            warnings = project_warnings + warnings
+            notes = project_notes + notes
         except Exception as exc:  # keep the batch going; report the failure verbatim
             # Recover the session FIRST: a failure can leave it mid-transaction
             # (worst case, a commit that died partway strands it in the
@@ -965,12 +1061,14 @@ def import_rows(session, rows, update=False) -> ImportReport:
                     reason += " (record left partially imported)"
             elif is_update:
                 reason += " (record left partially imported)"
-            report.add(well_name=name, record_type=record_type, outcome="error", reason=reason)
+            finish(well_name=well_name, record_type=record_type, outcome="error", reason=reason)
             continue
 
-        report.add(well_name=name, record_type=record_type,
-                   outcome="updated" if is_update else "created",
-                   warnings=warnings, notes=notes)
+        # Reported under the sheet's OWN "Well Name" throughout, so a line in
+        # the report is findable in the sheet that produced it.
+        finish(well_name=well_name, record_type=record_type,
+               outcome="updated" if is_update else "created",
+               warnings=warnings, notes=notes)
     return report
 
 
@@ -1021,9 +1119,19 @@ def main() -> None:
             db.init_db(real_path)
             print(f"Target database: {real_path}")
 
+        # Progress goes to STDERR, the report to stdout: piping the report to a
+        # file still shows the run moving, and the two never interleave in it.
+        # Without this the tool is silent from "Target database:" until the last
+        # row lands, so a slow run (a lock held by the running app, a long
+        # sheet) is indistinguishable from a hung one -- and you cannot see
+        # WHICH record it is on, which is the first thing you want to know.
+        def show(index, total, result):
+            print(f"  [{index}/{total}] {result.well_name or '(blank)'}: {result.outcome}",
+                  file=sys.stderr, flush=True)
+
         session = db.new_session()
         try:
-            report = import_rows(session, rows, update=args.update)
+            report = import_rows(session, rows, update=args.update, progress=show)
         finally:
             session.close()
         print(report.format())

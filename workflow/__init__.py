@@ -126,6 +126,7 @@ from .projects import (
     restore_project,
     annotate_canonical_names,
     canonical_record_name,
+    set_nucd_area,
     set_project_priority,
     update_project_name,
 )
@@ -189,7 +190,7 @@ __all__ = [
     "add_project", "archive_project", "delete_project", "get_project",
     "get_projects", "project_completion_percent", "restore_project",
     "annotate_canonical_names", "canonical_record_name",
-    "set_project_priority", "update_project_name",
+    "set_nucd_area", "set_project_priority", "update_project_name",
     # lifecycle
     "apply_canonical_name", "apply_checkbox_submission", "apply_field_completion",
     "guard_staking_name", "assign_task",

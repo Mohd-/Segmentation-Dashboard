@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from conftest import create_project, get_task_by_name, get_tasks
 
 BP_KWARGS = {"business_plan_enabled": True, "business_plan_year": 2027}
@@ -406,6 +408,76 @@ def test_classification_bp_gate_beats_gheer(client):
 
 
 # ---------------------------------------------------------------------------
+# NUCD Area (projects.nucd_area) -- the column that replaced Classification in
+# the Portfolio table. Record-level, not a step input: nothing in the UI writes
+# it, so these drive the domain setter the importer calls.
+# ---------------------------------------------------------------------------
+
+def _set_area(app_modules, project_id, value, changed_by="External Import"):
+    import workflow
+
+    _main, db = app_modules
+    session = db.new_session()
+    try:
+        return workflow.set_nucd_area(session, project_id, value, changed_by=changed_by)
+    finally:
+        session.close()
+
+
+def test_nucd_area_is_blank_until_something_states_one(client):
+    """No default, and nothing derives it from the field or seismic block: an
+    area the app was never told is reported as unknown, not guessed."""
+    pid = create_project(client, "AREA-1", **BP_KWARGS)
+    row = _row_for(client, pid)
+    assert row["nucd_area"] == ""
+    # Classification still travels on the row (the export reads it); it simply
+    # stopped being a column of the table.
+    assert "classification" in row
+
+
+def test_nucd_area_reaches_the_portfolio_row_trimmed(client, app_modules):
+    pid = create_project(client, "AREA-2", **BP_KWARGS)
+    assert _set_area(app_modules, pid, "  North   Jafurah ") == "North Jafurah"
+    assert _row_for(client, pid)["nucd_area"] == "North Jafurah"
+
+    # A lead is a record too -- the property is not BP-only.
+    lead = create_project(client, "AREA-LEAD-1")
+    _set_area(app_modules, lead, "South Ghawar")
+    assert _row_for(client, lead)["nucd_area"] == "South Ghawar"
+
+
+def test_nucd_area_is_audited_once_per_real_change(client, app_modules):
+    pid = create_project(client, "AREA-3", **BP_KWARGS)
+    assert _history(client, pid, "NUCD Area Changed") == []
+
+    _set_area(app_modules, pid, "North Jafurah")
+    _set_area(app_modules, pid, "North Jafurah")  # unchanged -- no second event
+    events = _history(client, pid, "NUCD Area Changed")
+    assert len(events) == 1
+    assert (events[0]["old_status"], events[0]["new_status"]) == ("", "North Jafurah")
+    assert events[0]["changed_by"] == "External Import"
+
+    # Blank CLEARS the area (stored NULL, read back as ''), and says so.
+    assert _set_area(app_modules, pid, "") == ""
+    assert _row_for(client, pid)["nucd_area"] == ""
+    events = _history(client, pid, "NUCD Area Changed")
+    assert len(events) == 2
+    assert (events[1]["old_status"], events[1]["new_status"]) == ("North Jafurah", "")
+    assert events[1]["comment"] == "NUCD Area cleared."
+
+
+def test_an_unknown_nucd_area_is_stored_not_rejected(client, app_modules):
+    """No vocabulary has been supplied, so the setter validates length only.
+    Refusing unrecognized areas would silently drop real ones."""
+    pid = create_project(client, "AREA-4", **BP_KWARGS)
+    assert _set_area(app_modules, pid, "Somewhere Nobody Listed") == "Somewhere Nobody Listed"
+
+    with pytest.raises(ValueError, match="120 characters"):
+        _set_area(app_modules, pid, "x" * 121)
+    assert _row_for(client, pid)["nucd_area"] == "Somewhere Nobody Listed"
+
+
+# ---------------------------------------------------------------------------
 # Scope / filters keep working with the new row shape
 # ---------------------------------------------------------------------------
 
@@ -668,9 +740,10 @@ def test_export_names_a_staked_record_by_its_well_name_and_keeps_the_lead(client
     assert staking_rows[0][staking_header.index("Staked Well Name")] == "STAKE-XL-1ST1"
 
     # The Portfolio sheet's historical column POSITIONS are a contract for
-    # external consumers, so the new column is appended, never inserted.
-    assert portfolio_export.PORTFOLIO_EXPORT_COLUMNS[-1] == "Lead Name"
+    # external consumers, so a new column is appended, never inserted: every
+    # column that shipped before keeps the index it had.
     assert portfolio_export.PORTFOLIO_EXPORT_COLUMNS[:3] == ["X", "Y", "Well Name"]
+    assert portfolio_export.PORTFOLIO_EXPORT_COLUMNS[-2:] == ["Lead Name", "NUCD Area"]
 
 
 # ---------------------------------------------------------------------------
