@@ -76,17 +76,17 @@ export var KEY_OWNER = {
 // that stakes it exists.
 export var CHECKBOXES = [
   { key: 'staking_well_created',
-    label: 'Well creation and well folder are completed' },
+    label: 'Well creation and well folder completed' },
   // Card 3V, placed immediately after the well-creation control the card names
   // and worded EXACTLY as the card writes it. It records that a person moved
   // the folder; the application performs no file operation for it, and it
   // gates no completion (FIELD_COMPLETION['Approval to Stake'] is unchanged).
   { key: 'lead_folder_handover_confirmed',
-    label: 'Lead Folder is moved to the Well Proposal Folder' },
+    label: 'Lead Folder moved to Well Proposal Folder' },
   { key: 'approval_stake_letter_loaded',
-    label: 'The Approval to Stake letter is placed in the shared folder' },
+    label: 'Approval to Stake letter placed in the shared folder' },
   { key: 'wellsite_letter_loaded',
-    label: 'The Wellsite Location letter is placed in the shared folder' }
+    label: 'Wellsite Location letter placed in the shared folder' }
 ];
 
 // Ticking the LAST checkbox reveals the staking location. Named once, so the

@@ -138,7 +138,7 @@ export var MESSAGES = {
 export var HELPER_TEXT =
   'PIIP results and plots update automatically when valid inputs or the selected scenario change.';
 export var PIIP_HEADING = 'Petroleum Initially In Place - PIIP Results';
-export var POLYGONS_LABEL = 'Polygons and surfaces are placed in the shared folder';
+export var POLYGONS_LABEL = 'Polygons and surfaces placed in the shared folder';
 
 // Input labels, by key. Used by the validators (so an error names the field the
 // user is looking at) and by the aria-labels.

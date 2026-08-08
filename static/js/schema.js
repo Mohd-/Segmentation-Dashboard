@@ -43,7 +43,7 @@ export var RESOURCE_SCENARIOS = [
 // approved wording lives here once rather than in four string literals that
 // can drift apart. The neighbouring LAS and Petrel labels are deliberately
 // untouched -- the card names this one only.
-export var PDF_LABEL = 'Logs as PDF loaded in shared folder';
+export var PDF_LABEL = 'Logs as PDF loaded in the shared folder';
 
 export function piip(prefix) {
   // Grouped layout: the gas P90/Mean/P10 trio sits under a 'Gas (BCF)' section
@@ -285,7 +285,7 @@ export var SCHEMA = {
     { key: 'top_formation_tvdss_ft', label: 'Top Formation TVDSS (ft)', type: 'number', bigOk: true, section: 'Structure' },
     // PIIP output keys remain intentionally unregistered because the auto-run
     // writes them directly; this confirmation is the editable checkpoint input.
-    { key: 'polygons_surfaces_loaded', label: 'Polygons and surfaces are placed in the shared folder', type: 'checkbox', section: 'Resource Assessment' }
+    { key: 'polygons_surfaces_loaded', label: 'Polygons and surfaces placed in the shared folder', type: 'checkbox', section: 'Resource Assessment' }
   ],
   // Card 4B, second half. The Wellsite Location letter's confirmation plus the
   // STAKED LOCATION it names -- the two coordinates the rest of the business
@@ -304,7 +304,7 @@ export var SCHEMA = {
   // Location'] -- the box AND both coordinates, so a ticked letter with no
   // location leaves the item In Progress.
   'Well Site Location': [
-    { key: 'wellsite_letter_loaded', label: 'The Wellsite Location letter is placed in the shared folder', type: 'checkbox' },
+    { key: 'wellsite_letter_loaded', label: 'Wellsite Location letter placed in the shared folder', type: 'checkbox' },
     { key: 'staked_x', label: 'Staked X Coordinate', type: 'number', bigOk: true, showIf: 'wellsite_letter_loaded', section: 'Staking Location', row: 'staked_location' },
     { key: 'staked_y', label: 'Staked Y Coordinate', type: 'number', bigOk: true, showIf: 'wellsite_letter_loaded', row: 'staked_location' }
   ],
@@ -314,7 +314,7 @@ export var SCHEMA = {
   // workflow/constants.py FIELD_COMPLETION keys it on this exact field key --
   // so this entry only has to RENDER the box; nothing here decides status.
   'Seismic Signature Validation': [
-    { key: 'seismic_slides_loaded', label: 'Seismic validation supporting slides are placed in the shared folder', type: 'checkbox' }
+    { key: 'seismic_slides_loaded', label: 'Seismic validation supporting slides placed in the shared folder', type: 'checkbox' }
   ],
   // Card 3A. The confirmation sits BENEATH the evaluations mini-sheet (fields
   // render in array order into #dynamic-fields, which precedes the Comments
@@ -323,7 +323,7 @@ export var SCHEMA = {
   // Reservoir CoS are both required before the step reads Completed.
   'Reservoir CoS': [
     { key: 'reservoir_cos_rows', label: 'Reservoir CoS Evaluations', type: 'repeatable', columns: RESERVOIR_COS_COLUMNS },
-    { key: 'reservoir_slides_loaded', label: 'Reservoir CoS supporting slides are placed in the shared folder', type: 'checkbox' }
+    { key: 'reservoir_slides_loaded', label: 'Reservoir CoS supporting slides placed in the shared folder', type: 'checkbox' }
   ],
   // v5: the separate 'Trap CoS' and 'Seal CoS' steps merged into ONE component.
   // The two halves keep their EXACT field keys (renaming an EAV key orphans
@@ -354,7 +354,7 @@ export var SCHEMA = {
     // the form. It is the third of the step's FIELD_COMPLETION requirements
     // (workflow/constants.py): the box AND both stored CoS percentages, so a
     // Trap half filled in on its own leaves the step In Progress.
-    { key: 'seal_slides_loaded', label: 'Seal CoS supporting slides are placed in the shared folder', type: 'checkbox' }
+    { key: 'seal_slides_loaded', label: 'Seal CoS supporting slides placed in the shared folder', type: 'checkbox' }
   ],
   // v18: 'Presence CoS Evaluation' removed as a step -- the derived value is
   // surfaced as "Total Chance of Success" from /detail's overview.derisking.
@@ -400,12 +400,12 @@ export var SCHEMA = {
   // that step's status is what the Portfolio reads as "Staked"
   // (reporting._approval_to_stake_map).
   'Approval to Stake': [
-    { key: 'staking_well_created', label: 'Well creation and well folder are completed', type: 'checkbox' },
+    { key: 'staking_well_created', label: 'Well creation and well folder completed', type: 'checkbox' },
     // Card 3V's handover confirmation. Persisted and audited like any other
     // field, but absent from FIELD_COMPLETION: it is a record of something a
     // person did on the share, not a gate.
-    { key: 'lead_folder_handover_confirmed', label: 'Lead Folder is moved to the Well Proposal Folder', type: 'checkbox' },
-    { key: 'approval_stake_letter_loaded', label: 'The Approval to Stake letter is placed in the shared folder', type: 'checkbox' }
+    { key: 'lead_folder_handover_confirmed', label: 'Lead Folder moved to Well Proposal Folder', type: 'checkbox' },
+    { key: 'approval_stake_letter_loaded', label: 'Approval to Stake letter placed in the shared folder', type: 'checkbox' }
   ],
   // sarh_formation_prognosis_pre_drill keeps its key (renaming EAV keys
   // orphans stored data); only the label dropped "(Pre-Drill)".
@@ -422,9 +422,9 @@ export var SCHEMA = {
   'Quicklook Logs': [
     { key: 'quicklook_formations', label: 'Formation Interpretation (Quicklook)', type: 'formations', phase: 'quicklook' },
     { key: 'quicklook_pdf', label: PDF_LABEL, type: 'checkbox', row: 'quicklook_logs' },
-    { key: 'quicklook_las', label: 'Logs as LAS', type: 'checkbox', row: 'quicklook_logs' }
+    { key: 'quicklook_las', label: 'Logs loaded as LAS in the shared folder', type: 'checkbox', row: 'quicklook_logs' }
   ],
-  'Aramco Picks': [{ key: 'aramco_picks_loaded', label: 'AAP are loaded in Petrel & GK', type: 'checkbox' }],
+  'Aramco Picks': [{ key: 'aramco_picks_loaded', label: 'AAP loaded in Petrel & GK', type: 'checkbox' }],
   // v4 merge: the retired 'Post-Drilling Resource Assessment' step folded in
   // here. Its EAV keys are kept verbatim (post_drill_piip_* via piip(),
   // post_drill_fluid_type) so no stored value is orphaned and every reader
@@ -438,15 +438,15 @@ export var SCHEMA = {
     // bigOk: GRV in 10³ acre.ft runs past the generic 9999 cap on big segments.
     { key: 'sad_grv_p90', label: 'GRV (10³ acre.ft) P90', type: 'number', row: 'sad_grv', bigOk: true },
     { key: 'sad_grv_p10', label: 'GRV (10³ acre.ft) P10', type: 'number', row: 'sad_grv', bigOk: true },
-    { key: 'sad_surfaces_polygons_loaded', label: 'Surfaces and polygons are placed in the shared folder', type: 'checkbox' }
+    { key: 'sad_surfaces_polygons_loaded', label: 'Surfaces and polygons placed in the shared folder', type: 'checkbox' }
   ].concat(piip('post_drill_piip')).concat([
     { key: 'post_drill_fluid_type', label: 'Fluid Type', type: 'select', options: FLUID_TYPES },
     { key: 'sad_formation_rows', label: 'Formations (optional)', type: 'repeatable', columns: SAD_FORMATION_COLUMNS }
   ]),
   // v4 merge: 'URED Update' folded in here as the second checkbox.
   'Executive Summary': [
-    { key: 'exec_summary_loaded', label: 'Executive Summary is loaded in the shared folder', type: 'checkbox', row: 'exec_summary_docs' },
-    { key: 'ured_update_loaded', label: 'URED Update is loaded in the shared folder', type: 'checkbox', row: 'exec_summary_docs' }
+    { key: 'exec_summary_loaded', label: 'Executive Summary placed in the shared folder', type: 'checkbox', row: 'exec_summary_docs' },
+    { key: 'ured_update_loaded', label: 'URED Update placed in the shared folder', type: 'checkbox', row: 'exec_summary_docs' }
   ],
   // Per-stage measurements moved into the flowback_stages_rows mini-sheet
   // (stage #1 is the primary read everywhere); the retired flat rate keys stay
@@ -457,8 +457,8 @@ export var SCHEMA = {
   'Flowback Results': [
     // Keys predate the reworded labels: existing '1' values in task_dynamic_fields
     // must keep counting, so the labels changed but the keys did not.
-    { key: 'flowback_sheet', label: 'Flowback Sheet is loaded in the shared folder', type: 'checkbox', row: 'flowback_docs' },
-    { key: 'flowback_slide', label: 'Flowback Slide is loaded in the shared folder', type: 'checkbox', row: 'flowback_docs' },
+    { key: 'flowback_sheet', label: 'Flowback Sheet placed in the shared folder', type: 'checkbox', row: 'flowback_docs' },
+    { key: 'flowback_slide', label: 'Flowback Slide placed in the shared folder', type: 'checkbox', row: 'flowback_docs' },
     { key: 'flowback_stages_rows', label: 'Flowback Stages', type: 'repeatable', columns: FLOWBACK_STAGE_COLUMNS },
     { key: 'flowback_dynamic_area_km2', label: 'Dynamic Reservoir Area (km²)', type: 'number', row: 'flowback_dyn' },
     { key: 'flowback_dynamic_ogip_bcf', label: 'Dynamic OGIP (BCF)', type: 'number', row: 'flowback_dyn' }
@@ -474,7 +474,7 @@ export var SCHEMA = {
     { key: 'sad_update_area_km2_p10', label: 'Area (km²) P10', type: 'number', row: 'sad_update_area' },
     { key: 'sad_update_grv_p90', label: 'GRV (10³ acre.ft) P90', type: 'number', row: 'sad_update_grv', bigOk: true },
     { key: 'sad_update_grv_p10', label: 'GRV (10³ acre.ft) P10', type: 'number', row: 'sad_update_grv', bigOk: true },
-    { key: 'sad_update_surfaces_polygons_loaded', label: 'Surfaces and polygons are placed in the shared folder', type: 'checkbox' }
+    { key: 'sad_update_surfaces_polygons_loaded', label: 'Surfaces and polygons placed in the shared folder', type: 'checkbox' }
   ].concat(piip('resource_update')).concat([
     { key: 'resource_update_fluid_type', label: 'Fluid Type', type: 'select', options: FLUID_TYPES },
     { key: 'sad_update_formation_rows', label: 'Formations (optional)', type: 'repeatable', columns: SAD_FORMATION_COLUMNS },
@@ -489,7 +489,7 @@ export var SCHEMA = {
     { key: 'final_formations', label: 'Formation Interpretation (Final)', type: 'formations', phase: 'final' },
     { key: 'final_petrel', label: 'Logs in Petrel', type: 'checkbox', row: 'final_logs' },
     { key: 'final_pdf', label: PDF_LABEL, type: 'checkbox', row: 'final_logs' },
-    { key: 'final_las', label: 'Logs as LAS', type: 'checkbox', row: 'final_logs' }
+    { key: 'final_las', label: 'Logs loaded as LAS in the shared folder', type: 'checkbox', row: 'final_logs' }
   ],
   'PVAD Structural MTR': [{ key: 'pvad_mtr_link', label: 'DRAS', type: 'link', value: 'https://DRAS/', linkText: 'Open PVAD Structural MTR (DRAS)' }],
   // Card 3D. The one tracked item whose completion stays a HUMAN APPROVAL: the
@@ -500,13 +500,13 @@ export var SCHEMA = {
   // action row shows Save Updates alone -- see SPECIAL_ACTION_ROWS in
   // views/detail-form.js.
   'Segmentation Slides': [
-    { key: 'segmentation_slides_loaded', label: 'Segmentation slides are placed in the shared folder', type: 'checkbox' }
+    { key: 'segmentation_slides_loaded', label: 'Segmentation slides placed in the shared folder', type: 'checkbox' }
   ],
   // Classification lives here now (moved off GHEER); reporting reads the new key
   // first, falling back to the legacy gheer_classification for old wells.
   'BP Execution Gate': [{ key: 'bp_gate_classification', label: 'Classification', type: 'radio', options: ['Development', 'Appraisal', 'Exploration'] }],
   'Site Preparation': [],
-  'Post-Well Outcome & Decision Gate': [{ key: 'post_well_slides_loaded', label: 'Slides are loaded in the shared folder', type: 'checkbox' }],
+  'Post-Well Outcome & Decision Gate': [{ key: 'post_well_slides_loaded', label: 'Post-Well Outcome slides placed in the shared folder', type: 'checkbox' }],
   'PDA': [{ key: 'pda_booked', label: 'Booked', type: 'checkbox' }, { key: 'pda_urinsight_link', label: 'URINSIGHT', type: 'link', value: 'https://urinsight/', linkText: 'Open URINSIGHT' }],
   'Approval To Drill': []
 };

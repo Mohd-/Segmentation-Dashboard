@@ -479,7 +479,7 @@ REQUIRED_FIELDS_FOR_SUBMIT = {
     # approval framework a save is never a submission, so the box became what
     # it reads as -- a REQUIREMENT the explicit Submit for Approval checks.
     "Segmentation Slides": (
-        ("segmentation_slides_loaded", "Segmentation slides are placed in the shared folder"),
+        ("segmentation_slides_loaded", "Segmentation slides placed in the shared folder"),
     ),
 }
 

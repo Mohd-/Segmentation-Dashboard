@@ -248,9 +248,9 @@ def run(out_dir: Path, headed: bool) -> int:
               "the consolidated page is titled Staking Letters")
         boxes = [el.inner_text().strip() for el in page.locator(".sl-check").all()]
         check(boxes == [
-            "Well creation and well folder are completed",
-            "The Approval to Stake letter is placed in the shared folder",
-            "The Wellsite Location letter is placed in the shared folder",
+            "Well creation and well folder completed",
+            "Approval to Stake letter placed in the shared folder",
+            "Wellsite Location letter placed in the shared folder",
         ], f"three confirmations in process order ({boxes})")
         check(page.locator('[data-sl-section="location"].hidden').count() == 1,
               "the Staking Location starts hidden")

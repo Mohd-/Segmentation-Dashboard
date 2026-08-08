@@ -415,9 +415,9 @@ test('schema.SCHEMA: Approval to Stake declares its confirmations, in process or
     assert.equal(field.type, 'checkbox', field.key + ' is a checkbox');
   });
   assert.deepEqual(SCHEMA['Approval to Stake'].map(function (f) { return f.label; }), [
-    'Well creation and well folder are completed',
-    'Lead Folder is moved to the Well Proposal Folder',
-    'The Approval to Stake letter is placed in the shared folder'
+    'Well creation and well folder completed',
+    'Lead Folder moved to Well Proposal Folder',
+    'Approval to Stake letter placed in the shared folder'
   ]);
 });
 
@@ -425,7 +425,7 @@ test('schema.SCHEMA: Well Site Location reveals the staked coordinates behind it
   assert.deepEqual(stepKeys('Well Site Location'), ['wellsite_letter_loaded', 'staked_x', 'staked_y']);
   var fields = SCHEMA['Well Site Location'];
   assert.equal(fields[0].type, 'checkbox');
-  assert.equal(fields[0].label, 'The Wellsite Location letter is placed in the shared folder');
+  assert.equal(fields[0].label, 'Wellsite Location letter placed in the shared folder');
   // Both coordinates hide behind the SAME key, so the generic form's row
   // grouping hides them as one unit (rowGroupMarkup's shared-showIf branch).
   assert.deepEqual(fields.slice(1).map(function (f) { return f.showIf; }),
@@ -478,7 +478,7 @@ test('schema.SCHEMA: Seismic Signature Validation is the single slides checkbox 
   assert.equal(fields[0].key, 'seismic_slides_loaded');
   assert.equal(fields[0].type, 'checkbox');
   assert.equal(fields[0].label,
-    'Seismic validation supporting slides are placed in the shared folder');
+    'Seismic validation supporting slides placed in the shared folder');
   // Nothing infers it: no default, no value, no showIf, no folder-path wiring.
   assert.equal(fields[0].value, undefined, 'defaults to unchecked');
   assert.equal(fields[0].showIf, undefined);
@@ -495,7 +495,7 @@ test('schema.SCHEMA: Reservoir CoS keeps its mini-sheet and adds the slides chec
   assert.equal(fields[0].columns, RESERVOIR_COS_COLUMNS);
   assert.equal(fields[1].type, 'checkbox');
   assert.equal(fields[1].label,
-    'Reservoir CoS supporting slides are placed in the shared folder');
+    'Reservoir CoS supporting slides placed in the shared folder');
   assert.equal(fields[1].value, undefined, 'defaults to unchecked');
   // Fields render in array order into #dynamic-fields, which precedes the
   // Comments box in the detail form -- so "last in the array" IS "beneath the
@@ -508,7 +508,7 @@ test('schema.SCHEMA: Trap and Seal CoS carries the Seal slides checkbox last (ca
   var box = fields[fields.length - 1];
   assert.equal(box.key, 'seal_slides_loaded');
   assert.equal(box.type, 'checkbox');
-  assert.equal(box.label, 'Seal CoS supporting slides are placed in the shared folder');
+  assert.equal(box.label, 'Seal CoS supporting slides placed in the shared folder');
   assert.equal(box.value, undefined, 'defaults to unchecked');
   assert.equal(box.showIf, undefined);
   // It belongs to the SEAL half: sections are inherited by the fields that
@@ -525,7 +525,7 @@ test('schema.SCHEMA: Segmentation Slides is the single slides checkbox (card 3D)
   assert.equal(fields.length, 1, 'the confirmation is the whole form');
   assert.equal(fields[0].key, 'segmentation_slides_loaded');
   assert.equal(fields[0].type, 'checkbox');
-  assert.equal(fields[0].label, 'Segmentation slides are placed in the shared folder');
+  assert.equal(fields[0].label, 'Segmentation slides placed in the shared folder');
   assert.equal(fields[0].value, undefined, 'defaults to unchecked');
   assert.equal(fields[0].showIf, undefined);
 });

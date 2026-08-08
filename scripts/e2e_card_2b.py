@@ -11,7 +11,7 @@ The journey, in order:
   3. fill Section 1 (thickness) and Section 2 (area + GRV);
   4. WATCH the PIIP results and plots appear WITHOUT clicking anything -- there
      is no Calculate button on this page any more;
-  5. tick "Polygons and surfaces are placed in the shared folder";
+   5. tick "Polygons and surfaces placed in the shared folder";
   6. press Save Updates once, then submit and approve the one lifecycle task;
   7. assert the one rail row reads Approved and the board card's four derived
      Lead Assessment checkpoints are Completed;

@@ -23,12 +23,12 @@ import {
 // The three confirmations' exact wording, as the card specifies them. Spelled
 // out here rather than read back off CHECKBOXES so a silent edit to the module
 // fails a test instead of quietly agreeing with itself.
-var LABEL_1 = 'Well creation and well folder are completed';
+var LABEL_1 = 'Well creation and well folder completed';
 // Card 3V's handover confirmation, worded EXACTLY as the card writes it and
 // placed immediately after the well-creation control the card names.
-var LABEL_HANDOVER = 'Lead Folder is moved to the Well Proposal Folder';
-var LABEL_2 = 'The Approval to Stake letter is placed in the shared folder';
-var LABEL_3 = 'The Wellsite Location letter is placed in the shared folder';
+var LABEL_HANDOVER = 'Lead Folder moved to Well Proposal Folder';
+var LABEL_2 = 'Approval to Stake letter placed in the shared folder';
+var LABEL_3 = 'Wellsite Location letter placed in the shared folder';
 
 function values(overrides) {
   return Object.assign({

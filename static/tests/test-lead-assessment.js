@@ -184,8 +184,8 @@ test('lead-assessment: Section 2 is Area/GRV x P90/P10', function () {
 test('lead-assessment: Section 3 pairs the TVDSS input with the exact confirmation label', function () {
   var root = fixture(structureSectionMarkup(goodValues(), []));
   assert.equal(root.querySelector('.la-polygons').textContent.trim(),
-    'Polygons and surfaces are placed in the shared folder');
-  assert.equal(POLYGONS_LABEL, 'Polygons and surfaces are placed in the shared folder');
+    'Polygons and surfaces placed in the shared folder');
+  assert.equal(POLYGONS_LABEL, 'Polygons and surfaces placed in the shared folder');
   var box = root.querySelector('[data-la-field="polygons_surfaces_loaded"]');
   assert.equal(box.type, 'checkbox');
   assert.equal(box.checked, false);

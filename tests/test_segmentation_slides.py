@@ -4,7 +4,7 @@ The one tracked item whose completion is a HUMAN decision.
 
 Card 3S moved it onto the Business Plan Execution approval framework, which
 changed HOW the request for review is made. It used to be implicit: ticking
-"Segmentation slides are placed in the shared folder" and saving submitted the
+"Segmentation slides placed in the shared folder" and saving submitted the
 step, because the page offered no Submit button. Under the shared framework a
 save is NEVER a submission -- the employee submits explicitly, the box is a
 REQUIREMENT that submit checks (REQUIRED_FIELDS_FOR_SUBMIT), and a supervisor
@@ -122,7 +122,7 @@ def test_the_confirmation_is_now_a_submit_REQUIREMENT(client):
     import workflow
 
     assert workflow.REQUIRED_FIELDS_FOR_SUBMIT[STEP] == (
-        (BOX, "Segmentation slides are placed in the shared folder"),)
+        (BOX, "Segmentation slides placed in the shared folder"),)
 
     login(client, SUPERVISOR)
     pid = create_project(client, "SS-REQUIRE-1")

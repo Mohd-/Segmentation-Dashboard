@@ -952,32 +952,32 @@ function gateForm() {
     }) +
     textInput('bp_gate_coring_thickness_ft', 'Coring Thickness (ft)', { type: 'number', required: coring, disabled: !coring }) +
     coringFormationsMarkup(formations, selectedCoring, coring) + '</div></div>' +
-    checkbox('bp_gate_slides_saved', 'Business Plan Execution Gate slides are saved in the shared folder.') +
+    checkbox('bp_gate_slides_saved', 'BP Execution Gate slides placed in the shared folder.') +
     commonTail();
 }
 
 function wellLettersForm() {
   var proposal = trackingByKey('well-proposal');
-  return checkbox('well_proposal_shared', 'Well Proposal is completed and placed in the shared folder.', {
+  return checkbox('well_proposal_shared', 'Well Proposal completed and placed in the shared folder.', {
     disabled: proposal.locked, system: proposal.source === 'system',
     checked: proposal.source === 'system' && proposal.status === 'Completed' ? true : null
-  }) + checkbox('site_preparation_shared', 'Site Preparation Letter is completed and placed in the shared folder.') +
-    checkbox('approval_to_drill_shared', 'Approval to Drill Letter is completed and placed in the shared folder.') + commonTail();
+  }) + checkbox('site_preparation_shared', 'Site Preparation Letter completed and placed in the shared folder.') +
+    checkbox('approval_to_drill_shared', 'Approval to Drill Letter completed and placed in the shared folder.') + commonTail();
 }
 
 function gheerForm() {
   var vsp = truthy(value('gheer_vsp_required'));
   var link = (state.detail.links || {}).vsp;
-  return checkbox('gheer_geophysical_shared', 'Geophysical GHEER inputs are loaded in the shared folder.') +
-    checkbox('gheer_geomechanical_shared', 'Geomechanical GHEER inputs are loaded in the shared folder.') +
+  return checkbox('gheer_geophysical_shared', 'Geophysical GHEER inputs placed in the shared folder.') +
+    checkbox('gheer_geomechanical_shared', 'Geomechanical GHEER inputs placed in the shared folder.') +
     checkbox('gheer_vsp_required', 'VSP is required.') +
     (vsp ? '<div class="bpe-external-link">' + (link ? '<a href="' + esc(link) + '" target="_blank" rel="noopener">Open VSP form</a>' :
       '<span>VSP form link: Not configured</span>') + '</div>' : '') + commonTail();
 }
 
 function aapForm() {
-  return checkbox('aap_petrel_loaded', 'Aramco Approved Picks are loaded into the PETREL repository.') +
-    checkbox('aap_geoknowledge_loaded', 'Aramco Approved Picks are loaded into the GeoKnowledge database.') +
+  return checkbox('aap_petrel_loaded', 'Aramco Approved Picks loaded in PETREL repository.') +
+    checkbox('aap_geoknowledge_loaded', 'Aramco Approved Picks loaded in GeoKnowledge database.') +
     // No omit flag: Aramco Picks (BP 5) is absent from the Card 3AB mapping,
     // so the server sends no folder and this renders nothing on its own.
     commonTail();
@@ -987,18 +987,18 @@ function summaryForm(finalSummary) {
   if (finalSummary) {
     var dry = (state.detail.fluid_state || {}).decision === 'all_water_or_dry';
     var copied = state.detail.sad_update_branch === 'copied_from_sad';
-    return checkbox('final_exec_summary_done', 'Final Executive Summary slides are placed in the shared folder.', {
+    return checkbox('final_exec_summary_done', 'Final Executive Summary slides placed in the shared folder.', {
       disabled: dry, system: dry, checked: dry ? true : null
-    }) + checkbox('final_ured_update_done', 'Final URED Update slides are placed in the shared folder.', {
+    }) + checkbox('final_ured_update_done', 'Final URED Update slides placed in the shared folder.', {
       disabled: dry || copied, system: dry || copied, checked: dry || copied ? true : null
     }) + commonTail();
   }
   var executive = trackingByKey('executive-summary');
   var ured = trackingByKey('ured-update');
-  return checkbox('exec_summary_loaded', 'Executive Summary slides are placed in the shared folder.', {
+  return checkbox('exec_summary_loaded', 'Executive Summary slides placed in the shared folder.', {
     disabled: executive.locked, system: executive.source === 'system',
     checked: executive.source === 'system' && executive.status === 'Completed' ? true : null
-  }) + checkbox('ured_update_loaded', 'URED Update slides are placed in the shared folder.', {
+  }) + checkbox('ured_update_loaded', 'URED Update slides placed in the shared folder.', {
     disabled: ured.locked, system: ured.source === 'system',
     checked: ured.source === 'system' && ured.status === 'Completed' ? true : null
   }) + commonTail();
@@ -1018,8 +1018,8 @@ function sadForm(update) {
     '<div class="bpe-form-section"><h3>GRV (10³ acre&middot;ft)</h3><div class="bpe-pair">' +
     textInput(base + '_grv_p90', 'P90', { type: 'number', required: true, disabled: locked }) +
     textInput(base + '_grv_p10', 'P10', { type: 'number', required: true, disabled: locked }) + '</div></div>' +
-    checkbox(base + '_surfaces_polygons_loaded', 'The polygons and surfaces are placed in the shared folder.', { disabled: locked, system: locked }) +
-    checkbox(base + '_slides_loaded', 'SAD Model slides are placed in the shared folder.', { disabled: locked, system: locked }) +
+    checkbox(base + '_surfaces_polygons_loaded', 'Polygons and surfaces placed in the shared folder.', { disabled: locked, system: locked }) +
+    checkbox(base + '_slides_loaded', 'SAD Model slides placed in the shared folder.', { disabled: locked, system: locked }) +
     '<div class="bpe-form-section"><h3>Gas Field Inputs</h3><div class="bpe-trio">' +
     textInput(prefix + '_gas_p90', 'P90 (BCF)', { type: 'number', required: true, disabled: locked }) +
     textInput(prefix + '_gas_mean', 'Mean OGIP (BCF)', { type: 'number', required: true, disabled: locked }) +
@@ -1034,7 +1034,7 @@ function sadForm(update) {
 }
 
 function learningForm() {
-  return checkbox('post_well_slides_loaded', 'Post-Drill Learning Review slides are placed in the shared folder.') + commonTail();
+  return checkbox('post_well_slides_loaded', 'Post-Drill Learning Review slides placed in the shared folder.') + commonTail();
 }
 
 function formationRowMarkup(row, formationIndex) {
@@ -1222,7 +1222,7 @@ function flowbackForm() {
   }).join('');
   return '<div class="bpe-flow-heading"><h3>Flowback Stage Results</h3><button type="button" id="bpe-add-flow" class="icon-btn" ' +
     (locked ? 'disabled' : '') + ' title="Add Flowback stage" aria-label="Add Flowback stage">' + icon('plus') + '</button></div>' + panels +
-    checkbox('flowback_shared_confirmed', 'Flowback sheet and slides are placed in the shared folder', {
+    checkbox('flowback_shared_confirmed', 'Flowback sheet and slides placed in the shared folder', {
       disabled: locked, system: locked, checked: locked ? true : null
     }) +
     commonTail();
@@ -1231,7 +1231,7 @@ function flowbackForm() {
 function mtrForm() {
   var item = trackingByKey('mtr');
   var link = (state.detail.links || {}).structural_mtr;
-  return checkbox('structural_mtr_shared', 'Structural MTR slides are placed in the shared folder.', {
+  return checkbox('structural_mtr_shared', 'Structural MTR slides placed in the shared folder.', {
     disabled: item.locked, system: item.source === 'system',
     checked: item.source === 'system' && item.status === 'Completed' ? true : null
   }) + '<div class="bpe-external-link">' + (link ? '<a href="' + esc(link) + '" target="_blank" rel="noopener">Open Structural MTR</a>' :
@@ -1244,7 +1244,7 @@ function pdaForm() {
   var response = value('reserves_booking_response') || '';
   var years = (state.detail.booking_years || []).map(String);
   if (value('reserves_booking_year') && years.indexOf(String(value('reserves_booking_year'))) < 0) years.unshift(String(value('reserves_booking_year')));
-  return checkbox('pda_complete', 'Post-Drilling Analysis is completed and placed in the shared folder.', {
+  return checkbox('pda_complete', 'Post-Drilling Analysis completed and placed in the shared folder.', {
     disabled: development, system: development, checked: development ? true : null
   }) + radioGroup('reserves_booking_response', 'Is the well included in a Reserves Booking Cycle?', ['Yes', 'No'], item.locked) +
     (response === 'Yes' ? selectInput('reserves_booking_year', 'Reserves Booking Year', years, { required: true, disabled: item.locked }) : '') +
