@@ -1185,7 +1185,7 @@ export function wellSummaryBodyHtml(source, folds, prefix) {
     return pvaRow('Area P' + bound + ' (km²)', predicted, actual);
   }
   var pvaHtml = foldSection('pva', 'Simulated Vs Actual Delta',
-    '<div class="summary-pva-head-row"><span class="summary-pva-label"></span><span class="summary-pva-cell summary-pva-colhead">Predicted</span><span class="summary-pva-cell summary-pva-colhead">Actual</span><span class="summary-pva-delta"></span></div>' +
+    '<div class="summary-pva-head-row"><span class="summary-pva-label"></span><span class="summary-pva-cell summary-pva-colhead">Simulated</span><span class="summary-pva-cell summary-pva-colhead">Actual</span><span class="summary-pva-delta"></span></div>' +
     pvaRow('Top SARH', prognosis, topSarh) +
     pvaRow('Thickness (ft)', predThickness, sarh ? sarh.thickness_ft : '') +
     areaBound('90') + areaBound('10') +
