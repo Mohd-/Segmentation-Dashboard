@@ -145,22 +145,30 @@ def _fill_project_surfaces(session, project_id):
         with db.write_transaction(session):
             surfaces_fill.fill_ground_elevation(session, project_id)
 
-
-# ---------------------------------------------------------------------------
-# Creation auto-assignment: REMOVED (v14)
-# ---------------------------------------------------------------------------
-# Role-based assignment replaced the hardcoded creation auto-assignment. Steps
-# are now assigned when they become the next unapproved step (activation), not
-# at project creation. See workflow.domain_roles and workflow.lifecycle for the
-# activation logic.
+    # BP Gate calculations are also coordinate-derived, but their unavailable
+    # state is meaningful: losing a surface/config/input must clear a stale
+    # governed output. Check project scope read-only before taking the lock so
+    # ordinary prospect saves keep the historical zero-transaction fast path.
+    bp_project = db.fetch_one(session, """
+        SELECT 1 AS present FROM projects
+        WHERE project_id = :project_id
+          AND archived = 0
+          AND (business_plan_enabled = 1 OR pipeline_type = 'bp')
+    """, {"project_id": project_id})
+    if bp_project:
+        with db.write_transaction(session):
+            surfaces_fill.fill_bp_calculations(session, project_id)
 
 
 def add_project(session, project_name, start_date=None, target_date=None, changed_by="System", lead_x=None, lead_y=None,
-                business_plan_year=None, business_plan_enabled=False, active_well_enabled=False, pipeline_type="prospect"):
+                business_plan_year=None, business_plan_enabled=False, active_well_enabled=False,
+                pipeline_type="prospect", creator_name=None):
     """Create a project and materialize its 24 workflow tasks; return project_id.
 
-    Role-based assignment happens on activation (when a step becomes the next
-    unapproved step), not at creation. All steps start Not Assigned.
+    An authenticated creator is silently preassigned to every unmapped step.
+    Role-mapped steps stay exempt and snapshot their active role members only
+    when reached. In-process imports and seeders omit ``creator_name`` and keep
+    the historical unassigned behavior.
     """
     project_name = (project_name or '').strip()
     if not project_name:
@@ -188,6 +196,17 @@ def add_project(session, project_name, start_date=None, target_date=None, change
     if bp_enabled and (year_val is None or year_val < 1990 or year_val > 2040):
         raise ValueError("Select a business plan year from 1990 to 2040.")
 
+    # The HTTP route passes only the signed session identity here, separately
+    # from the audit actor. Resolve it against the active-user catalog again so
+    # a stale/deactivated session can never create an invalid assignment row.
+    creator = None
+    if creator_name:
+        from .users import find_active_user
+        creator = find_active_user(session, creator_name)
+        if not creator:
+            raise ValueError("Unknown or inactive lead creator.")
+    canonical_creator = creator["name"] if creator else None
+
     # Friendly duplicate check up front; the IntegrityError catch below still
     # covers the race where another request inserts the same name in between.
     #
@@ -213,7 +232,7 @@ def add_project(session, project_name, start_date=None, target_date=None, change
     try:
         project_id = _insert_project_with_tasks(session, project_name, start_date, target_date, changed_by,
                                                 lead_x, lead_y, year_val, bp_enabled, active_well_enabled,
-                                                pipeline_type, first_template, now)
+                                                pipeline_type, first_template, now, canonical_creator)
         _fill_project_surfaces(session, project_id)
         from .lifecycle import activate_next_task
         activate_next_task(session, project_id, changed_by)
@@ -227,10 +246,18 @@ def add_project(session, project_name, start_date=None, target_date=None, change
 
 def _insert_project_with_tasks(session, project_name, start_date, target_date, changed_by, lead_x, lead_y,
                                year_val, bp_enabled, active_well_enabled, pipeline_type,
-                               first_template, now):
-    """Insert the project row plus one task per PIPELINE_TEMPLATES step in one locked transaction."""
+                               first_template, now, creator_name=None):
+    """Atomically insert a project, tasks, creator assignments, and history."""
     first_sequence, first_task_name, _first_stage = first_template
     with db.write_transaction(session):
+        mapped_names = set()
+        if creator_name:
+            mapped_names = {
+                row["task_name"] for row in db.fetch_all(session, """
+                    SELECT task_name FROM task_domain_role_mappings
+                    WHERE task_name IN :task_names
+                """, {"task_names": [row[1] for row in PIPELINE_TEMPLATES]})
+            }
         result = db.execute(session, """
             INSERT INTO projects (
                 project_name, start_date, target_date, last_updated,
@@ -255,10 +282,9 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
         project_id = result.lastrowid  # PG: use RETURNING when on Postgres
         first_task_id = None
         for sequence_no, task_name, stage_group in PIPELINE_TEMPLATES:
-            # Every step starts Not Assigned regardless of pipeline_type;
-            # assignment moves it to In Progress. Applicability is derived per
-            # pipeline at query time (applicable_stages), never stored per row,
-            # so all 24 rows are materialized identically.
+            creator_assigned = bool(creator_name and task_name not in mapped_names)
+            # Creator assignment is a silent preassignment: future work stays
+            # Not Assigned with no start date or notification until reached.
             initial_status = "Not Assigned"
             task_result = db.execute(session, """
                 INSERT INTO project_tasks (
@@ -271,7 +297,8 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
             """, {
                 "project_id": project_id,
                 "sequence_no": sequence_no, "task_name": task_name,
-                "stage_group": stage_group, "assigned_to": None,
+                "stage_group": stage_group,
+                "assigned_to": creator_name if creator_assigned else None,
                 "status": initial_status,
                 "actual_start": None, "actual_finish": None,
                 # Legacy per-TASK priority: kept at 'Low' for server compat
@@ -282,8 +309,16 @@ def _insert_project_with_tasks(session, project_name, start_date, target_date, c
                 "business_plan_enabled": bp_enabled, "business_plan_year": year_val,
                 "last_updated": now,
             })
+            task_id = task_result.lastrowid
+            if creator_assigned:
+                db.execute(session, """
+                    INSERT INTO task_assignees
+                        (task_id, assignee_name, source, notified, created_at)
+                    VALUES (:task_id, :assignee_name, 'creator', 0, :created_at)
+                """, {"task_id": task_id, "assignee_name": creator_name,
+                      "created_at": now})
             if sequence_no == first_sequence:
-                first_task_id = task_result.lastrowid  # PG: use RETURNING when on Postgres
+                first_task_id = task_id  # PG: use RETURNING when on Postgres
 
         if first_task_id is not None:
             action = "Well Added to BP" if pipeline_type == "bp" else "Lead Created"

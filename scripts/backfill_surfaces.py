@@ -1,13 +1,14 @@
 #!/usr/bin/env python
-"""Backfill the two surface-derived values across every non-archived project.
+"""Backfill surface-derived values across every non-archived project.
 
     .venv/bin/python scripts/backfill_surfaces.py pipeline_tracker.db
     .venv/bin/python scripts/backfill_surfaces.py pipeline_tracker.db --dry-run
 
-Runs both fills from workflow/surfaces_fill.py -- the TSQ thickness auto-fill
+Runs the fills from workflow/surfaces_fill.py -- the TSQ thickness auto-fill
 (Trap and Seal CoS ``sarah_quwarah_thickness_ft``, only where empty) and the
-machine-derived ``projects.ground_elevation`` (overwritten freely) -- over
-every NON-ARCHIVED project, and prints a per-project report:
+machine-derived ``projects.ground_elevation`` (overwritten freely), plus the
+two governed BP Gate calculations -- over every NON-ARCHIVED project, and
+prints a per-project report:
 
     filled            the surface produced a value and it was written
     had-value         (TSQ only) the field already holds a value; manual wins
@@ -92,12 +93,18 @@ def run_backfill(db_path, apply_writes):
 
     tsq_path = config.tsq_surface_file()
     elevation_path = config.ground_elevation_surface_file()
+    sarh_path = config.sarh_thickness_surface_file()
     print("database             : {}".format(db_path))
     print("mode                 : {}".format("apply" if apply_writes else "DRY RUN (on a copy)"))
     print("TSQ surface          : {} ({})".format(
         tsq_path, "found" if tsq_path.exists() else "MISSING -- tsq skipped"))
     print("elevation surface    : {} ({})".format(
         elevation_path, "found" if elevation_path.exists() else "MISSING -- elevation skipped"))
+    print("BP SARH surface      : {} ({})".format(
+        sarh_path, "found" if sarh_path.exists() else "MISSING -- BP TD unavailable"))
+    print("BP calculation config: {} ({})".format(
+        config.bp_calculations_path(),
+        "valid" if config.bp_calculations() is not None else "MISSING/INVALID -- BP outputs unavailable"))
 
     session = db.new_session()
     counts = {"tsq": {}, "elev": {}}
@@ -144,10 +151,20 @@ def run_backfill(db_path, apply_writes):
                 elevation = note("elev", "filled")
 
             tsq_value = elevation_value = None
-            if apply_writes and (tsq == "filled" or elevation == "filled"):
+            bp_values = None
+            if apply_writes:
                 with db.write_transaction(session):
-                    tsq_value = surfaces_fill.fill_tsq(session, project_id)
-                    elevation_value = surfaces_fill.fill_ground_elevation(session, project_id)
+                    if tsq == "filled":
+                        tsq_value = surfaces_fill.fill_tsq(session, project_id)
+                    if elevation == "filled":
+                        elevation_value = surfaces_fill.fill_ground_elevation(session, project_id)
+                    bp_values = surfaces_fill.fill_bp_calculations(session, project_id)
+            else:
+                # --dry-run operates on a disposable SQLite backup, so running
+                # the governed calculation there gives an exact preview while
+                # the source database remains byte-for-byte untouched.
+                with db.write_transaction(session):
+                    bp_values = surfaces_fill.fill_bp_calculations(session, project_id)
 
             def _shown(outcome, value):
                 if outcome != "filled":
@@ -156,9 +173,13 @@ def run_backfill(db_path, apply_writes):
                     return "filled {:.2f}".format(value)
                 return "would fill" if not apply_writes else "filled"
 
-            print("{:>5}  {:<28} tsq: {:<18} elevation: {}".format(
+            bp_status = "not-bp"
+            if bp_values:
+                bp_status = "td={}, days={}".format(
+                    bp_values["td"]["status"], bp_values["days"]["status"])
+            print("{:>5}  {:<28} tsq: {:<18} elevation: {:<18} bp: {}".format(
                 project_id, project["project_name"][:28],
-                _shown(tsq, tsq_value), _shown(elevation, elevation_value)))
+                _shown(tsq, tsq_value), _shown(elevation, elevation_value), bp_status))
     finally:
         session.close()
         db.reset_for_tests()

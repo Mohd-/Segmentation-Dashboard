@@ -22,7 +22,7 @@ from .constants import (
 )
 from .flowback import FLOWBACK_STAGE_FIELDS, normalize_flowback_rows
 from .history import log_task_event
-from . import approval, domain_roles
+from . import approval, domain_roles, surfaces_fill
 from .lifecycle import get_task, update_task_assignees
 from .promotion import ACTIVE_DRILLING_FIELD, get_lead_summary_snapshot
 from .summary import get_project_overview
@@ -161,8 +161,6 @@ DETAIL_FIELD_OWNERS = {
     "business-plan-gate": {
         "bp_gate_classification": "BP Execution Gate",
         "bp_gate_calculated_td_ft_md": "BP Execution Gate",
-        "bp_gate_calculated_td_source": "BP Execution Gate",
-        "bp_gate_calculated_td_override_reason": "BP Execution Gate",
         "bp_gate_actual_td_ft_md": "BP Execution Gate",
         "bp_gate_calculated_drilling_days": "BP Execution Gate",
         "bp_gate_actual_drilling_days": "BP Execution Gate",
@@ -748,7 +746,17 @@ def _matches_filters(well, filters):
     current_keys = {item["key"] for item in well["items"]}
     if step != "all" and step not in current_keys:
         return False
-    if status != "All Status":
+    if status == "Completed":
+        # Completed is a WELL-level fact: every one of the eighteen approved
+        # tracking items must be effectively complete, regardless of whether
+        # that completion was manual, Supervisor-approved, system-derived, or
+        # non-applicable. Other status choices retain their current-stage
+        # semantics below.
+        if not all(
+                (well["all_states"].get(option["value"]) or {}).get("status") == "Completed"
+                for option in STEP_OPTIONS):
+            return False
+    elif status != "All Status":
         candidates = well["items"] if step == "all" else [well["all_states"][step]]
         if not any(item["status"] == status for item in candidates):
             return False
@@ -972,6 +980,8 @@ def get_detail(session, project_id, detail_slug):
         "hole_sections": list(config.hole_sections()),
         "formation_options": list(config.formations()) + custom_formations,
         "booking_years": list(range(date.today().year, date.today().year + 4)),
+        "calculations": surfaces_fill.bp_calculation_metadata(
+            fields.get("BP Execution Gate") or {}),
     }
 
 
@@ -1100,14 +1110,8 @@ def save_field(session, project_id, detail_slug, key, value, actor="Web User", r
         raise ValueError("Reserves Booking is locked by the Water Bearing/Dry Hole rule.")
     if key == "pda_complete" and effective["values"].get("bp_gate_classification") == "Development":
         raise ValueError("Post-Drilling Analysis is controlled by the Development classification rule.")
-    if key == "bp_gate_calculated_drilling_days":
-        raise ValueError("Calculated Drilling Days is awaiting the approved calculation configuration.")
-    if key == "bp_gate_calculated_td_ft_md":
-        if role != "supervisor":
-            raise PermissionError("Only a Supervisor may enter a Calculated TD override.")
-        reason = str(override_reason or "").strip()
-        if not reason:
-            raise ValueError("A reason is required for the Calculated TD override.")
+    if key in {"bp_gate_calculated_drilling_days", "bp_gate_calculated_td_ft_md"}:
+        raise ValueError("Calculated Business Plan values are read only and controlled by the system.")
     normalized = _normalized_value(key, value)
     correlation = str(uuid.uuid4())
     old_classification = effective["values"].get("bp_gate_classification")
@@ -1134,15 +1138,6 @@ def save_field(session, project_id, detail_slug, key, value, actor="Web User", r
                 }.items():
                     _set_field(session, task, default_key, default_value, actor, role, "system",
                                "Standard B defaults", correlation)
-            if key == "bp_gate_calculated_td_ft_md":
-                _set_field(session, task, "bp_gate_calculated_td_source", "Supervisor override",
-                           actor, role, "supervisor", override_reason, correlation)
-                _set_field(session, task, "bp_gate_calculated_td_override_reason", override_reason,
-                           actor, role, "supervisor", override_reason, correlation)
-                current_actual = _value(fields, "BP Execution Gate", "bp_gate_actual_td_ft_md")
-                if not _present(current_actual):
-                    _set_field(session, task, "bp_gate_actual_td_ft_md", normalized, actor, role,
-                               "system", "initialized from Calculated Business Plan TD", correlation)
         preview = _effective_state(
             project, tasks, _field_maps(session, project_id), _formation_rows(session, project_id))
         branch_error = _sad_branch_change_error(tasks, effective, preview)
@@ -1156,6 +1151,10 @@ def save_field(session, project_id, detail_slug, key, value, actor="Web User", r
             session, new_tasks, effective, new_effective, actor, role, correlation,
             f"field={key}",
         )
+    # Classification and Coring Program are equation inputs. This shared hook
+    # also keeps the coordinate-triggered recompute path identical.
+    from .projects import _fill_project_surfaces
+    _fill_project_surfaces(session, project_id)
     activate_bpe_task(session, project_id, actor)
     return get_detail(session, project_id, detail_slug)
 
@@ -1164,11 +1163,7 @@ def _gate_errors(values):
     errors = []
     required = {
         "bp_gate_classification": "Well Classification",
-        "bp_gate_calculated_td_ft_md": "Calculated Business Plan TD",
         "bp_gate_actual_td_ft_md": "Actual Business Plan TD",
-        # Calculated Drilling Days is NOT required: the field is locked (no
-        # equation ships yet), so requiring it would make the Gate
-        # unapprovable. It is still validated as numeric when present.
         "bp_gate_actual_drilling_days": "Actual Drilling Days",
         "bp_gate_logging_program": "Logging Program",
         "bp_gate_interval_from": "Interval From",

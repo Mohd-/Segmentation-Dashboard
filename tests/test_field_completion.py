@@ -254,9 +254,11 @@ def test_completion_logs_one_engine_event_naming_the_saving_user(client):
     assert engine[0]["changed_by"] == SUPERVISOR
     assert {row["changed_by"] for row in events} == {SUPERVISOR}
     # And it really WALKED the machine rather than writing Approved directly.
-    # The helper assigns the step first, then the engine walks submit -> approve.
+    # Reaching activates the creator-owned step; the helper then adds the
+    # employee before the engine walks submit -> approve.
     assert [row["action_type"] for row in events if row["action_type"].startswith("Component ")] == [
-        "Component Assigned", "Component Inputs Updated", "Component Submitted", "Component Approved",
+        "Component Activated", "Component Preassigned",
+        "Component Inputs Updated", "Component Submitted", "Component Approved",
     ]
 
 
@@ -660,10 +662,11 @@ def test_the_engine_walk_does_not_spam_supervisors_with_a_submit(client):
     finally:
         conn.close()
     assert [r for r in rows if r["event"] == "submitted"] == []
-    # The approve resolves to "recipient == actor" (the saver owns the step), so
-    # it is suppressed by the pre-existing generic rule too. The manual
-    # pre-assignment may have generated a real "assigned" notification.
-    assert [r for r in rows if r["event"] in ("submitted", "approved")] == []
+    # The saver is one assignee, while the lead creator remains a second
+    # assignee and receives the real approval notification.
+    assert [r for r in rows if r["event"] in ("submitted", "approved")] == [
+        {"recipient": "Supervisor", "event": "approved"},
+    ]
 
 
 def test_a_manual_submit_still_notifies_supervisors(client):

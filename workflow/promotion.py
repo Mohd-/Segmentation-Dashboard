@@ -11,7 +11,7 @@ from helpers import utc_now_str
 from .constants import BP_EXECUTION_STAGES, PROSPECT_STAGES
 from .history import log_task_event
 from .lifecycle import activate_next_task
-from .projects import _sync_completed_at, get_project
+from .projects import _fill_project_surfaces, _sync_completed_at, get_project
 
 
 def _activate_bpe_safe(session, project_id, actor):
@@ -165,6 +165,10 @@ def set_business_plan(session, project_id, enabled, year=None, changed_by="Admin
         _sync_completed_at(session, project_id)
 
     if enabled_int:
+        # Promotion can reveal BP inputs already loaded by an import or an
+        # earlier BP period. Recompute the governed Gate outputs before the BP
+        # task is activated so its first read cannot surface stale legacy data.
+        _fill_project_surfaces(session, project_id)
         activate_next_task(session, project_id, changed_by)
         _activate_bpe_safe(session, project_id, changed_by)
 

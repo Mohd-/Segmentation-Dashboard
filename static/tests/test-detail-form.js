@@ -176,7 +176,7 @@ test('detail-form GeoX: loadComponent renders the seven manual external-result c
   });
 });
 
-test('detail-form assignment group shows every member and protects role members', async function () {
+test('detail-form assignment group labels creator and protects only role members', async function () {
   await withDetailStore(async function () {
     fixture(ASSIGNMENT_DETAIL_SHELL);
     var component = {
@@ -185,7 +185,8 @@ test('detail-form assignment group shows every member and protects role members'
       assigned_to: 'Employee', default_domain_role: 'Petrophysicist',
       assignees: [
         { name: 'Employee', source: 'role', notified: true },
-        { name: 'Staff Member', source: 'manual', notified: true }
+        { name: 'Staff Member', source: 'manual', notified: true },
+        { name: 'Supervisor', source: 'creator', notified: false }
       ]
     };
     Store.tasks = [component];
@@ -198,13 +199,16 @@ test('detail-form assignment group shows every member and protects role members'
 
     await loadComponent(component);
     var chips = Array.from(document.querySelectorAll('#assigned-members .assignee-chip'));
-    assert.equal(chips.length, 2);
+    assert.equal(chips.length, 3);
     assert.ok(chips[0].textContent.indexOf('Employee') >= 0);
     assert.ok(chips[0].textContent.indexOf('Role') >= 0);
     assert.equal(chips[0].querySelector('.assignee-remove'), null,
       'role-derived membership cannot be removed manually');
     assert.ok(chips[1].querySelector('.assignee-remove'),
       'manual additions remain removable');
+    assert.ok(chips[2].textContent.indexOf('Creator') >= 0);
+    assert.ok(chips[2].querySelector('.assignee-remove'),
+      'creator assignments remain removable');
   });
 });
 

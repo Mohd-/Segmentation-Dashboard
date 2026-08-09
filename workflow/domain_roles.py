@@ -14,6 +14,9 @@ functions for:
 - Querying the mapped role for a task
 - Managing per-task multi-assignee rows
 
+Task assignee sources are ``role`` (protected role snapshot), ``creator``
+(automatic lead-creator preassignment), and ``manual`` (explicit assignment).
+
 All writes go through ``db.write_transaction``; reads need no transaction.
 """
 from __future__ import annotations
@@ -246,12 +249,59 @@ def set_task_mapping(session, task_name: str, role_id: int) -> int:
                 SET role_id = :role_id, created_at = :created_at
                 WHERE task_name = :task_name
             """, {"role_id": role_id, "created_at": now, "task_name": name})
-            return existing["id"]
-        result = db.execute(session, """
-            INSERT INTO task_domain_role_mappings (task_name, role_id, created_at)
-            VALUES (:task_name, :role_id, :created_at)
-        """, {"task_name": name, "role_id": role_id, "created_at": now})
-        return result.lastrowid
+            mapping_id = existing["id"]
+        else:
+            result = db.execute(session, """
+                INSERT INTO task_domain_role_mappings (task_name, role_id, created_at)
+                VALUES (:task_name, :role_id, :created_at)
+            """, {"task_name": name, "role_id": role_id, "created_at": now})
+            mapping_id = result.lastrowid
+        remove_creator_assignments_for_mapped_task_locked(session, name, now)
+        return mapping_id
+
+
+def remove_creator_assignments_for_mapped_task_locked(
+        session, task_name: str, now: Optional[str] = None) -> List[int]:
+    """Discard automatic creator rows for future instances of a mapped step.
+
+    The caller owns the write transaction. Explicit manual rows survive, the
+    legacy scalar owner is re-derived, and optimistic revisions advance for
+    details that were open while the mapping changed.
+    """
+    affected = db.fetch_all(session, """
+        SELECT DISTINCT pt.task_id, pt.project_id
+        FROM project_tasks pt
+        JOIN task_assignees ta ON ta.task_id = pt.task_id
+        WHERE pt.task_name = :task_name
+          AND pt.status = 'Not Assigned'
+          AND ta.source = 'creator'
+    """, {"task_name": task_name})
+    if not affected:
+        return []
+    task_ids = [row["task_id"] for row in affected]
+    db.execute(session, """
+        DELETE FROM task_assignees
+        WHERE task_id IN :task_ids AND source = 'creator'
+    """, {"task_ids": task_ids})
+    stamp = now or utc_now_str()
+    db.execute(session, """
+        UPDATE project_tasks
+        SET assigned_to = (
+                SELECT MIN(ta.assignee_name)
+                FROM task_assignees ta
+                WHERE ta.task_id = project_tasks.task_id
+            ),
+            last_updated = :now,
+            revision = COALESCE(revision, 0) + 1
+        WHERE task_id IN :task_ids
+    """, {"now": stamp, "task_ids": task_ids})
+    project_ids = sorted({row["project_id"] for row in affected})
+    db.execute(session, """
+        UPDATE projects
+        SET last_updated = :now, revision = COALESCE(revision, 0) + 1
+        WHERE project_id IN :project_ids
+    """, {"now": stamp, "project_ids": project_ids})
+    return task_ids
 
 
 def delete_task_mapping(session, task_name: str) -> None:
@@ -378,6 +428,7 @@ __all__ = [
     "get_active_role_members",
     "list_task_mappings", "get_task_mapping", "get_task_mappings_for_names",
     "set_task_mapping", "delete_task_mapping",
+    "remove_creator_assignments_for_mapped_task_locked",
     "list_task_assignees", "get_task_assignees_map", "add_task_assignee",
     "remove_task_assignee", "mark_assignees_notified", "get_primary_assignee",
     "get_assignee_names",

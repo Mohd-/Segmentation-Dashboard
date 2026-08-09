@@ -573,6 +573,7 @@ def get_portfolio_rows(session, year="All", activity="All"):
 
     return {
         "rows": filtered,
+        "ytf_config": config.ytf_values(),
         "summary": {
             "business_plan_wells": sum(1 for r in filtered if r["is_lead"] == 0),
             "leads": sum(1 for r in filtered if r["is_lead"] == 1),

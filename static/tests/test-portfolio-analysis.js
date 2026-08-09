@@ -26,10 +26,10 @@ function sampleRows() {
   ];
 }
 
-/* YET-TO-FIND IS THE WHOLE ENDOWMENT, NOT AN EXTRA SLICE. 400 BCF/field is
-   what we think is in the ground; discovered and undiscovered volumes eat into
-   that estimate rather than stacking on top of it. So the bar always totals
-   the endowment, and the YTF segment is what is LEFT. */
+/* YET-TO-FIND IS THE WHOLE ENDOWMENT, NOT AN EXTRA SLICE. Each configured
+   per-field value is what we think is in the ground; discovered and
+   undiscovered volumes eat into that estimate rather than stacking on top of
+   it. So the bar always totals the endowment, and YTF is what is LEFT. */
 test('portfolio-analysis.computeResourceSummary splits undiscovered and counts records', function () {
   var summary = computeResourceSummary(sampleRows());
   assert.equal(summary.discovered.bcf, 42.5);
@@ -68,6 +68,56 @@ test('portfolio-analysis.computeResourceSummary clamps YTF and flags an over-run
   assert.equal(summary.exceedsEstimate, true);
 });
 
+test('portfolio-analysis.computeResourceSummary uses normalized per-field YTF values once', function () {
+  var summary = computeResourceSummary([
+    { gas_field: ' mdft ', status: 'Gas', mean_ogip: 50, is_lead: 0 },
+    { gas_field: 'MDFT', status: 'Staked', mean_ogip: 25, is_lead: 0 },
+    { gas_field: 'unmapped', status: 'Proposed', mean_ogip: 10, is_lead: 1 }
+  ], { default_bcf: 300, fields: { mdft: 650 } });
+  assert.equal(summary.fieldCount, 2, 'trimmed uppercase identity deduplicates MDFT');
+  assert.equal(summary.initialYtf, 950, '650 configured + 300 default');
+  assert.equal(summary.ytf, 865, 'accounted volume is subtracted from heterogeneous total');
+  assert.deepEqual(summary.fieldEndowments, [
+    { field: 'MDFT', bcf: 650, configured: true },
+    { field: 'UNMAPPED', bcf: 300, configured: false }
+  ]);
+});
+
+test('portfolio-analysis.renderResourceBar describes heterogeneous field starting values', function () {
+  var root = fixture('<div id="portfolio-resource-bar"></div>');
+  renderResourceBar([
+    { gas_field: 'ALPHA', status: 'Gas', mean_ogip: 100, is_lead: 0 },
+    { gas_field: 'BETA', status: 'Proposed', mean_ogip: 50, is_lead: 1 }
+  ], { default_bcf: 300, fields: { alpha: 500 } });
+  assert.match(root.querySelector('.prb-title-note').textContent,
+    /ALPHA 500 BCF · BETA 300 BCF \(default\)/);
+  assert.match(root.querySelector('.prb-ytf').title,
+    /Configured field starting values: ALPHA 500 BCF · BETA 300 BCF \(default\)/);
+  assert.match(root.querySelector('.prb-bar').getAttribute('aria-label'), /Of 800 BCF estimated/);
+});
+
+test('portfolio refresh passes API YTF configuration into the visible resource bar', async function () {
+  var host = portfolioFixture();
+  mockFetch(function (url) {
+    if (String(url).indexOf('/api/portfolio/rows') >= 0) {
+      return new Response(JSON.stringify({
+        rows: [
+          { project_id: 1, well_name: 'A-1', lead_name: 'A-1', gas_field: 'A',
+            status: 'Gas', mean_ogip: 25, total_cos: 50, is_lead: 0, pipeline_type: 'bp' },
+          { project_id: 2, well_name: 'B-1', lead_name: 'B-1', gas_field: 'B',
+            status: 'Proposed', mean_ogip: 10, total_cos: 25, is_lead: 1, pipeline_type: 'prospect' }
+        ],
+        ytf_config: { default_bcf: 300, fields: { A: 500 } }
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    throw new Error('Unexpected request: ' + url);
+  });
+
+  await refreshPortfolio();
+  assert.match(host.querySelector('.prb-title').textContent, /is 800 BCF/);
+  assert.match(host.querySelector('.prb-title-note').textContent, /A 500 BCF · B 300 BCF \(default\)/);
+});
+
 test('portfolio-analysis.crossPlotPoints keeps only rows with both measures, CoS as fraction', function () {
   var points = crossPlotPoints(sampleRows());
   assert.equal(points.length, 5, 'GAMMA-2 has no OGIP');
@@ -82,7 +132,7 @@ test('portfolio-analysis.renderResourceBar renders the estimate + proportional s
   var title = root.querySelector('.prb-title');
   // The estimate the bar DIVIDES, not a running total of the segments.
   assert.match(title.textContent, /Total Estimated Original Gas Initially in Place is 1,200 BCF/);
-  assert.match(title.textContent, /400 BCF × 3 fields/);
+  assert.match(title.textContent, /Configured field starting values: ALPHA 400 BCF \(default\)/);
   var segments = root.querySelectorAll('.prb-seg');
   assert.equal(segments.length, 4, 'discovered, staked, proposed, yet-to-find');
   assert.equal(segments[0].style.flexGrow, '42.5', 'discovered width tracks its value');

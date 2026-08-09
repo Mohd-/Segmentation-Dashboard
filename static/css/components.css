@@ -3321,6 +3321,19 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .bpe-field b, .bpe-flow-stage label b { margin-left: 2px; color: var(--danger-600); }
 .bpe-field input, .bpe-field select, .bpe-formation-block input, .bpe-formation-block select, .bpe-flow-stage input, .bpe-flow-stage select { width: 100%; min-width: 0; }
 .bpe-field input[readonly], .bpe-field input:disabled, .bpe-field select:disabled, .bpe-flow-stage.is-locked input, .bpe-flow-stage.is-locked select { background: var(--gray-100); color: var(--text-faint); }
+.bpe-calculated-output output {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--gray-100);
+  color: var(--ink-800);
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+}
+.bpe-calculated-output .bpe-field-hint { color: var(--text-faint); font-weight: 500; }
 /* A cell whose value was refused before it could be saved. Same red border the
    Lead Assessment grids use (.la-invalid), because it means the same thing;
    the reason itself is in the save-state strip, this only says WHERE. */

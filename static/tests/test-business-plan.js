@@ -416,7 +416,8 @@ test('business-plan detail renders the shared assignment group', async function 
   var detail = detailPayload('business-plan-gate', {});
   detail.task.assignees = [
     { name: 'Employee', source: 'role', notified: true },
-    { name: 'Staff Member', source: 'manual', notified: true }
+    { name: 'Staff Member', source: 'creator', notified: true },
+    { name: 'Supervisor', source: 'manual', notified: true }
   ];
   detail.assignee = 'Employee';
   hooks.state.users = [
@@ -431,13 +432,15 @@ test('business-plan detail renders the shared assignment group', async function 
   try {
     await openBusinessPlanDetail(7, 'business-plan-gate');
     var chips = host.querySelectorAll('#bpe-assignment-group .assignee-chip');
-    assert.equal(chips.length, 2);
+    assert.equal(chips.length, 3);
     assert.equal(chips[0].querySelector('.assignee-remove'), null,
       'role assignment remains protected in the BPE editor');
     assert.ok(chips[1].querySelector('.assignee-remove'));
+    assert.equal(chips[1].querySelector('.assignee-chip-source').textContent, 'Creator');
+    assert.ok(chips[2].querySelector('.assignee-remove'));
     assert.deepEqual(Array.prototype.map.call(host.querySelector('#bpe-assignee').options, function (option) {
       return option.value;
-    }), ['', 'Supervisor']);
+    }), ['']);
   } finally {
     hooks.state.users = savedUsers;
   }
@@ -869,6 +872,51 @@ function mountGate(detail, onPatch) {
   });
   return host;
 }
+
+test('business-plan calculated BP values render as governed outputs, never editable inputs', async function () {
+  var detail = detailPayload('business-plan-gate', {
+    bp_gate_calculated_td_ft_md: '1351',
+    bp_gate_calculated_drilling_days: '137'
+  });
+  detail.calculations = {
+    bp_gate_calculated_td_ft_md: {
+      status: 'calculated',
+      formula: 'TD base + SARH thickness at well X/Y + digital elevation at well X/Y'
+    },
+    bp_gate_calculated_drilling_days: {
+      status: 'calculated',
+      formula: 'classification baseline + coring uplift when Coring Program is Yes'
+    }
+  };
+  var host = mountGate(detail);
+  await openBusinessPlanDetail(7, 'business-plan-gate');
+
+  assert.equal(host.querySelector('[data-bpe-field="bp_gate_calculated_td_ft_md"]'), null);
+  assert.equal(host.querySelector('[data-bpe-field="bp_gate_calculated_drilling_days"]'), null);
+  assert.equal(host.querySelector('[data-bpe-field="bp_gate_calculated_td_override_reason"]'), null);
+  assert.equal(host.querySelector('[data-bpe-output="bp_gate_calculated_td_ft_md"]').textContent, '1351 ft MD');
+  assert.equal(host.querySelector('[data-bpe-output="bp_gate_calculated_drilling_days"]').textContent, '137 days');
+  assert.match(host.querySelector('.bpe-calculated-output .bpe-field-hint').textContent,
+    /SARH thickness/);
+});
+
+test('business-plan calculated BP outputs explain unavailable dependencies', async function () {
+  var detail = detailPayload('business-plan-gate', {});
+  detail.calculations = {
+    bp_gate_calculated_td_ft_md: {
+      status: 'unavailable', unavailable_reason: 'SARH thickness surface'
+    },
+    bp_gate_calculated_drilling_days: {
+      status: 'unavailable', unavailable_reason: 'well classification'
+    }
+  };
+  var host = mountGate(detail);
+  await openBusinessPlanDetail(7, 'business-plan-gate');
+  assert.equal(host.querySelector('[data-bpe-output="bp_gate_calculated_td_ft_md"]').textContent,
+    'Calculation unavailable');
+  assert.match(host.textContent, /Unavailable: SARH thickness surface/);
+  assert.match(host.textContent, /Unavailable: well classification/);
+});
 
 function coringOptionLabels(host) {
   return Array.prototype.map.call(host.querySelectorAll('#bpe-coring-menu .lf-option'),

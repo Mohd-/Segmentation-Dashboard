@@ -1,4 +1,4 @@
-"""Auto-fill from grid surfaces: values a save can derive from WHERE a lead is.
+"""Auto-fill governed values derived from well location and BP inputs.
 
 Two fills share one mechanism -- resolve the project's coordinates, sample a
 configured ZMAP+ surface (surfaces.py) there, store the result:
@@ -13,6 +13,8 @@ configured ZMAP+ surface (surfaces.py) there, store the result:
   ``projects.ground_elevation``. That column is MACHINE-DERIVED, so overwriting
   is always correct; it is only left untouched when there is nothing to say
   (no coordinates, no surface, or no value at the point).
+- :func:`fill_bp_calculations` owns the BP Gate TD and drilling-days outputs,
+  preserving any legacy user-entered value as provenance before replacing it.
 
 Coordinate precedence mirrors workflow/mapdata.py exactly: the STAKED pair
 (``staked_x``/``staked_y`` in task_dynamic_fields, both present and numeric)
@@ -34,7 +36,10 @@ wiring); this module must therefore never import lifecycle.
 """
 from __future__ import annotations
 
+import json
 import logging
+import math
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional, Tuple
 
 import config
@@ -53,8 +58,19 @@ logger = logging.getLogger(__name__)
 TSQ_TASK_NAME = "Trap and Seal CoS"
 TSQ_FIELD_KEY = "sarah_quwarah_thickness_ft"
 
+BP_GATE_TASK_NAME = "BP Execution Gate"
+BP_TD_FIELD_KEY = "bp_gate_calculated_td_ft_md"
+BP_DAYS_FIELD_KEY = "bp_gate_calculated_drilling_days"
+BP_TD_SOURCE_KEY = "bp_gate_calculated_td_source"
+BP_TD_REASON_KEY = "bp_gate_calculated_td_override_reason"
+BP_TD_METADATA_KEY = "bp_gate_calculated_td_metadata"
+BP_DAYS_SOURCE_KEY = "bp_gate_calculated_drilling_days_source"
+BP_DAYS_METADATA_KEY = "bp_gate_calculated_drilling_days_metadata"
+BP_CALCULATION_SOURCE = "System calculation"
+
 # The audit-trail actor for auto-filled values (the migration-actor idiom).
 SURFACE_FILL_ACTOR = "System (surface auto-fill)"
+BP_CALCULATION_ACTOR = "System (BP calculation)"
 
 # The staked location keys, read by KEY across active AND retired rows -- the
 # same reason mapdata reads them that way: a value answers to its key whichever
@@ -181,3 +197,234 @@ def fill_ground_elevation(session, project_id) -> Optional[float]:
         WHERE project_id = :project_id
     """, {"ground_elevation": float(value), "project_id": project_id})
     return value
+
+
+def _whole_number(value) -> str:
+    """Round a configured/sampled value half-up to the governed whole unit."""
+    return str(int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)))
+
+
+def _bp_gate_task(session, project_id):
+    return db.fetch_one(session, """
+        SELECT pt.task_id, pt.project_id, pt.task_name
+        FROM project_tasks pt
+        JOIN projects p ON p.project_id = pt.project_id
+        WHERE pt.project_id = :project_id
+          AND pt.task_name = :task_name
+          AND pt.is_active = 1
+          AND p.archived = 0
+          AND (p.business_plan_enabled = 1 OR p.pipeline_type = 'bp')
+        ORDER BY pt.task_id DESC
+        LIMIT 1
+    """, {"project_id": project_id, "task_name": BP_GATE_TASK_NAME})
+
+
+def _task_fields(session, task_id):
+    return {
+        row["field_key"]: "" if row.get("field_value") is None else str(row["field_value"])
+        for row in db.fetch_all(session, """
+            SELECT field_key, field_value FROM task_dynamic_fields
+            WHERE task_id = :task_id
+        """, {"task_id": task_id})
+    }
+
+
+def _metadata(value):
+    try:
+        parsed = json.loads(value or "")
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _put_field(session, task_id, key, value, now):
+    """Upsert one EAV value and report whether its stored representation moved."""
+    value = "" if value is None else str(value)
+    existing = db.fetch_one(session, """
+        SELECT field_value FROM task_dynamic_fields
+        WHERE task_id = :task_id AND field_key = :field_key
+    """, {"task_id": task_id, "field_key": key})
+    old = "" if not existing or existing.get("field_value") is None else str(existing["field_value"])
+    if old == value and existing is not None:
+        return False
+    db.execute(session, """
+        INSERT INTO task_dynamic_fields (task_id, field_key, field_value, updated_at)
+        VALUES (:task_id, :field_key, :field_value, :now)
+        ON CONFLICT(task_id, field_key) DO UPDATE
+        SET field_value = excluded.field_value, updated_at = excluded.updated_at
+    """, {"task_id": task_id, "field_key": key, "field_value": value, "now": now})
+    return True
+
+
+def _legacy_snapshot(fields, value_key, source_key, reason_key, prior_metadata):
+    """Carry the first non-system calculated value forward as read-only history."""
+    legacy = prior_metadata.get("legacy")
+    if isinstance(legacy, dict):
+        return legacy
+    old_value = str(fields.get(value_key) or "").strip()
+    old_source = str(fields.get(source_key) or "").strip()
+    if not old_value or old_source == BP_CALCULATION_SOURCE:
+        return None
+    snapshot = {"value": old_value, "source": old_source or "Legacy/imported value"}
+    old_reason = str(fields.get(reason_key) or "").strip() if reason_key else ""
+    if old_reason:
+        snapshot["reason"] = old_reason
+    return snapshot
+
+
+def _calculation_metadata(status, formula, inputs, unavailable_reason=None, legacy=None):
+    result = {
+        "status": status,
+        "source": BP_CALCULATION_SOURCE,
+        "formula": formula,
+        "inputs": inputs,
+    }
+    if unavailable_reason:
+        result["unavailable_reason"] = unavailable_reason
+    if legacy:
+        result["legacy"] = legacy
+    return result
+
+
+def fill_bp_calculations(session, project_id):
+    """Recompute both server-owned BP Gate outputs from current dependencies.
+
+    TD uses the dedicated SARH-thickness and DEM grids at the resolved well
+    coordinates. Drilling days uses the configured classification baseline and
+    coring uplift. Missing inputs/configuration clear the active governed value
+    so a stale legacy number can never masquerade as a current calculation.
+    Legacy/imported values are preserved once in the calculation metadata.
+
+    The caller owns the write transaction. The return value is ``None`` for a
+    non-BP record and otherwise contains the two published metadata objects.
+    """
+    task = _bp_gate_task(session, project_id)
+    if not task:
+        return None
+    fields = _task_fields(session, task["task_id"])
+    settings = config.bp_calculations()
+    position = _resolve_coordinates(session, project_id)
+
+    td_prior = _metadata(fields.get(BP_TD_METADATA_KEY))
+    td_legacy = _legacy_snapshot(
+        fields, BP_TD_FIELD_KEY, BP_TD_SOURCE_KEY, BP_TD_REASON_KEY, td_prior)
+    td_inputs = {
+        "base_ft": settings.get("td_base_ft") if settings else None,
+        "x": position[0] if position else None,
+        "y": position[1] if position else None,
+        "sarh_thickness_ft": None,
+        "digital_elevation_ft": None,
+    }
+    td_missing = []
+    if settings is None:
+        td_missing.append("calculation configuration")
+    if position is None:
+        td_missing.append("well coordinates")
+    sarh_path = config.sarh_thickness_surface_file()
+    elevation_path = config.ground_elevation_surface_file()
+    if not sarh_path.is_file():
+        td_missing.append("SARH thickness surface")
+    if not elevation_path.is_file():
+        td_missing.append("digital elevation surface")
+    if not td_missing:
+        sarh = surfaces.sample_surface(sarh_path, position[0], position[1])
+        elevation = surfaces.sample_surface(elevation_path, position[0], position[1])
+        td_inputs["sarh_thickness_ft"] = sarh
+        td_inputs["digital_elevation_ft"] = elevation
+        if sarh is None or not math.isfinite(float(sarh)):
+            td_inputs["sarh_thickness_ft"] = None
+            td_missing.append("SARH thickness at well location")
+        if elevation is None or not math.isfinite(float(elevation)):
+            td_inputs["digital_elevation_ft"] = None
+            td_missing.append("digital elevation at well location")
+    td_value = ""
+    if not td_missing:
+        td_value = _whole_number(settings["td_base_ft"] + sarh + elevation)
+    td_meta = _calculation_metadata(
+        "calculated" if td_value else "unavailable",
+        "TD base + SARH thickness at well X/Y + digital elevation at well X/Y",
+        td_inputs, ", ".join(td_missing) if td_missing else None, td_legacy)
+
+    days_prior = _metadata(fields.get(BP_DAYS_METADATA_KEY))
+    days_legacy = _legacy_snapshot(
+        fields, BP_DAYS_FIELD_KEY, BP_DAYS_SOURCE_KEY, None, days_prior)
+    classification = str(fields.get("bp_gate_classification") or "").strip()
+    coring = str(fields.get("bp_gate_coring_program") or "").strip()
+    days_inputs = {
+        "classification": classification or None,
+        "classification_days": None,
+        "coring_program": coring or None,
+        "coring_uplift_days": settings.get("coring_uplift_days") if settings else None,
+    }
+    days_missing = []
+    if settings is None:
+        days_missing.append("calculation configuration")
+    elif classification not in settings["classification_days"]:
+        days_missing.append("well classification")
+    else:
+        days_inputs["classification_days"] = settings["classification_days"][classification]
+    if coring not in {"Yes", "No"}:
+        days_missing.append("Coring Program")
+    days_value = ""
+    if not days_missing:
+        total_days = days_inputs["classification_days"]
+        if coring == "Yes":
+            total_days += settings["coring_uplift_days"]
+        days_value = _whole_number(total_days)
+    days_meta = _calculation_metadata(
+        "calculated" if days_value else "unavailable",
+        "classification baseline + coring uplift when Coring Program is Yes",
+        days_inputs, ", ".join(days_missing) if days_missing else None, days_legacy)
+
+    now = utc_now_str()
+    changes = []
+    td_meta_text = json.dumps(td_meta, sort_keys=True, separators=(",", ":"))
+    days_meta_text = json.dumps(days_meta, sort_keys=True, separators=(",", ":"))
+    for key, value in (
+        (BP_TD_FIELD_KEY, td_value),
+        (BP_TD_SOURCE_KEY, BP_CALCULATION_SOURCE if td_value else ""),
+        (BP_TD_REASON_KEY, ""),
+        (BP_TD_METADATA_KEY, td_meta_text),
+        (BP_DAYS_FIELD_KEY, days_value),
+        (BP_DAYS_SOURCE_KEY, BP_CALCULATION_SOURCE if days_value else ""),
+        (BP_DAYS_METADATA_KEY, days_meta_text),
+    ):
+        if _put_field(session, task["task_id"], key, value, now):
+            changes.append(key)
+
+    if changes:
+        db.execute(session, """
+            UPDATE project_tasks SET last_updated = :now, revision = revision + 1
+            WHERE task_id = :task_id
+        """, {"now": now, "task_id": task["task_id"]})
+        db.execute(session, """
+            UPDATE projects SET last_updated = :now, revision = revision + 1
+            WHERE project_id = :project_id
+        """, {"now": now, "project_id": project_id})
+        log_task_event(
+            session, task["task_id"], project_id, BP_GATE_TASK_NAME,
+            "Business Plan Calculation Updated",
+            fields.get(BP_TD_FIELD_KEY) or fields.get(BP_DAYS_FIELD_KEY) or None,
+            td_value or days_value or None, BP_CALCULATION_ACTOR,
+            json.dumps({"changed_fields": changes, "td": td_meta, "days": days_meta},
+                       sort_keys=True, separators=(",", ":")),
+        )
+    return {"td": td_meta, "days": days_meta}
+
+
+def bp_calculation_metadata(fields):
+    """Calculation provenance for the detail API, including a safe fallback."""
+    result = {}
+    for public_key, metadata_key, formula in (
+        (BP_TD_FIELD_KEY, BP_TD_METADATA_KEY,
+         "TD base + SARH thickness at well X/Y + digital elevation at well X/Y"),
+        (BP_DAYS_FIELD_KEY, BP_DAYS_METADATA_KEY,
+         "classification baseline + coring uplift when Coring Program is Yes"),
+    ):
+        metadata = _metadata(fields.get(metadata_key))
+        if not metadata:
+            metadata = _calculation_metadata(
+                "unavailable", formula, {}, "calculation has not run")
+        metadata["value"] = str(fields.get(public_key) or "")
+        result[public_key] = metadata
+    return result

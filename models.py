@@ -415,8 +415,8 @@ class TaskAssignee(Base):
 
     Replaces the single ``project_tasks.assigned_to`` column as the authoritative
     assignment relation. Each row records one assignee, whether the assignment
-    came from a role membership or was added manually, and whether the assignment
-    notification was sent (so retries and reopen do not duplicate alerts).
+    came from a role membership, lead creator, or manual addition, and whether
+    the notification was sent (so retries and reopen do not duplicate alerts).
     """
     __tablename__ = "task_assignees"
 

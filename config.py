@@ -25,6 +25,7 @@ state, never as a value frozen at import time.
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 
@@ -86,6 +87,54 @@ def resource_scenarios_path() -> Path:
     """Path to the vendored resource_engine scenarios.yaml."""
     raw = os.environ.get("SEGMENT_TRACKER_SCENARIOS_PATH", str(BASE_DIR / "config" / "scenarios.yaml"))
     return Path(raw).expanduser().resolve()
+
+
+# ---------------------------------------------------------------------------
+# Portfolio yet-to-find (YTF) starting values
+# ---------------------------------------------------------------------------
+
+DEFAULT_YTF_BCF = 400
+
+
+def ytf_values_path() -> Path:
+    """Path to the per-field YTF starting-value JSON file, resolved lazily."""
+    raw = os.environ.get(
+        "SEGMENT_TRACKER_YTF_VALUES_FILE", str(BASE_DIR / "config" / "ytf_values.json"))
+    return Path(raw).expanduser().resolve()
+
+
+def _ytf_bcf_value(value, fallback):
+    """Return a finite non-negative BCF value, or ``fallback`` when invalid."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return fallback
+    numeric = float(value)
+    if not math.isfinite(numeric) or numeric < 0:
+        return fallback
+    return int(numeric) if numeric.is_integer() else numeric
+
+
+def ytf_values() -> dict:
+    """Load the effective per-field Portfolio YTF configuration.
+
+    The JSON contract is ``{"default_bcf": 400, "fields": {"MDFT": 650}}``.
+    Field names are trimmed and upper-cased. A missing/malformed file restores
+    the historical 400 BCF default; invalid field amounts inherit that default.
+    """
+    fallback = {"default_bcf": DEFAULT_YTF_BCF, "fields": {}}
+    try:
+        raw = json.loads(ytf_values_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return fallback
+    if not isinstance(raw, dict) or not isinstance(raw.get("fields", {}), dict):
+        return fallback
+
+    default_bcf = _ytf_bcf_value(raw.get("default_bcf"), DEFAULT_YTF_BCF)
+    fields = {}
+    for field, value in raw.get("fields", {}).items():
+        name = str(field).strip().upper()
+        if name:
+            fields[name] = _ytf_bcf_value(value, default_bcf)
+    return {"default_bcf": default_bcf, "fields": fields}
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +209,56 @@ def ground_elevation_surface_file() -> Path:
     raw = os.environ.get("SEGMENT_TRACKER_GROUND_ELEVATION_SURFACE_FILE",
                          str(map_surfaces_dir() / "ground_elevation.dat"))
     return Path(raw).expanduser().resolve()
+
+
+def sarh_thickness_surface_file() -> Path:
+    """The SARH formation-thickness grid used by the BP TD calculation.
+
+    This is deliberately separate from the TSQ (SARH-QWRH interval) surface:
+    the two measurements are not interchangeable even when a deployment
+    happens to receive them in the same delivery bundle.
+    """
+    raw = os.environ.get("SEGMENT_TRACKER_SARH_THICKNESS_SURFACE_FILE",
+                         str(map_surfaces_dir() / "sarh_thickness.dat"))
+    return Path(raw).expanduser().resolve()
+
+
+def bp_calculations_path() -> Path:
+    """Path to the deployment-editable BP Gate calculation settings."""
+    raw = os.environ.get("SEGMENT_TRACKER_BP_CALCULATIONS_PATH",
+                         str(BASE_DIR / "config" / "bp_calculations.json"))
+    return Path(raw).expanduser().resolve()
+
+
+def bp_calculations():
+    """Validated BP Gate settings, or ``None`` when configuration is unusable.
+
+    Read lazily so tests and deployments can replace the JSON without an app
+    restart.  Returning ``None`` is intentional: a missing or malformed
+    equation must make the server-owned outputs unavailable rather than leave
+    a stale number looking authoritative.
+    """
+    try:
+        with bp_calculations_path().open("r", encoding="utf-8") as handle:
+            raw = json.load(handle)
+        td_base = float(raw["td_base_ft"])
+        coring_uplift = float(raw["coring_uplift_days"])
+        raw_days = raw["classification_days"]
+        classification_days = {
+            name: float(raw_days[name])
+            for name in ("Development", "Appraisal", "Exploration")
+        }
+        values = [td_base, coring_uplift] + list(classification_days.values())
+        if any(value != value or value in (float("inf"), float("-inf")) or value < 0
+               for value in values):
+            return None
+    except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError):
+        return None
+    return {
+        "td_base_ft": td_base,
+        "classification_days": classification_days,
+        "coring_uplift_days": coring_uplift,
+    }
 
 
 # ---------------------------------------------------------------------------

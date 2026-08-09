@@ -87,7 +87,8 @@ function renderAssigneeSelect(task, load) {
     var names = users.map(function (user) { return user.name; });
     if (members) {
       members.innerHTML = assignees.length ? assignees.map(function (member) {
-        var source = member.source === 'role' ? 'Role' : 'Manual';
+        var source = member.source === 'role' ? 'Role' :
+          (member.source === 'creator' ? 'Creator' : 'Manual');
         var removable = member.source !== 'role';
         return '<span class="assignee-chip" title="' + source + ' assignment">' + esc(member.name) +
           '<span class="assignee-chip-source">' + source + '</span>' +

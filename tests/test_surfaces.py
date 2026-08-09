@@ -13,6 +13,8 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import json
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -274,6 +276,18 @@ def elevation_surface(tmp_path, monkeypatch):
     return configure
 
 
+@pytest.fixture()
+def sarh_surface(tmp_path, monkeypatch):
+    path = write_sample_grid(tmp_path / "sarh-thickness.dat")
+    monkeypatch.delenv("SEGMENT_TRACKER_SARH_THICKNESS_SURFACE_FILE", raising=False)
+
+    def configure():
+        monkeypatch.setenv("SEGMENT_TRACKER_SARH_THICKNESS_SURFACE_FILE", str(path))
+        return path
+
+    return configure
+
+
 def test_fill_tsq_fills_an_empty_field_and_logs_the_history_event(client, tsq_surface):
     from workflow import surfaces_fill
 
@@ -506,3 +520,167 @@ def test_fill_ground_elevation_leaves_the_stored_value_when_it_has_nothing_to_sa
                        str(tmp_path / "not-there.dat"))
     assert _run_fill(surfaces_fill.fill_ground_elevation, pid) is None
     assert _stored_elevation(client.db_path, pid) == pytest.approx(42.0)
+
+
+# ---------------------------------------------------------------------------
+# BP Gate governed TD / drilling-days calculations
+# ---------------------------------------------------------------------------
+
+def _bp_project(client, name, **kwargs):
+    return create_project(
+        client, name, pipeline_type="bp", business_plan_enabled=True,
+        business_plan_year=date.today().year, **kwargs)
+
+
+def _bp_calc_fields(client, project_id):
+    task = get_task_by_name(client, project_id, "BP Execution Gate")
+    return task, client.get(f"/api/tasks/{task['task_id']}/dynamic-fields").get_json()
+
+
+def _save_bp_field(client, project_id, key, value):
+    return client.patch(
+        f"/api/business-plan/wells/{project_id}/steps/business-plan-gate/field",
+        json={"field_key": key, "value": value})
+
+
+def test_bp_calculations_use_dedicated_surfaces_configuration_and_half_up_rounding(
+        client, tmp_path, monkeypatch):
+    from workflow import surfaces_fill
+
+    sarh = write_zmap_grid(
+        tmp_path / "sarh.dat", [[30.25] * 3 for _ in range(3)],
+        GRID_XMIN, GRID_XMAX, GRID_YMIN, GRID_YMAX)
+    elevation = write_zmap_grid(
+        tmp_path / "elevation.dat", [[20.25] * 3 for _ in range(3)],
+        GRID_XMIN, GRID_XMAX, GRID_YMIN, GRID_YMAX)
+    monkeypatch.setenv("SEGMENT_TRACKER_SARH_THICKNESS_SURFACE_FILE", str(sarh))
+    monkeypatch.setenv("SEGMENT_TRACKER_GROUND_ELEVATION_SURFACE_FILE", str(elevation))
+
+    pid = _bp_project(client, "BPE-CALC-1", lead_x="50", lead_y="150")
+    response = _save_bp_field(client, pid, "bp_gate_classification", "Appraisal")
+    assert response.status_code == 200, response.get_json()
+    values = response.get_json()["detail"]["values"]
+    assert values["bp_gate_calculated_td_ft_md"] == "1251"
+    assert values["bp_gate_calculated_drilling_days"] == "127"
+    assert not values.get("bp_gate_actual_td_ft_md")
+    assert not values.get("bp_gate_actual_drilling_days")
+
+    response = _save_bp_field(client, pid, "bp_gate_coring_program", "Yes")
+    assert response.get_json()["detail"]["values"]["bp_gate_calculated_drilling_days"] == "137"
+    metadata = response.get_json()["detail"]["calculations"]
+    assert metadata[surfaces_fill.BP_TD_FIELD_KEY]["status"] == "calculated"
+    assert metadata[surfaces_fill.BP_TD_FIELD_KEY]["inputs"] == {
+        "base_ft": 1200.0, "x": 50.0, "y": 150.0,
+        "sarh_thickness_ft": 30.25, "digital_elevation_ft": 20.25,
+    }
+
+
+def test_bp_td_recomputes_with_staked_coordinate_precedence(
+        client, sarh_surface, elevation_surface):
+    import db
+    import workflow
+
+    sarh_surface()
+    elevation_surface()
+    pid = _bp_project(client, "BPE-CALC-STAKED", lead_x="50", lead_y="150")
+    assert _save_bp_field(client, pid, "bp_gate_classification", "Development").status_code == 200
+    assert _bp_calc_fields(client, pid)[1]["bp_gate_calculated_td_ft_md"] == "1260"
+
+    staking = get_task_by_name(client, pid, "Well Site Location")
+    session = db.new_session()
+    try:
+        workflow.save_task_dynamic_fields(
+            session, staking["task_id"], {"staked_x": "100", "staked_y": "100"},
+            changed_by="Test", reconcile=False)
+    finally:
+        session.close()
+    assert _bp_calc_fields(client, pid)[1]["bp_gate_calculated_td_ft_md"] == "1300"
+
+
+def test_bp_calculation_archives_legacy_value_and_clears_stale_active_output(
+        client, sarh_surface, elevation_surface, tmp_path, monkeypatch):
+    from workflow import surfaces_fill
+
+    pid = _bp_project(client, "BPE-CALC-LEGACY", lead_x="50", lead_y="150")
+    gate = get_task_by_name(client, pid, "BP Execution Gate")
+    conn = raw_sqlite_connect(client.db_path)
+    with conn:
+        for key, value in {
+            "bp_gate_calculated_td_ft_md": "9999",
+            "bp_gate_calculated_td_source": "Supervisor override",
+            "bp_gate_calculated_td_override_reason": "Historic approved exception",
+        }.items():
+            conn.execute(
+                "INSERT INTO task_dynamic_fields (task_id, field_key, field_value, updated_at) "
+                "VALUES (?, ?, ?, '2026-01-01') "
+                "ON CONFLICT(task_id, field_key) DO UPDATE SET field_value=excluded.field_value",
+                (gate["task_id"], key, value))
+    conn.close()
+
+    sarh_surface()
+    elevation_surface()
+    result = _run_fill(surfaces_fill.fill_bp_calculations, pid)
+    assert result["td"]["legacy"] == {
+        "value": "9999", "source": "Supervisor override",
+        "reason": "Historic approved exception",
+    }
+    fields = _bp_calc_fields(client, pid)[1]
+    assert fields["bp_gate_calculated_td_ft_md"] == "1260"
+    assert fields["bp_gate_calculated_td_source"] == "System calculation"
+    assert fields["bp_gate_calculated_td_override_reason"] == ""
+    assert json.loads(fields["bp_gate_calculated_td_metadata"])["legacy"]["value"] == "9999"
+
+    monkeypatch.setenv("SEGMENT_TRACKER_SARH_THICKNESS_SURFACE_FILE",
+                       str(tmp_path / "missing.dat"))
+    result = _run_fill(surfaces_fill.fill_bp_calculations, pid)
+    assert result["td"]["status"] == "unavailable"
+    fields = _bp_calc_fields(client, pid)[1]
+    assert fields["bp_gate_calculated_td_ft_md"] == ""
+    assert json.loads(fields["bp_gate_calculated_td_metadata"])["legacy"]["value"] == "9999"
+
+
+def test_bp_calculation_invalid_configuration_makes_both_outputs_unavailable(
+        client, sarh_surface, elevation_surface, tmp_path, monkeypatch):
+    from workflow import surfaces_fill
+
+    sarh_surface()
+    elevation_surface()
+    pid = _bp_project(client, "BPE-CALC-BAD-CONFIG", lead_x="50", lead_y="150")
+    assert _save_bp_field(client, pid, "bp_gate_classification", "Exploration").status_code == 200
+    bad = tmp_path / "bad-bp-calculations.json"
+    bad.write_text('{"td_base_ft": "not a number"}', encoding="utf-8")
+    monkeypatch.setenv("SEGMENT_TRACKER_BP_CALCULATIONS_PATH", str(bad))
+    result = _run_fill(surfaces_fill.fill_bp_calculations, pid)
+    assert result["td"]["status"] == "unavailable"
+    assert result["days"]["status"] == "unavailable"
+    fields = _bp_calc_fields(client, pid)[1]
+    assert fields["bp_gate_calculated_td_ft_md"] == ""
+    assert fields["bp_gate_calculated_drilling_days"] == ""
+
+
+def test_bp_promotion_recomputes_preloaded_gate_inputs(
+        client, sarh_surface, elevation_surface):
+    sarh_surface()
+    elevation_surface()
+    pid = create_project(client, "BPE-CALC-PROMOTE", lead_x="50", lead_y="150")
+    gate = get_task_by_name(client, pid, "BP Execution Gate")
+    conn = raw_sqlite_connect(client.db_path)
+    with conn:
+        for key, value in {
+            "bp_gate_classification": "Exploration",
+            "bp_gate_coring_program": "Yes",
+        }.items():
+            conn.execute(
+                "INSERT INTO task_dynamic_fields (task_id, field_key, field_value, updated_at) "
+                "VALUES (?, ?, ?, '2026-01-01')",
+                (gate["task_id"], key, value))
+    conn.close()
+
+    promoted = client.patch(f"/api/projects/{pid}/flags", json={
+        "business_plan_enabled": True,
+        "business_plan_year": date.today().year,
+    })
+    assert promoted.status_code == 200, promoted.get_json()
+    fields = _bp_calc_fields(client, pid)[1]
+    assert fields["bp_gate_calculated_td_ft_md"] == "1260"
+    assert fields["bp_gate_calculated_drilling_days"] == "137"

@@ -108,6 +108,30 @@ def test_gas_field_whole_name_when_no_hyphen(client):
     assert _row_for(client, pid)["gas_field"] == "SOLO"
 
 
+def test_portfolio_exposes_normalized_per_field_ytf_configuration(client, monkeypatch, tmp_path):
+    config_file = tmp_path / "ytf.json"
+    config_file.write_text(json.dumps({
+        "default_bcf": 375.5,
+        "fields": {" mdft ": 650, "Bad": "not-a-number", "negative": -1},
+    }), encoding="utf-8")
+    monkeypatch.setenv("SEGMENT_TRACKER_YTF_VALUES_FILE", str(config_file))
+
+    assert _rows(client)["ytf_config"] == {
+        "default_bcf": 375.5,
+        "fields": {"MDFT": 650, "BAD": 375.5, "NEGATIVE": 375.5},
+    }
+
+
+@pytest.mark.parametrize("contents", ["not json", "[]", '{"fields": []}'])
+def test_portfolio_ytf_configuration_malformed_file_falls_back(client, monkeypatch,
+                                                                tmp_path, contents):
+    config_file = tmp_path / "ytf.json"
+    config_file.write_text(contents, encoding="utf-8")
+    monkeypatch.setenv("SEGMENT_TRACKER_YTF_VALUES_FILE", str(config_file))
+
+    assert _rows(client)["ytf_config"] == {"default_bcf": 400, "fields": {}}
+
+
 # ---------------------------------------------------------------------------
 # Seismic block
 # ---------------------------------------------------------------------------

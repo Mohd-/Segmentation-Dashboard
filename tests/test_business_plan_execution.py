@@ -143,6 +143,7 @@ def test_development_classification_resets_defaults_and_system_completes_only_pr
     assert response.status_code == 200, response.get_json()
     values = response.get_json()["detail"]["values"]
     assert values["bp_gate_logging_program"] == "Optimized Standard B"
+    assert values["bp_gate_calculated_drilling_days"] == "50"
     assert [values[key] for key in ("bp_gate_swc", "bp_gate_pressure_points", "bp_gate_fluid_samples")] == ["0", "3", "3"]
 
     detail = client.get(f"/api/business-plan/wells/{project_id}/steps/well-letters").get_json()
@@ -204,11 +205,10 @@ def test_gate_submission_requires_complete_draft_and_supervisor_approval(client)
     project_id = _bp_project(client)
     incomplete = _transition(client, project_id, "submit")
     assert incomplete.status_code == 400
-    # Calculated Drilling Days is deliberately ABSENT: the field is locked (no
-    # equation ships yet), so requiring it would leave the Gate unapprovable.
+    # Both governed calculations are deliberately absent. Missing surface
+    # inputs cannot make an otherwise complete Gate impossible to submit.
     _raw_fields(client, project_id, "BP Execution Gate", {
         "bp_gate_classification": "Appraisal",
-        "bp_gate_calculated_td_ft_md": "12000",
         "bp_gate_actual_td_ft_md": "12100",
         "bp_gate_actual_drilling_days": "31.5",
         "bp_gate_logging_program": "Standard A",
@@ -249,6 +249,22 @@ def test_gate_submission_requires_complete_draft_and_supervisor_approval(client)
     assert approved_context["role"] == "supervisor"
     assert approved_context["source"] == "supervisor"
     assert approved_context["correlation"]
+
+
+def test_gate_calculated_fields_reject_direct_writes_and_never_seed_actuals(client):
+    project_id = _bp_project(client, "BPE-READONLY-CALCS")
+    for key in ("bp_gate_calculated_td_ft_md", "bp_gate_calculated_drilling_days"):
+        blocked = _save(client, project_id, "business-plan-gate", key, 99999,
+                        override_reason="legacy supervisor path")
+        assert blocked.status_code == 400
+        assert "read only" in blocked.get_json()["detail"]
+
+    response = _save(
+        client, project_id, "business-plan-gate", "bp_gate_classification", "Development")
+    values = response.get_json()["detail"]["values"]
+    assert values["bp_gate_calculated_drilling_days"] == "50"
+    assert not values.get("bp_gate_actual_drilling_days")
+    assert not values.get("bp_gate_actual_td_ft_md")
 
 
 def test_old_bpe_transition_route_is_removed_and_generic_content_routes_are_blocked(client):
@@ -1089,20 +1105,25 @@ def test_bpe_transitions_notify_the_same_people_a_lifecycle_transition_does(clie
     _login(client, "Employee")
     assert _transition(client, project_id, "submit").status_code == 200
     assert [(row["recipient"], row["event"]) for row in _notifications(client, project_id)] == [
-        ("Employee", "assigned"), ("Supervisor", "submitted")]
+        ("Supervisor", "assigned"), ("Employee", "assigned"),
+        ("Supervisor", "submitted")]
 
     _login(client, "Supervisor")
     assert _transition(client, project_id, "approve").status_code == 200
     assert _transition(client, project_id, "reopen").status_code == 200
     rows = _notifications(client, project_id)
     assert [(row["recipient"], row["actor"], row["event"]) for row in rows] == [
+        ("Supervisor", "Supervisor", "assigned"),
         ("Employee", "Supervisor", "assigned"),
         ("Supervisor", "Employee", "submitted"),
         ("Employee", "Supervisor", "approved"),
+        ("Supervisor", "Supervisor", "assigned"),
         ("Employee", "Supervisor", "returned"),
     ]
     assert "reopened for update" in rows[-1]["message"]
-    assert {row["task_name"] for row in rows} == {"BP Execution Gate"}
+    assert {row["task_name"] for row in rows} == {
+        "BP Execution Gate", "Well Proposal",
+    }
 
 
 def test_bpe_assignment_uses_the_shared_manual_group(client):
@@ -1113,18 +1134,23 @@ def test_bpe_assignment_uses_the_shared_manual_group(client):
     response = client.post(endpoint, json={"add": ["Employee", "Staff Member"]})
     assert response.status_code == 200, response.get_json()
     task = response.get_json()["detail"]["task"]
-    assert [member["name"] for member in task["assignees"]] == ["Employee", "Staff Member"]
-    assert {member["source"] for member in task["assignees"]} == {"manual"}
+    assert [member["name"] for member in task["assignees"]] == [
+        "Employee", "Staff Member", "Supervisor",
+    ]
+    assert {member["source"] for member in task["assignees"]} == {"creator", "manual"}
     assert task["status"] == "In Progress"
 
     response = client.post(endpoint, json={"remove": ["Employee"]})
     assert response.status_code == 200, response.get_json()
     task = response.get_json()["detail"]["task"]
-    assert task["assignees"] == [{"name": "Staff Member", "source": "manual", "notified": True}]
+    assert task["assignees"] == [
+        {"name": "Staff Member", "source": "manual", "notified": True},
+        {"name": "Supervisor", "source": "creator", "notified": True},
+    ]
 
     dashboard = client.get(f"/api/business-plan/dashboard?year={date.today().year}").get_json()
     well = next(row for row in dashboard["wells"] if row["project_id"] == project_id)
-    assert well["assignees"] == ["Staff Member"]
+    assert well["assignees"] == ["Staff Member", "Supervisor"]
 
 
 def test_bpe_un_approving_actions_are_supervisor_only_at_the_route(client):

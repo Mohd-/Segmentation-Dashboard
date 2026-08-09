@@ -29,7 +29,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import db
 from helpers import utc_now_str
 from workflow.constants import PIPELINE_TEMPLATES
-from workflow.domain_roles import get_role, get_task_mapping
+from workflow.domain_roles import (get_role, get_task_mapping,
+                                   remove_creator_assignments_for_mapped_task_locked)
 from workflow.users import find_active_user
 
 
@@ -240,6 +241,7 @@ def _sync(session, manifest: Dict[str, Any]) -> Dict[str, List[str]]:
             db.execute(session, """
                 DELETE FROM app_settings WHERE key = :key
             """, {"key": f"mapping_deleted:{task_name}"})
+            remove_creator_assignments_for_mapped_task_locked(session, task_name, now)
             set_mappings.append(f"{task_name} -> {role_names[role_id]}")
 
         for task_name in existing_map:

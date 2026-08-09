@@ -161,15 +161,21 @@ def reach_task(client, project_id, task_name):
     """
     import workflow
     import db as dbmod
-    for task in get_tasks(client, project_id):
+    tasks = get_tasks(client, project_id)
+    target = next((task for task in tasks if task["task_name"] == task_name), None)
+    # Authenticated projects now carry a creator preassignment. Use that same
+    # person for the setup walk so the target's automatic activation audit is
+    # attributed consistently; anonymous legacy tests keep Employee.
+    walk_actor = (target or {}).get("assigned_to") or "Employee"
+    for task in tasks:
         if task["task_name"] == task_name:
-            return task
+            return get_task_by_name(client, project_id, task_name)
         if task["status"] == "Approved":
             continue
         session = dbmod.new_session()
         try:
             workflow.lifecycle.ensure_task_approved(
-                session, task["task_id"], "Employee", automated=True)
+                session, task["task_id"], walk_actor, automated=True)
         finally:
             session.close()
     raise AssertionError(f"Unknown task {task_name!r}")

@@ -780,6 +780,23 @@ function textInput(key, label, options) {
     (options.readonly ? ' readonly' : '') + (options.placeholder ? ' placeholder="' + esc(options.placeholder) + '"' : '') + '></label>';
 }
 
+function calculatedOutput(key, label, unit) {
+  var calculations = (state.detail && state.detail.calculations) || {};
+  var metadata = calculations[key] || {};
+  var raw = value(key);
+  var shown = raw == null || String(raw).trim() === '' ? 'Calculation unavailable' : String(raw) + (unit ? ' ' + unit : '');
+  var provenance = metadata.status === 'calculated' ? metadata.formula :
+    (metadata.unavailable_reason ? 'Unavailable: ' + metadata.unavailable_reason : 'Awaiting calculation inputs.');
+  if (metadata.legacy && metadata.legacy.value) {
+    provenance += ' Legacy value: ' + metadata.legacy.value +
+      (metadata.legacy.source ? ' (' + metadata.legacy.source + ')' : '') +
+      (metadata.legacy.reason ? ' — ' + metadata.legacy.reason : '') + '.';
+  }
+  return '<div class="bpe-field bpe-calculated-output"><span>' + esc(label) + '</span>' +
+    '<output data-bpe-output="' + esc(key) + '">' + esc(shown) + '</output>' +
+    '<small class="bpe-field-hint">' + esc(provenance) + '</small></div>';
+}
+
 function selectInput(key, label, options, configOptions) {
   configOptions = configOptions || {};
   var labelMarkup = configOptions.headingLabel ?
@@ -910,7 +927,6 @@ function gateForm() {
   var classification = value('bp_gate_classification');
   var formations = state.detail.formation_options || [];
   var intervalOptions = formations.concat(state.detail.hole_sections || []);
-  var calcTdEditable = state.detail.role === 'supervisor';
   var coring = value('bp_gate_coring_program') === 'Yes';
   var intervalConflict = ['Standard A', 'Standard B'].indexOf(value('bp_gate_logging_program')) >= 0 &&
     value('bp_gate_interval_from') && value('bp_gate_interval_from') === value('bp_gate_interval_to');
@@ -922,16 +938,11 @@ function gateForm() {
   return '<div class="bpe-form-section"><h3>Well Classification</h3>' +
     radioGroup('bp_gate_classification', 'Well Classification', ['Development', 'Appraisal', 'Exploration'], false, true) + '</div>' +
     '<div class="bpe-form-section"><h3>Depth &amp; Schedule</h3><div class="bpe-gate-depth">' +
-    textInput('bp_gate_calculated_td_ft_md', 'Calculated Business Plan TD (ft MD)', {
-      type: 'number', required: true, readonly: !calcTdEditable,
-      placeholder: calcTdEditable ? '' : 'Awaiting approved calculation'
-    }) + textInput('bp_gate_actual_td_ft_md', 'Actual Business Plan TD (ft MD)', { type: 'number', required: true }) +
-    textInput('bp_gate_calculated_drilling_days', 'Calculated Drilling Days (days)', {
-      type: 'number', required: true, readonly: true, placeholder: 'Awaiting approved equation'
-    }) + textInput('bp_gate_actual_drilling_days', 'Actual Drilling Days (days)', { type: 'number', required: true }) +
-    '</div>' + (calcTdEditable ? textInput('bp_gate_calculated_td_override_reason', 'Calculated TD Override Reason', {
-      className: 'bpe-override-reason'
-    }) : '') + '</div>' +
+    calculatedOutput('bp_gate_calculated_td_ft_md', 'Calculated Business Plan TD', 'ft MD') +
+    textInput('bp_gate_actual_td_ft_md', 'Actual Business Plan TD (ft MD)', { type: 'number', required: true }) +
+    calculatedOutput('bp_gate_calculated_drilling_days', 'Calculated Drilling Days', 'days') +
+    textInput('bp_gate_actual_drilling_days', 'Actual Drilling Days (days)', { type: 'number', required: true }) +
+    '</div></div>' +
     '<div class="bpe-form-section"><h3>Logging Program</h3><div class="bpe-gate-logging">' +
     selectInput('bp_gate_logging_program', 'Logging Program', ['Standard A', 'Standard B', 'Optimized Standard B'], {
       required: true, placeholder: 'Select Program', headingLabel: true
@@ -1417,7 +1428,8 @@ function assignmentControlsMarkup() {
   var editable = role !== 'employee';
   var assignees = detailAssignees();
   var chips = assignees.length ? assignees.map(function (member) {
-    var source = member.source === 'role' ? 'Role' : 'Manual';
+    var source = member.source === 'role' ? 'Role' :
+      (member.source === 'creator' ? 'Creator' : 'Manual');
     var removable = member.source !== 'role';
     return '<span class="assignee-chip" title="' + source + ' assignment">' + esc(member.name) +
       '<span class="assignee-chip-source">' + source + '</span>' +
@@ -1874,9 +1886,6 @@ function enqueueFieldDraft(key, version) {
   draft.queuedVersion = version;
   draft.failed = false;
   var payload = Object.assign({}, draft.payload);
-  if (key === 'bp_gate_calculated_td_ft_md' && isCurrentContext(draft.context)) {
-    payload.override_reason = value('bp_gate_calculated_td_override_reason') || '';
-  }
   var context = draft.context;
   return queueSave(function () {
     return API.saveBusinessPlanField(context.projectId, context.detailSlug, payload);
@@ -1897,19 +1906,11 @@ function enqueueFieldDraft(key, version) {
   });
 }
 
-function valueFromElement(key) {
-  var element = document.querySelector('[data-bpe-field="' + key + '"]');
-  return element ? inputValue(element) : value(key);
-}
-
 // The tail of every field edit: buffer the draft and either save it now (a
 // tick / a pick is a finished edit) or after the typing pause. Split out of
 // the listener below because the Well Classification path has to WAIT for a
 // dialog answer first -- the queueing itself is identical either way.
 function queueFieldDraft(element, immediate, key, nextValue, payload) {
-  if (key === 'bp_gate_calculated_td_ft_md') {
-    payload.override_reason = valueFromElement('bp_gate_calculated_td_override_reason');
-  }
   var version = ++state.saveVersion;
   state.detail.values[key] = nextValue;
   state.fieldDrafts[key] = {

@@ -15,14 +15,33 @@ import { byId, all, esc } from '../dom.js';
 // write-offs and count toward neither bucket.
 export var DISCOVERED_STATUSES = ['Gas', 'Gas over Water'];
 export var UNDISCOVERED_STATUSES = ['Staked', 'Proposed'];
-// Yet-to-find is a fixed planning assumption, not data: 400 BCF for every
-// distinct gas field in the current selection. That figure is the field's
+// Yet-to-find is a configurable planning assumption for every distinct gas
+// field in the current selection. The default preserves the historical 400
+// BCF starting value when configuration is absent. That figure is the field's
 // WHOLE estimated endowment, so what is left to find is it MINUS what has
 // already been found or booked as potential -- discovered and undiscovered
 // volumes eat into the estimate rather than stacking on top of it. The bar
 // therefore always totals the endowment, and its shape reads as "how much of
 // what we think is there have we accounted for".
 export var YTF_BCF_PER_FIELD = 400;
+
+function validBcf(value, fallback) {
+  var numeric = Number(value);
+  return value !== '' && value != null && isFinite(numeric) && numeric >= 0 ? numeric : fallback;
+}
+
+function normalizeYtfConfig(config) {
+  var fallback = YTF_BCF_PER_FIELD;
+  var defaultBcf = config && typeof config === 'object'
+    ? validBcf(config.default_bcf, fallback) : fallback;
+  var fields = {};
+  var configured = config && config.fields && typeof config.fields === 'object' ? config.fields : {};
+  Object.keys(configured).forEach(function (field) {
+    var name = String(field).trim().toUpperCase();
+    if (name) fields[name] = validBcf(configured[field], defaultBcf);
+  });
+  return { default_bcf: defaultBcf, fields: fields };
+}
 
 // Segments vs wells: a record that has not been promoted to the Business Plan
 // is a segment/lead (is_lead), the rest are wells. Counting both per bucket is
@@ -34,15 +53,27 @@ function addToBucket(bucket, row, ogip) {
   if (row.is_lead) bucket.segments += 1; else bucket.wells += 1;
 }
 
-export function computeResourceSummary(rows) {
+export function computeResourceSummary(rows, ytfConfig) {
   var discovered = emptyBucket();
   var staked = emptyBucket();
   var proposed = emptyBucket();
   var seenFields = {};
   var fieldCount = 0;
+  var fieldEndowments = [];
+  var config = normalizeYtfConfig(ytfConfig);
   (rows || []).forEach(function (row) {
-    var field = row.gas_field == null ? '' : String(row.gas_field);
-    if (field && !seenFields[field]) { seenFields[field] = true; fieldCount += 1; }
+    var field = row.gas_field == null ? '' : String(row.gas_field).trim().toUpperCase();
+    var fieldKey = '$' + field;
+    if (field && !seenFields[fieldKey]) {
+      seenFields[fieldKey] = true;
+      fieldCount += 1;
+      fieldEndowments.push({
+        field: field,
+        bcf: Object.prototype.hasOwnProperty.call(config.fields, field)
+          ? config.fields[field] : config.default_bcf,
+        configured: Object.prototype.hasOwnProperty.call(config.fields, field)
+      });
+    }
     var raw = Number(row.mean_ogip);
     var ogip = (row.mean_ogip === '' || row.mean_ogip == null || !isFinite(raw)) ? null : raw;
     // A record still COUNTS toward its category with no volume recorded --
@@ -51,7 +82,7 @@ export function computeResourceSummary(rows) {
     else if (row.status === 'Staked') addToBucket(staked, row, ogip);
     else if (row.status === 'Proposed') addToBucket(proposed, row, ogip);
   });
-  var initialYtf = fieldCount * YTF_BCF_PER_FIELD;
+  var initialYtf = fieldEndowments.reduce(function (sum, field) { return sum + field.bcf; }, 0);
   var accounted = discovered.bcf + staked.bcf + proposed.bcf;
   var remainingYtf = Math.max(0, initialYtf - accounted);
   return {
@@ -68,6 +99,8 @@ export function computeResourceSummary(rows) {
     // knowing.
     exceedsEstimate: accounted > initialYtf,
     fieldCount: fieldCount,
+    fieldEndowments: fieldEndowments,
+    defaultYtfBcf: config.default_bcf,
     // The bar always totals the endowment; with no field in the selection
     // there is nothing to total.
     total: initialYtf
@@ -101,12 +134,17 @@ function countsLabel(bucket) {
 // supported card.
 var MIN_LABELLED_SHARE = 0.12;
 
-export function renderResourceBar(rows) {
+export function renderResourceBar(rows, ytfConfig) {
   var element = byId('portfolio-resource-bar');
   if (!element) return;
-  var summary = computeResourceSummary(rows);
+  var summary = computeResourceSummary(rows, ytfConfig);
   var fieldsShort = summary.fieldCount + ' field' + (summary.fieldCount === 1 ? '' : 's');
-  var fieldsPhrase = fieldsShort + ' in the current selection';
+  var endowmentDetails = summary.fieldEndowments.map(function (entry) {
+    return entry.field + ' ' + fmtBcf(entry.bcf) + ' BCF' + (entry.configured ? '' : ' (default)');
+  }).join(' · ');
+  var configuredPhrase = summary.fieldCount
+    ? 'Configured field starting values: ' + endowmentDetails
+    : 'No fields in the current selection';
   var stages = [
     { slug: 'discovered', label: 'Discovered', value: summary.discovered.bcf,
       counts: countsLabel(summary.discovered),
@@ -122,7 +160,7 @@ export function renderResourceBar(rows) {
       // endowment has left over. The field count is the honest number, and it
       // is what drives the figure.
       counts: fieldsShort,
-      hint: YTF_BCF_PER_FIELD + ' BCF × ' + fieldsPhrase + ', less the ' +
+      hint: configuredPhrase + ', less the ' +
         fmtBcf(summary.accounted) + ' BCF already discovered or booked as potential' }
   ];
   // Each block PRINTS its own value, as the approved design shows -- but only
@@ -164,7 +202,7 @@ export function renderResourceBar(rows) {
   element.innerHTML =
     '<p class="prb-title">Total Estimated Original Gas Initially in Place is <b>' +
     esc(fmtBcf(summary.total)) + ' BCF</b>' +
-    '<small class="prb-title-note">' + esc(YTF_BCF_PER_FIELD + ' BCF × ' + fieldsPhrase) + '</small></p>' +
+    '<small class="prb-title-note">' + esc(configuredPhrase) + '</small></p>' +
     '<div class="prb-bar" role="img" aria-label="Of ' + esc(fmtBcf(summary.total)) +
     ' BCF estimated: discovered ' + esc(fmtBcf(summary.discovered.bcf)) +
     ' BCF, undiscovered staked ' + esc(fmtBcf(summary.staked.bcf)) +

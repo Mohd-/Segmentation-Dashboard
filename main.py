@@ -511,6 +511,7 @@ def create_project():
         payload.get("lead_x"), payload.get("lead_y"),
         payload.get("business_plan_year"), bool(payload.get("business_plan_enabled")),
         bool(payload.get("active_well_enabled")), payload.get("pipeline_type", "prospect"),
+        creator_name=flask_session.get("name"),
     )
     # Folder creation is best-effort by design: an unavailable share must never
     # fail project creation. Documented exception to the no-try/except rule.
@@ -732,11 +733,11 @@ def assign_task(task_id):
 
 @app.post("/api/tasks/<int:task_id>/assignees")
 def manage_task_assignees(task_id):
-    """Add or remove manual assignees for a task (supervisor/staff only).
+    """Add or remove editable assignees for a task (supervisor/staff only).
 
     Body: {"add": ["Name1", "Name2"], "remove": ["Name3"]}. Add creates
-    source='manual' rows and notifies when the task is active; remove only
-    deletes manual rows (role-sourced assignees are protected).
+    source='manual' rows and notifies when active; remove deletes manual or
+    creator rows (role-sourced assignees are protected).
     """
     require_role("supervisor", "staff")
     session = db.get_session()

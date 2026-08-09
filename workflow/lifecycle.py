@@ -729,15 +729,26 @@ def assign_task(session, task_id, assignee, cascade=True, changed_by="Web User",
         target_old_status = task.get("status") or "Not Assigned"
         target_activation = (target_is_reached or force_activation) and target_old_status == "Not Assigned"
         activation_role_names: Set[str] = set()
+        activation_creator_names: Set[str] = set()
         activation_names: Set[str] = set(canonical_names)
         if target_activation:
             mapping = domain_roles.get_task_mapping(session, task.get("task_name") or "")
             if mapping:
+                db.execute(session, """
+                    DELETE FROM task_assignees
+                    WHERE task_id = :task_id AND source = 'creator'
+                """, {"task_id": task["task_id"]})
                 activation_role_names = set(
                     domain_roles.get_active_role_members(session, mapping["role_id"]))
             activation_names.update(
                 row["name"] for row in task.get("assignees", [])
                 if row.get("source") == "manual")
+            if not mapping:
+                activation_creator_names = {
+                    row["name"] for row in task.get("assignees", [])
+                    if row.get("source") == "creator"
+                }
+                activation_names.update(activation_creator_names)
             activation_names.update(activation_role_names)
 
         for row in targets:
@@ -746,7 +757,13 @@ def assign_task(session, task_id, assignee, cascade=True, changed_by="Web User",
 
             row_names = activation_names if is_target and target_activation else set(canonical_names)
             for name in sorted(row_names):
-                source = "role" if is_target and name in activation_role_names else "manual"
+                if is_target and name in activation_role_names:
+                    source = "role"
+                elif (is_target and name in activation_creator_names
+                      and name not in canonical_names):
+                    source = "creator"
+                else:
+                    source = "manual"
                 if source == "role":
                     # A user who was manually preassigned before the task was
                     # reached is part of the role snapshot once activation
@@ -754,6 +771,15 @@ def assign_task(session, task_id, assignee, cascade=True, changed_by="Web User",
                     db.execute(session, """
                         UPDATE task_assignees SET source = 'role'
                         WHERE task_id = :task_id AND assignee_name = :name
+                    """, {"task_id": row["task_id"], "name": name})
+                else:
+                    # Explicit assignment takes ownership of an automatic
+                    # creator row, so later role mapping changes do not erase
+                    # a supervisor's deliberate manual preassignment.
+                    db.execute(session, """
+                        UPDATE task_assignees SET source = 'manual'
+                        WHERE task_id = :task_id AND assignee_name = :name
+                          AND source = 'creator'
                     """, {"task_id": row["task_id"], "name": name})
                 if _insert_task_assignee(session, row["task_id"], name, source, now) and is_target:
                     newly_added.append(name)
@@ -837,11 +863,33 @@ def _activate_task_locked(session, task, actor):
     role_members = (domain_roles.get_active_role_members(session, mapping["role_id"])
                     if mapping else [])
 
-    manual_rows = domain_roles.list_task_assignees(session, task_id)
-    manual_names = {r["assignee_name"] for r in manual_rows if r.get("source") == "manual"}
+    assignment_rows = domain_roles.list_task_assignees(session, task_id)
+    manual_names = {r["assignee_name"] for r in assignment_rows if r.get("source") == "manual"}
+    creator_names = {r["assignee_name"] for r in assignment_rows if r.get("source") == "creator"}
 
-    combined = sorted(set(role_members) | manual_names)
+    # A mapping exempts this step from creator assignment, even when it was
+    # added after the lead was created. An empty mapped role deliberately does
+    # not fall back to the creator. Unmapped steps activate their creator row.
+    combined = sorted(set(role_members) | manual_names |
+                      (set() if mapping else creator_names))
     if not combined:
+        if mapping and creator_names:
+            now = utc_now_str()
+            db.execute(session, """
+                DELETE FROM task_assignees
+                WHERE task_id = :task_id AND source = 'creator'
+            """, {"task_id": task_id})
+            _sync_primary_assignee_locked(session, task_id)
+            db.execute(session, """
+                UPDATE project_tasks
+                SET last_updated = :now, revision = COALESCE(revision, 0) + 1
+                WHERE task_id = :task_id
+            """, {"now": now, "task_id": task_id})
+            db.execute(session, """
+                UPDATE projects
+                SET last_updated = :now, revision = COALESCE(revision, 0) + 1
+                WHERE project_id = :project_id
+            """, {"now": now, "project_id": task["project_id"]})
         return []
 
     project_id = task["project_id"]
@@ -867,7 +915,12 @@ def _activate_task_locked(session, task, actor):
     db.execute(session, "DELETE FROM task_assignees WHERE task_id = :task_id",
                {"task_id": task_id})
     for name in combined:
-        source = "manual" if name in manual_names else "role"
+        if name in manual_names:
+            source = "manual"
+        elif name in role_members:
+            source = "role"
+        else:
+            source = "creator"
         db.execute(session, """
             INSERT INTO task_assignees (task_id, assignee_name, source, notified, created_at)
             VALUES (:task_id, :name, :source, 0, :now)
@@ -898,9 +951,9 @@ def activate_task(session, task_id, actor):
     """Activate the generically reached task with its assignment snapshot.
 
     - Finds the mapped role for the task via ``domain_roles.get_task_mapping``.
-    - Gathers active members of that role plus any existing manual
-      preassignments from task_assignees (source='manual').
-    - Deduplicates the assignee list; manual preassignments keep source='manual'.
+    - Mapped steps gather role members plus manual preassignments and discard
+      automatic creator rows; unmapped steps gather creator plus manual rows.
+    - Deduplicates the assignee list while preserving its source.
     - Moves the task from 'Not Assigned' to 'In Progress' and stamps actual_start.
     - Writes task_assignee rows (source='role' for role members, 'manual' for
       preassignments), notifies every assignee, and marks them notified.
@@ -913,9 +966,9 @@ def activate_task(session, task_id, actor):
     the UPDATE affects zero rows and this call returns ``[]`` without writing
     history, notifications, or assignee rows.
 
-    If neither a mapped role member nor a manual preassignment exists, the task
-    remains ``Not Assigned``.  A manual preassignment is deliberately enough
-    to start an unmapped or currently unstaffed role once the task is reached.
+    If neither an eligible automatic assignment nor a manual preassignment
+    exists, the task remains ``Not Assigned``. A manual preassignment is still
+    enough to start an unmapped or currently unstaffed role once reached.
     """
     with db.write_transaction(session):
         task = get_task(session, task_id)
@@ -948,13 +1001,12 @@ def activate_next_task(session, project_id, actor):
 
 
 def update_task_assignees(session, task_id, add_names=None, remove_names=None, changed_by="Web User"):
-    """Add or remove manual assignees for a task.
+    """Add or remove editable assignees for a task.
 
     - ``add_names`` are validated against active users and inserted as
-      source='manual'. A role-sourced row remains role-sourced; duplicate rows
-      are a no-op.
-    - ``remove_names`` only delete rows where source='manual'; role-sourced
-      assignments are protected from this endpoint.
+      source='manual'. An explicit add upgrades the same user's automatic
+      creator row to manual; role-sourced rows remain protected.
+    - ``remove_names`` delete manual and creator rows; role rows are protected.
     - project_tasks.assigned_to is derived from the remaining assignee rows.
     - Status, reachability, mutations, activation, and notifications are all
       decided under one write lock. Future preassignments stay silent and do
@@ -988,13 +1040,21 @@ def update_task_assignees(session, task_id, add_names=None, remove_names=None, c
         now = utc_now_str()
 
         for name in canonical_add:
+            upgraded = db.execute(session, """
+                UPDATE task_assignees SET source = 'manual'
+                WHERE task_id = :task_id AND assignee_name = :name
+                  AND source = 'creator'
+            """, {"task_id": task_id, "name": name})
+            if upgraded.rowcount:
+                continue
             if _insert_task_assignee(session, task_id, name, "manual", now):
                 newly_added.append(name)
 
         for name in remove_names:
             removed = db.execute(session, """
                 DELETE FROM task_assignees
-                WHERE task_id = :task_id AND assignee_name = :name AND source = 'manual'
+                WHERE task_id = :task_id AND assignee_name = :name
+                  AND source IN ('manual', 'creator')
             """, {"task_id": task_id, "name": name})
             if removed.rowcount:
                 removed_names.append(name)

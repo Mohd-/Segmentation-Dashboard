@@ -164,10 +164,11 @@ them are unknown here:
 
 ## Cards deliberately not implemented
 
-**3F (BPE main-page filters)** was withdrawn by the owner as a no-op — doc and
-team planning rather than an application change. It had been implemented and is
-reverted: the current-stage Completed semantics are back as they were, and the
-step filter is back in the row.
+**3F (BPE main-page filters)** was later re-opened in part. `Status = Completed`
+now admits only wells whose complete set of eighteen approved tracking items is
+effectively complete, including manual, Supervisor-approved, system/logical,
+and non-applicable outcomes. The step filter remains in the row and retains its
+current-stage scope for the other statuses.
 
 **Two pieces of it the owner later asked for by name.** First, **All Years** on
 the Business Plan Year filter: a real option at the head of the year list rather

@@ -76,7 +76,7 @@ function cellValue(row, col) {
 // never enough here -- "biggest volumes, grouped by field" is two -- and a
 // chain says exactly that instead of making the user sort twice and hope the
 // second pass is stable.
-var state = { rows: [], sortChain: [], filters: {} };
+var state = { rows: [], sortChain: [], filters: {}, ytfConfig: null };
 
 function sortIndex(key) {
   for (var i = 0; i < state.sortChain.length; i += 1) {
@@ -326,7 +326,7 @@ function renderBody(table) {
   // legend, which is where the two deleted stat boxes' numbers went. (The
   // cross plot does NOT: it has its own filters over the full rowset -- see
   // portfolio-analysis.js.)
-  renderResourceBar(rows);
+  renderResourceBar(rows, state.ytfConfig);
 }
 
 function colByKey(key) {
@@ -657,6 +657,7 @@ export function refreshPortfolio() {
   // is unchanged behaviour.
   return API.portfolioRows({ year: 'All', activity: 'All' }).then(function (payload) {
     state.rows = (payload && payload.rows) || [];
+    state.ytfConfig = payload && payload.ytf_config;
     state.filters = {};
     // The cross plot dialog filters the full rowset independently of the
     // column filters (its selects can't see them from inside the dialog).

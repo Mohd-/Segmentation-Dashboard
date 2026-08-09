@@ -1,0 +1,9 @@
+{
+  "td_base_ft": 1200,
+  "classification_days": {
+    "Development": 50,
+    "Appraisal": 127,
+    "Exploration": 127
+  },
+  "coring_uplift_days": 10
+}
