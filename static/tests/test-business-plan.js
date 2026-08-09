@@ -409,7 +409,7 @@ function detailPayload(slug, values) {
   };
 }
 
-test('business-plan detail renders the shared assignment group', async function () {
+test('business-plan detail renders source-free chips and the shared assignment checklist', async function () {
   var host = fixture('<div id="bpe-main-view"></div><section id="bpe-detail-view" class="hidden"></section>');
   var hooks = businessPlanTestHooks();
   var savedUsers = hooks.state.users;
@@ -421,10 +421,12 @@ test('business-plan detail renders the shared assignment group', async function 
   ];
   detail.assignee = 'Employee';
   hooks.state.users = [
-    { name: 'Employee' }, { name: 'Staff Member' }, { name: 'Supervisor' }
+    { name: 'Employee' }, { name: 'Staff Member' }, { name: 'Supervisor' }, { name: 'Available User' }
   ];
-  mockFetch(function (url) {
+  var assignmentPayloads = [];
+  mockFetch(function (url, options) {
     if (String(url).indexOf('/api/business-plan/wells/7/steps/business-plan-gate') >= 0) {
+      if (options && options.method === 'POST') assignmentPayloads.push(JSON.parse(options.body));
       return response(detail);
     }
     throw new Error('Unexpected request: ' + url);
@@ -436,11 +438,49 @@ test('business-plan detail renders the shared assignment group', async function 
     assert.equal(chips[0].querySelector('.assignee-remove'), null,
       'role assignment remains protected in the BPE editor');
     assert.ok(chips[1].querySelector('.assignee-remove'));
-    assert.equal(chips[1].querySelector('.assignee-chip-source').textContent, 'Creator');
+    assert.equal(host.querySelectorAll('.assignee-chip-source').length, 0);
+    assert.equal(chips[1].textContent.replace(/\s+/g, ' ').trim(), 'Staff Member');
     assert.ok(chips[2].querySelector('.assignee-remove'));
-    assert.deepEqual(Array.prototype.map.call(host.querySelector('#bpe-assignee').options, function (option) {
-      return option.value;
-    }), ['']);
+    var roleBox = host.querySelector('[data-assignment-name="Employee"]');
+    var creatorBox = host.querySelector('[data-assignment-name="Staff Member"]');
+    var availableBox = host.querySelector('[data-assignment-name="Available User"]');
+    assert.equal(roleBox.checked, true);
+    assert.equal(roleBox.disabled, true);
+    assert.equal(availableBox.checked, false);
+    host.querySelector('#bpe-assignee').click();
+    assert.equal(host.querySelector('#bpe-assignee-menu').hidden, false);
+    availableBox.checked = true;
+    availableBox.dispatchEvent(new Event('change', { bubbles: true }));
+    creatorBox.checked = false;
+    creatorBox.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitFor(function () { return assignmentPayloads.length === 2; });
+    assert.deepEqual(assignmentPayloads[0].add, ['Available User']);
+    assert.deepEqual(assignmentPayloads[1].remove, ['Staff Member']);
+  } finally {
+    hooks.state.users = savedUsers;
+  }
+});
+
+test('business-plan assignment checklist is read-only for employees', async function () {
+  var host = fixture('<div id="bpe-main-view"></div><section id="bpe-detail-view" class="hidden"></section>');
+  var hooks = businessPlanTestHooks();
+  var savedUsers = hooks.state.users;
+  var detail = detailPayload('business-plan-gate', {});
+  detail.role = 'employee';
+  detail.permissions.can_manage_assignments = false;
+  detail.task.permissions.can_manage_assignments = false;
+  detail.task.assignees = [{ name: 'Employee', source: 'manual' }];
+  hooks.state.users = [{ name: 'Employee' }, { name: 'Supervisor' }];
+  mockFetch(function (url) {
+    if (String(url).indexOf('/api/business-plan/wells/7/steps/business-plan-gate') >= 0) return response(detail);
+    throw new Error('Unexpected request: ' + url);
+  });
+  try {
+    await openBusinessPlanDetail(7, 'business-plan-gate');
+    assert.equal(host.querySelector('#bpe-assignee').disabled, true);
+    Array.from(host.querySelectorAll('[data-assignment-name]')).forEach(function (input) {
+      assert.equal(input.disabled, true);
+    });
   } finally {
     hooks.state.users = savedUsers;
   }
@@ -1124,22 +1164,23 @@ test('business-plan the detail shell uses the maturation shell anatomy', async f
   var host = mountGate(detail);
   await openBusinessPlanDetail(7, 'gheer-inputs');
 
-  // Rail head: back control, title row with the priority chip, the lead name
-  // under it where the two differ, the stage eyebrow, then the all-fields link.
+  // Rail head: exactly the maturation shell's visible anatomy -- one back
+  // control and one title/priority row, without a BPE-only subtitle or link.
   var rail = host.querySelector('.component-rail .rail-head');
   assert.ok(rail.querySelector('#bpe-back'));
   assert.ok(rail.querySelector('.detail-title-row #bpe-priority-chip'));
-  assert.equal(rail.querySelector('#bpe-detail-subtitle').textContent, 'MDFT-7');
-  assert.ok(rail.querySelector('.bpe-rail-eyebrow'));
-  assert.ok(rail.querySelector('#bpe-rail-edit-all.rail-all-fields'),
-    'the all-fields link is a rail control here too, not gear-only');
+  assert.equal(rail.children.length, 2);
+  assert.equal(rail.querySelector('#bpe-detail-subtitle'), null);
+  assert.equal(rail.querySelector('.bpe-rail-eyebrow'), null);
+  assert.equal(rail.querySelector('#bpe-rail-edit-all'), null);
 
-  // Editor head: numbered chip, title, status chip, top controls -- the
-  // maturation order, with the rail's own numbering (GHEER Inputs is 3).
+  // Editor head: numbered chip, title, assignment group -- the maturation
+  // order, with the rail's own numbering (GHEER Inputs is 3).
   var head = host.querySelector('.component-editor .editor-head');
   assert.equal(head.querySelector('.component-number').textContent, '3');
   assert.ok(head.querySelector('h2'));
-  assert.ok(head.querySelector('.bpe-detail-status'));
+  assert.equal(head.querySelector('.bpe-detail-status'), null);
+  assert.ok(head.querySelector('#bpe-assignment-group'));
 
   // Summary panel: progress bar and phase row, which it had neither of.
   var summary = host.querySelector('.summary-panel .ls-card');
@@ -1149,16 +1190,16 @@ test('business-plan the detail shell uses the maturation shell anatomy', async f
     'the lead name rides opposite the phase, as it does on the maturation card');
 });
 
-test('business-plan the status chip is always present, whatever the step tracks', async function () {
-  // It used to render only when the step had a tracking item, so a step
-  // without one got a differently-shaped head.
+test('business-plan editor head stays aligned with maturation when tracking is absent', async function () {
   var detail = detailPayload('gheer-inputs', {});
   detail.tracking = [];
   var host = mountGate(detail);
   await openBusinessPlanDetail(7, 'gheer-inputs');
-  var chip = host.querySelector('.editor-head .bpe-detail-status');
-  assert.ok(chip, 'the head keeps its shape');
-  assert.equal(chip.textContent.trim(), 'In Progress');
+  var head = host.querySelector('.editor-head');
+  assert.equal(head.querySelector('.bpe-detail-status'), null);
+  assert.ok(head.querySelector('.component-number'));
+  assert.ok(head.querySelector('.editor-title'));
+  assert.ok(head.querySelector('.assignment-group'));
 });
 
 test('business-plan refreshes the Well Summary alone when a saved value changes it', async function () {

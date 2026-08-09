@@ -17,7 +17,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/css/base.css?v=11">
-  <link rel="stylesheet" href="/static/css/components.css?v=69">
+  <link rel="stylesheet" href="/static/css/components.css?v=71">
 </head>
 <body>
   <section id="login-page" class="login-page hidden">
@@ -362,7 +362,13 @@
           <span id="component-status-chip" class="status not-assigned editor-status-chip">Not Assigned</span>
           <div id="assignment-group" class="assignment-group" aria-label="Task assignees">
             <div id="assigned-members" class="assigned-members"></div>
-            <select id="assigned-to" class="editor-assignee" aria-label="Add assignee"></select>
+            <div class="assignment-picker" data-assignment-picker>
+              <button id="assigned-to" type="button" class="editor-assignee assignment-picker-trigger"
+                      aria-haspopup="true" aria-expanded="false" aria-controls="assigned-to-menu" disabled>
+                <span>Manage assignees</span><span data-lucide-icon="chevron-down" aria-hidden="true"></span>
+              </button>
+              <div id="assigned-to-menu" class="assignment-checklist" role="group" aria-label="Assignees" hidden></div>
+            </div>
           </div>
         </div>
         <form id="component-form" class="component-form">
@@ -513,6 +519,6 @@
     <img id="ra-lightbox-img" alt="">
   </dialog>
 
-  <script type="module" src="/static/js/main.js?v=71"></script>
+  <script type="module" src="/static/js/main.js?v=72"></script>
 </body>
 </html>

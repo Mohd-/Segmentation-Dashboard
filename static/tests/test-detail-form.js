@@ -3,7 +3,7 @@
 // The row is driven by the normalized server permissions. The promise that
 // matters is negative: no role is shown an action the backend will refuse.
 // These tests render the real row against the real markup.
-import { test, assert, fixture, mockFetch } from './harness.js';
+import { test, assert, fixture, mockFetch, waitFor } from './harness.js';
 import {
   renderActionButtons, savedMessage, renderFields, getFields, loadComponent,
   stepHostsResourceCalculator, renderRepeatableField
@@ -176,13 +176,17 @@ test('detail-form GeoX: loadComponent renders the seven manual external-result c
   });
 });
 
-test('detail-form assignment group labels creator and protects only role members', async function () {
+test('detail-form assignment group hides sources and renders the shared checklist', async function () {
   await withDetailStore(async function () {
     fixture(ASSIGNMENT_DETAIL_SHELL);
+    Store.users = [
+      { name: 'Employee' }, { name: 'Staff Member' }, { name: 'Supervisor' }, { name: 'Available User' }
+    ];
     var component = {
       task_id: 95, task_name: 'Reservoir CoS', sequence_no: 2,
       stage_group: 'Risk Analysis', status: 'In Progress', priority: 'Medium',
       assigned_to: 'Employee', default_domain_role: 'Petrophysicist',
+      permissions: { can_manage_assignments: true },
       assignees: [
         { name: 'Employee', source: 'role', notified: true },
         { name: 'Staff Member', source: 'manual', notified: true },
@@ -190,25 +194,75 @@ test('detail-form assignment group labels creator and protects only role members
       ]
     };
     Store.tasks = [component];
-    mockFetch(function (url) {
+    var assignmentPayloads = [];
+    mockFetch(function (url, options) {
       var path = String(url);
       if (path.indexOf('/api/tasks/95/dynamic-fields') >= 0) return response({});
       if (path.indexOf('/api/projects/44/component-folder/95') >= 0) return response({ requires_folder: 0 });
+      if (path.indexOf('/api/tasks/95/assign') >= 0 || path.indexOf('/api/tasks/95/assignees') >= 0) {
+        assignmentPayloads.push({ path: path, body: JSON.parse(options.body) });
+        return response({});
+      }
       throw new Error('Unexpected request: ' + path);
     });
 
     await loadComponent(component);
     var chips = Array.from(document.querySelectorAll('#assigned-members .assignee-chip'));
     assert.equal(chips.length, 3);
-    assert.ok(chips[0].textContent.indexOf('Employee') >= 0);
-    assert.ok(chips[0].textContent.indexOf('Role') >= 0);
+    assert.equal(chips[0].textContent.trim(), 'Employee');
+    assert.equal(document.querySelectorAll('.assignee-chip-source').length, 0);
     assert.equal(chips[0].querySelector('.assignee-remove'), null,
       'role-derived membership cannot be removed manually');
     assert.ok(chips[1].querySelector('.assignee-remove'),
       'manual additions remain removable');
-    assert.ok(chips[2].textContent.indexOf('Creator') >= 0);
+    assert.equal(chips[2].textContent.replace(/\s+/g, ' ').trim(), 'Supervisor');
     assert.ok(chips[2].querySelector('.assignee-remove'),
       'creator assignments remain removable');
+    var roleBox = document.querySelector('[data-assignment-name="Employee"]');
+    var manualBox = document.querySelector('[data-assignment-name="Staff Member"]');
+    assert.equal(roleBox.checked, true);
+    assert.equal(roleBox.disabled, true, 'the role-mapped checklist row is protected');
+    assert.equal(manualBox.checked, true);
+    assert.equal(manualBox.disabled, false, 'manual membership can be unchecked');
+    var availableBox = document.querySelector('[data-assignment-name="Available User"]');
+    availableBox.checked = true;
+    availableBox.dispatchEvent(new Event('change', { bubbles: true }));
+    assert.equal(document.getElementById('app-dialog').open, true,
+      'adding retains the existing later-step scope choice');
+    document.getElementById('app-dialog-cancel').click();
+    await waitFor(function () { return assignmentPayloads.length === 1; });
+    manualBox.checked = false;
+    manualBox.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitFor(function () { return assignmentPayloads.length === 2; });
+    assert.deepEqual(assignmentPayloads[0].body.assignee, 'Available User');
+    assert.equal(assignmentPayloads[0].body.cascade, false);
+    assert.deepEqual(assignmentPayloads[1].body.remove, ['Staff Member']);
+  });
+});
+
+test('detail-form assignment checklist is read-only for employees', async function () {
+  await withDetailStore(async function () {
+    fixture(ASSIGNMENT_DETAIL_SHELL);
+    Store.user = { name: 'Employee', role: 'employee' };
+    Store.users = [{ name: 'Employee' }, { name: 'Supervisor' }];
+    var component = {
+      task_id: 96, task_name: 'Reservoir CoS', sequence_no: 2,
+      stage_group: 'Risk Analysis', status: 'In Progress', assigned_to: 'Employee',
+      assignees: [{ name: 'Employee', source: 'manual' }],
+      permissions: { can_manage_assignments: false }
+    };
+    Store.tasks = [component];
+    mockFetch(function (url) {
+      var path = String(url);
+      if (path.indexOf('/api/tasks/96/dynamic-fields') >= 0) return response({});
+      if (path.indexOf('/api/projects/44/component-folder/96') >= 0) return response({ requires_folder: 0 });
+      throw new Error('Unexpected request: ' + path);
+    });
+    await loadComponent(component);
+    assert.equal(document.getElementById('assigned-to').disabled, true);
+    Array.from(document.querySelectorAll('[data-assignment-name]')).forEach(function (input) {
+      assert.equal(input.disabled, true);
+    });
   });
 });
 

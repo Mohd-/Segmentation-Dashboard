@@ -20,8 +20,9 @@ import { wellSummaryBodyHtml, wireWellSummaryFolds } from './detail.js';
 import { approvalActionsMarkup, approvalContentLocked } from './approval-policy.js';
 import { summaryCardHtml } from '../ui/summary-card.js';
 import {
-  assignmentMembersHtml, detailBackButtonHtml, detailEditorHeaderHtml,
-  detailStageHtml, detailStepItemHtml
+  assignmentChecklistHtml, assignmentMembersHtml, detailBackButtonHtml,
+  detailEditorHeaderHtml, detailStageHtml, detailStepItemHtml,
+  wireAssignmentChecklist
 } from '../ui/detail-shell.js';
 
 var FLUIDS = ['Gas', 'Gas over Water', 'Water Bearing', 'Dry Hole', 'Oil', 'Oil over Gas', 'Oil over Water'];
@@ -1392,16 +1393,6 @@ function railMarkup() {
       '<div class="detail-title-row"><h3>' + esc(detail.project.project_name) + '</h3>' +
         priorityChipHtml('bpe-priority-chip', detail.project.priority,
                          (detail.role || currentRole()) === 'supervisor') + '</div>' +
-      // Card 3I: the maturation rail head carries the record's LEAD name under
-      // the title where the two differ (Card 3V's pairing), then the stage
-      // eyebrow, then the all-fields link -- same order, same elements.
-      (detail.project.lead_name && detail.project.lead_name !== detail.project.project_name
-        ? '<p id="bpe-detail-subtitle" class="detail-subtitle">' + esc(detail.project.lead_name) + '</p>'
-        : '') +
-      '<p class="bpe-rail-eyebrow">' + esc(detail.detail.stage_label) + '</p>' +
-      // The maturation shell shows this as a rail link on a well; BPE hid it
-      // in the gear menu, which is the divergence the card names.
-      '<button type="button" id="bpe-rail-edit-all" class="link-button rail-all-fields">Edit all project fields</button>' +
     '</div>' +
     '<div class="component-list">' + detailNavMarkup() + '</div>' +
     '</aside>';
@@ -1413,17 +1404,10 @@ function detailAssignees() {
   return state.detail && state.detail.assignee ? [{ name: state.detail.assignee, source: 'manual' }] : [];
 }
 
-function assigneeOptions() {
-  var users = state.users || Store.users || [];
-  var assigned = detailAssignees().map(function (member) { return member.name; });
-  return [{ value: '', label: 'Add assignee' }].concat(users.filter(function (user) {
-    return assigned.indexOf(user.name) < 0;
-  }).map(function (user) { return { value: user.name, label: user.name }; }));
-}
-
 function assignmentControlsMarkup() {
   var role = state.detail.role || currentRole();
-  var editable = role !== 'employee';
+  var permissions = state.detail.permissions || {};
+  var editable = role !== 'employee' && permissions.can_manage_assignments !== false;
   var assignees = detailAssignees();
   var chips = assignmentMembersHtml(assignees, {
     removeAttribute: 'data-bpe-remove-assignee',
@@ -1431,32 +1415,21 @@ function assignmentControlsMarkup() {
   });
   return '<div id="bpe-assignment-group" class="assignment-group">' +
     '<div class="assigned-members">' + chips + '</div>' +
-    '<label><span class="sr-only">Add assignee</span><select id="bpe-assignee" class="editor-assignee" ' +
-    (editable ? '' : 'disabled') + '>' + selectOptions(assigneeOptions(), '') + '</select></label></div>';
+    assignmentChecklistHtml(state.users || Store.users || [], assignees, {
+      triggerId: 'bpe-assignee', menuId: 'bpe-assignee-menu', editable: editable,
+      disabledReason: 'Only supervisors and staff can change assignees.'
+    }) + '</div>';
 }
 
-// Assignee is the editor-head assignment group. Priority remains a well-level
-// chip beside the record name, never a per-step control.
-function topControlsMarkup() {
-  return '<div class="bpe-detail-controls">' + assignmentControlsMarkup() + '</div>';
-}
-
-// Card 3I: the maturation editor head is a numbered chip, the step title, its
-// status chip and the top controls -- in that order. BPE had the title and a
-// CONDITIONAL status chip, so a step with no tracking item rendered a
-// differently-shaped head. The number is the rail's own numbering for this
-// step, so the head and the rail agree about which step you are on.
+// The maturation editor head is a numbered chip, the step title, then the
+// shared assignment group. The number is the rail's own numbering for this
+// step, so the head and rail agree about which step is open.
 function editorMarkup() {
   var detail = state.detail;
-  var tracking = (detail.tracking || [])[0];
-  var chip = '<span class="bpe-detail-status state-' +
-    esc(tracking ? tracking.color : 'empty') + '">' +
-    (tracking ? statusIcon(tracking) : '') +
-    esc(tracking ? tracking.status : 'In Progress') + '</span>';
   return '<section class="component-editor bpe-detail-form">' +
     detailEditorHeaderHtml({
       number: detailNumber(state.detailSlug), title: detail.detail.label,
-      statusHtml: chip, controlsHtml: topControlsMarkup()
+      controlsHtml: assignmentControlsMarkup()
     }) +
     bodyMarkup() +
     '</section>';
@@ -1669,28 +1642,28 @@ function renderBpeAssignmentControls() {
 }
 
 function wireBpeAssignmentControls() {
-  var assignee = byId('bpe-assignee');
-  if (assignee && !assignee.dataset.bound) {
-    assignee.dataset.bound = '1';
-    assignee.addEventListener('change', function () {
-      var selected = assignee.value;
-      if (!selected) return;
-      var context = currentContext();
-      queueCommandSave(function () {
-        return API.assignBusinessPlan(context.projectId, context.detailSlug, { add: [selected] });
-      }, { context: context, rerender: true });
-    });
-  }
+  var group = byId('bpe-assignment-group');
+  wireAssignmentChecklist(group, function (change) {
+    return updateBpeAssignment(change.name, change.checked);
+  });
   all('[data-bpe-remove-assignee]').forEach(function (button) {
     if (button.dataset.bound) return;
     button.dataset.bound = '1';
     button.addEventListener('click', function () {
-      var context = currentContext();
       var name = button.dataset.bpeRemoveAssignee;
-      queueCommandSave(function () {
-        return API.assignBusinessPlan(context.projectId, context.detailSlug, { remove: [name] });
-      }, { context: context, rerender: true });
+      updateBpeAssignment(name, false);
     });
+  });
+}
+
+function updateBpeAssignment(name, checked) {
+  var context = currentContext();
+  return queueCommandSave(function () {
+    var changes = checked ? { add: [name] } : { remove: [name] };
+    return API.assignBusinessPlan(context.projectId, context.detailSlug, changes);
+  }, { context: context, rerender: true }).then(function (result) {
+    if (!result) throw new Error('The assignment could not be updated.');
+    return result;
   });
 }
 
@@ -2499,10 +2472,6 @@ function bindDetail() {
   });
   wireSummaryPanel();
   wireBpeSummaryDismissOnce();
-  // The rail's twin of the panel's own "Edit all project fields" -- Card 3I put
-  // the link where the maturation shell keeps it, and both run one handler.
-  var railEdit = byId('bpe-rail-edit-all');
-  if (railEdit) railEdit.addEventListener('click', openAllFields);
 }
 
 export function businessPlanTestHooks() {

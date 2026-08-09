@@ -26,7 +26,9 @@ import {
 // cycle (autosave.js imports saveComponent back), same as detail.js's.
 import { syncAutoSaveContext, flushAutoSave, captureEditorFocus, restoreEditorFocus } from './autosave.js';
 import { applyApprovalActions, approvalContentLocked } from './approval-policy.js';
-import { assignmentMembersHtml } from '../ui/detail-shell.js';
+import {
+  assignmentChecklistHtml, assignmentMembersHtml, wireAssignmentChecklist
+} from '../ui/detail-shell.js';
 
 export function ensureUsers() {
   if (Store.users) return Promise.resolve(Store.users);
@@ -65,17 +67,25 @@ function renderStatusChip(status) {
 // function, so whichever lands last still leaves the employee's control
 // disabled instead of a dead, unauthorized dropdown.
 function syncAssigneeGate(referenceOnly) {
-  var select = byId('assigned-to');
+  var trigger = byId('assigned-to');
   var reference = referenceOnly === undefined ? !isCurrentPipelineView() : !!referenceOnly;
-  var editable = canManageAssignments() && !reference;
-  if (select) select.disabled = !editable;
-  all('.assignee-remove').forEach(function (button) { button.disabled = !editable; });
+  var permissions = (Store.task && Store.task.permissions) || {};
+  var editable = canManageAssignments() && permissions.can_manage_assignments !== false && !reference;
+  if (trigger) trigger.disabled = !editable;
+  var group = byId('assignment-group');
+  all('.assignee-remove', group).forEach(function (button) { button.disabled = !editable; });
+  all('[data-assignment-name]', group).forEach(function (input) {
+    var member = ((Store.task && Store.task.assignees) || []).filter(function (item) {
+      return item.name === input.dataset.assignmentName;
+    })[0];
+    input.disabled = !editable || !!member && member.source === 'role';
+  });
 }
 
 function renderAssigneeSelect(task, load) {
-  var select = byId('assigned-to');
+  var group = byId('assignment-group');
   var members = byId('assigned-members');
-  if (!select && !members) return;
+  if (!group && !members) return;
   ensureUsers().then(function (users) {
     // Component loads are asynchronous. Never let a users response for the
     // previous component repaint the shared assignee control after navigation.
@@ -84,24 +94,23 @@ function renderAssigneeSelect(task, load) {
     if (!assignees.length && task.assigned_to) {
       assignees = [{ name: task.assigned_to, source: 'manual' }];
     }
-    var assignedNames = assignees.map(function (member) { return member.name; });
-    var names = users.map(function (user) { return user.name; });
-    if (members) {
-      members.innerHTML = assignmentMembersHtml(assignees, {
+    var editable = canManageAssignments() && (!task.permissions ||
+      task.permissions.can_manage_assignments !== false) && isCurrentPipelineView();
+    if (group) {
+      group.innerHTML = '<div id="assigned-members" class="assigned-members">' +
+        assignmentMembersHtml(assignees, {
         removeAttribute: 'data-assignee-name',
-        editable: true
+        editable: editable
+      }) + '</div>' + assignmentChecklistHtml(users, assignees, {
+        triggerId: 'assigned-to', menuId: 'assigned-to-menu', editable: editable,
+        disabledReason: 'Only supervisors and staff can change assignees.'
       });
-      all('.assignee-remove', members).forEach(function (button) {
+      all('.assignee-remove', group).forEach(function (button) {
         button.addEventListener('click', function () { removeManualAssignee(button.dataset.assigneeName); });
       });
-    }
-    if (select) {
-      select.innerHTML = '<option value="">Add assignee</option>' + names.filter(function (name) {
-        return assignedNames.indexOf(name) < 0;
-      }).map(function (name) {
-        return '<option value="' + esc(name) + '">' + esc(name) + '</option>';
-      }).join('');
-      select.value = '';
+      wireAssignmentChecklist(group, function (change) {
+        return change.checked ? assignComponent(change.name) : removeManualAssignee(change.name);
+      });
     }
     syncAssigneeGate();
   });
@@ -341,16 +350,15 @@ export function loadComponent(task) {
   });
 }
 
-// Assignment posts immediately on select change (not deferred to Save): the
-// confirm dialog decides whether the same assignee also cascades to every
-// later still-unassigned step of this pipeline.
-export function assignComponent() {
+// Checklist changes post immediately (not deferred to Save). Adding retains
+// the established scope choice: this step only, or this and later unassigned
+// steps. The checkbox itself continues to describe membership on this step.
+export function assignComponent(name) {
   if (!Store.task) return;
   if (!isCurrentPipelineView()) return msg('Switch back to the current pipeline to change assignments.', 'error');
-  var select = byId('assigned-to');
-  var assignee = select.value;
+  var assignee = typeof name === 'string' ? name : '';
   if (!assignee) return;
-  confirmDialog({
+  return confirmDialog({
     title: 'Add assignee',
     message: 'Also preassign following steps to ' + assignee + '?',
     confirmLabel: 'Yes, preassign following steps',
@@ -365,20 +373,21 @@ export function assignComponent() {
   }).then(function () {
     return refreshAfterRecordChange(assignee + ' added to the assignment group.');
   }).catch(function (error) {
-    select.value = '';
     msg(error.message, 'error');
+    throw error;
   });
 }
 
 function removeManualAssignee(name) {
   if (!Store.task || !name || !isCurrentPipelineView()) return;
-  API.updateTaskAssignees(Store.task.task_id, {
+  return API.updateTaskAssignees(Store.task.task_id, {
     remove: [name],
     changed_by: currentUserName()
   }).then(function () {
     return refreshAfterRecordChange(name + ' removed from the assignment group.');
   }).catch(function (error) {
     msg(error.message, 'error');
+    throw error;
   });
 }
 
