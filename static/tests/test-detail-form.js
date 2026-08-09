@@ -180,7 +180,8 @@ test('detail-form assignment group hides sources and renders the shared checklis
   await withDetailStore(async function () {
     fixture(ASSIGNMENT_DETAIL_SHELL);
     Store.users = [
-      { name: 'Employee' }, { name: 'Staff Member' }, { name: 'Supervisor' }, { name: 'Available User' }
+      { name: 'Employee' }, { name: 'Staff Member' }, { name: 'Supervisor' },
+      { name: 'Available User' }, { name: 'Only This Step User' }
     ];
     var component = {
       task_id: 95, task_name: 'Reservoir CoS', sequence_no: 2,
@@ -229,14 +230,23 @@ test('detail-form assignment group hides sources and renders the shared checklis
     availableBox.dispatchEvent(new Event('change', { bubbles: true }));
     assert.equal(document.getElementById('app-dialog').open, true,
       'adding retains the existing later-step scope choice');
-    document.getElementById('app-dialog-cancel').click();
+    document.getElementById('app-dialog-confirm').click();
     await waitFor(function () { return assignmentPayloads.length === 1; });
+    var onlyThisStepBox = document.querySelector('[data-assignment-name="Only This Step User"]');
+    onlyThisStepBox.checked = true;
+    onlyThisStepBox.dispatchEvent(new Event('change', { bubbles: true }));
+    document.getElementById('app-dialog-cancel').click();
+    await waitFor(function () { return assignmentPayloads.length === 2; });
     manualBox.checked = false;
     manualBox.dispatchEvent(new Event('change', { bubbles: true }));
-    await waitFor(function () { return assignmentPayloads.length === 2; });
+    await waitFor(function () { return assignmentPayloads.length === 3; });
     assert.deepEqual(assignmentPayloads[0].body.assignee, 'Available User');
-    assert.equal(assignmentPayloads[0].body.cascade, false);
-    assert.deepEqual(assignmentPayloads[1].body.remove, ['Staff Member']);
+    assert.equal(assignmentPayloads[0].body.cascade, true,
+      'the real confirmation submit preassigns following steps');
+    assert.deepEqual(assignmentPayloads[1].body.assignee, 'Only This Step User');
+    assert.equal(assignmentPayloads[1].body.cascade, false,
+      'the alternate dialog action keeps assignment local to this step');
+    assert.deepEqual(assignmentPayloads[2].body.remove, ['Staff Member']);
   });
 });
 

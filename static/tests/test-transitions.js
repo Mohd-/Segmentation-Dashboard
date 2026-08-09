@@ -89,10 +89,9 @@ test('transitions.promoteProject confirm PATCHes /flags with the selected year',
   });
   var pending = promoteProject({ project_id: 7, business_plan_year: '2031' }, [], 'Tester');
   return waitFor(function () { return dialog.open; }).then(function () {
-    // Simulate the dialog-form confirm: method="dialog" submit sets returnValue
-    // and closes; the handler resolves the select's value.
-    dialog.returnValue = 'confirm';
-    dialog.close();
+    // Use the real submit control: this guards the browser's method="dialog"
+    // behavior instead of manually setting returnValue in the test.
+    byId('app-dialog-confirm').click();
     return pending;
   }).then(function (result) {
     assert.deepEqual(result, { ok: true, pipeline_type: 'bp', business_plan_year: 2031 },
@@ -136,8 +135,7 @@ test('transitions.recallProject confirm PATCHes /flags with business_plan_enable
   });
   var pending = recallProject({ project_id: 9, project_name: 'W-1' }, 'Tester');
   return waitFor(function () { return dialog.open; }).then(function () {
-    dialog.returnValue = 'confirm';
-    dialog.close();
+    byId('app-dialog-confirm').click();
     return pending;
   }).then(function (result) {
     assert.deepEqual(result, { ok: true });

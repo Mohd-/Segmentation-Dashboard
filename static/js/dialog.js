@@ -55,7 +55,14 @@ function openDialog(options) {
       }
     }
     function onCancel() { dialog.close('cancel'); }
-    function onSubmit() { dialog.returnValue = 'confirm'; }
+    // `method="dialog"` otherwise closes with the submit button's value
+    // (empty for our button), overwriting the intended confirmation result.
+    // Closing explicitly keeps confirms, prompts, and select dialogs on one
+    // deterministic return-value path.
+    function onSubmit(event) {
+      event.preventDefault();
+      dialog.close('confirm');
+    }
 
     dialog.returnValue = '';
     dialog.addEventListener('close', onClose);
