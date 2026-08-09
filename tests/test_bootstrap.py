@@ -12,6 +12,11 @@ the upgrade, then bootstrap once more and assert nothing changes.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
 
 import pytest
 
@@ -52,6 +57,96 @@ def test_fresh_bootstrap_seeds_configured_users(client):
     assert resp.status_code == 200
     seeded = {(u["name"], u["role"]) for u in resp.get_json()}
     assert seeded == set(config.SEED_USERS)
+
+
+def test_concurrent_processes_can_bootstrap_one_fresh_sqlite_database(tmp_path):
+    """Independent workers serialize the complete first-boot sequence.
+
+    The workers are released from a common gate only after every subprocess
+    has imported the application modules, making this exercise the startup
+    race seen when Gunicorn workers initialize together rather than merely
+    running several sequential bootstraps.
+    """
+    db_path = tmp_path / "concurrent-bootstrap.db"
+    ready_dir = tmp_path / "ready"
+    ready_dir.mkdir()
+    gate = tmp_path / "start-bootstrap"
+    worker_script = """
+import os
+import sys
+import time
+from pathlib import Path
+
+import db
+
+ready = Path(os.environ["BOOTSTRAP_READY"])
+ready.touch()
+gate = Path(os.environ["BOOTSTRAP_GATE"])
+while not gate.exists():
+    time.sleep(0.005)
+db.init_db(os.environ["BOOTSTRAP_DB"])
+"""
+    worker_count = 8
+    repo_root = Path(__file__).resolve().parents[1]
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = os.pathsep.join(
+        [str(repo_root), environment.get("PYTHONPATH", "")]
+    )
+    processes = []
+    try:
+        for index in range(worker_count):
+            worker_env = environment.copy()
+            worker_env.update({
+                "BOOTSTRAP_DB": str(db_path),
+                "BOOTSTRAP_GATE": str(gate),
+                "BOOTSTRAP_READY": str(ready_dir / ("worker-{}".format(index))),
+            })
+            processes.append(subprocess.Popen(
+                [sys.executable, "-c", worker_script],
+                cwd=str(repo_root),
+                env=worker_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            ))
+
+        deadline = time.monotonic() + 30
+        while len(list(ready_dir.iterdir())) < worker_count:
+            if time.monotonic() >= deadline:
+                raise AssertionError("bootstrap workers did not become ready")
+            time.sleep(0.01)
+        gate.touch()
+
+        results = []
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=60)
+            results.append((process.returncode, stdout, stderr))
+    finally:
+        gate.touch()
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+
+    failures = [result for result in results if result[0] != 0]
+    assert not failures, "concurrent bootstrap workers failed: {}".format(failures)
+
+    conn = raw_sqlite_connect(db_path)
+    try:
+        schema_version = conn.execute(
+            "SELECT value FROM app_settings WHERE key = 'schema_version'"
+        ).fetchone()["value"]
+        user_count = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
+        journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    finally:
+        conn.close()
+
+    import config
+    import migrations
+
+    assert schema_version == str(migrations.LATEST_SCHEMA_VERSION)
+    assert user_count == len(config.SEED_USERS)
+    assert journal_mode.lower() == "wal"
 
 
 def test_new_project_gets_24_active_tasks(client):

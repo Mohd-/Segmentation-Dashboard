@@ -132,6 +132,44 @@ def current_display() -> str:
     return _current_display
 
 
+@contextmanager
+def _sqlite_bootstrap_lock(engine):
+    """Serialize the complete SQLite bootstrap across OS processes.
+
+    ``BEGIN IMMEDIATE`` in ``migrations.run`` cannot protect the setup that
+    precedes it: configuring WAL and ``Base.metadata.create_all`` both touch
+    the database before that transaction starts.  A sidecar lock therefore
+    guards the entire sequence, including WAL configuration, schema creation,
+    migrations, and seed data.  ``flock`` releases the lock if a worker exits
+    unexpectedly, so a stale lock file does not strand future startups.
+
+    In-memory SQLite databases have no shared file to coordinate and are left
+    alone.  Non-SQLite engines also pass through unchanged.
+    """
+    if engine.dialect.name != "sqlite":
+        yield
+        return
+
+    database = engine.url.database
+    query = engine.url.query
+    if not database or database == ":memory:" or query.get("mode") == "memory":
+        yield
+        return
+
+    # Import only on the SQLite path.  Production deployments run on Unix,
+    # where flock provides the required inter-process advisory lock.
+    import fcntl
+
+    database_path = Path(database).expanduser().resolve()
+    lock_path = database_path.with_name(database_path.name + ".bootstrap.lock")
+    with lock_path.open("a+b") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 def bootstrap(db_path_or_url: Optional[str] = None) -> None:
     """Create tables, run migrations and seed templates -- once per process.
 
@@ -144,21 +182,22 @@ def bootstrap(db_path_or_url: Optional[str] = None) -> None:
         if _bootstrapped:
             return
         engine = _engine if _engine is not None else init_engine(db_path_or_url)
-        if engine.dialect.name == "sqlite":
-            with engine.connect() as connection:
-                connection.exec_driver_sql("PRAGMA journal_mode = WAL")
-                connection.exec_driver_sql("PRAGMA synchronous = NORMAL")
-        # Imported lazily to avoid an import cycle (migrations -> db).
-        import migrations
-        session = _SessionFactory()
-        try:
-            migrations.run(session, engine)
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
+        with _sqlite_bootstrap_lock(engine):
+            if engine.dialect.name == "sqlite":
+                with engine.connect() as connection:
+                    connection.exec_driver_sql("PRAGMA journal_mode = WAL")
+                    connection.exec_driver_sql("PRAGMA synchronous = NORMAL")
+            # Imported lazily to avoid an import cycle (migrations -> db).
+            import migrations
+            session = _SessionFactory()
+            try:
+                migrations.run(session, engine)
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
         _bootstrapped = True
 
 

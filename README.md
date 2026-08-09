@@ -121,10 +121,11 @@ SQLite-flavored.)
 
 ## Deployment
 
-For shared use, run behind Gunicorn/Nginx. Startup bootstrap is process-safe
-(the seed/ensure step takes the database write lock up front), but the
-simplest operational rule is: on the **first boot after an upgrade**, start a
-single instance, let it finish bootstrapping, then scale out.
+For shared use, run behind Gunicorn/Nginx. SQLite startup bootstrap is
+process-safe: workers serialize the full WAL/schema/migration/seed sequence
+with a per-database sidecar lock. The simplest operational rule is still: on
+the **first boot after an upgrade**, start a single instance, let it finish
+bootstrapping, then scale out.
 
 ## Running tests
 
