@@ -28,6 +28,10 @@ import { leadSummaryHtml, wireLeadSummary, closeLeadSummaryMenu, EM_DASH } from 
 // one dataset (the lead's 12 tracked items).
 import { completedItemCount, TRACKED_ITEM_COUNT } from './lead-kpis.js';
 import { applyPriorityChip, nextLeadPriority } from './board-widgets.js';
+import {
+  summaryCardHtml, summaryFoldHtml, summaryGridHtml, summarySectionHtml
+} from '../ui/summary-card.js';
+import { detailStageHtml, detailStepItemHtml } from '../ui/detail-shell.js';
 
 // A LEAD detail page is the redesigned Card 2A shell (single back control, big
 // name, three-stage sidebar, wide Lead Summary). EVERY branch below guards on
@@ -47,7 +51,7 @@ function isLeadView() {
 var LEAD_STAGE_ICONS = {
   'Lead Assessment': 'clipboard-check',
   'Risk Analysis': 'gauge',
-  'Pre-Well Delivery': 'rig'
+  'Pre-Well Delivery': 'drill'
 };
 
 /* -------------------------------------------------------------------------
@@ -151,9 +155,9 @@ export function openDetail(projectId, pipeline) {
 var STAGE_ICONS = {
   'Lead Assessment': 'clipboard-check',
   'Risk Analysis': 'gauge',
-  'Pre-Well Delivery': 'rig',
-  'Well Delivery': 'clipboard-steps',
-  'Post-Drilling': 'rig',
+  'Pre-Well Delivery': 'drill',
+  'Well Delivery': 'clipboard-list',
+  'Post-Drilling': 'drill',
   'Post-Testing': 'gauge'
 };
 
@@ -354,9 +358,10 @@ function leadRailRowHtml(row) {
     // Defensive only: every tracked item has a real step since v5, so this
     // renders solely for a record missing a row the workflow says it should
     // have (a legacy row a migration could not reach).
-    return '<div class="component-item component-item-future"' +
-      ' title="This step is not on this record." aria-disabled="true">' +
-      '<span class="component-num" aria-hidden="true">·</span><b>' + esc(row.label) + '</b></div>';
+    return detailStepItemHtml({
+      number: '\u00b7', label: row.label, disabled: true,
+      attributes: { title: 'This step is not on this record.', 'aria-disabled': 'true' }
+    });
   }
   // A merged row (Card 4B) overrides the status and slot number it renders
   // under; a plain row reads both straight off its task. `data-task-ids`
@@ -364,38 +369,35 @@ function leadRailRowHtml(row) {
   // match whichever of them is actually loaded (syncMergedRowActive).
   var slug = String((row.status || row.task.status) || 'Not Assigned').toLowerCase().replace(/\s+/g, '-');
   var num = row.num != null ? row.num : row.task.sequence_no;
-  var idsAttr = row.tasks
-    ? ' data-task-ids="' + esc(row.tasks.map(function (task) { return task.task_id; }).join(',')) + '"'
-    : '';
-  return '<button type="button" class="component-item status-' + slug + '" data-task-id="' + row.task.task_id + '"' + idsAttr + '>' +
-    '<span class="component-num">' + esc(num) + '</span><b>' + esc(row.label) + '</b></button>';
+  var attributes = { 'data-task-id': row.task.task_id };
+  if (row.tasks) {
+    attributes['data-task-ids'] = row.tasks.map(function (task) { return task.task_id; }).join(',');
+  }
+  return detailStepItemHtml({
+    number: num, label: row.label, statusSlug: slug, attributes: attributes
+  });
 }
 
 function renderLeadRail(tasks) {
   var groups = leadStageGroups((Store.project || {}).tracked_items, tasks);
   byId('component-list').innerHTML = groups.map(function (group) {
     var isOpen = group.stage === openStage;
-    var icon = ICONS[LEAD_STAGE_ICONS[group.stage]] || '';
     if (group.single) {
       var enabled = !!group.task;
       return '<div class="rail-stage rail-stage-lead rail-stage-single' + (isOpen ? ' is-active' : '') + '" data-stage="' + esc(group.stage) + '">' +
         (enabled ? '<button type="button" class="rail-stage-head' + (isOpen ? ' open' : '') + '" data-stage="' + esc(group.stage) +
           '" data-task-id="' + group.task.task_id + '" aria-current="' + (isOpen ? 'step' : 'false') + '">' :
           '<div class="rail-stage-head" aria-disabled="true">') +
-        '<span class="stage-icon" aria-hidden="true">' + icon + '</span>' +
+        '<span class="stage-icon" aria-hidden="true">' + (ICONS[LEAD_STAGE_ICONS[group.stage]] || '') + '</span>' +
         '<span class="rail-stage-name">' + esc(group.stage) + '</span>' +
         '<span class="rail-stage-count">' + group.done + '/' + group.total + '</span>' +
         (enabled ? '</button>' : '</div>') + '</div>';
     }
-    return '<div class="rail-stage rail-stage-lead' + (isOpen ? ' is-active' : '') + '" data-stage="' + esc(group.stage) + '">' +
-      '<button type="button" class="rail-stage-head' + (isOpen ? ' open' : '') + '" data-stage="' + esc(group.stage) +
-      '" aria-expanded="' + isOpen + '">' +
-      '<span class="stage-icon" aria-hidden="true">' + icon + '</span>' +
-      '<span class="rail-stage-name">' + esc(group.stage) + '</span>' +
-      '<span class="rail-stage-count">' + group.done + '/' + group.total + '</span>' +
-      '<span class="rail-stage-chevron" aria-hidden="true"></span></button>' +
-      '<div class="rail-stage-body' + (isOpen ? '' : ' collapsed') + '" data-stage="' + esc(group.stage) + '">' +
-      group.rows.map(leadRailRowHtml).join('') + '</div></div>';
+    return detailStageHtml({
+      stage: group.stage, label: group.stage, icon: LEAD_STAGE_ICONS[group.stage],
+      done: group.done, total: group.total, open: isOpen,
+      itemsHtml: group.rows.map(leadRailRowHtml).join('')
+    });
   }).join('') || '<div class="empty-state">No components in this pipeline.</div>';
 }
 
@@ -419,7 +421,8 @@ export function renderDetail() {
   // rewrites its className wholesale, which is also what reveals it.
   renderLeadPriorityChip();
   byId('detail-subtitle').textContent = viewLabel + (isReference ? ' · Reference view' : ' · Current phase');
-  byId('back-to-overview').textContent = '← Back to ' + currentLabel;
+  var overviewLabel = 'Back to ' + currentLabel;
+  byId('back-to-overview').innerHTML = ICONS['arrow-left'] + '<span>' + esc(overviewLabel) + '</span>';
   /* Card 2A shell swap. The LEAD page shows one outlined back control and an
      enlarged lead name; the "Prospect Maturation · Current phase" subtitle and
      the visible "Edit all project fields" link are gone (the latter is
@@ -432,8 +435,10 @@ export function renderDetail() {
   byId('detail-subtitle').classList.toggle('hidden', leadView);
   byId('open-project-editor').classList.toggle('hidden', leadView);
   var switchButton = byId('switch-pipeline-view');
-  switchButton.textContent = isReference ? '← Back to ' + currentLabel : 'View ' + otherLabel + ' →';
-  switchButton.setAttribute('aria-label', switchButton.textContent + ' for ' + (Store.project.project_name || 'this record'));
+  var switchLabel = isReference ? 'Back to ' + currentLabel : 'View ' + otherLabel;
+  switchButton.innerHTML = (isReference ? ICONS['arrow-left'] : '') + '<span>' + esc(switchLabel) + '</span>' +
+    (isReference ? '' : ICONS['arrow-right']);
+  switchButton.setAttribute('aria-label', switchLabel + ' for ' + (Store.project.project_name || 'this record'));
   var viewNote = byId('detail-view-note');
   viewNote.textContent = isReference
     ? 'Reference only — switch back to ' + currentLabel + ' to edit components or change workflow status.'
@@ -465,15 +470,15 @@ export function renderDetail() {
       // status-<slug> colours the number badge (see components.css); same slug
       // the status chips use, so the token trios line up.
       var slug = String(task.status || 'Not Assigned').toLowerCase().replace(/\s+/g, '-');
-      return '<button type="button" class="component-item status-' + slug + '" data-task-id="' + task.task_id + '"><span class="component-num">' + esc(task.sequence_no) + '</span><b>' + esc(task.task_name) + '</b></button>';
+      return detailStepItemHtml({
+        number: task.sequence_no, label: task.task_name, statusSlug: slug,
+        attributes: { 'data-task-id': task.task_id }
+      });
     }).join('');
-    return '<div class="rail-stage">' +
-      '<button type="button" class="rail-stage-head' + (isOpen ? ' open' : '') + '" data-stage="' + esc(group.stage) + '" aria-expanded="' + isOpen + '">' +
-      '<span class="stage-icon" aria-hidden="true">' + (ICONS[STAGE_ICONS[group.stage]] || '') + '</span>' +
-      '<span class="rail-stage-name">' + esc(group.stage) + '</span>' +
-      '<span class="rail-stage-count">' + approved + '/' + group.tasks.length + '</span>' +
-      '<span class="rail-stage-chevron" aria-hidden="true"></span></button>' +
-      '<div class="rail-stage-body' + (isOpen ? '' : ' collapsed') + '" data-stage="' + esc(group.stage) + '">' + items + '</div></div>';
+    return detailStageHtml({
+      stage: group.stage, label: group.stage, icon: STAGE_ICONS[group.stage],
+      done: approved, total: group.tasks.length, open: isOpen, itemsHtml: items
+    });
   }).join('') || '<div class="empty-state">No components in this pipeline.</div>';
   wireRailHandlers();
   renderRightPanel(tasks);
@@ -833,14 +838,7 @@ var foldProjectId = null;
 // shells can be mounted at once (they are two tabs of one document), and two
 // nodes cannot share an id.
 function foldSection(id, title, bodyHtml, folds, prefix) {
-  var isOpen = !!(folds || openFolds)[id];
-  var domId = (prefix || '') + 'summary-fold-' + id;
-  return '<div class="summary-fold">' +
-    '<button id="' + domId + '" type="button" class="summary-fold-head' + (isOpen ? ' open' : '') +
-    '" data-fold="' + id + '" aria-expanded="' + isOpen + '" aria-controls="' + domId + '-body">' +
-    '<span class="summary-fold-title">' + esc(title) + '</span>' +
-    '<span class="summary-fold-chevron" aria-hidden="true"></span></button>' +
-    '<div id="' + domId + '-body" class="summary-fold-body' + (isOpen ? '' : ' collapsed') + '">' + bodyHtml + '</div></div>';
+  return summaryFoldHtml(id, title, bodyHtml, folds || openFolds, prefix);
 }
 
 /* Toggle each rendered fold in place so the surrounding card isn't re-rendered
@@ -951,20 +949,15 @@ function metricRow(label, value, note) {
    the same slot on the same page, so they read as one component with two
    contents rather than two components. */
 function summarySection(title, bodyHtml) {
-  return '<section class="ls-section summary-section">' +
-    '<h4 class="ls-section-title">' + esc(title) + '</h4>' + bodyHtml + '</section>';
+  return summarySectionHtml(title, bodyHtml, 'summary-section');
 }
 
 // A row of aligned label-over-value columns -- the Lead Summary's own grid, so
 // the well card's Gas trio lines up exactly as the lead card's does.
 function columnsHtml(columns) {
-  var cells = columns.map(function (column) {
-    return '<div class="ls-col"><span class="ls-col-label">' + esc(column.label) + '</span>' +
-      '<span class="ls-col-value">' + (isFilled(column.value) ? esc(fmtNum(column.value)) : EM_DASH) +
-      '</span></div>';
-  }).join('');
-  return '<div class="ls-grid" style="grid-template-columns:repeat(' +
-    columns.length + ',minmax(0,1fr))">' + cells + '</div>';
+  return summaryGridHtml(columns.map(function (column) {
+    return { label: column.label, value: isFilled(column.value) ? fmtNum(column.value) : EM_DASH };
+  }), { emptyText: EM_DASH });
 }
 
 // A stat cluster: a quiet group label over a row of sub-label/value columns
@@ -1214,10 +1207,10 @@ export function wellSummaryBodyHtml(source, folds, prefix) {
   return metricsHtml + flowbackHtml + reservoirsHtml + pvaHtml + leadHtml;
 }
 
-// The gear popover, its outside-click/Escape dismissal, and the toggle button
-// (static in index.html) are wired once — the button and document persist
-// across re-renders, so byId resolves the freshly rendered popover at call
-// time and no listeners stack.
+// The gear popover's button is rendered with the shared card on every refresh;
+// its local listener is therefore rebound per render. The document-level
+// outside-click/Escape listeners are registered once and resolve current nodes
+// by id so they never retain a replaced card.
 function closeSummarySettings() {
   var popover = byId('summary-settings');
   if (popover) popover.classList.add('hidden');
@@ -1226,8 +1219,6 @@ function closeSummarySettings() {
 }
 var summarySettingsWired = false;
 function wireSummarySettings() {
-  if (summarySettingsWired) return;
-  summarySettingsWired = true;
   var toggle = byId('summary-settings-toggle');
   var close = closeSummarySettings;
   if (toggle) toggle.addEventListener('click', function (event) {
@@ -1238,10 +1229,13 @@ function wireSummarySettings() {
     popover.classList.toggle('hidden', !opening);
     toggle.setAttribute('aria-expanded', String(opening));
   });
+  if (summarySettingsWired) return;
+  summarySettingsWired = true;
   document.addEventListener('click', function (event) {
     var popover = byId('summary-settings');
+    var currentToggle = byId('summary-settings-toggle');
     if (!popover || popover.classList.contains('hidden')) return;
-    if (popover.contains(event.target) || (toggle && toggle.contains(event.target))) return;
+    if (popover.contains(event.target) || (currentToggle && currentToggle.contains(event.target))) return;
     close();
   });
   document.addEventListener('keydown', function (event) {
@@ -1249,7 +1243,8 @@ function wireSummarySettings() {
     var popover = byId('summary-settings');
     if (!popover || popover.classList.contains('hidden')) return;
     close();
-    if (toggle) toggle.focus();
+    var currentToggle = byId('summary-settings-toggle');
+    if (currentToggle) currentToggle.focus();
   });
 }
 
@@ -1300,6 +1295,17 @@ export function leadSummaryData() {
 
 export function renderRightPanel(tasks) {
   var staticHead = byId('summary-card-head');
+  var summaryHost = byId('lead-summary');
+  // The historical index markup supplies a neutral mounting host. The shared
+  // builder supplies the one visible card and header for every record kind.
+  if (staticHead) {
+    staticHead.classList.add('hidden');
+    var legacyTitle = staticHead.querySelector('#summary-title');
+    var legacyToggle = staticHead.querySelector('#summary-settings-toggle');
+    if (legacyTitle) legacyTitle.id = 'legacy-summary-title';
+    if (legacyToggle) legacyToggle.id = 'legacy-summary-settings-toggle';
+  }
+  if (summaryHost && summaryHost.parentNode) summaryHost.parentNode.classList.remove('summary-card');
   if (isLeadView()) {
     /* ---- Card 2A: the shared LEAD SUMMARY component ----------------------
        It renders its own header + gear, so the card's static header is hidden
@@ -1308,8 +1314,7 @@ export function renderRightPanel(tasks) {
        triggers the SAME #open-project-editor action the (now hidden) rail link
        used to expose, clicked through rather than imported so this module does
        not take a circular dependency on views/project-editor.js. */
-    if (staticHead) staticHead.classList.add('hidden');
-    byId('lead-summary').innerHTML = leadSummaryHtml(leadSummaryData());
+    summaryHost.innerHTML = leadSummaryHtml(leadSummaryData());
     wireLeadSummary({
       onEditAll: function () {
         var button = byId('open-project-editor');
@@ -1320,12 +1325,10 @@ export function renderRightPanel(tasks) {
     });
     return;
   }
-  if (staticHead) staticHead.classList.remove('hidden');
   closeLeadSummaryMenu();
   // `tasks` is already scoped to the operating pipeline's stages (see
   // tasksForPipeline), so every row counts toward progress.
   var completed = tasks.filter(function (task) { return DONE[task.status]; }).length;
-  var percent = tasks.length ? Math.round((completed / tasks.length) * 100) : 0;
 
   var isBP = Number(Store.project.business_plan_enabled || 0) === 1;
   var viewingBP = Store.pipeline === 'bp';
@@ -1335,9 +1338,6 @@ export function renderRightPanel(tasks) {
   if (year < 2026 || year > 2040) year = 2026;
   var recordKind = String(Store.project.pipeline_type || '').toLowerCase() === 'bp' ? 'Well' : 'Lead';
 
-  var progressHtml =
-    '<div class="summary-progress"><div class="summary-progress-bar"><span style="width:' + percent + '%"></span></div>' +
-    '<div class="summary-progress-figures"><b>' + percent + '%</b><small>' + completed + ' / ' + tasks.length + '</small></div></div>';
   // Phase row: where the record sits (Lead vs BP Well · year). The phase MOVE
   // itself is a gear-popover action (see popoverHtml) -- rare, irreversible
   // without a counter-move, and supervisor-only, so it stays off the card face.
@@ -1347,12 +1347,7 @@ export function renderRightPanel(tasks) {
   // the pairing stays visible once the title has changed, in both pipelines.
   var leadName = leadRecordName();
   var canonical = displayRecordName();
-  var stakedHtml = (leadName && leadName !== canonical)
-    ? '<span class="summary-phase-well" title="Lead name">' + esc(leadName) + '</span>'
-    : '';
-  var phaseHtml = '<div class="summary-phase"><span class="summary-phase-label">' +
-    (isBP ? 'BP Well · ' + esc(Store.project.business_plan_year || year) : 'Lead') +
-    '</span>' + stakedHtml + '</div>';
+  var otherName = (leadName && leadName !== canonical) ? leadName : '';
   // Phase-specific body: leads show volumetrics + chance-of-success; drilled BP
   // wells show post-drill results per formation plus a predicted-vs-actual
   // comparison against the frozen lead snapshot.
@@ -1437,21 +1432,30 @@ export function renderRightPanel(tasks) {
     // actions, so this popover was the wrong shelf for them.
     '<div class="summary-popover-actions"><button id="rename-record" type="button" class="ghost">Rename ' + recordKind + '</button><button id="delete-record" type="button" class="danger">Delete ' + recordKind + '</button></div></div>';
 
-  byId('summary-title').textContent = viewingBP ? 'Well Summary' : 'Lead Summary';
-  byId('lead-summary').innerHTML = progressHtml + phaseHtml + bodyHtml + popoverHtml;
+  var manageTitle = referenceOnly
+    ? 'Return to the current pipeline to manage this record'
+    : 'Manage lead / well';
+  var settingsActionHtml = '<button id="summary-settings-toggle" type="button" class="icon-btn ls-gear"' +
+    ' title="' + esc(manageTitle) + '" aria-label="' + esc(manageTitle) + '" aria-haspopup="dialog"' +
+    ' aria-expanded="false"' + (referenceOnly ? ' disabled' : '') + '>' + ICONS.settings + '</button>';
+  summaryHost.innerHTML = summaryCardHtml({
+    title: viewingBP ? 'Well Summary' : 'Lead Summary',
+    titleId: 'summary-title',
+    actionHtml: settingsActionHtml,
+    progress: { completed: completed, total: tasks.length },
+    phase: {
+      label: isBP ? 'BP Well · ' + (Store.project.business_plan_year || year) : 'Lead',
+      secondary: otherName,
+      secondaryTitle: 'Lead name'
+    },
+    bodyHtml: bodyHtml,
+    menuHtml: popoverHtml
+  });
 
   // Record-level actions stay with the operating pipeline too. This avoids a
   // "reference only" view exposing a hidden phase/flag mutation through the
   // summary gear while still leaving the explicit all-fields editor available
   // as a separate, deliberate workflow.
-  var settingsToggle = byId('summary-settings-toggle');
-  if (settingsToggle) {
-    settingsToggle.disabled = referenceOnly;
-    settingsToggle.title = referenceOnly ? 'Return to the current pipeline to manage this record' : 'Manage lead / well';
-    settingsToggle.setAttribute('aria-label', settingsToggle.title);
-    settingsToggle.setAttribute('aria-expanded', 'false');
-  }
-
   var activeFlag = byId('summary-active-flag');
   if (activeFlag) activeFlag.addEventListener('change', function () { saveProjectFlags({ active_well_enabled: activeFlag.checked }); });
   var drillingFlag = byId('summary-active-drilling');

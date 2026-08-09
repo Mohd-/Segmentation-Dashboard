@@ -26,6 +26,7 @@ import {
 // cycle (autosave.js imports saveComponent back), same as detail.js's.
 import { syncAutoSaveContext, flushAutoSave, captureEditorFocus, restoreEditorFocus } from './autosave.js';
 import { applyApprovalActions, approvalContentLocked } from './approval-policy.js';
+import { assignmentMembersHtml } from '../ui/detail-shell.js';
 
 export function ensureUsers() {
   if (Store.users) return Promise.resolve(Store.users);
@@ -86,15 +87,10 @@ function renderAssigneeSelect(task, load) {
     var assignedNames = assignees.map(function (member) { return member.name; });
     var names = users.map(function (user) { return user.name; });
     if (members) {
-      members.innerHTML = assignees.length ? assignees.map(function (member) {
-        var source = member.source === 'role' ? 'Role' :
-          (member.source === 'creator' ? 'Creator' : 'Manual');
-        var removable = member.source !== 'role';
-        return '<span class="assignee-chip" title="' + source + ' assignment">' + esc(member.name) +
-          '<span class="assignee-chip-source">' + source + '</span>' +
-          (removable ? '<button type="button" class="assignee-remove" data-assignee-name="' + esc(member.name) +
-            '" aria-label="Remove ' + esc(member.name) + '">&times;</button>' : '') + '</span>';
-      }).join('') : '<span class="assignee-chip">Unassigned</span>';
+      members.innerHTML = assignmentMembersHtml(assignees, {
+        removeAttribute: 'data-assignee-name',
+        editable: true
+      });
       all('.assignee-remove', members).forEach(function (button) {
         button.addEventListener('click', function () { removeManualAssignee(button.dataset.assigneeName); });
       });
@@ -709,7 +705,7 @@ function payIntervalRowMarkup(interval, index, formationIndex) {
     return '<input type="number" step="any"' + (/tvdss/.test(col.key) ? '' : ' min="0"') +
       ' ' + attr + ' value="' + esc(value) + '">';
   }).join('') + '<button type="button" class="icon-btn pay-interval-remove" data-pay-row="' + index +
-    '" title="Remove pay interval" aria-label="Remove pay interval">&#10005;</button></div>';
+    '" title="Remove pay interval" aria-label="Remove pay interval">' + ICONS.x + '</button></div>';
 }
 
 // The selected formation's pay-interval sub-table (log-interpretation phases
@@ -730,7 +726,7 @@ function payIntervalsMarkup(row, formationIndex, phase) {
     : '<p class="pay-interval-empty">No pay intervals recorded for this formation yet.</p>';
   return '<div class="pay-intervals">' +
     '<div class="repeatable-heading"><b>Pay intervals</b>' +
-    '<button type="button" class="icon-btn pay-interval-add" title="Add pay interval" aria-label="Add pay interval">+</button></div>' +
+    '<button type="button" class="icon-btn pay-interval-add" title="Add pay interval" aria-label="Add pay interval">' + ICONS.plus + '</button></div>' +
     body + '</div>';
 }
 
@@ -747,7 +743,7 @@ function buildFormationsInner(field) {
     return '<option value="' + index + '"' + (index === selected ? ' selected' : '') + '>' + esc(item.formation) + '</option>';
   }).join('') + '<option value="__add__">Add custom formation&hellip;</option>';
   var removeButton = (row && row.isCustom)
-    ? '<button type="button" class="icon-btn formation-remove" title="Remove formation" aria-label="Remove formation">&#10005;</button>'
+    ? '<button type="button" class="icon-btn formation-remove" title="Remove formation" aria-label="Remove formation">' + ICONS.x + '</button>'
     : '';
   var pickerRow = '<div class="formation-picker-row">' +
     '<label class="formation-picker-label">Formation<select class="formation-picker" aria-label="Formation">' + pickerOptions + '</select></label>' +
@@ -1462,7 +1458,7 @@ export function renderRepeatableField(field, value) {
   var header = '<div class="repeatable-head">' + cols.map(function (col) {
     return '<span class="repeatable-col-label">' + esc(col.label) + '</span>';
   }).join('') + '<span class="repeatable-col-label" aria-hidden="true"></span></div>';
-  return '<div class="repeatable-field wide-field" data-repeatable="' + esc(field.key) + '"><div class="repeatable-heading"><b>' + esc(field.label) + '</b><button type="button" class="icon-btn add-repeatable-row" data-repeatable-key="' + esc(field.key) + '" title="Add row" aria-label="Add row">+</button></div><div class="repeatable-sheet"><div class="repeatable-rows" style="grid-template-columns:' + repeatableTemplate(field) + '">' + header + rows.map(function (row, index) { return repeatableInputMarkup(field, row || {}, index); }).join('') + '</div></div></div>';
+  return '<div class="repeatable-field wide-field" data-repeatable="' + esc(field.key) + '"><div class="repeatable-heading"><b>' + esc(field.label) + '</b><button type="button" class="icon-btn add-repeatable-row" data-repeatable-key="' + esc(field.key) + '" title="Add row" aria-label="Add row">' + ICONS.plus + '</button></div><div class="repeatable-sheet"><div class="repeatable-rows" style="grid-template-columns:' + repeatableTemplate(field) + '">' + header + rows.map(function (row, index) { return repeatableInputMarkup(field, row || {}, index); }).join('') + '</div></div></div>';
 }
 // Re-stamp a container's display-only index chips (#1..#n) after a mid-list
 // removal so row numbers stay contiguous (rows without index columns are a

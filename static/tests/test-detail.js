@@ -187,7 +187,7 @@ function foldTitles(host) {
 // an unscoped query would count what is inside them too.
 function sectionTitles(host) {
   return Array.prototype.map.call(
-    host.querySelectorAll('#lead-summary > .ls-section > .ls-section-title'),
+    host.querySelectorAll('#lead-summary > .ls-card > .ls-section > .ls-section-title'),
     function (element) { return element.textContent; });
 }
 function metricPairs(host, sectionTitle) {
@@ -217,6 +217,20 @@ test('detail the well card carries exactly two folds, both collapsed on arrival'
   Array.prototype.forEach.call(host.querySelectorAll('.summary-fold-body'), function (body) {
     assert.ok(body.classList.contains('collapsed'));
   });
+});
+
+test('detail shared Well Summary keeps stable action ids and rewires its gear after refresh', function () {
+  var host = mountWellCard({});
+  var firstGear = host.querySelector('#summary-settings-toggle');
+  assert.ok(firstGear.classList.contains('ls-gear'));
+  firstGear.click();
+  assert.equal(host.querySelector('#summary-settings').classList.contains('hidden'), false);
+  renderRightPanel([{ status: 'Approved' }, { status: 'In Progress' }]);
+  var refreshedGear = host.querySelector('#summary-settings-toggle');
+  assert.ok(refreshedGear !== firstGear, 'the card was replaced by the normal refresh');
+  refreshedGear.click();
+  assert.equal(host.querySelector('#summary-settings').classList.contains('hidden'), false,
+    'the newly rendered gear owns a fresh local listener');
 });
 
 test('detail the delta fold compares Area bound against matching bound', function () {
@@ -321,7 +335,7 @@ test('detail the well card is built from the Lead Summary card anatomy', functio
   assert.deepEqual(sectionTitles(host),
     ['Gas (BCF)', 'Flowback Results', 'Reservoir Properties']);
 
-  var gas = host.querySelectorAll('#lead-summary > .ls-section')[0];
+  var gas = host.querySelectorAll('#lead-summary > .ls-card > .ls-section')[0];
   assert.deepEqual(Array.prototype.map.call(gas.querySelectorAll('.ls-col-label'),
     function (element) { return element.textContent; }), ['P90', 'Mean', 'P10']);
   assert.deepEqual(Array.prototype.map.call(gas.querySelectorAll('.ls-col-value'),
@@ -330,7 +344,7 @@ test('detail the well card is built from the Lead Summary card anatomy', functio
 
 test('detail the two expandable sections are the last thing on the card', function () {
   var host = mountWellCard({});
-  var blocks = host.querySelectorAll('#lead-summary > .ls-section, #lead-summary > .summary-fold');
+  var blocks = host.querySelectorAll('#lead-summary > .ls-card > .ls-section, #lead-summary > .ls-card > .summary-fold');
   var last = Array.prototype.slice.call(blocks, -2);
   assert.deepEqual(last.map(function (element) {
     return element.querySelector('.summary-fold-title').textContent;

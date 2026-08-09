@@ -71,7 +71,7 @@ export var DISPLAY_STAGES = ['Lead Assessment', 'Risk Analysis', 'Pre-Well Deliv
 var STAGE_HEADER_ICONS = {
   'Lead Assessment': 'clipboard-check',
   'Risk Analysis': 'gauge',
-  'Pre-Well Delivery': 'rig'
+  'Pre-Well Delivery': 'drill'
 };
 
 // Card border color + column order. Unknown/absent reads Low (gray), matching

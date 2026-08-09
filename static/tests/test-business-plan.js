@@ -315,7 +315,7 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   // is progressPercent() over the stage's own items (1 of 6 completed).
   assert.equal(host.querySelectorAll('.summary-panel .ls-card').length, 1);
   assert.equal(host.querySelector('.ls-title').textContent, 'Well Summary');
-  assert.equal(host.querySelector('.summary-progress-figures').textContent, '17%1 / 6');
+  assert.equal(host.querySelector('.ls-progress-figures').textContent, '17%1 / 6');
   assert.equal(host.querySelector('.summary-phase-label').textContent.trim(), 'BP Well · ' + currentYear);
   /* Card 3E: the panel is the WELL SUMMARY CARD, not a fact sheet -- the same
      builder the maturation shell calls, over this payload's own bundle. Its
@@ -1143,7 +1143,7 @@ test('business-plan the detail shell uses the maturation shell anatomy', async f
 
   // Summary panel: progress bar and phase row, which it had neither of.
   var summary = host.querySelector('.summary-panel .ls-card');
-  assert.ok(summary.querySelector('.summary-progress .summary-progress-bar span'));
+  assert.ok(summary.querySelector('.ls-progress .ls-progress-track span'));
   assert.match(summary.querySelector('.summary-phase-label').textContent, /BP Well/);
   assert.equal(summary.querySelector('.summary-phase-well').textContent, 'MDFT-7',
     'the lead name rides opposite the phase, as it does on the maturation card');

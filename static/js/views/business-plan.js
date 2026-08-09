@@ -18,13 +18,18 @@ import { numericFieldError, PDF_LABEL } from '../schema.js';
    import this module) and both bindings are touched only inside functions. */
 import { wellSummaryBodyHtml, wireWellSummaryFolds } from './detail.js';
 import { approvalActionsMarkup, approvalContentLocked } from './approval-policy.js';
+import { summaryCardHtml } from '../ui/summary-card.js';
+import {
+  assignmentMembersHtml, detailBackButtonHtml, detailEditorHeaderHtml,
+  detailStageHtml, detailStepItemHtml
+} from '../ui/detail-shell.js';
 
 var FLUIDS = ['Gas', 'Gas over Water', 'Water Bearing', 'Dry Hole', 'Oil', 'Oil over Gas', 'Oil over Water'];
 var STAGE_META = [
   // The multi-step clipboard, so the BP stage reads apart from the maturation
   // board's Lead Assessment clipboard at a glance.
-  { key: 'pre_drilling', label: 'Pre-Drilling', icon: 'clipboard-steps' },
-  { key: 'post_drilling', label: 'Post-Drilling', icon: 'rig' },
+  { key: 'pre_drilling', label: 'Pre-Drilling', icon: 'clipboard-list' },
+  { key: 'post_drilling', label: 'Post-Drilling', icon: 'drill' },
   { key: 'post_testing', label: 'Post-Testing', icon: 'gauge' }
 ];
 var CONDITIONAL_FIELDS = {
@@ -1183,7 +1188,7 @@ function formationsForm() {
       '<button type="button" id="bpe-formations-head" class="summary-fold-head' + (open ? ' open' : '') +
         '" aria-expanded="' + open + '" aria-controls="bpe-formations">' +
         '<span class="summary-fold-title">Formation Interpretation</span>' +
-        '<span class="summary-fold-chevron" aria-hidden="true"></span></button>' +
+        '<span class="summary-fold-chevron" aria-hidden="true">' + icon('chevron-down') + '</span></button>' +
       '<div id="bpe-formations" class="bpe-formations summary-fold-body' + (open ? '' : ' collapsed') + '">' +
         rows.map(formationRowMarkup).join('') +
         '<button type="button" id="bpe-add-formation" class="ghost">' + icon('plus') + ' Add Formation</button>' +
@@ -1362,22 +1367,16 @@ function detailNavMarkup() {
       // is entirely the house .component-item (+ status-* for the badge tint
       // and .active for the current one, exactly as views/detail.js marks its
       // own rail).
-      return '<button type="button" class="component-item status-' + railStatusSlug(item.status) +
-        (item.slug === state.detailSlug ? ' active' : '') + ' bpe-nav-item"' +
-        ' data-detail-slug="' + esc(item.slug) + '">' +
-        '<span class="component-num">' + number + '</span><b>' + esc(item.label) + '</b></button>';
+      return detailStepItemHtml({
+        number: number, label: item.label, statusSlug: railStatusSlug(item.status),
+        active: item.slug === state.detailSlug, className: 'bpe-nav-item',
+        attributes: { 'data-detail-slug': item.slug }
+      });
     }).join('');
-    return '<div class="rail-stage rail-stage-lead' + (isOpen ? ' is-active' : '') + '"' +
-      ' data-stage="' + esc(group.stage_key) + '">' +
-      '<button type="button" class="rail-stage-head' + (isOpen ? ' open' : '') + '"' +
-        ' data-stage="' + esc(group.stage_key) + '" aria-expanded="' + isOpen + '">' +
-        '<span class="stage-icon" aria-hidden="true">' + icon(stageIcons[group.stage_key]) + '</span>' +
-        '<span class="rail-stage-name">' + esc(group.stage_label) + '</span>' +
-        '<span class="rail-stage-count">' + done + '/' + group.details.length + '</span>' +
-        '<span class="rail-stage-chevron" aria-hidden="true"></span></button>' +
-      '<div class="rail-stage-body' + (isOpen ? '' : ' collapsed') + '"' +
-        ' data-stage="' + esc(group.stage_key) + '">' + items + '</div>' +
-      '</div>';
+    return detailStageHtml({
+      stage: group.stage_key, label: group.stage_label, icon: stageIcons[group.stage_key],
+      done: done, total: group.details.length, open: isOpen, itemsHtml: items
+    });
   }).join('');
 }
 
@@ -1387,8 +1386,7 @@ function railMarkup() {
     '<div class="rail-head">' +
       // The page's one back control, where the maturation detail page keeps
       // its own: first thing in the rail head, above the record name.
-      '<button type="button" id="bpe-back" class="ghost back-to-board">' + icon('arrow-left') +
-        ' <span>Back to Business Plan Execution</span></button>' +
+      detailBackButtonHtml({ id: 'bpe-back', label: 'Back to Business Plan Execution' }) +
       // The record's priority chip, in the maturation shell's exact position:
       // beside the record name, one chip for the whole well (never per step).
       '<div class="detail-title-row"><h3>' + esc(detail.project.project_name) + '</h3>' +
@@ -1427,16 +1425,10 @@ function assignmentControlsMarkup() {
   var role = state.detail.role || currentRole();
   var editable = role !== 'employee';
   var assignees = detailAssignees();
-  var chips = assignees.length ? assignees.map(function (member) {
-    var source = member.source === 'role' ? 'Role' :
-      (member.source === 'creator' ? 'Creator' : 'Manual');
-    var removable = member.source !== 'role';
-    return '<span class="assignee-chip" title="' + source + ' assignment">' + esc(member.name) +
-      '<span class="assignee-chip-source">' + source + '</span>' +
-      (removable ? '<button type="button" class="assignee-remove" data-bpe-remove-assignee="' + esc(member.name) +
-        '" aria-label="Remove ' + esc(member.name) + '" ' + (editable ? '' : 'disabled') + '>&times;</button>' : '') +
-      '</span>';
-  }).join('') : '<span class="assignee-chip">Unassigned</span>';
+  var chips = assignmentMembersHtml(assignees, {
+    removeAttribute: 'data-bpe-remove-assignee',
+    editable: editable
+  });
   return '<div id="bpe-assignment-group" class="assignment-group">' +
     '<div class="assigned-members">' + chips + '</div>' +
     '<label><span class="sr-only">Add assignee</span><select id="bpe-assignee" class="editor-assignee" ' +
@@ -1462,11 +1454,10 @@ function editorMarkup() {
     (tracking ? statusIcon(tracking) : '') +
     esc(tracking ? tracking.status : 'In Progress') + '</span>';
   return '<section class="component-editor bpe-detail-form">' +
-    '<div class="editor-head">' +
-      '<span class="component-number">' + detailNumber(state.detailSlug) + '</span>' +
-      '<div><h2>' + esc(detail.detail.label) + '</h2></div>' +
-      chip + topControlsMarkup() +
-    '</div>' +
+    detailEditorHeaderHtml({
+      number: detailNumber(state.detailSlug), title: detail.detail.label,
+      statusHtml: chip, controlsHtml: topControlsMarkup()
+    }) +
     bodyMarkup() +
     '</section>';
 }
@@ -1516,41 +1507,38 @@ function summaryMarkup() {
   var project = detail.project || {};
   var items = detail.stage_items || [];
   var done = items.filter(function (item) { return item.status === 'Completed'; }).length;
-  var percent = items.length ? Math.round((done / items.length) * 100) : 0;
   if (summaryFoldsProjectId !== state.projectId) {
     summaryFolds = {};
     summaryFoldsProjectId = state.projectId;
   }
   var bundle = detail.well_summary || {};
-  return '<aside class="summary-panel"><div class="ls-card">' +
-    '<div class="ls-head"><h3 class="ls-title">Well Summary</h3>' +
-      '<button type="button" id="bpe-summary-gear" class="icon-btn ls-gear" aria-haspopup="menu"' +
-      ' aria-expanded="false" title="Well Summary actions" aria-label="Well Summary actions">' + icon('settings') + '</button>' +
-    '</div>' +
-    // Card 3I: the maturation summary opens with a progress bar and a phase
-    // row. Both were missing here, which is what made this panel read as a
-    // different component rather than the same one with well content. The
-    // denominator is the stage's OWN item count, never a hard-coded six.
-    '<div class="summary-progress"><div class="summary-progress-bar"><span style="width:' + percent + '%"></span></div>' +
-      '<div class="summary-progress-figures"><b>' + percent + '%</b><small>' + done + ' / ' + items.length + '</small></div></div>' +
-    '<div class="summary-phase"><span class="summary-phase-label">BP Well &middot; ' +
-      esc(project.business_plan_year || '') + '</span>' +
-      (project.lead_name && project.lead_name !== project.project_name
-        ? '<span class="summary-phase-well" title="Lead name">' + esc(project.lead_name) + '</span>' : '') +
-    '</div>' +
-    // The ids inside carry a prefix because both detail shells live in one
-    // document -- see wellSummaryBodyHtml.
-    wellSummaryBodyHtml({
+  var actionHtml = '<button type="button" id="bpe-summary-gear" class="icon-btn ls-gear" aria-haspopup="menu"' +
+    ' aria-expanded="false" title="Well Summary actions" aria-label="Well Summary actions">' +
+    icon('settings') + '</button>';
+  var bodyHtml = wellSummaryBodyHtml({
       fields: bundle.fields,
       formations: bundle.formations,
       leadSummary: bundle.lead_summary,
       derisking: bundle.derisking
-    }, summaryFolds, 'bpe-') +
-    '<div id="bpe-summary-menu" class="ls-menu hidden" role="menu" aria-labelledby="bpe-summary-gear">' +
+    }, summaryFolds, 'bpe-');
+  var menuHtml = '<div id="bpe-summary-menu" class="ls-menu hidden" role="menu" aria-labelledby="bpe-summary-gear">' +
       drillingCheckHtml(project) +
       '<button type="button" id="bpe-edit-all" class="ls-menu-item" role="menuitem">Edit all project fields</button>' +
-    '</div>' +
-    '</div></aside>';
+    '</div>';
+  return '<aside class="summary-panel">' + summaryCardHtml({
+    title: 'Well Summary',
+    actionHtml: actionHtml,
+    progress: { completed: done, total: items.length },
+    phase: {
+      label: 'BP Well · ' + (project.business_plan_year || ''),
+      secondary: project.lead_name && project.lead_name !== project.project_name ? project.lead_name : '',
+      secondaryTitle: 'Lead name'
+    },
+    // The ids inside carry a prefix because both detail shells live in one
+    // document -- see wellSummaryBodyHtml.
+    bodyHtml: bodyHtml,
+    menuHtml: menuHtml
+  }) + '</aside>';
 }
 
 /* Card 3X's Active Drilling flag, on the step page's own gear.

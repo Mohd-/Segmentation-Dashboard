@@ -24,7 +24,8 @@ static/
     schema.js                 the data that describes each workflow component's form fields (this is the biggest lever for change — see §4)
     dialog.js                 the confirm/rename popup + the sign-in dialog (replaces the browser's ugly native confirm/prompt)
     auth.js                   api.js-free login primitives shared by the boot-time login page (main.js) and the mid-session login dialog (dialog.js)
-    icons.js                  the vendored Lucide icons inlined as SVG strings, keyed by icon name (source SVGs live in static/icons/)
+    icons.js                  the pinned, vendored Lucide icons inlined as SVG strings, keyed by icon name (source SVGs live in static/icons/)
+    ui/                       pure shared markup primitives for static icons, detail shells, and summary cards
     navigation.js             activateTab(): the DOM-only "show this tab" helper — it decides nothing about what to fetch
     main.js                   boots the app: wires up the tab buttons and the one static form (#component-form)
     views/

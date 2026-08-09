@@ -14,6 +14,7 @@ import {
 } from './resource-calculator.js';
 import { calculateTrapCos, calculateSealCos } from '../cos-rules.js';
 import { RESOURCE_SCENARIOS } from '../schema.js';
+import { ICONS } from '../icons.js';
 
 var DEFAULT_SCENARIO = 'dry_gas_high_pressure';
 
@@ -36,7 +37,7 @@ function disclosure(key, mark, title, description, body) {
   return '<details class="calculator-card" data-calculator="' + key + '">' +
     '<summary><span class="calculator-mark" aria-hidden="true">' + mark + '</span>' +
       '<span class="calculator-summary-copy"><strong>' + esc(title) + '</strong><small>' + esc(description) + '</small></span>' +
-      '<span class="calculator-chevron" aria-hidden="true"></span></summary>' +
+      '<span class="calculator-chevron" aria-hidden="true">' + ICONS['chevron-down'] + '</span></summary>' +
     '<div class="calculator-body">' + body + '</div></details>';
 }
 
@@ -52,7 +53,7 @@ function twtMarkup(meta) {
         (coefficients ? '<small>thickness = ' + esc(coefficients.m) + ' × TWT + ' + esc(coefficients.b) + '</small>' : '<small>Calibration unavailable</small>') +
       '</div>' +
       numberField('calc-twt-' + row, 'Two-way time', 'ms', disabled) +
-      '<span class="calc-swap" aria-hidden="true">⇄</span>' +
+      '<span class="calc-swap" aria-hidden="true">' + ICONS['arrow-left-right'] + '</span>' +
       numberField('calc-thickness-' + row, 'Thickness', 'ft', disabled) +
     '</div>';
   }).join('');
@@ -96,7 +97,7 @@ var ADVANCED_DISTRIBUTIONS = ['constant', 'normal', 'lognormal'];
 
 function advancedMarkup() {
   return '<details id="calc-advanced" class="calc-advanced">' +
-    '<summary>Advanced settings' +
+    '<summary><span class="calc-advanced-chevron" aria-hidden="true">' + ICONS['chevron-down'] + '</span>Advanced settings' +
       '<span class="calc-advanced-note">Scenario assumptions — porosity, Sg, NGR, geometric factor, 1/Bg</span>' +
       '<span class="calc-advanced-count hidden"></span></summary>' +
     '<div id="calc-advanced-rows" class="calc-advanced-rows"></div>' +

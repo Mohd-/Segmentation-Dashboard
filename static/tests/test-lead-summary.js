@@ -17,6 +17,9 @@ import { leadStageGroups } from '../js/views/detail.js';
 import {
   completedItemCount, dashboardCompletionPercent, TRACKED_ITEM_COUNT
 } from '../js/views/lead-kpis.js';
+import {
+  summaryCardHtml, summaryFoldHtml, summaryGridHtml, summarySectionHtml
+} from '../js/ui/summary-card.js';
 
 // A fully populated lead, so a test can knock out ONE value and see only that
 // cell change.
@@ -37,6 +40,31 @@ function fullData(overrides) {
 function render(data) {
   return fixture(leadSummaryHtml(data));
 }
+
+test('summary-card primitives expose one shell, header, progress, phase, section, grid, and fold contract', function () {
+  var folds = { details: true };
+  var body = summarySectionHtml('Shared <Section>', summaryGridHtml([
+    { label: 'Mean', value: '12.5' }, { label: 'Missing', value: '' }
+  ])) + summaryFoldHtml('details', 'Details', '<p>Body</p>', folds, 'test-');
+  var host = fixture(summaryCardHtml({
+    title: 'Shared <Summary>',
+    progress: { completed: 1, total: 4 },
+    phase: { label: 'BP Well · 2028', secondary: 'Lead & One', secondaryTitle: 'Lead name' },
+    bodyHtml: body
+  }));
+  var root = host.querySelector('.summary-card-shell');
+  assert.ok(root);
+  assert.equal(root.querySelector('.ls-title').textContent, 'Shared <Summary>');
+  assert.equal(root.querySelector('.ls-progress-figures').textContent, '25%1 / 4');
+  assert.equal(root.querySelector('.summary-phase-well').textContent, 'Lead & One');
+  assert.deepEqual(Array.prototype.map.call(root.querySelectorAll('.ls-col-value'), function (el) {
+    return el.textContent;
+  }), ['12.5', '—']);
+  var fold = root.querySelector('#test-summary-fold-details');
+  assert.equal(fold.getAttribute('aria-expanded'), 'true');
+  assert.ok(fold.querySelector('.summary-fold-chevron .lucide-chevron-down'),
+    'fold disclosure is an official SVG, not a generated text glyph');
+});
 
 // Section titles, in rendered order.
 function sectionTitles(root) {

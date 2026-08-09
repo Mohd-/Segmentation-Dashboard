@@ -26,6 +26,7 @@ import { byId, all, esc, isFilled, truthy, msg } from '../dom.js';
 import { API } from '../api.js';
 import { Store, isCurrentPipelineView } from '../state.js';
 import { RESOURCE_SCENARIOS } from '../schema.js';
+import { ICONS } from '../icons.js';
 import { refreshAfterRecordChange } from './detail.js';
 
 // Defaults mirror app.py's _scenario_selector/_method_selector/_positive_float_input.
@@ -174,7 +175,7 @@ export function buildPlotMarkup(src, altText) {
   var label = altText || 'Exceedance plot';
   return '<div class="ra-plot">' +
     '<img alt="' + esc(label) + '" src="' + esc(src) + '">' +
-    '<button type="button" class="ra-plot-expand icon-btn" title="Enlarge plot" aria-label="Enlarge ' + esc(label) + '">&#x26F6;</button>' +
+    '<button type="button" class="ra-plot-expand icon-btn" title="Enlarge plot" aria-label="Enlarge ' + esc(label) + '">' + ICONS['maximize-2'] + '</button>' +
     '</div>';
 }
 

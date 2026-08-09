@@ -225,10 +225,10 @@ function yearCellMarkup(row) {
 }
 
 var QUADRANT_ICONS = {
-  'Super Stars': 'quadrant-superstar',
-  'Risk Takers': 'quadrant-risk-taker',
-  'Value Hunter': 'quadrant-value-hunter',
-  'Dogs': 'quadrant-dog'
+  'Super Stars': { icon: 'star', slug: 'quadrant-superstar' },
+  'Risk Takers': { icon: 'dices', slug: 'quadrant-risk-taker' },
+  'Value Hunter': { icon: 'search', slug: 'quadrant-value-hunter' },
+  'Dogs': { icon: 'dog', slug: 'quadrant-dog' }
 };
 
 // The quadrant mark that sits beside a record's name. Icon only -- the word is
@@ -239,9 +239,9 @@ var QUADRANT_ICONS = {
 function quadrantMarkMarkup(row) {
   var quadrant = quadrantOf(row);
   if (!quadrant) return '';
-  var key = QUADRANT_ICONS[quadrant];
-  return '<span class="pf-quadrant pf-' + esc(key) + '" role="img"' +
-    ' title="' + esc(quadrant) + '" aria-label="' + esc(quadrant) + '">' + ICONS[key] + '</span>';
+  var mark = QUADRANT_ICONS[quadrant];
+  return '<span class="pf-quadrant pf-' + esc(mark.slug) + '" role="img"' +
+    ' title="' + esc(quadrant) + '" aria-label="' + esc(quadrant) + '">' + ICONS[mark.icon] + '</span>';
 }
 
 /* The name cell: the quadrant mark, the name the record is known by, and --

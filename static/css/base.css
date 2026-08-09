@@ -102,12 +102,48 @@
   --font-display: "Bahnschrift", "DIN Alternate", "Franklin Gothic Medium", "Arial Narrow", "Segoe UI", sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
 
+  /* Type roles. The small steps are intentionally compact for data-dense
+     workflow surfaces; hero is reserved for calculator/readout values. */
+  --text-micro: 9px;
+  --text-2xs: 10px;
   --text-xs: 11px;
   --text-sm: 12.5px;
   --text-base: 14px;
   --text-md: 16px;
   --text-lg: 20px;
   --text-xl: 28px;
+  --text-hero: 44px;
+
+  /* Shared vertical rhythm. Named values keep equivalent labels, cards and
+     detail shells aligned without repeating one-off unitless numbers. */
+  --leading-zero: 0;
+  --leading-none: 1;
+  --leading-hero: 1.1;
+  --leading-compact: 1.15;
+  --leading-tight: 1.2;
+  --leading-title: 1.25;
+  --leading-snug: 1.3;
+  --leading-caption: 1.35;
+  --leading-reading: 1.4;
+  --leading-body: 1.45;
+
+  /* Common control and icon geometry. Components may still grow with wrapped
+     labels, but equivalent controls share the same minimum hit area. */
+  --control-height-xs: 28px;
+  --control-height-sm: 30px;
+  --control-height: 40px;
+  --control-height-lg: 42px;
+  --icon-2xs: 12px;
+  --icon-xs: 14px;
+  --icon-sm: 16px;
+  --icon-md: 18px;
+  --icon-lg: 24px;
+  --icon-xl: 30px;
+
+  /* Reusable component geometry. */
+  --card-padding: var(--space-4);
+  --card-gap: var(--space-3);
+  --field-gap: var(--space-1);
 
   --transition: 140ms ease;
 
@@ -219,7 +255,7 @@ body {
   color: var(--text);
   font-family: var(--font-sans);
   font-size: var(--text-base);
-  line-height: 1.45;
+  line-height: var(--leading-body);
   -webkit-font-smoothing: antialiased;
 }
 h1, h2, h3, h4, p { margin: 0; }
@@ -268,7 +304,7 @@ a { color: var(--brand-700); }
 }
 .brand-lockup { display: flex; align-items: center; gap: var(--space-3); }
 .brand-mark { display: block; width: 40px; height: auto; flex: 0 0 auto; }
-.brand-text { display: flex; flex-direction: column; line-height: 1.2; }
+.brand-text { display: flex; flex-direction: column; line-height: var(--leading-tight); }
 /* Shared brand-title typography: the header lockup and the full-page login
    card (.login-brand, components.css) reuse the same markup. */
 .brand-wordmark {
@@ -280,7 +316,7 @@ a { color: var(--brand-700); }
 }
 .brand-subtitle {
   font-family: var(--font-display);
-  font-size: var(--text-xs);
+  font-size: var(--text-base);
   font-weight: 600;
   letter-spacing: .02em;
   color: var(--text-muted);
@@ -343,11 +379,7 @@ a { color: var(--brand-700); }
 }
 /* Icons stay the approved ASAS blue regardless of the button's own
    (state-driven) text color -- only the underline + label distinguish active. */
-.tabs button .lucide { width: 24px; height: 24px; color: var(--asas-blue); flex: 0 0 auto; }
-/* Composed marks with a non-square viewBox (the Segment Maturation glyph is a
-   growth chart and a derrick side by side in one 48x24 box). Every fixed
-   square rule in this file has to opt them out or they render at half scale. */
-.tabs button .lucide-wide { width: 48px; }
+.tabs button .lucide { width: var(--icon-lg); height: var(--icon-lg); color: var(--asas-blue); flex: 0 0 auto; }
 .tabs button:hover { color: var(--asas-navy); background: transparent; }
 /* Active state: the approved deep ASAS navy, not the lighter teal/cyan brand
    accents -- reusable for any tab. */
@@ -364,7 +396,7 @@ main { max-width: 1760px; margin: 0 auto; padding: var(--space-6); }
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: var(--space-4);
+  padding: var(--card-padding);
   margin-bottom: var(--space-3);
   box-shadow: var(--shadow-sm);
 }
@@ -373,18 +405,20 @@ main { max-width: 1760px; margin: 0 auto; padding: var(--space-6); }
 /* =========================================================================
    Forms — inputs, selects, textareas, buttons
    ========================================================================= */
-label { display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--text-sm); font-weight: 700; color: var(--text-muted); }
+label { display: flex; flex-direction: column; gap: var(--field-gap); font-size: var(--text-sm); font-weight: 700; color: var(--text-muted); }
 input, select, textarea {
   width: 100%;
   background: var(--surface);
   border: 1px solid var(--border-strong);
   color: var(--text);
   border-radius: var(--radius-sm);
-  padding: 10px 12px;
+  padding: var(--space-2) var(--space-3);
   font: inherit;
   outline: none;
   transition: border-color var(--transition), box-shadow var(--transition);
 }
+input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="file"]):not([type="image"]),
+select { min-height: var(--control-height); }
 textarea { min-height: 92px; resize: vertical; }
 input:focus, select:focus, textarea:focus {
   border-color: var(--brand-500);
@@ -400,7 +434,7 @@ button {
   font-weight: 600;
   font-size: var(--text-sm);
   border-radius: var(--radius-sm);
-  padding: 8px 14px;
+  padding: var(--space-2) var(--space-4);
   border: 1px solid transparent;
   cursor: pointer;
   transition: background var(--transition), box-shadow var(--transition), transform var(--transition);
@@ -425,8 +459,8 @@ button.danger:hover { background: var(--danger-600); }
 
 .icon-btn {
   position: relative; /* anchors badges like .notify-dot */
-  width: 30px;
-  height: 30px;
+  width: var(--control-height-sm);
+  height: var(--control-height-sm);
   padding: 0; /* neutralize button padding when used on a <button> */
   border: none;
   box-shadow: none;
@@ -441,13 +475,11 @@ button.danger:hover { background: var(--danger-600); }
 }
 button.icon-btn:hover { background: var(--brand-100); }
 
-/* Inline icons (static/icons/, inlined via js/icons.js or the markup):
-   strokes follow currentColor; size follows the local font size, with a fixed
-   16px inside the square icon buttons. The `.lucide` class name predates the
-   ASAS icon set and is kept as the shared sizing hook. */
+/* Inline Lucide icons, inlined via js/icons.js or the markup: strokes follow
+   currentColor; size follows the local font size, with a fixed shared size in
+   square icon buttons. */
 .lucide { width: 1em; height: 1em; vertical-align: -0.15em; }
-.lucide-wide { width: 2em; }
-.icon-btn .lucide { width: 16px; height: 16px; }
+.icon-btn .lucide { width: var(--icon-sm); height: var(--icon-sm); }
 
 .toolbar {
   display: grid;
@@ -505,7 +537,6 @@ tbody tr[data-index] { cursor: pointer; }
   .brand-subtitle { display: none; }
   .tabs { top: 56px; height: 52px; }
   .tabs button { min-width: 110px; font-size: var(--text-xs); gap: var(--space-1); padding: 0 var(--space-2); }
-  .tabs button .lucide { width: 18px; height: 18px; }
-  .tabs button .lucide-wide { width: 36px; }
+  .tabs button .lucide { width: var(--icon-md); height: var(--icon-md); }
   .header-actions .user-chip { display: none; }
 }

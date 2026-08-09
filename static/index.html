@@ -16,8 +16,8 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="/static/css/base.css?v=10">
-  <link rel="stylesheet" href="/static/css/components.css?v=68">
+  <link rel="stylesheet" href="/static/css/base.css?v=11">
+  <link rel="stylesheet" href="/static/css/components.css?v=69">
 </head>
 <body>
   <section id="login-page" class="login-page hidden">
@@ -47,8 +47,8 @@
     </div>
     <div class="header-actions">
       <span id="user-chip" class="user-chip hidden"></span>
-      <button id="notify-toggle" type="button" class="icon-btn" aria-label="Notifications" title="Notifications"><svg aria-hidden="true" focusable="false" class="lucide lucide-bell" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"> <path d="M5.2 16.7c1.3-1.4 1.7-3.2 1.7-5.5V9.5a5.1 5.1 0 0 1 10.2 0v1.7c0 2.3.4 4.1 1.7 5.5H5.2Z"/> <path d="M9.8 19.3a2.4 2.4 0 0 0 4.4 0M12 4.4V2.9"/> </g> <circle cx="19.2" cy="4.1" r="2.05" fill="#F22B20" stroke="#fff" stroke-width=".75"/></svg><span id="notify-dot" class="notify-dot hidden" aria-hidden="true"></span></button>
-      <button id="app-settings-toggle" type="button" class="icon-btn" aria-label="Settings" title="Settings"><svg aria-hidden="true" focusable="false" class="lucide lucide-settings" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"> <path d="M9.7 3.2 10.4 2h3.2l.7 1.2 1.5.7 1.4-.3 2.2 2.2-.3 1.4.7 1.5 1.2.7v3.2l-1.2.7-.7 1.5.3 1.4-2.2 2.2-1.4-.3-1.5.7-.7 1.2h-3.2l-.7-1.2-1.5-.7-1.4.3-2.2-2.2.3-1.4-.7-1.5-1.2-.7V9.4l1.2-.7.7-1.5-.3-1.4 2.2-2.2 1.4.3 1.5-.7Z"/> <circle cx="12" cy="11" r="3"/> </g></svg></button>
+      <button id="notify-toggle" type="button" class="icon-btn" aria-label="Notifications" title="Notifications"><span data-lucide-icon="bell" aria-hidden="true"></span><span id="notify-dot" class="notify-dot hidden" aria-hidden="true"></span></button>
+      <button id="app-settings-toggle" type="button" class="icon-btn" aria-label="Settings" title="Settings"><span data-lucide-icon="settings" aria-hidden="true"></span></button>
       <!-- Card 1F — the two header dropdowns. Both are EMPTY containers:
            views/header-menus.js renders their contents (the gear's labels and
            glyphs change with the theme and the session, and the bell's list is
@@ -63,12 +63,12 @@
   </header>
 
   <nav class="tabs app-chrome" aria-label="Main navigation" role="tablist">
-    <button data-tab="prospect" class="active" role="tab" aria-selected="true" type="button"><svg aria-hidden="true" focusable="false" class="lucide lucide-rig-trend lucide-wide" xmlns="http://www.w3.org/2000/svg" width="48" height="24" viewBox="0 0 48 24"><g fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"> <path d="M2.5 20.5h19M4.5 20.5v-5h3v5M10 20.5v-8h3v8M15.5 20.5V9h3v11.5"/> <path d="m3.8 11.5 4.1-3.7 3.2 2.1 7.1-6.6M15.5 3.3h2.7V6"/> <path d="M25 21h20M28 21l4.2-18h1.6L38 21M30.7 9h4.6M29.8 13h6.4M28.9 17h8.2M31.2 6h3.6"/> <path d="m31.2 6 4.1 3-5.5 4 7.3 4-9.1 4M34.8 6l-4.1 3 5.5 4-7.3 4 9.1 4M32.2 3l.8-1 .8 1"/> </g></svg><span>Segment Maturation</span></button>
-    <button data-tab="portfolio" role="tab" aria-selected="false" type="button"><svg aria-hidden="true" focusable="false" class="lucide lucide-portfolio" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"> <rect x="2.5" y="6.5" width="19" height="14" rx="1.8"/> <path d="M8.5 6.5V4.8A1.8 1.8 0 0 1 10.3 3h3.4a1.8 1.8 0 0 1 1.8 1.8v1.7M2.5 11.5h7.2M14.3 11.5h7.2"/> <circle cx="12" cy="11.5" r="1.8"/> </g></svg><span>Portfolio Analysis</span></button>
-    <button data-tab="bp" role="tab" aria-selected="false" type="button"><svg aria-hidden="true" focusable="false" class="lucide lucide-bp-execution" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"> <circle cx="10.5" cy="13.5" r="8"/> <circle cx="10.5" cy="13.5" r="4.8"/> <circle cx="10.5" cy="13.5" r="1.7"/> <path d="m11.7 12.3 7.8-7.8M17 4.5h2.5V7M19.5 4.5l1.8-1.8M19.5 7l1.8-1.8"/> </g></svg><span>Business Plan Execution</span></button>
-    <button data-tab="map" role="tab" aria-selected="false" type="button"><svg aria-hidden="true" focusable="false" class="lucide lucide-map-pin" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"> <path d="M20 10c0 5.6-8 12-8 12s-8-6.4-8-12a8 8 0 1 1 16 0Z"/> <circle cx="12" cy="10" r="2.7"/> </g></svg><span>Map</span></button>
-    <button data-tab="audit" role="tab" aria-selected="false" type="button"><svg aria-hidden="true" focusable="false" class="lucide lucide-audit-trail" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"> <path d="M12 2.5c2.7 1.8 5.4 2.2 8 1.8v6.1c0 5.2-3.1 9-8 11.1-4.9-2.1-8-5.9-8-11.1V4.3c2.6.4 5.3 0 8-1.8Z"/> <path d="m8.8 10.2 3.2 3.6 3.4-3.6"/> </g></svg><span>Audit Trail</span></button>
-    <button data-tab="calculator" role="tab" aria-selected="false" type="button"><svg aria-hidden="true" focusable="false" class="lucide lucide-calculator" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"> <rect x="5" y="2.5" width="14" height="19" rx="1.6"/> <rect x="7.5" y="5" width="9" height="3.4" rx=".5"/> <path d="M8 11.5h.01M12 11.5h.01M8 15h.01M12 15h.01M8 18.5h.01M12 18.5h.01M16 11.5v7" stroke-width="2.1"/> </g></svg><span>Calculator</span></button>
+    <button data-tab="prospect" class="active" role="tab" aria-selected="true" type="button"><span data-lucide-icon="workflow" aria-hidden="true"></span><span>Segment Maturation</span></button>
+    <button data-tab="portfolio" role="tab" aria-selected="false" type="button"><span data-lucide-icon="briefcase" aria-hidden="true"></span><span>Portfolio Analysis</span></button>
+    <button data-tab="bp" role="tab" aria-selected="false" type="button"><span data-lucide-icon="target" aria-hidden="true"></span><span>Business Plan Execution</span></button>
+    <button data-tab="map" role="tab" aria-selected="false" type="button"><span data-lucide-icon="map-pin" aria-hidden="true"></span><span>Map</span></button>
+    <button data-tab="audit" role="tab" aria-selected="false" type="button"><span data-lucide-icon="shield-check" aria-hidden="true"></span><span>Audit Trail</span></button>
+    <button data-tab="calculator" role="tab" aria-selected="false" type="button"><span data-lucide-icon="calculator" aria-hidden="true"></span><span>Calculator</span></button>
   </nav>
 
   <main class="app-chrome">
@@ -99,7 +99,7 @@
                exists to report. -->
           <div id="new-lead-controls" class="new-lead-controls">
             <button id="new-lead-open" type="button" class="new-lead-button"
-                    aria-expanded="false" aria-controls="new-lead-fields">+ Add New Lead</button>
+                    aria-expanded="false" aria-controls="new-lead-fields"><span data-lucide-icon="plus" aria-hidden="true"></span> Add New Lead</button>
             <div id="new-lead-fields" class="new-lead-fields hidden">
               <div class="nl-field">
                 <label class="visually-hidden" for="new-lead-name">Lead Name</label>
@@ -243,6 +243,7 @@
                    minus sign"); the projection is announced on every hover by
                    the coordinate readout anyway. -->
               <span class="map-crs" aria-hidden="true">UTM 37N</span>
+              <span class="map-collapse-icon" data-lucide-icon="chevron-down" aria-hidden="true"></span>
             </button>
             <div id="map-sidebar-body" class="map-sidebar-body">
               <div class="map-sidebar-actions">
@@ -253,7 +254,7 @@
                 <button id="map-filters-toggle" type="button" class="map-fold-head open"
                         aria-expanded="true" aria-controls="map-filter-list">
                   <span class="map-fold-title">Well filters</span>
-                  <span class="map-fold-chevron" aria-hidden="true"></span>
+                  <span class="map-fold-chevron" data-lucide-icon="chevron-down" aria-hidden="true"></span>
                 </button>
                 <!-- Not a live region: renderSidebar rewrites the whole
                      checklist on every activation, which would re-announce all
@@ -264,7 +265,7 @@
                 <button id="map-layers-toggle" type="button" class="map-fold-head open"
                         aria-expanded="true" aria-controls="map-layer-list">
                   <span class="map-fold-title">Layers</span>
-                  <span class="map-fold-chevron" aria-hidden="true"></span>
+                  <span class="map-fold-chevron" data-lucide-icon="chevron-down" aria-hidden="true"></span>
                 </button>
                 <!-- Ordered top -> bottom = topmost drawn first. The wells
                      overlay is pinned at the head and country borders at the
@@ -281,7 +282,7 @@
                right edge however wide the summary is. -->
           <div class="map-overlay-top">
             <div id="map-summary" class="map-summary">
-              <button id="map-summary-toggle" type="button" class="map-summary-toggle" aria-expanded="true" aria-controls="map-summary-body">Map summary</button>
+              <button id="map-summary-toggle" type="button" class="map-summary-toggle" aria-expanded="true" aria-controls="map-summary-body"><span>Map summary</span><span class="map-collapse-icon" data-lucide-icon="chevron-down" aria-hidden="true"></span></button>
               <div id="map-summary-body" class="map-summary-body" aria-live="polite"></div>
             </div>
 
@@ -299,8 +300,8 @@
           <div id="map-color-panel" class="map-color-panel" hidden></div>
 
           <div class="map-zoom" role="group" aria-label="Zoom">
-            <button id="map-zoom-in" type="button" aria-label="Zoom in">+</button>
-            <button id="map-zoom-out" type="button" aria-label="Zoom out">&minus;</button>
+            <button id="map-zoom-in" type="button" aria-label="Zoom in"><span data-lucide-icon="plus" aria-hidden="true"></span></button>
+            <button id="map-zoom-out" type="button" aria-label="Zoom out"><span data-lucide-icon="minus" aria-hidden="true"></span></button>
           </div>
 
           <div id="map-readout" class="map-readout" hidden></div>
@@ -319,12 +320,12 @@
                real <button>, so Enter and Space activate it for free.
                Lead pages only — views/detail.js hides it and reveals #rail-nav
                below for a BP WELL, whose shell is deliberately unchanged. -->
-          <button id="back-to-board" class="ghost back-to-board hidden" type="button"
-                  aria-label="Back to Segment Maturation"><svg aria-hidden="true" focusable="false" class="lucide lucide-arrow-up" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="m5 12 7-7 7 7"/> <path d="M12 19V5"/> </svg> <span>Back to Segment Maturation</span></button>
+          <button id="back-to-board" class="ghost back-to-board detail-back hidden" type="button"
+                  aria-label="Back to Segment Maturation"><span data-lucide-icon="arrow-left" aria-hidden="true"></span><span>Back to Segment Maturation</span></button>
           <!-- The BP well shell's original two controls, untouched. Hidden on
                lead pages (the single control above replaces both there). -->
           <div id="rail-nav" class="rail-nav">
-            <button id="back-to-overview" class="ghost" type="button"><svg aria-hidden="true" focusable="false" class="lucide lucide-arrow-left" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="m12 19-7-7 7-7"/> <path d="M19 12H5"/> </svg> Back to Pipeline</button>
+            <button id="back-to-overview" class="ghost" type="button"><span data-lucide-icon="arrow-left" aria-hidden="true"></span><span>Back to Pipeline</span></button>
             <button id="switch-pipeline-view" class="ghost rail-switch-pipeline" type="button">View Other Pipeline</button>
           </div>
           <!-- Lead-level priority: ONE chip for the whole record (lead AND BP
@@ -348,7 +349,7 @@
       <section class="component-editor">
         <div class="editor-head">
           <span id="component-number" class="component-number">1</span>
-          <div>
+          <div class="editor-title">
             <h2 id="component-title">Component</h2>
           </div>
           <!-- Item A: the auto-save state indicator ("Saving…" / "Saved" / the
@@ -358,11 +359,11 @@
                role=status live region must exist BEFORE text lands to be
                announced, hence static markup rather than JS insertion. -->
           <span id="save-state" class="save-state" role="status" aria-live="polite"></span>
+          <span id="component-status-chip" class="status not-assigned editor-status-chip">Not Assigned</span>
           <div id="assignment-group" class="assignment-group" aria-label="Task assignees">
             <div id="assigned-members" class="assigned-members"></div>
             <select id="assigned-to" class="editor-assignee" aria-label="Add assignee"></select>
           </div>
-          <span id="component-status-chip" class="status not-assigned editor-status-chip">Not Assigned</span>
         </div>
         <form id="component-form" class="component-form">
           <div id="dynamic-fields" class="dynamic-fields"></div>
@@ -389,7 +390,7 @@
                on lead pages and shows it for a BP well. -->
           <div id="summary-card-head" class="summary-card-head">
             <h3 id="summary-title">Lead Summary</h3>
-            <button id="summary-settings-toggle" type="button" class="icon-btn" title="Manage lead / well" aria-label="Manage lead / well" aria-haspopup="dialog" aria-expanded="false"><svg aria-hidden="true" focusable="false" class="lucide lucide-settings" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"> <path d="M9.7 3.2 10.4 2h3.2l.7 1.2 1.5.7 1.4-.3 2.2 2.2-.3 1.4.7 1.5 1.2.7v3.2l-1.2.7-.7 1.5.3 1.4-2.2 2.2-1.4-.3-1.5.7-.7 1.2h-3.2l-.7-1.2-1.5-.7-1.4.3-2.2-2.2.3-1.4-.7-1.5-1.2-.7V9.4l1.2-.7.7-1.5-.3-1.4 2.2-2.2 1.4.3 1.5-.7Z"/> <circle cx="12" cy="11" r="3"/> </g></svg></button>
+            <button id="summary-settings-toggle" type="button" class="icon-btn" title="Manage lead / well" aria-label="Manage lead / well" aria-haspopup="dialog" aria-expanded="false"><span data-lucide-icon="settings" aria-hidden="true"></span></button>
           </div>
           <div id="lead-summary" class="summary-content"></div>
         </div>
@@ -508,10 +509,10 @@
   </dialog>
 
   <dialog id="ra-plot-lightbox" class="ra-lightbox">
-    <button type="button" id="ra-lightbox-close" class="icon-btn ra-lightbox-close" title="Close" aria-label="Close enlarged plot"><svg aria-hidden="true" focusable="false" class="lucide lucide-x" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="M18 6 6 18"/> <path d="m6 6 12 12"/> </svg></button>
+    <button type="button" id="ra-lightbox-close" class="icon-btn ra-lightbox-close" title="Close" aria-label="Close enlarged plot"><span data-lucide-icon="x" aria-hidden="true"></span></button>
     <img id="ra-lightbox-img" alt="">
   </dialog>
 
-  <script type="module" src="/static/js/main.js?v=70"></script>
+  <script type="module" src="/static/js/main.js?v=71"></script>
 </body>
 </html>

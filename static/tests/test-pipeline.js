@@ -69,12 +69,12 @@ test('pipeline.renderLeadBoard renders the three display-stage columns in order'
   var element = board([]);
   assert.deepEqual(columnNames(element), ['Lead Assessment', 'Risk Analysis', 'Pre-Well Delivery']);
   assert.deepEqual(DISPLAY_STAGES, ['Lead Assessment', 'Risk Analysis', 'Pre-Well Delivery']);
-  // Header glyphs: checklist / gauge / rig, one per column.
+  // Header glyphs: checklist / gauge / drill, one per column.
   var icons = element.querySelectorAll('.lead-column-icon svg');
   assert.equal(icons.length, 3, 'every column header carries its glyph');
   assert.ok(icons[0].classList.contains('lucide-clipboard-check'));
   assert.ok(icons[1].classList.contains('lucide-gauge'));
-  assert.ok(icons[2].classList.contains('lucide-rig'));
+  assert.ok(icons[2].classList.contains('lucide-drill'));
 });
 
 test('pipeline.renderLeadBoard puts a Segmentation-stage lead in Risk Analysis', function () {

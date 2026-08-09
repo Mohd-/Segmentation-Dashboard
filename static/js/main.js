@@ -18,6 +18,7 @@ import { initAutoSave } from './views/autosave.js';
 import { cycleLeadPriorityChip } from './views/detail.js';
 import { openProjectEditor } from './views/project-editor.js';
 import { performLogin, fetchUserOptions } from './auth.js';
+import { hydrateStaticIcons } from './ui/static-icons.js';
 
 export function showTab(name) {
   activateTab(name);
@@ -203,6 +204,7 @@ function showLoginPage() {
 }
 
 document.addEventListener('DOMContentLoaded', function () {
+  hydrateStaticIcons(document);
   document.addEventListener('auth:changed', renderUserChip);
   // /api/me is probed FIRST because it never 401s (even under AUTH_REQUIRED).
   // It reports both the session identity and whether auth is required, so we

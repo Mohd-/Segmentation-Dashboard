@@ -39,6 +39,9 @@
    ========================================================================= */
 import { byId, all, esc, isFilled, fmtNum } from '../dom.js';
 import { ICONS } from '../icons.js';
+import {
+  summaryCardHtml, summaryGridHtml, summaryProgressPercent, summarySectionHtml
+} from '../ui/summary-card.js';
 
 // The one "no value" glyph of this card.
 export var EM_DASH = '—';
@@ -47,7 +50,7 @@ export var EM_DASH = '—';
 // an em dash. Never blank -- a blank cell reads as a layout bug, a dash reads
 // as "not recorded yet".
 function value(raw) {
-  return isFilled(raw) ? esc(fmtNum(raw)) : EM_DASH;
+  return isFilled(raw) ? fmtNum(raw) : EM_DASH;
 }
 
 /* One section: a left-aligned heading over N evenly distributed value columns
@@ -55,16 +58,9 @@ function value(raw) {
    Mean / P10 line up with Formation / Reservoir and with RES. / Trap / Seal /
    Total down the whole card. */
 function section(title, columns) {
-  var cells = columns.map(function (column) {
-    return '<div class="ls-col">' +
-      '<span class="ls-col-label">' + esc(column.label) + '</span>' +
-      '<span class="ls-col-value">' + value(column.value) + '</span>' +
-      '</div>';
-  }).join('');
-  return '<section class="ls-section">' +
-    '<h4 class="ls-section-title">' + esc(title) + '</h4>' +
-    '<div class="ls-grid" style="grid-template-columns:repeat(' + columns.length + ',minmax(0,1fr))">' +
-    cells + '</div></section>';
+  return summarySectionHtml(title, summaryGridHtml(columns.map(function (column) {
+    return { label: column.label, value: value(column.value) };
+  }), { emptyText: EM_DASH }));
 }
 
 /* The progress bar: a slim track with the percentage and the raw count at its
@@ -73,20 +69,7 @@ function section(title, columns) {
    supplies the completed/total pair, this file never decides what "completed"
    means. */
 export function progressPercent(progress) {
-  var done = Number((progress || {}).completed);
-  var total = Number((progress || {}).total);
-  if (!isFinite(done) || !isFinite(total) || total <= 0) return 0;
-  return Math.round((Math.min(Math.max(done, 0), total) / total) * 100);
-}
-
-function progressHtml(progress) {
-  var percent = progressPercent(progress);
-  var done = Number((progress || {}).completed) || 0;
-  var total = Number((progress || {}).total) || 0;
-  return '<div class="ls-progress">' +
-    '<div class="ls-progress-track"><span style="width:' + percent + '%"></span></div>' +
-    '<div class="ls-progress-figures"><b>' + percent + '%</b>' +
-    '<small>' + done + ' / ' + total + '</small></div></div>';
+  return summaryProgressPercent(progress);
 }
 
 /* Footer: the lead's seismic reference, left-aligned. Both halves come from the
@@ -136,17 +119,12 @@ export function leadSummaryHtml(data) {
     ]);
   }
 
-  return '<div class="ls-card">' +
-    '<div class="ls-head">' +
-      '<h3 class="ls-title">Lead Summary</h3>' +
-      '<button id="lead-summary-gear" type="button" class="icon-btn ls-gear"' +
+  var actionHtml = '<button id="lead-summary-gear" type="button" class="icon-btn ls-gear"' +
         ' aria-haspopup="menu" aria-expanded="false"' +
         ' title="' + (canManage ? 'Manage lead' : 'Return to the current pipeline to manage this lead') + '"' +
         ' aria-label="' + (canManage ? 'Manage lead' : 'Return to the current pipeline to manage this lead') + '"' +
-        (canManage ? '' : ' disabled') + '>' + ICONS.settings + '</button>' +
-    '</div>' +
-    progressHtml(d.progress) +
-    section('Gas (BCF)', [
+        (canManage ? '' : ' disabled') + '>' + ICONS.settings + '</button>';
+  var bodyHtml = section('Gas (BCF)', [
       { label: 'P90', value: gas.p90 },
       { label: 'Mean', value: gas.mean },
       { label: 'P10', value: gas.p10 }
@@ -165,10 +143,15 @@ export function leadSummaryHtml(data) {
       { label: 'Trap', value: cos.trap },
       { label: 'Seal', value: cos.seal },
       { label: 'Total', value: cos.total }
-    ]) +
-    footerHtml(d.block, d.ar) +
-    menuHtml(canManage) +
-    '</div>';
+    ]);
+  return summaryCardHtml({
+    title: 'Lead Summary',
+    actionHtml: actionHtml,
+    progress: d.progress,
+    bodyHtml: bodyHtml,
+    footerHtml: footerHtml(d.block, d.ar),
+    menuHtml: menuHtml(canManage)
+  });
 }
 
 /* -------------------------------------------------------------------------
