@@ -237,17 +237,31 @@ def current_identity() -> Optional[str]:
     return flask_session.get("name") or None
 
 
+def annotate_bpe_permissions(session, payload, detail_slug):
+    """Attach the shared permission projection to one BPE detail payload."""
+    payload["role"] = current_role()
+    tracking = payload.get("tracking") or []
+    system_locked = bool(tracking and all(bool(item.get("locked")) for item in tracking))
+    if detail_slug == "sad-model-update" and payload.get("sad_update_branch") != "manual_update":
+        system_locked = True
+    workflow.attach_task_permissions(
+        session, payload["task"], current_role(), flask_session.get("name"),
+        detail_slug=detail_slug, system_locked=system_locked)
+    payload["permissions"] = payload["task"]["permissions"]
+    return payload
+
+
 def require_role(*roles: str) -> None:
     """Raise PermissionError (-> 403) unless the current role is one of ``roles``.
 
-    Consumers: POST /api/tasks/<id>/assign (supervisor, staff), the
-    approve actions of POST /api/tasks/<id>/transition (supervisor),
+    Consumers: POST /api/tasks/<id>/assign (supervisor, staff),
     business_plan_enabled changes via PATCH /api/projects/<id>/flags
     (supervisor), PATCH /api/tasks/<id>/priority (supervisor),
     PATCH /api/projects/<id>/priority (supervisor), the approve/return/reopen
-    actions of POST /api/business-plan/wells/<id>/steps/<slug>/transition
-    (supervisor), and business_plan_enabled at creation via POST
-    /api/projects (supervisor). Priority is also guarded on the Save path:
+    business_plan_enabled changes and creation (supervisor), and priority
+    mutations. Approval action authorization is centralized in
+    workflow.approval and enforced by the unified task transition service.
+    Priority is also guarded on the Save path:
     PATCH /api/tasks/<id> passes allow_priority_change so a non-supervisor's
     save keeps the stored value.
     """
@@ -522,9 +536,13 @@ def project_detail(project_id):
     project = workflow.get_project(session, project_id)
     if not project:
         return error_response("Lead / well not found", 404)
+    tasks_payload = workflow.get_project_tasks(session, project_id)
+    for task_payload in tasks_payload:
+        workflow.attach_task_permissions(
+            session, task_payload, current_role(), flask_session.get("name"))
     return json_response({
         "project": project,
-        "tasks": workflow.get_project_tasks(session, project_id),
+        "tasks": tasks_payload,
         "completion": {"percent": workflow.project_completion_percent(session, project_id)},
         "fields": workflow.get_project_dynamic_field_map(session, project_id),
         "lead_summary": workflow.get_lead_summary_snapshot(session, project_id),
@@ -555,6 +573,8 @@ def put_formations(project_id):
     formations = workflow.upsert_project_formations(
         session, project_id, payload.get("phase", ""), payload.get("rows"),
         actor(payload), payload.get("source_task_id"),
+        actor_role=current_role(), actor_name=flask_session.get("name"),
+        public_write=True,
     )
     return json_response({"ok": True, "formations": formations})
 
@@ -637,7 +657,11 @@ def project_priority(project_id):
 @app.get("/api/projects/<int:project_id>/tasks")
 def tasks(project_id):
     session = db.get_session()
-    return json_response(workflow.get_project_tasks(session, project_id))
+    rows = workflow.get_project_tasks(session, project_id)
+    for row in rows:
+        workflow.attach_task_permissions(
+            session, row, current_role(), flask_session.get("name"))
+    return json_response(rows)
 
 
 @app.get("/api/tasks/<int:task_id>")
@@ -646,6 +670,8 @@ def task(task_id):
     item = workflow.get_task(session, task_id)
     if not item:
         return error_response("Task not found", 404)
+    workflow.attach_task_permissions(
+        session, item, current_role(), flask_session.get("name"))
     return json_response(item)
 
 
@@ -660,7 +686,11 @@ def update_task(task_id):
     task_after_save = workflow.save_task(
         session, task_id, payload, actor(payload),
         allow_priority_change=current_role() == "supervisor",
+        actor_role=current_role(), actor_name=flask_session.get("name"),
+        public_write=True,
     )
+    workflow.attach_task_permissions(
+        session, task_after_save, current_role(), flask_session.get("name"))
     return json_response({"ok": True, "task": task_after_save})
 
 
@@ -695,6 +725,8 @@ def assign_task(task_id):
         True if cascade is None else bool(cascade),
         actor(payload), payload.get("revision"),
     )
+    workflow.attach_task_permissions(
+        session, task_after, current_role(), flask_session.get("name"))
     return json_response({"ok": True, "task": task_after})
 
 
@@ -718,37 +750,30 @@ def manage_task_assignees(task_id):
     task_after, _new_assignees = workflow.update_task_assignees(
         session, task_id, add_names or [], remove_names or [], actor(payload),
     )
+    workflow.attach_task_permissions(
+        session, task_after, current_role(), flask_session.get("name"))
     return json_response({"ok": True, "task": task_after})
 
 
 @app.post("/api/tasks/<int:task_id>/transition")
 def transition_task(task_id):
-    """Lifecycle actions: submit, approve (supervisor), and return (supervisor/assignee).
-
-    The approve supervisor gate lives here (require_role). Return is available
-    to supervisors and the task's assignee. The assignee checks for return and
-    employee submit both need the task row, so they are enforced in
-    workflow.transition_task using the session identity passed in.
-    """
+    """Run the shared approval transition policy for either detail shell."""
     payload = request.get_json(silent=True) or {}
     action = str(payload.get("action") or "").strip().lower()
-    # The public vocabulary is workflow.TASK_TRANSITIONS plus "reopen", which
-    # Card 3S needs: the Business Plan Execution framework lets an authorized
-    # supervisor reopen an approved step, and Segmentation Slides now uses that
-    # framework. It stays SUPERVISOR-ONLY here -- an ungated un-approve is
-    # exactly what keeping it off this surface used to prevent -- and the
-    # earlier approval remains in the history either way, because task_history
-    # is append-only.
+    # The earlier approval remains in the append-only task history after a
+    # supervisor reopens the step.
     if action not in workflow.TASK_TRANSITIONS and action != "reopen":
         raise ValueError("Unknown action. Use one of: submit, approve, return, reopen.")
-    if action in ("approve", "reopen"):
-        require_role("supervisor")
     session = db.get_session()
     task_after = workflow.transition_task(
         session, task_id, action, actor(payload),
         expected_revision=payload.get("revision"),
         actor_role=current_role(), actor_name=flask_session.get("name"),
+        comment=payload.get("comment", ""),
+        public_transition=True,
     )
+    workflow.attach_task_permissions(
+        session, task_after, current_role(), flask_session.get("name"))
     return json_response({"ok": True, "task": task_after})
 
 
@@ -817,7 +842,10 @@ def save_task_dynamic_fields(task_id):
     session = db.get_session()
     payload = request.get_json(silent=True) or {}
     fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else payload
-    workflow.save_task_dynamic_fields(session, task_id, fields or {}, actor(payload))
+    workflow.save_task_dynamic_fields(
+        session, task_id, fields or {}, actor(payload),
+        actor_role=current_role(), actor_name=flask_session.get("name"),
+        public_write=True)
     return json_response({"ok": True})
 
 
@@ -928,7 +956,7 @@ def business_plan_dashboard():
 def business_plan_detail(project_id, detail_slug):
     session = db.get_session()
     payload = workflow.get_bpe_detail(session, project_id, detail_slug)
-    payload["role"] = current_role()
+    annotate_bpe_permissions(session, payload, detail_slug)
     # Card 3AB keys the BPE side by DETAIL SLUG, not task name: sad-model-update
     # and final-summary-slides share the "SAD Update" task and take different
     # destinations. `folder` is absent when the step has no mapping, and the
@@ -947,8 +975,9 @@ def business_plan_save_field(project_id, detail_slug):
         session, project_id, detail_slug, payload.get("field_key", ""),
         payload.get("value"), actor(payload), current_role(),
         bool(payload.get("confirm_reset")), payload.get("override_reason"),
+        actor_name=flask_session.get("name"),
     )
-    result["role"] = current_role()
+    annotate_bpe_permissions(session, result, detail_slug)
     return json_response({"ok": True, "detail": result})
 
 
@@ -958,9 +987,9 @@ def business_plan_save_formations(project_id, detail_slug):
     payload = request.get_json(silent=True) or {}
     result = workflow.save_bpe_formations(
         session, project_id, detail_slug, payload.get("rows", []),
-        actor(payload), current_role(),
+        actor(payload), current_role(), actor_name=flask_session.get("name"),
     )
-    result["role"] = current_role()
+    annotate_bpe_permissions(session, result, detail_slug)
     return json_response({"ok": True, "detail": result})
 
 
@@ -969,26 +998,9 @@ def business_plan_save_flowback(project_id):
     session = db.get_session()
     payload = request.get_json(silent=True) or {}
     result = workflow.save_bpe_flowback_stages(
-        session, project_id, payload.get("rows", []), actor(payload), current_role())
-    result["role"] = current_role()
-    return json_response({"ok": True, "detail": result})
-
-
-@app.post("/api/business-plan/wells/<int:project_id>/steps/<detail_slug>/transition")
-def business_plan_transition(project_id, detail_slug):
-    session = db.get_session()
-    payload = request.get_json(silent=True) or {}
-    action = str(payload.get("action") or "").lower()
-    # The supervisor gate for the un-approve-capable actions lives here, beside
-    # every other route-level role check; transition_bpe_approval repeats it as
-    # defense-in-depth for non-HTTP callers.
-    if action in {"approve", "return", "reopen"}:
-        require_role("supervisor")
-    result = workflow.transition_bpe_approval(
-        session, project_id, detail_slug, action,
-        actor(payload), current_role(), payload.get("comment", ""),
-    )
-    result["role"] = current_role()
+        session, project_id, payload.get("rows", []), actor(payload), current_role(),
+        actor_name=flask_session.get("name"))
+    annotate_bpe_permissions(session, result, "flowback-results")
     return json_response({"ok": True, "detail": result})
 
 
@@ -1007,7 +1019,7 @@ def business_plan_assign(project_id, detail_slug):
         session, project_id, detail_slug, payload.get("assignee", ""),
         actor(payload), current_role(), add_names=add_names, remove_names=remove_names,
     )
-    result["role"] = current_role()
+    annotate_bpe_permissions(session, result, detail_slug)
     return json_response({"ok": True, "detail": result})
 
 

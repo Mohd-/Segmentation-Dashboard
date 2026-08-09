@@ -1,10 +1,8 @@
 // Tests for static/js/views/detail-form.js — the ACTION ROW.
 //
-// The row is three shared buttons plus the form's own Save, laid out from the
-// task's status and the viewer's role. Card 3D gives one step its own layout
-// (SPECIAL_ACTION_ROWS), and the promise that matters is negative: an employee
-// must never be shown a control the backend will refuse. So these render the
-// real row against the real markup and look at what is on screen.
+// The row is driven by the normalized server permissions. The promise that
+// matters is negative: no role is shown an action the backend will refuse.
+// These tests render the real row against the real markup.
 import { test, assert, fixture, mockFetch } from './harness.js';
 import {
   renderActionButtons, savedMessage, renderFields, getFields, loadComponent,
@@ -44,6 +42,26 @@ function task(name, status, assignee, assignees) {
   var t = { task_id: 7, task_name: name, status: status,
             assigned_to: assignee === undefined ? 'Employee' : assignee };
   if (assignees) t.assignees = assignees;
+  var approvalRequired = ['Segmentation Slides', 'BP Execution Gate', 'SAD Model',
+    'Post-Well Outcome & Decision Gate', 'SAD Update'].indexOf(name) >= 0;
+  var names = (assignees || [{ name: t.assigned_to }]).map(function (member) {
+    return String(member.name || '').toLowerCase();
+  });
+  var role = Store.user && Store.user.role;
+  var mine = Store.user && names.indexOf(String(Store.user.name || '').toLowerCase()) >= 0;
+  var authorized = role === 'supervisor' || role === 'staff' || (role === 'employee' && mine);
+  var locked = approvalRequired && (status === 'Ready' || status === 'Approved');
+  t.permissions = {
+    approval_required: approvalRequired,
+    approval_locked: locked,
+    can_edit: authorized && !locked,
+    can_submit: approvalRequired && authorized && !locked &&
+      (status === 'Not Assigned' || status === 'In Progress'),
+    can_approve: approvalRequired && role === 'supervisor' && status === 'Ready',
+    can_return: approvalRequired && role === 'supervisor' && status === 'Ready',
+    can_reopen: approvalRequired && role === 'supervisor' && status === 'Approved',
+    can_manage_assignments: role === 'supervisor' || role === 'staff'
+  };
   return t;
 }
 
@@ -255,7 +273,7 @@ test('detail-form navigation: stale step responses cannot remount over Staking L
 test('detail-form action row: a BP step still shows Submit to its assignee', function () {
   withStore(function () {
     mount('employee', 'Employee', 'bp');
-    renderActionButtons(task('Flowback Results', 'In Progress'));
+    renderActionButtons(task('SAD Model', 'In Progress'));
     assert.equal(visible('submit-component'), true, 'the assignee may submit');
     assert.equal(visible('approve-component'), false);
     assert.equal(visible('return-component'), false);
@@ -266,7 +284,7 @@ test('detail-form action row: a BP step still shows Submit to its assignee', fun
 test('detail-form action row: a BP Ready step shows Approve to a supervisor', function () {
   withStore(function () {
     mount('supervisor', 'Supervisor', 'bp');
-    renderActionButtons(task('Flowback Results', 'Ready'));
+    renderActionButtons(task('SAD Model', 'Ready'));
     assert.equal(visible('approve-component'), true);
     assert.equal(visible('return-component'), true);
     assert.equal(button('approve-component').textContent, 'Approve');
@@ -371,31 +389,26 @@ test('detail-form action row: a supervisor gets Save, Approved and Return side b
 
     assert.equal(visible('approve-component'), true);
     assert.equal(visible('return-component'), true);
-    assert.equal(visible('submit-component'), false, 'a supervisor does not submit for the employee');
-    assert.equal(button('approve-component').textContent, 'Approved');
-    assert.equal(button('return-component').textContent, 'Return');
+    assert.equal(visible('submit-component'), false);
+    assert.equal(button('approve-component').textContent, 'Approve');
+    assert.equal(button('return-component').textContent, 'Return for Update');
     // Existing button vocabulary only (no new CSS): the constructive outline
     // used elsewhere for Promote, and the plain ghost the Return button
     // already carried.
-    assert.equal(button('approve-component').className, 'ghost success-outline');
+    assert.equal(button('approve-component').className, '');
     assert.ok(button('return-component').classList.contains('ghost'));
     assert.equal(button('approve-component').disabled, false);
     assert.equal(button('return-component').disabled, false);
   });
 });
 
-test('detail-form action row: the supervisor controls are visible-but-disabled until submitted', function () {
+test('detail-form action row: unavailable supervisor decisions stay hidden until submitted', function () {
   withStore(function () {
     mount('supervisor', 'Supervisor');
     ['Not Assigned', 'In Progress', 'Approved'].forEach(function (status) {
       renderActionButtons(task('Segmentation Slides', status));
-      assert.equal(visible('approve-component'), true,
-        'the review controls are the point of the page (' + status + ')');
-      assert.equal(button('approve-component').disabled, true,
-        'nothing to approve at ' + status);
-      assert.equal(button('return-component').disabled, true,
-        'nothing to return at ' + status);
-      assert.match(button('approve-component').title, /submitted for review/);
+      assert.equal(visible('approve-component'), false, 'nothing to approve at ' + status);
+      assert.equal(visible('return-component'), false, 'nothing to return at ' + status);
     });
   });
 });
@@ -405,8 +418,8 @@ test('detail-form action row: reference mode disables the supervisor controls', 
     mount('supervisor', 'Supervisor');
     Store.pipeline = 'bp';   // looking at the other pipeline's structure
     renderActionButtons(task('Segmentation Slides', 'Ready'));
-    assert.equal(button('approve-component').disabled, true);
-    assert.equal(button('return-component').disabled, true);
+    assert.equal(visible('approve-component'), false);
+    assert.equal(visible('return-component'), false);
   });
 });
 
@@ -418,11 +431,11 @@ test('detail-form action row: the overridden buttons are restored for the next s
     Store.pipeline = 'prospect';
     Store.project = { pipeline_type: 'prospect' };
     renderActionButtons(task('Segmentation Slides', 'Ready'));
-    assert.equal(button('approve-component').textContent, 'Approved');
+    assert.equal(button('approve-component').textContent, 'Approve');
 
     Store.pipeline = 'bp';
     Store.project = { pipeline_type: 'bp' };
-    renderActionButtons(task('Flowback Results', 'Ready'));
+    renderActionButtons(task('SAD Model', 'Ready'));
 
     assert.equal(button('approve-component').textContent, 'Approve',
       'the shared node carries no trace of the previous step');
@@ -451,7 +464,7 @@ test('detail-form action row: a non-primary assignee can submit Segmentation Sli
 test('detail-form action row: a non-primary assignee can submit a generic BP step', function () {
   withStore(function () {
     mount('employee', 'Zed', 'bp');
-    renderActionButtons(task('Flowback Results', 'In Progress', 'Alice',
+    renderActionButtons(task('SAD Model', 'In Progress', 'Alice',
       [{ name: 'Alice', source: 'role' }, { name: 'Zed', source: 'role' }]));
     assert.equal(visible('submit-component'), true,
       'the generic submit button also honours task.assignees');
@@ -461,10 +474,10 @@ test('detail-form action row: a non-primary assignee can submit a generic BP ste
 test('detail-form action row: a non-primary assignee can return a Ready BP step', function () {
   withStore(function () {
     mount('employee', 'Zed', 'bp');
-    renderActionButtons(task('Flowback Results', 'Ready', 'Alice',
+    renderActionButtons(task('SAD Model', 'Ready', 'Alice',
       [{ name: 'Alice', source: 'role' }, { name: 'Zed', source: 'role' }]));
-    assert.equal(visible('return-component'), true,
-      'the Return button is visible to any assignee');
+    assert.equal(visible('return-component'), false,
+      'approval decisions are supervisor-only');
   });
 });
 
@@ -473,8 +486,8 @@ test('detail-form action row: a non-assignee employee cannot submit', function (
     mount('employee', 'Bobby');
     renderActionButtons(task('Segmentation Slides', 'In Progress', 'Alice',
       [{ name: 'Alice', source: 'role' }, { name: 'Zed', source: 'role' }]));
-    assert.equal(button('submit-component').disabled, true,
-      'Bobby is not in assignees; submit must be disabled');
+    assert.equal(visible('submit-component'), false,
+      'Bobby is not in assignees; submit must be hidden');
   });
 });
 
@@ -501,9 +514,9 @@ test('detail-form action row: assigned_to fallback works when assignees array is
 
 // --- the toast that names the combined save+submit ---------------------------
 
-test('detail-form savedMessage names the submission only when the save made one', function () {
+test('detail-form savedMessage always describes a draft/content save', function () {
   var slides = { task_name: 'Segmentation Slides', status: 'Ready' };
-  assert.equal(savedMessage(slides, 'In Progress'), 'Component saved and submitted for approval.');
+  assert.equal(savedMessage(slides, 'In Progress'), 'Component saved.');
   assert.equal(savedMessage(slides, 'Ready'), 'Component saved.',
     're-saving a pending step submits nothing, so it says nothing');
   assert.equal(savedMessage({ task_name: 'Segmentation Slides', status: 'In Progress' }, 'In Progress'),

@@ -14,7 +14,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 import config
 import db
-from helpers import today_str, utc_now_str
+from helpers import utc_now_str
 
 from .constants import (
     FORMATIONS, STAKED_WELL_NAME_FIELD, StaleRevisionError, display_record_name,
@@ -22,10 +22,8 @@ from .constants import (
 )
 from .flowback import FLOWBACK_STAGE_FIELDS, normalize_flowback_rows
 from .history import log_task_event
-from . import domain_roles
+from . import approval, domain_roles
 from .lifecycle import get_task, update_task_assignees
-from .notifications import notify_transition
-from .projects import _sync_completed_at
 from .promotion import ACTIVE_DRILLING_FIELD, get_lead_summary_snapshot
 from .summary import get_project_overview
 
@@ -153,9 +151,11 @@ ITEM_STAGE_KEYS = {
     key: stage["key"] for stage in STAGES for key, _label, _detail_slug in stage["items"]
 }
 
-APPROVAL_DETAILS = frozenset({
-    "business-plan-gate", "sad-model", "post-drill-learning-review", "sad-model-update",
-})
+# Compatibility export for readers that need the set of BPE approval detail
+# slugs.  The policy itself is owned solely by workflow.approval.
+APPROVAL_DETAILS = frozenset(
+    slug for slug in approval.APPROVAL_POLICY.values() if slug is not None
+)
 
 DETAIL_FIELD_OWNERS = {
     "business-plan-gate": {
@@ -630,6 +630,12 @@ def _project_context(session, project_id):
     return project, tasks, fields, formations, effective
 
 
+def sad_model_update_requires_approval(session, project_id):
+    """Whether SAD Model Update is currently on its manual approval branch."""
+    _project, _tasks, _fields, _formations, effective = _project_context(session, project_id)
+    return effective["sad_update_branch"] == "manual_update"
+
+
 def current_stage_key(session, project_id):
     """The BPE stage this well is working right now ('pre_drilling', …).
 
@@ -1046,8 +1052,6 @@ def _classification_defaults(classification):
 
 
 def _approved_source_edit_blocked(detail_slug, key, tasks):
-    if key.startswith("bpe_comments_"):
-        return False
     task = tasks.get(DETAILS[detail_slug]["task_name"])
     return (detail_slug in APPROVAL_DETAILS and task
             and task.get("status") in {"Ready", "Approved"})
@@ -1065,7 +1069,7 @@ def _sad_branch_change_error(tasks, before, after):
 
 
 def save_field(session, project_id, detail_slug, key, value, actor="Web User", role="employee",
-               confirm_reset=False, override_reason=None):
+               confirm_reset=False, override_reason=None, actor_name=None):
     if detail_slug not in DETAILS:
         raise ValueError("Unknown Business Plan detail step.")
     project, tasks, fields, _formations, effective = _project_context(session, project_id)
@@ -1078,6 +1082,7 @@ def save_field(session, project_id, detail_slug, key, value, actor="Web User", r
     task = tasks.get(owner_name)
     if not task:
         raise ValueError("Business Plan component not found.")
+    approval.require_content_edit(session, task, role, actor_name, detail_slug)
     if _approved_source_edit_blocked(detail_slug, key, tasks):
         status = (tasks.get(detail["task_name"]) or {}).get("status")
         if status == "Ready":
@@ -1110,6 +1115,10 @@ def save_field(session, project_id, detail_slug, key, value, actor="Web User", r
         raise ValueError("Confirm the classification change to reset classification-driven defaults.")
 
     with db.write_transaction(session):
+        # Re-read authorization after taking the write lock.  A concurrent
+        # submit/approval cannot race a field save through the content lock.
+        locked_task = get_task(session, task["task_id"])
+        approval.require_content_edit(session, locked_task, role, actor_name, detail_slug)
         if key == "bp_gate_classification" and old_classification != normalized:
             _set_field(session, task, key, normalized, actor, role, "user",
                        "classification reset confirmed" if old_classification else "initial classification",
@@ -1214,77 +1223,6 @@ def _approval_errors(detail_slug, effective):
             return ["SAD Model Update approval is available only in the manual comparison branch."]
         return _sad_errors(values, update=True)
     return ["This step does not use approval."]
-
-
-def transition_approval(session, project_id, detail_slug, action, actor="Web User", role="employee", comment=""):
-    if detail_slug not in APPROVAL_DETAILS:
-        raise ValueError("This Business Plan step does not use approval.")
-    if action not in {"submit", "approve", "return", "reopen"}:
-        raise ValueError("Unknown approval action.")
-    if action in {"approve", "return", "reopen"} and role != "supervisor":
-        raise PermissionError("Only a Supervisor may perform this approval action.")
-    project, tasks, _fields, _formations, effective = _project_context(session, project_id)
-    task = tasks.get(DETAILS[detail_slug]["task_name"])
-    if not task:
-        raise ValueError("Business Plan component not found.")
-    current = task.get("status") or "Not Assigned"
-    if action in {"submit", "approve"}:
-        errors = _approval_errors(detail_slug, effective)
-        if errors:
-            raise ValueError(" ".join(errors))
-    expected = {
-        "submit": {"Not Assigned", "In Progress"},
-        "approve": {"Ready"},
-        "return": {"Ready"},
-        "reopen": {"Approved"},
-    }[action]
-    if current not in expected:
-        raise ValueError(f"Cannot {action} this step while it is {current}.")
-    new_status = {"submit": "Ready", "approve": "Approved", "return": "In Progress", "reopen": "In Progress"}[action]
-    now = utc_now_str()
-    correlation = str(uuid.uuid4())
-    actual_start = task.get("actual_start") or today_str()
-    actual_finish = today_str() if new_status == "Approved" else None
-    with db.write_transaction(session):
-        db.execute(session, """
-            UPDATE project_tasks
-            SET status = :status, actual_start = :actual_start, actual_finish = :actual_finish,
-                last_updated = :now, revision = revision + 1
-            WHERE task_id = :task_id
-        """, {"status": new_status, "actual_start": actual_start, "actual_finish": actual_finish,
-              "now": now, "task_id": task["task_id"]})
-        log_task_event(
-            session, task["task_id"], project_id, task["task_name"],
-            {"submit": "Component Submitted", "approve": "Component Approved",
-             "return": "Component Returned", "reopen": "Component Reopened"}[action],
-            current, new_status, actor,
-            json.dumps({"role": role, "source": "supervisor" if role == "supervisor" else "user",
-                        "comment": str(comment or ""), "correlation": correlation},
-                       sort_keys=True, separators=(",", ":")),
-        )
-        # The header bell rides THIS transaction, beside the audit event it
-        # mirrors, exactly as lifecycle.transition_task does -- the fan-out
-        # policy is shared even though the two state machines are not. The
-        # PRE-transition row is what notify_transition wants: it reads
-        # assigned_to and the identifiers, none of which this UPDATE changed.
-        notify_transition(session, task, action, actor)
-        # Approve may have completed the applicable set; return/reopen reopens
-        # it. A BPE component is an ordinary project_tasks row, so the same
-        # derived completion stamp applies.
-        _sync_completed_at(session, project_id)
-        db.execute(session, """
-            UPDATE projects SET last_updated = :now, revision = revision + 1
-            WHERE project_id = :project_id
-        """, {"now": now, "project_id": project_id})
-        new_tasks = _task_map(session, project_id)
-        new_effective = _effective_state(
-            project, new_tasks, _field_maps(session, project_id), _formation_rows(session, project_id))
-        _audit_effective_changes(
-            session, new_tasks, effective, new_effective, actor, role, correlation,
-            f"approval={action}",
-        )
-    activate_bpe_task(session, project_id, actor)
-    return get_detail(session, project_id, detail_slug)
 
 
 def assign_detail(session, project_id, detail_slug, assignee=None, actor="Web User", role="staff",
@@ -1434,7 +1372,8 @@ def _clean_formation_payload(rows):
     return cleaned
 
 
-def save_formations(session, project_id, detail_slug, rows, actor="Web User", role="employee"):
+def save_formations(session, project_id, detail_slug, rows, actor="Web User", role="employee",
+                    actor_name=None):
     phase_by_detail = {"quicklook-logs": "quicklook", "final-log-analysis": "final"}
     phase = phase_by_detail.get(detail_slug)
     if not phase:
@@ -1444,9 +1383,12 @@ def save_formations(session, project_id, detail_slug, rows, actor="Web User", ro
     task = tasks.get(DETAILS[detail_slug]["task_name"])
     if not task:
         raise ValueError("Business Plan component not found.")
+    approval.require_content_edit(session, task, role, actor_name, detail_slug)
     now = utc_now_str()
     correlation = str(uuid.uuid4())
     with db.write_transaction(session):
+        locked_task = get_task(session, task["task_id"])
+        approval.require_content_edit(session, locked_task, role, actor_name, detail_slug)
         # The stored rows are read INSIDE the write transaction, not before it:
         # every check below decides what the UPDATEs are allowed to do, so
         # validation and writes have to see ONE snapshot. Read before the write
@@ -1694,15 +1636,22 @@ def _clean_flowback_rows(rows):
     return cleaned
 
 
-def save_flowback_stages(session, project_id, rows, actor="Web User", role="employee"):
+def save_flowback_stages(session, project_id, rows, actor="Web User", role="employee",
+                         actor_name=None):
     cleaned = _clean_flowback_rows(rows)
     project, tasks, fields, _formations, old_effective = _project_context(session, project_id)
     task = tasks.get("Flowback Results")
+    if not task:
+        raise ValueError("Business Plan component not found.")
+    approval.require_content_edit(session, task, role, actor_name, "flowback-results")
     old_rows = _flowback_rows(fields)
     old_by_id = {str(row.get("id") or row.get("_id") or ""): row for row in old_rows}
     new_by_id = {row["id"]: row for row in cleaned}
     correlation = str(uuid.uuid4())
     with db.write_transaction(session):
+        locked_task = get_task(session, task["task_id"])
+        approval.require_content_edit(
+            session, locked_task, role, actor_name, "flowback-results")
         for stable_id in new_by_id.keys() - old_by_id.keys():
             _audit_structure(session, task, "Flowback Stage Added", None, stable_id, actor, role,
                              reason="repeatable stage", correlation=correlation)

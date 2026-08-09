@@ -462,6 +462,7 @@ test('detail-form leaving reference mode does NOT enable the assignee select for
   var savedUser = Store.user;
   var savedProject = Store.project;
   var savedPipeline = Store.pipeline;
+  var savedTask = Store.task;
   // The hostile arrangement: #assigned-to sits INSIDE the form the sweep walks.
   fixture('<form id="component-form">' +
           '<select id="assigned-to" disabled></select>' +
@@ -471,6 +472,7 @@ test('detail-form leaving reference mode does NOT enable the assignee select for
     Store.user = { name: 'Employee', role: 'employee' };
     Store.project = { pipeline_type: 'prospect' };
     Store.pipeline = 'prospect';
+    Store.task = { permissions: { can_edit: true, can_manage_assignments: false } };
 
     setComponentReferenceMode(true);
     assert.equal(document.getElementById('assigned-to').disabled, true);
@@ -485,6 +487,7 @@ test('detail-form leaving reference mode does NOT enable the assignee select for
 
     // A supervisor gets it back, in the current pipeline only.
     Store.user = { name: 'Supervisor', role: 'supervisor' };
+    Store.task.permissions.can_manage_assignments = true;
     setComponentReferenceMode(false);
     assert.equal(document.getElementById('assigned-to').disabled, false);
     setComponentReferenceMode(true);
@@ -494,6 +497,7 @@ test('detail-form leaving reference mode does NOT enable the assignee select for
     Store.user = savedUser;
     Store.project = savedProject;
     Store.pipeline = savedPipeline;
+    Store.task = savedTask;
   }
 });
 

@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import approve_task, create_project, get_tasks
+from conftest import approve_task, create_project, get_task_by_name, get_tasks
 
 PROSPECT_STAGES = {"Lead Assessment", "Risk Analysis", "Pre-Well Delivery"}
+SLIDES_FIELD = "segmentation_slides_loaded"
 
 
 
@@ -33,6 +34,16 @@ def _transition(client, task_id, action, revision):
     return client.post(f"/api/tasks/{task_id}/transition", json={
         "action": action, "revision": revision,
     })
+
+
+def _slides_ready_to_submit(client, pid, assignee="Employee"):
+    task = get_task_by_name(client, pid, "Segmentation Slides")
+    assigned = _assign(client, task["task_id"], assignee, task["revision"])
+    resp = client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields", json={
+        "fields": {SLIDES_FIELD: "1"},
+    })
+    assert resp.status_code == 200, resp.get_json()
+    return client.get(f"/api/tasks/{task['task_id']}").get_json()
 
 
 def _login(client, name):
@@ -71,8 +82,8 @@ def test_reassigning_an_in_progress_task_keeps_its_status(client):
 
 def test_submit_approve_flow_advances_project(client):
     pid = create_project(client, "LIFECYCLE-FLOW-1")
-    task = get_tasks(client, pid)[0]
-    assigned = _assign(client, task["task_id"], "Employee", task["revision"])
+    assigned = _slides_ready_to_submit(client, pid)
+    task = assigned
 
     resp = _transition(client, task["task_id"], "submit", assigned["revision"])
     assert resp.status_code == 200
@@ -87,14 +98,13 @@ def test_submit_approve_flow_advances_project(client):
     assert approved["actual_finish"] is not None
     assert approved["actual_start"] is not None
 
-    project = client.get(f"/api/projects/{pid}").get_json()
-    assert project["current_task"] == "Reservoir CoS"
+    assert approved["permissions"]["can_reopen"] is True
 
 
 def test_return_sends_ready_back_to_in_progress(client):
     pid = create_project(client, "LIFECYCLE-RETURN-1")
-    task = get_tasks(client, pid)[0]
-    assigned = _assign(client, task["task_id"], "Employee", task["revision"])
+    assigned = _slides_ready_to_submit(client, pid)
+    task = assigned
     ready = _transition(client, task["task_id"], "submit", assigned["revision"]).get_json()["task"]
 
     resp = _transition(client, task["task_id"], "return", ready["revision"])
@@ -109,17 +119,17 @@ def test_return_sends_ready_back_to_in_progress(client):
 # Wrong-state and unknown-action validation
 # ---------------------------------------------------------------------------
 
-def test_submit_requires_in_progress(client):
+def test_auto_complete_step_rejects_public_submit(client):
     pid = create_project(client, "WRONGSTATE-1")
     task = get_tasks(client, pid)[0]  # Not Assigned
     resp = _transition(client, task["task_id"], "submit", task["revision"])
     assert resp.status_code == 400
-    assert "Not Assigned" in resp.get_json()["detail"]
+    assert "completes automatically" in resp.get_json()["detail"]
 
 
 def test_approve_and_return_require_ready(client):
     pid = create_project(client, "WRONGSTATE-2")
-    task = get_tasks(client, pid)[0]
+    task = get_task_by_name(client, pid, "Segmentation Slides")
     assigned = _assign(client, task["task_id"], "Employee", task["revision"])  # In Progress
 
     resp = _transition(client, task["task_id"], "approve", assigned["revision"])
@@ -150,45 +160,33 @@ def test_employee_cannot_assign(client):
     assert resp.status_code == 403
 
 
-def test_only_supervisor_can_approve_and_only_assignee_or_supervisor_can_return(client):
+def test_only_supervisor_can_approve_or_return(client):
     pid = create_project(client, "ROLES-APPROVE-1")
-    task = get_tasks(client, pid)[0]
     _login(client, "Supervisor")
-    assigned = _assign(client, task["task_id"], "Employee", task["revision"])
+    assigned = _slides_ready_to_submit(client, pid)
+    task = assigned
     ready = _transition(client, task["task_id"], "submit", assigned["revision"]).get_json()["task"]
 
     _login(client, "Employee")
     resp = _transition(client, task["task_id"], "approve", ready["revision"])
     assert resp.status_code == 403
     resp = _transition(client, task["task_id"], "return", ready["revision"])
-    assert resp.status_code == 200
-    returned = resp.get_json()["task"]
-    assert returned["status"] == "In Progress"
-
-    # Staff may not approve either -- supervisor only.
-    _login(client, "Staff Member")
-    resp = _transition(client, task["task_id"], "approve", returned["revision"])
     assert resp.status_code == 403
 
-    # Staff can return a different Ready component just like an employee.
-    staff_pid = create_project(client, "ROLES-APPROVE-STAFF")
-    _login(client, "Supervisor")
-    staff_task = get_tasks(client, staff_pid)[0]
-    staff_assigned = _assign(client, staff_task["task_id"], "Staff Member", staff_task["revision"])
-    staff_ready = _transition(client, staff_task["task_id"], "submit", staff_assigned["revision"]).get_json()["task"]
+    # Staff may submit across assignments, but approval decisions remain
+    # supervisor-only.
     _login(client, "Staff Member")
-    resp = _transition(client, staff_task["task_id"], "return", staff_ready["revision"])
-    assert resp.status_code == 200
-    assert resp.get_json()["task"]["status"] == "In Progress"
-
-    _login(client, "Supervisor")
-    ready_again = _transition(client, task["task_id"], "submit", returned["revision"]).get_json()["task"]
-    _login(client, "Staff Member")
-    resp = _transition(client, task["task_id"], "return", ready_again["revision"])
+    resp = _transition(client, task["task_id"], "approve", ready["revision"])
     assert resp.status_code == 403
-    assert "assigned to you" in resp.get_json()["detail"]
+    resp = _transition(client, task["task_id"], "return", ready["revision"])
+    assert resp.status_code == 403
 
     _login(client, "Supervisor")
+    returned = _transition(client, task["task_id"], "return", ready["revision"])
+    assert returned.status_code == 200
+    ready_again = _transition(
+        client, task["task_id"], "submit", returned.get_json()["task"]["revision"]
+    ).get_json()["task"]
     resp = _transition(client, task["task_id"], "approve", ready_again["revision"])
     assert resp.status_code == 200
 
@@ -232,6 +230,7 @@ def test_save_cannot_bypass_the_priority_gate(client):
     _login(client, "Supervisor")
     assert client.patch(f"/api/tasks/{task['task_id']}/priority", json={"priority": "High"}).status_code == 200
     task = get_tasks(client, pid)[0]
+    task = _assign(client, task["task_id"], "Employee", task["revision"])
 
     _login(client, "Employee")
     resp = client.patch(f"/api/tasks/{task['task_id']}", json={
@@ -251,29 +250,27 @@ def test_save_cannot_bypass_the_priority_gate(client):
 
 
 def test_employee_can_submit_own_task_but_not_someone_elses(client):
-    pid = create_project(client, "ROLES-SUBMIT-1")
-    tasks = get_tasks(client, pid)
-    mine, theirs = tasks[0], tasks[1]
-
     _login(client, "Supervisor")
-    mine_assigned = _assign(client, mine["task_id"], "Employee", mine["revision"])
-    theirs_assigned = _assign(client, theirs["task_id"], "Staff Member", theirs["revision"])
+    mine_pid = create_project(client, "ROLES-SUBMIT-1-MINE")
+    their_pid = create_project(client, "ROLES-SUBMIT-1-THEIRS")
+    mine_assigned = _slides_ready_to_submit(client, mine_pid, "Employee")
+    theirs_assigned = _slides_ready_to_submit(client, their_pid, "Staff Member")
 
     _login(client, "Employee")
-    resp = _transition(client, theirs["task_id"], "submit", theirs_assigned["revision"])
+    resp = _transition(client, theirs_assigned["task_id"], "submit", theirs_assigned["revision"])
     assert resp.status_code == 403
     assert "assigned to you" in resp.get_json()["detail"]
 
-    resp = _transition(client, mine["task_id"], "submit", mine_assigned["revision"])
+    resp = _transition(client, mine_assigned["task_id"], "submit", mine_assigned["revision"])
     assert resp.status_code == 200
     assert resp.get_json()["task"]["status"] == "Ready"
 
 
 def test_staff_can_submit_a_task_assigned_to_someone_else(client):
     pid = create_project(client, "ROLES-SUBMIT-2")
-    task = get_tasks(client, pid)[0]
     _login(client, "Supervisor")
-    assigned = _assign(client, task["task_id"], "Employee", task["revision"])
+    assigned = _slides_ready_to_submit(client, pid, "Employee")
+    task = assigned
     _login(client, "Staff Member")
     resp = _transition(client, task["task_id"], "submit", assigned["revision"])
     assert resp.status_code == 200

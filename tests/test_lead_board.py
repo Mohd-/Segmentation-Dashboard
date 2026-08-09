@@ -40,10 +40,18 @@ def _assign(client, task, assignee):
 
 
 def _transition(client, task, action):
-    resp = client.post(f"/api/tasks/{task['task_id']}/transition",
-                       json={"action": action, "revision": task["revision"]})
-    assert resp.status_code == 200, resp.get_json()
-    return resp.get_json()["task"]
+    # Projection tests may place auto-complete tasks in legacy lifecycle states
+    # through the internal automation service. Public transitions are reserved
+    # for approval-required steps.
+    import db
+    import workflow
+    session = db.new_session()
+    try:
+        return workflow.transition_task(
+            session, task["task_id"], action,
+            expected_revision=task["revision"], automated=True)
+    finally:
+        session.close()
 
 
 def _satisfy_submit_requirements(client, pid, step_name):

@@ -99,7 +99,10 @@ test('business-plan renders the approved dashboard and one auto-save approval de
     project: { project_id: 7, project_name: 'MDFT-7', field: 'MDFT', business_plan_year: currentYear, priority: 'High' },
     detail: { slug: 'business-plan-gate', label: 'Business Plan Execution Gate', stage_key: 'pre_drilling',
       stage_label: 'Pre-Drilling', task_name: 'BP Execution Gate' },
-    task: { task_id: 13, status: 'In Progress' }, assignee: 'Supervisor', values: {},
+    task: { task_id: 13, status: 'In Progress', revision: 0 }, assignee: 'Supervisor', values: {},
+    permissions: { approval_required: true, approval_locked: false, can_edit: true,
+      can_submit: true, can_approve: false, can_return: false, can_reopen: false,
+      can_manage_assignments: true },
     comments_key: 'bpe_comments_business_plan_gate', formations: [], flowback_stages: [],
     // Card 3E: the record-level bundle the Well Summary is built from. It
     // carries EVERY formation phase (unlike `formations` above, which is this
@@ -367,7 +370,7 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   assert.equal(host.textContent.indexOf('Save Updates'), -1);
   assert.deepEqual(Array.prototype.map.call(host.querySelectorAll('.bpe-approval-row button'), function (button) {
     return button.textContent.trim();
-  }), ['Return', 'Approve', 'Submit for Approval']);
+  }), ['Submit for Approval']);
   assert.ok(host.querySelector('#bpe-summary-gear').classList.contains('ls-gear'));
   assert.ok(host.querySelector('#bpe-summary-menu').classList.contains('ls-menu'));
   assert.ok(host.querySelector('#bpe-edit-all').classList.contains('ls-menu-item'));
@@ -383,12 +386,17 @@ function detailPayload(slug, values) {
   var label = slug === 'flowback-results' ? 'Flowback Results' : 'Business Plan Execution Gate';
   var key = slug === 'flowback-results' ? 'flowback' : 'business-plan-gate';
   var stage = slug === 'flowback-results' ? 'Post-Testing' : 'Pre-Drilling';
+  var required = slug === 'business-plan-gate';
+  var permissions = { approval_required: required, approval_locked: false, can_edit: true,
+    can_submit: required, can_approve: false, can_return: false, can_reopen: false,
+    can_manage_assignments: true };
   return {
     role: 'supervisor',
     project: { project_id: 7, project_name: 'MDFT-7', field: 'MDFT', business_plan_year: 2027, priority: 'High' },
     detail: { slug: slug, label: label, stage_key: slug === 'flowback-results' ? 'post_testing' : 'pre_drilling',
       stage_label: stage, task_name: slug === 'flowback-results' ? 'Flowback Results' : 'BP Execution Gate' },
-    task: { task_id: 13, status: 'In Progress' }, assignee: 'Supervisor', values: values || {},
+    task: { task_id: 13, status: 'In Progress', revision: 0, permissions: permissions },
+    permissions: permissions, assignee: 'Supervisor', values: values || {},
     comments_key: 'bpe_comments_' + slug.replace(/-/g, '_'), formations: [], flowback_stages: [],
     flowback_initialized: false,
     fluid_state: { decision: 'incomplete', successful: false, fluids: [] }, sad_update_branch: 'blocked_fluid',
@@ -728,7 +736,7 @@ test('business-plan a refused Submit for Approval shows why and leaves navigatio
   mockFetch(function (url, options) {
     var path = String(url);
     var method = (options && options.method) || 'GET';
-    if (/\/steps\/[^/]+\/transition/.test(path) && method === 'POST') {
+    if (/\/api\/tasks\/13\/transition/.test(path) && method === 'POST') {
       return errorResponse(400, refusal);
     }
     var match = path.match(/\/steps\/([a-z-]+)(\?|$)/);
@@ -801,7 +809,7 @@ test('business-plan a transition that never reached the server offers Retry and 
   mockFetch(function (url, options) {
     var path = String(url);
     var method = (options && options.method) || 'GET';
-    if (/\/steps\/[^/]+\/transition/.test(path) && method === 'POST') throw new Error('network down');
+    if (/\/api\/tasks\/13\/transition/.test(path) && method === 'POST') throw new Error('network down');
     var match = path.match(/\/steps\/([a-z-]+)(\?|$)/);
     if (match && method === 'GET') {
       loads.push(match[1]);

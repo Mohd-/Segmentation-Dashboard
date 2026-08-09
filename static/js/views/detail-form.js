@@ -1,8 +1,8 @@
 import { byId, all, esc, isFilled, truthy, msg } from '../dom.js';
 import { API } from '../api.js';
 import { ICONS } from '../icons.js';
-import { currentUserName, currentRole, canManageAssignments, isCurrentPipelineView, Store } from '../state.js';
-import { SCHEMA, formationNames, FORMATION_METRICS, FLUID_TYPES, SEISMIC_BLOCKS, CHECKBOX_SUBMIT_STEPS, normalizeFlowbackStages, validateStepFields, numericFieldError, submitBlockedMessage } from '../schema.js';
+import { currentUserName, canManageAssignments, isCurrentPipelineView, Store } from '../state.js';
+import { SCHEMA, formationNames, FORMATION_METRICS, FLUID_TYPES, SEISMIC_BLOCKS, normalizeFlowbackStages, validateStepFields, numericFieldError, submitBlockedMessage } from '../schema.js';
 import { calculateTrapCos, calculateSealCos } from '../cos-rules.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { renderDetail, renderRightPanel, chooseInitialTask, tasksForPipeline, parseRepeatableRows, refreshAfterRecordChange, revealTaskStage } from './detail.js';
@@ -24,7 +24,8 @@ import {
 // this module only (a) tells it when the mounted task changed and (b) keeps
 // the focused control alive across the post-save re-render. Runtime-only
 // cycle (autosave.js imports saveComponent back), same as detail.js's.
-import { syncAutoSaveContext, captureEditorFocus, restoreEditorFocus } from './autosave.js';
+import { syncAutoSaveContext, flushAutoSave, captureEditorFocus, restoreEditorFocus } from './autosave.js';
+import { applyApprovalActions, approvalContentLocked } from './approval-policy.js';
 
 export function ensureUsers() {
   if (Store.users) return Promise.resolve(Store.users);
@@ -157,94 +158,11 @@ function resetActionButtons(buttons) {
   });
 }
 
-// Show one transition button with an optional relabel / restyle. `enabled`
-// false leaves it visible but disabled (the supervisor's Approved button on a
-// step nobody has submitted yet), with `title` explaining why.
-function showActionButton(button, options) {
-  if (!button) return;
-  options = options || {};
-  if (options.text) button.textContent = options.text;
-  if (options.className) button.className = options.className;
-  button.classList.remove('hidden');
-  button.disabled = options.enabled === false;
-  if (options.title) button.title = options.title;
-}
-
-// PER-STEP ACTION ROWS: task_name -> a function that lays out the row for that
-// step, given the same context the generic renderer computes. A step absent
-// from this map gets the generic lifecycle row below, unchanged.
-//
-// Card 3D, "Segmentation Slides": the deliverable's review gate.
-//   - EMPLOYEE (anyone who is not a supervisor): Save Updates ONLY. There is no
-//     Submit button because SAVING with the confirmation ticked IS the
-//     submission (schema.js CHECKBOX_SUBMIT_STEPS, server-side
-//     lifecycle.apply_checkbox_submission), and Approve/Return are a
-//     supervisor's decisions -- showing either here would be an invitation to a
-//     403.
-//   - SUPERVISOR: Save Updates, Approved and Return side by side. Both
-//     transitions need the step to be Ready (the server refuses otherwise), so
-//     on a step nobody has submitted they render disabled rather than vanishing
-//     -- the review controls are the point of the page for a supervisor, and a
-//     row that changes shape underneath them reads as a bug.
-var SPECIAL_ACTION_ROWS = {
-  // Card 3S moved this step onto the Business Plan Execution approval
-  // framework. What changed: an employee now SUBMITS explicitly instead of the
-  // ticked confirmation submitting on save -- a save is never a submission --
-  // and a supervisor may reopen an approved step.
-  //
-  // Approve and Return still render disabled rather than vanishing on a step
-  // nobody has submitted: the review controls are the point of this page for a
-  // supervisor, and a row that changes shape underneath them reads as a bug.
-  'Segmentation Slides': function (context) {
-    var pending = context.status === 'Ready';
-    var approved = context.status === 'Approved';
-    if (context.role !== 'supervisor') {
-      // The employee's half: one action, and only when there is something to
-      // ask for. The confirmation is a REQUIREMENT the server checks, so a
-      // submit with the box unticked is refused with a message naming it.
-      if (!approved && !pending) {
-        showActionButton(context.buttons['submit-component'], {
-          enabled: context.editable && (context.isAssignee || context.manage),
-          title: 'Ask a supervisor to review the segmentation slides'
-        });
-      }
-      return;
-    }
-    showActionButton(context.buttons['approve-component'], {
-      text: 'Approved',
-      className: 'ghost success-outline',
-      enabled: context.editable && pending,
-      title: pending ? 'Approve the segmentation slides' : 'Available once the slides are submitted for review'
-    });
-    showActionButton(context.buttons['return-component'], {
-      text: 'Return',
-      enabled: context.editable && pending,
-      title: pending ? 'Send the slides back for update' : 'Available once the slides are submitted for review'
-    });
-    if (approved) {
-      showActionButton(context.buttons['reopen-component'], {
-        enabled: context.editable,
-        title: 'Reopen for update. The earlier approval stays in the history.'
-      });
-    }
-  }
-};
-
 // Exported for the harness: the action row is a role/status decision, and the
 // only honest way to test "an employee never sees Approve/Return" is to render
 // it and look.
 export function renderActionButtons(task) {
-  var status = task.status || 'Not Assigned';
-  var role = currentRole();
-  var manage = canManageAssignments();
   var editable = isCurrentPipelineView();
-  var isAssignee = (function () {
-    if (!Store.user || !Store.user.name) return false;
-    var me = String(Store.user.name).toLowerCase();
-    var list = (task.assignees || []).map(function (m) { return String(m.name || '').toLowerCase(); });
-    if (!list.length && task.assigned_to) list = [String(task.assigned_to).toLowerCase()];
-    return list.indexOf(me) >= 0;
-  })();
   var buttons = actionButtons();
   resetActionButtons(buttons);
   // ITEM A: prospect step pages have no Save button -- persistence is the
@@ -255,32 +173,19 @@ export function renderActionButtons(task) {
   var prospectView = Store.pipeline === 'prospect';
   var saveButton = byId('save-component');
   if (saveButton) saveButton.classList.toggle('hidden', prospectView);
-  var special = SPECIAL_ACTION_ROWS[task.task_name];
-  if (special) {
-    special({ task: task, status: status, role: role, editable: editable,
-              isAssignee: isAssignee, manage: manage, buttons: buttons });
-    return;
-  }
-  // ITEM A3: with the server auto-approving prospect saves, the lifecycle
-  // buttons (Submit / Approve / Return) are furniture on every prospect step
-  // except Segmentation Slides (whose SPECIAL_ACTION_ROWS entry above keeps
-  // its checkbox-submit + supervisor review row). resetActionButtons has
-  // already hidden all three; the assignee control is untouched.
-  if (prospectView) return;
-  var submitButton = buttons['submit-component'];
-  var approveButton = buttons['approve-component'];
-  var returnButton = buttons['return-component'];
-  if (submitButton) submitButton.classList.toggle('hidden', !(editable && status === 'In Progress' && (manage || isAssignee)));
-  if (approveButton) approveButton.classList.toggle('hidden', !(editable && status === 'Ready' && role === 'supervisor'));
-  // A supervisor may return any Ready component; everyone else may return
-  // only work assigned to them. The backend enforces the same rule.
-  if (returnButton) returnButton.classList.toggle('hidden',
-    !(editable && status === 'Ready' && (role === 'supervisor' || isAssignee)));
+  applyApprovalActions({
+    return: buttons['return-component'],
+    submit: buttons['submit-component'],
+    approve: buttons['approve-component'],
+    reopen: buttons['reopen-component']
+  }, editable ? task.permissions : null);
 }
 
 export function setComponentReferenceMode(referenceOnly) {
   var form = byId('component-form');
   if (!form) return;
+  var permissions = (Store.task && Store.task.permissions) || null;
+  var contentReadOnly = referenceOnly || approvalContentLocked(permissions);
   // The sweep only touches the controls this mode OWNS. The assignee select is
   // gated by role (KI-002) and is re-applied explicitly below, so leaving
   // reference mode restores its role-based state instead of blanket-enabling
@@ -288,15 +193,15 @@ export function setComponentReferenceMode(referenceOnly) {
   // future markup move cannot silently re-open the hole.)
   all('input, select, textarea', form).forEach(function (control) {
     if (control.id === 'assigned-to') return;
-    control.disabled = referenceOnly;
+    control.disabled = contentReadOnly;
   });
   all('.add-repeatable-row, .remove-repeatable-row, .formation-remove, .pay-interval-add, .pay-interval-remove', form).forEach(function (button) {
-    button.disabled = referenceOnly;
+    button.disabled = contentReadOnly;
   });
   var saveButton = byId('save-component');
-  if (saveButton) saveButton.disabled = referenceOnly;
-  syncAssigneeGate(referenceOnly);
-  form.classList.toggle('reference-only', referenceOnly);
+  if (saveButton) saveButton.disabled = contentReadOnly;
+  syncAssigneeGate(referenceOnly || !permissions || !permissions.can_manage_assignments);
+  form.classList.toggle('reference-only', contentReadOnly);
 }
 
 // CONSOLIDATED PAGES (cards 2B and 4B). Some tracked items no longer have a
@@ -483,27 +388,30 @@ function removeManualAssignee(name) {
 var TRANSITION_MESSAGES = {
   submit: 'Component submitted for approval.',
   approve: 'Component approved.',
-  return: 'Component returned for update.'
+  return: 'Component returned for update.',
+  reopen: 'Component reopened for update.'
 };
 
 export function transitionComponent(action) {
   if (!Store.task) return;
   if (!isCurrentPipelineView()) return msg('Switch back to the current pipeline to change workflow status.', 'error');
-  // Submit gating (SCHEMA's REQUIRED_FIELDS_FOR_SUBMIT): a pre-check against
-  // the SAVED fields, so a blocked submit is a toast instead of a round-trip.
-  // The server runs the same rule and is the authority -- this only skips a
-  // request whose 400 we can already predict, and reads Store.allFields (what
-  // the server has) rather than the live form, so an unsaved tick correctly
-  // does not unlock it.
-  if (action === 'submit') {
-    var blocked = submitBlockedMessage(Store.task.task_name,
-                                       (Store.allFields || {})[Store.task.task_name]);
-    if (blocked) return msg(blocked, 'error');
-  }
-  API.transition(Store.task.task_id, {
-    action: action,
-    revision: Store.task.revision,
-    changed_by: currentUserName()
+  // Segment pages auto-save. A transition must observe those writes (and the
+  // fresh revision returned by their detail refresh) before validation runs.
+  return flushAutoSave().then(function (saved) {
+    if (!saved) throw new Error('Save the latest changes successfully before submitting.');
+    if (!Store.task || !Store.task.permissions || !Store.task.permissions['can_' + action]) {
+      throw new Error('This approval action is no longer available. Refresh the step and try again.');
+    }
+    if (action === 'submit') {
+      var blocked = submitBlockedMessage(Store.task.task_name,
+                                         (Store.allFields || {})[Store.task.task_name]);
+      if (blocked) throw new Error(blocked);
+    }
+    return API.transition(Store.task.task_id, {
+      action: action,
+      revision: Store.task.revision,
+      changed_by: currentUserName()
+    });
   }).then(function () {
     return refreshAfterRecordChange(TRANSITION_MESSAGES[action] || 'Component updated.');
   }).catch(function (error) { msg(error.message, 'error'); });
@@ -1328,17 +1236,9 @@ export function fallbackCopy(text) {
   area.remove();
   msg('Folder link copied.', 'success');
 }
-// What a completed save should say. Normally "Component saved."; on a
-// checkbox-submit step (card 3D) whose save also filed the review request --
-// the task came back Ready having not been Ready before -- it names the
-// submission, because the user clicked ONE button and two things happened.
-// Exported for the harness.
-export function savedMessage(savedTask, statusBeforeSave) {
-  var name = savedTask && savedTask.task_name;
-  if (name && CHECKBOX_SUBMIT_STEPS[name] &&
-      savedTask.status === 'Ready' && statusBeforeSave !== 'Ready') {
-    return 'Component saved and submitted for approval.';
-  }
+// Exported for the harness. Saves are drafts/content writes only; lifecycle
+// messages come exclusively from the transition endpoint.
+export function savedMessage() {
   return 'Component saved.';
 }
 
@@ -1347,13 +1247,16 @@ export function savedMessage(savedTask, statusBeforeSave) {
 //   { ok: true,  state: 'saved' | 'nochange' }
 //   { ok: false, state: 'invalid' | 'error', message }
 // `options.auto` marks an auto-save: success / no-change / error toasts are
-// suppressed (the indicator speaks instead; inline errors keep rendering),
-// with ONE exception below -- a save that doubled as a checkbox-submission
-// still announces itself, because a lifecycle change is not a routine save.
+// suppressed (the indicator speaks instead; inline errors keep rendering).
 export function saveComponent(event, options) {
   if (event && event.preventDefault) event.preventDefault();
   options = options || {};
   var auto = !!options.auto;
+  if (!Store.task || !Store.task.permissions || !Store.task.permissions.can_edit) {
+    var permissionMessage = 'You do not have permission to edit this step.';
+    if (!auto) msg(permissionMessage, 'error');
+    return Promise.resolve({ ok: false, state: 'error', message: permissionMessage });
+  }
   if (!Store.task) return Promise.resolve({ ok: false, state: 'error', message: 'No component selected.' });
   // Cards 2B / 4B: a consolidated workspace owns its own batched save (one
   // page, several owning tasks, one PATCH each). Checked FIRST because
@@ -1394,12 +1297,6 @@ export function saveComponent(event, options) {
   }
   var submitButton = byId('save-component');
   if (submitButton) submitButton.disabled = true;
-  // Card 3D: on a checkbox-submit step the SAVE may also have asked for a
-  // review (the server does both in the one PATCH -- see
-  // lifecycle.apply_checkbox_submission). The response's task row is the
-  // post-hook one, so comparing its status with the pre-save status is how the
-  // toast knows which of the two things just happened.
-  var statusBeforeSave = Store.task.status;
   var savedTask = null;
   // No status / assigned_to keys: Save only persists inputs. Status moves via
   // /transition and assignment via /assign; the backend preserves both when
@@ -1446,10 +1343,8 @@ export function saveComponent(event, options) {
     return Promise.resolve(loadComponent(nextTask)).then(function () {
       restoreEditorFocus(focusSnapshot);
       refreshAllBoards();
-      var savedNote = savedMessage(savedTask, statusBeforeSave);
-      // Auto saves stay quiet -- UNLESS this save also filed a submission
-      // (card 3D): a status change the user caused deserves its toast.
-      if (!auto || savedNote !== 'Component saved.') msg(savedNote, 'success');
+      var savedNote = savedMessage(savedTask);
+      if (!auto) msg(savedNote, 'success');
       return { ok: true, state: 'saved' };
     });
   }).catch(function (error) {

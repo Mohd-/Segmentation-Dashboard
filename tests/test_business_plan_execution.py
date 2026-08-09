@@ -195,20 +195,14 @@ def test_navigation_carries_every_step_status_for_the_detail_rail(client):
         "bp_gate_coring_program": "No",
         "bp_gate_slides_saved": "1",
     })
-    submitted = client.post(
-        f"/api/business-plan/wells/{project_id}/steps/business-plan-gate/transition",
-        json={"action": "submit"},
-    )
+    submitted = _transition(client, project_id, "submit")
     assert submitted.status_code == 200, submitted.get_json()
     assert statuses()["business-plan-gate"] == "Pending Approval"
 
 
 def test_gate_submission_requires_complete_draft_and_supervisor_approval(client):
     project_id = _bp_project(client)
-    incomplete = client.post(
-        f"/api/business-plan/wells/{project_id}/steps/business-plan-gate/transition",
-        json={"action": "submit"},
-    )
+    incomplete = _transition(client, project_id, "submit")
     assert incomplete.status_code == 400
     # Calculated Drilling Days is deliberately ABSENT: the field is locked (no
     # equation ships yet), so requiring it would leave the Gate unapprovable.
@@ -226,28 +220,27 @@ def test_gate_submission_requires_complete_draft_and_supervisor_approval(client)
         "bp_gate_coring_program": "No",
         "bp_gate_slides_saved": "1",
     })
-    submitted = client.post(
-        f"/api/business-plan/wells/{project_id}/steps/business-plan-gate/transition",
-        json={"action": "submit"},
-    )
+    submitted = _transition(client, project_id, "submit")
     assert submitted.status_code == 200, submitted.get_json()
-    assert submitted.get_json()["detail"]["tracking"][0]["status"] == "Pending Approval"
+    assert client.get(
+        f"/api/business-plan/wells/{project_id}/steps/business-plan-gate"
+    ).get_json()["tracking"][0]["status"] == "Pending Approval"
     pending_edit = _save(
         client, project_id, "business-plan-gate", "bp_gate_actual_drilling_days", 32)
     assert pending_edit.status_code == 400
     assert "must be returned" in pending_edit.get_json()["detail"]
-    approved = client.post(
-        f"/api/business-plan/wells/{project_id}/steps/business-plan-gate/transition",
-        json={"action": "approve"},
-    )
+    pending_comment = _save(
+        client, project_id, "business-plan-gate",
+        "bpe_comments_business_plan_gate", "review note")
+    assert pending_comment.status_code == 400
+    approved = _transition(client, project_id, "approve")
     assert approved.status_code == 200
-    assert approved.get_json()["detail"]["tracking"][0]["color"] == "green"
+    assert client.get(
+        f"/api/business-plan/wells/{project_id}/steps/business-plan-gate"
+    ).get_json()["tracking"][0]["color"] == "green"
     edit = _save(client, project_id, "business-plan-gate", "bp_gate_actual_drilling_days", 32)
     assert edit.status_code == 400
-    reopened = client.post(
-        f"/api/business-plan/wells/{project_id}/steps/business-plan-gate/transition",
-        json={"action": "reopen", "comment": "Scope changed"},
-    )
+    reopened = _transition(client, project_id, "reopen", comment="Scope changed")
     assert reopened.status_code == 200
     assert _save(client, project_id, "business-plan-gate", "bp_gate_actual_drilling_days", 32).status_code == 200
     approved_event = _history(client, project_id, "Component Approved")[-1]
@@ -256,6 +249,61 @@ def test_gate_submission_requires_complete_draft_and_supervisor_approval(client)
     assert approved_context["role"] == "supervisor"
     assert approved_context["source"] == "supervisor"
     assert approved_context["correlation"]
+
+
+def test_old_bpe_transition_route_is_removed_and_generic_content_routes_are_blocked(client):
+    project_id = _bp_project(client, "BPE-UNIFIED-ROUTE")
+    gate = get_task_by_name(client, project_id, "BP Execution Gate")
+
+    removed = client.post(
+        f"/api/business-plan/wells/{project_id}/steps/business-plan-gate/transition",
+        json={"action": "submit"})
+    assert removed.status_code == 404
+
+    generic_task = client.patch(f"/api/tasks/{gate['task_id']}", json={
+        "fields": {"bp_gate_classification": "Appraisal"},
+        "revision": gate["revision"],
+    })
+    assert generic_task.status_code == 400
+    assert "Business Plan step data API" in generic_task.get_json()["detail"]
+
+    generic_fields = client.patch(
+        f"/api/tasks/{gate['task_id']}/dynamic-fields",
+        json={"fields": {"bp_gate_classification": "Appraisal"}})
+    assert generic_fields.status_code == 400
+    assert "Business Plan step data API" in generic_fields.get_json()["detail"]
+
+    generic_formations = client.put(f"/api/projects/{project_id}/formations", json={
+        "phase": "quicklook", "source_task_id": gate["task_id"],
+        "rows": [{"formation": "SARH"}],
+    })
+    assert generic_formations.status_code == 400
+    assert "Business Plan step data API" in generic_formations.get_json()["detail"]
+
+
+def test_bpe_detail_publishes_shared_permissions_for_each_role(client):
+    project_id = _bp_project(client, "BPE-PERMISSIONS")
+    url = f"/api/business-plan/wells/{project_id}/steps/business-plan-gate"
+
+    _login(client, "Employee")
+    employee = client.get(url).get_json()["permissions"]
+    assert employee == {
+        "approval_required": True, "approval_locked": False,
+        "can_edit": False, "can_submit": False, "can_approve": False,
+        "can_return": False, "can_reopen": False,
+        "can_manage_assignments": False,
+    }
+
+    _login(client, "Staff Member")
+    staff = client.get(url).get_json()["permissions"]
+    assert staff["can_edit"] is True and staff["can_submit"] is True
+    assert not any(staff[key] for key in ("can_approve", "can_return", "can_reopen"))
+    assert staff["can_manage_assignments"] is True
+
+    _login(client, "Supervisor")
+    supervisor = client.get(url).get_json()["permissions"]
+    assert supervisor["can_edit"] is True and supervisor["can_submit"] is True
+    assert supervisor["can_manage_assignments"] is True
 
 
 def test_pay_intervals_keep_ids_and_water_dry_cascade_is_reversible(client):
@@ -807,10 +855,11 @@ def _submittable_gate(client, project_id):
 
 
 def _transition(client, project_id, action, slug="business-plan-gate", **extra):
-    payload = {"action": action}
+    detail = client.get(
+        f"/api/business-plan/wells/{project_id}/steps/{slug}").get_json()
+    payload = {"action": action, "revision": detail["task"]["revision"]}
     payload.update(extra)
-    return client.post(
-        f"/api/business-plan/wells/{project_id}/steps/{slug}/transition", json=payload)
+    return client.post(f"/api/tasks/{detail['task']['task_id']}/transition", json=payload)
 
 
 def _approve_every_other_task(client, project_id, except_name):

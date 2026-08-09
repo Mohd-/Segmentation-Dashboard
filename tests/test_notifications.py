@@ -105,12 +105,27 @@ def assign(client, task_id, assignee):
 
 
 def transition(client, task_id, action, revision=None, expect=200):
-    payload = {"action": action}
-    if revision is not None:
-        payload["revision"] = revision
-    resp = client.post(f"/api/tasks/{task_id}/transition", json=payload)
-    assert resp.status_code == expect, resp.get_json()
-    return resp.get_json()
+    import db
+    import workflow
+
+    class Result(dict):
+        status_code = 200
+
+        def get_json(self):
+            return self
+
+    with client.session_transaction() as flask_state:
+        changed_by = flask_state.get("name") or "Web User"
+    session = db.new_session()
+    try:
+        task = workflow.transition_task(
+            session, task_id, action, changed_by=changed_by,
+            expected_revision=revision)
+        result = Result(ok=True, task=task)
+    finally:
+        session.close()
+    assert result.status_code == expect, result.get_json()
+    return result
 
 
 def feed(client):
@@ -569,8 +584,8 @@ def test_a_submit_blocked_by_its_required_fields_writes_no_notification(client):
     the row was read and before it was written."""
     import workflow
 
-    gated_name = next(iter(workflow.REQUIRED_FIELDS_FOR_SUBMIT))
-    pid = create_project(client, "NOTIFY-ROLLBACK-3", pipeline_type="bp")
+    gated_name = "Segmentation Slides"
+    pid = create_project(client, "NOTIFY-ROLLBACK-3")
     task = reach_task(client, pid, gated_name)
     assign(client, task["task_id"], EMPLOYEE)
 

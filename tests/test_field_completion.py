@@ -51,6 +51,8 @@ def save(client, task, fields, expect=200, **extra):
     body.update(extra)
     resp = client.patch(f"/api/tasks/{task['task_id']}", json=body)
     assert resp.status_code == expect, resp.get_json()
+    if expect != 200:
+        return resp.get_json()
     return resp.get_json()["task"]
 
 
@@ -85,10 +87,14 @@ def _assign(client, task, assignee):
 
 
 def _transition(client, task, action):
-    resp = client.post(f"/api/tasks/{task['task_id']}/transition",
-                       json={"action": action, "revision": task["revision"]})
-    assert resp.status_code == 200, resp.get_json()
-    return resp.get_json()["task"]
+    import db
+    session = db.new_session()
+    try:
+        return workflow.transition_task(
+            session, task["task_id"], action,
+            expected_revision=task["revision"], automated=True)
+    finally:
+        session.close()
 
 
 def drive_to_approved(client, pid, step):
@@ -196,20 +202,20 @@ def test_reopen_is_published_but_supervisor_only(client):
     framework needs it.
     """
     pid = create_project(client, "FC-REOPEN-ROUTE")
-    task = drive_to_approved(client, pid, "Seismic Signature Validation")
+    task = drive_to_approved(client, pid, "Segmentation Slides")
 
     login(client, EMPLOYEE)
     resp = client.post(f"/api/tasks/{task['task_id']}/transition",
                        json={"action": "reopen", "revision": task["revision"]})
     assert resp.status_code == 403
-    assert get_task_by_name(client, pid, "Seismic Signature Validation")["status"] == "Approved"
+    assert get_task_by_name(client, pid, "Segmentation Slides")["status"] == "Approved"
 
     login(client, SUPERVISOR)
-    fresh = get_task_by_name(client, pid, "Seismic Signature Validation")
+    fresh = get_task_by_name(client, pid, "Segmentation Slides")
     resp = client.post(f"/api/tasks/{fresh['task_id']}/transition",
                        json={"action": "reopen", "revision": fresh["revision"]})
     assert resp.status_code == 200, resp.get_json()
-    assert get_task_by_name(client, pid, "Seismic Signature Validation")["status"] == "In Progress"
+    assert get_task_by_name(client, pid, "Segmentation Slides")["status"] == "In Progress"
 
 
 # ---------------------------------------------------------------------------
@@ -619,10 +625,9 @@ def test_steps_outside_the_table_are_untouched_by_their_own_saves(client):
     slides = drive_to_approved(client, pid, "Segmentation Slides")
     assert slides["status"] == "Approved"
 
-    # Segmentation Slides has no FIELD_COMPLETION entry, so saving it (with or
-    # without any confirmation-shaped key) never moves it.
-    touched = save(client, slides, {"seismic_slides_loaded": ""})
-    assert touched["status"] == "Approved"
+    # Approval-required content is immutable until a supervisor reopens it.
+    save(client, slides, {"seismic_slides_loaded": ""}, expect=400)
+    assert get_task_by_name(client, pid, "Segmentation Slides")["status"] == "Approved"
     assert tracked_item(client, pid, "Segmentation Slides") == "Completed"
 
 
@@ -669,7 +674,9 @@ def test_a_manual_submit_still_notifies_supervisors(client):
     _save_step(client, pid, "Segmentation Slides", {"segmentation_slides_loaded": "1"})
     task = _assign(client, get_task_by_name(client, pid, "Segmentation Slides"), EMPLOYEE)
     login(client, EMPLOYEE)
-    _transition(client, task, "submit")
+    resp = client.post(f"/api/tasks/{task['task_id']}/transition", json={
+        "action": "submit", "revision": task["revision"]})
+    assert resp.status_code == 200, resp.get_json()
 
     conn = raw_sqlite_connect(client.db_path)
     try:
@@ -1618,7 +1625,7 @@ def test_the_geox_assessment_auto_approves_when_its_mean_is_stored(client):
 # The BP execution pipeline is OUTSIDE the auto-approve policy
 # ---------------------------------------------------------------------------
 
-def test_bp_steps_never_auto_approve_on_save_and_keep_the_manual_walk(client):
+def test_bp_auto_steps_reject_generic_writes_and_manual_approval_actions(client):
     """The owner decision names SEGMENT MATURATION steps only.
 
     Well Delivery / Post-Drilling / Post-Testing keep the supervisor's
@@ -1629,19 +1636,14 @@ def test_bp_steps_never_auto_approve_on_save_and_keep_the_manual_walk(client):
     pid = create_project(client, "FC-BP-POLICY", pipeline_type="bp",
                          business_plan_enabled=True, business_plan_year=2027)
     task = get_task_by_name(client, pid, "Quicklook Logs")
-    saved = save(client, task, {"quicklook_pay_thickness_ft": "45",
-                                "quicklook_average_porosity_pct": "8",
-                                "quicklook_average_swt_pct": "35"})
-    assert saved["status"] == "In Progress"
-    assert not [row for row in history(client, task["task_id"])
-                if row["action_type"] in ("Field Completion", "Field Reopen")]
-    # The manual walk is untouched.
-    approved = drive_to_approved(client, pid, "Quicklook Logs")
-    assert approved["status"] == "Approved"
-    # A ticked sign-off pair on SAD Update is a submit GATE, not a completion.
-    sad = get_task_by_name(client, pid, "SAD Update")
-    saved = save(client, sad, {"sad_update_done": "1", "final_exec_summary_done": "1"})
-    assert saved["status"] == "In Progress"
+    blocked = client.patch(f"/api/tasks/{task['task_id']}", json={
+        "fields": {"quicklook_pdf": "1"}, "revision": task["revision"]})
+    assert blocked.status_code == 400
+    assert "Business Plan step data API" in blocked.get_json()["detail"]
+    manual = client.post(f"/api/tasks/{task['task_id']}/transition", json={
+        "action": "submit", "revision": task["revision"]})
+    assert manual.status_code == 400
+    assert "completes automatically" in manual.get_json()["detail"]
 
 
 def test_pre_well_delivery_four_of_four_matures_the_whole_lead(client):

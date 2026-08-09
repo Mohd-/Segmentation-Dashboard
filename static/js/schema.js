@@ -492,13 +492,9 @@ export var SCHEMA = {
     { key: 'final_las', label: 'Logs loaded as LAS in the shared folder', type: 'checkbox', row: 'final_logs' }
   ],
   'PVAD Structural MTR': [{ key: 'pvad_mtr_link', label: 'DRAS', type: 'link', value: 'https://DRAS/', linkText: 'Open PVAD Structural MTR (DRAS)' }],
-  // Card 3D. The one tracked item whose completion stays a HUMAN APPROVAL: the
-  // box is not a completion predicate (this step is deliberately absent from
-  // the server's FIELD_COMPLETION table), it is the REQUEST for one. Saving it
-  // ticked submits the step for review in the same action (server-side twin:
-  // workflow/constants.py CHECKBOX_SUBMIT_STEPS), which is why the employee's
-  // action row shows Save Updates alone -- see SPECIAL_ACTION_ROWS in
-  // views/detail-form.js.
+  // The one Segment Maturation item whose completion stays a human approval.
+  // Saving the checkbox only persists a draft; the shared transition action
+  // submits it after the autosave has completed.
   'Segmentation Slides': [
     { key: 'segmentation_slides_loaded', label: 'Segmentation slides placed in the shared folder', type: 'checkbox' }
   ],
@@ -524,25 +520,15 @@ export var REQUIRED_FIELDS_FOR_SUBMIT = {
   'SAD Update': [
     ['sad_update_done', 'SAD Update'],
     ['final_exec_summary_done', 'Final Executive Summary']
+  ],
+  'Segmentation Slides': [
+    ['segmentation_slides_loaded', 'Segmentation slides placed in the shared folder']
   ]
 };
 
-// ---------------------------------------------------------------------------
-// Checkbox-driven SUBMISSION (card 3D) -- the CLIENT MIRROR of
-// workflow/constants.py's CHECKBOX_SUBMIT_STEPS. task name -> the confirmation
-// whose ticked state makes a SAVE double as a submit-for-review.
-//
-// The server owns the behavior end to end (lifecycle.apply_checkbox_submission
-// runs on the same PATCH the Save button already sends, so a save is one round
-// trip either way). This mirror exists so the CLIENT can describe what just
-// happened -- the action row it renders (SPECIAL_ACTION_ROWS in
-// views/detail-form.js) and the toast the save shows -- without hard-coding a
-// step name in the view layer. Keep the two tables in sync.
-// ---------------------------------------------------------------------------
-
-export var CHECKBOX_SUBMIT_STEPS = {
-  'Segmentation Slides': 'segmentation_slides_loaded'
-};
+// Compatibility mirror of the server's deliberately empty legacy table. No
+// checkbox save submits a task; approval requests only use /transition.
+export var CHECKBOX_SUBMIT_STEPS = {};
 
 // Checkbox truthiness, matching dom.js truthy() and the server's
 // constants._CHECKBOX_TRUTHY.

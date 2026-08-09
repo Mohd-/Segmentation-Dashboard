@@ -71,12 +71,17 @@ def test_completed_at_set_on_completion_and_cleared_on_reopen(client):
     assert project["overall_status"] == "Completed"
     assert project["completed_at"]  # stamped at the completion transition
 
-    # Reopen one component: the project returns to In Progress and the stamp clears.
+    # Reopen one auto-complete component through the internal lifecycle service:
+    # public approval actions are reserved for approval-required steps.
     first = client.get(f"/api/tasks/{first_task_id}").get_json()
-    resp = client.post(f"/api/tasks/{first_task_id}/transition", json={
-        "action": "reopen", "revision": first["revision"],
-    })
-    assert resp.status_code == 200
+    import db as dbmod
+    import workflow
+    session = dbmod.new_session()
+    try:
+        workflow.transition_task(
+            session, first_task_id, "reopen", expected_revision=first["revision"])
+    finally:
+        session.close()
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["overall_status"] == "In Progress"
     assert project["completed_at"] is None
@@ -90,18 +95,24 @@ def test_completed_at_set_on_completion_and_cleared_on_reopen(client):
 def test_dashboard_metrics_function_excludes_archived_projects(client):
     import db as dbmod
     import reporting
+    import workflow
 
     pid = create_project(client, "METRICS-ARCHIVED-1")
     task = get_tasks(client, pid)[0]
     # v17 lifecycle: 'Ready' is the awaiting-approval state (the metric formerly
     # counted 'Under Review'). Put the first task there via assign -> submit.
-    assigned = client.post(f"/api/tasks/{task['task_id']}/assign", json={
-        "assigned_to": "Employee", "cascade": False, "revision": task["revision"],
-    }).get_json()["task"]
-    resp = client.post(f"/api/tasks/{task['task_id']}/transition", json={
-        "action": "submit", "revision": assigned["revision"],
-    })
-    assert resp.status_code == 200
+    session = dbmod.new_session()
+    try:
+        workflow.assign_task(
+            session, task["task_id"], "Employee", cascade=False,
+            expected_revision=task["revision"], automated=True,
+            force_activation=True)
+        assigned = workflow.get_task(session, task["task_id"])
+        workflow.transition_task(
+            session, task["task_id"], "submit",
+            expected_revision=assigned["revision"])
+    finally:
+        session.close()
 
     session = dbmod.new_session()
     try:

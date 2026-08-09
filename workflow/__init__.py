@@ -32,6 +32,15 @@ Conventions:
   users/projects, then lifecycle/promotion/summary, then formations.
 """
 from . import domain_roles
+from .approval import (
+    APPROVAL_POLICY,
+    approval_required,
+    attach_permissions as attach_task_permissions,
+    project_is_bpe,
+    require_content_edit,
+    task_is_bpe,
+    task_permissions,
+)
 from .constants import (
     ACTIVE_STATUSES,
     AUTO_APPROVE_ON_SAVE_STEPS,
@@ -160,7 +169,6 @@ from .business_plan import (
     save_field as save_bpe_field,
     save_flowback_stages as save_bpe_flowback_stages,
     save_formations as save_bpe_formations,
-    transition_approval as transition_bpe_approval,
 )
 
 __all__ = [
@@ -188,6 +196,9 @@ __all__ = [
     "StaleRevisionError", "applicable_stages", "checkbox_submit_met",
     "field_completion_met", "is_number", "positive_number",
     "unmet_submit_requirements",
+    # shared approval/write policy
+    "APPROVAL_POLICY", "approval_required", "attach_task_permissions",
+    "project_is_bpe", "require_content_edit", "task_is_bpe", "task_permissions",
     # users
     "SYSTEM_USER", "ensure_system_user", "find_active_user", "get_active_users",
     "get_active_users_with_roles",
@@ -225,5 +236,5 @@ __all__ = [
     "BPE_APPROVAL_DETAILS", "BPE_CLASSIFICATIONS", "BPE_DETAILS", "BPE_FLUIDS",
     "BPE_STAGES", "BPE_STEP_OPTIONS", "assign_bpe_detail", "get_bpe_dashboard",
     "get_bpe_detail", "save_bpe_field", "save_bpe_flowback_stages",
-    "save_bpe_formations", "transition_bpe_approval",
+    "save_bpe_formations",
 ]

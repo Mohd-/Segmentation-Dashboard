@@ -14,7 +14,18 @@ import pytest
 
 import config
 import portfolio_export
-from conftest import create_project, get_task_by_name, get_tasks, raw_sqlite_connect
+from conftest import create_project, get_task_by_name, get_tasks, raw_sqlite_connect, reach_task
+
+
+def _save_fields_internal(task_id, fields):
+    """Test setup for historical/retired values with no public BPE adapter."""
+    import db
+    import workflow
+    session = db.new_session()
+    try:
+        workflow.save_task_dynamic_fields(session, task_id, fields, reconcile=False)
+    finally:
+        session.close()
 
 
 # ---------------------------------------------------------------------------
@@ -625,7 +636,11 @@ def test_assign_task_unknown_assignee(client):
 
 def test_transition_task_shape(client):
     pid = create_project(client, "TRANSITION-CONTRACT-1")
-    task = get_tasks(client, pid)[0]
+    task = reach_task(client, pid, "Segmentation Slides")
+    saved = client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields", json={
+        "fields": {"segmentation_slides_loaded": "1"}})
+    assert saved.status_code == 200, saved.get_json()
+    task = get_task_by_name(client, pid, "Segmentation Slides")
     assigned = client.post(f"/api/tasks/{task['task_id']}/assign", json={
         "assigned_to": "Supervisor", "cascade": False, "revision": task["revision"],
     }).get_json()["task"]
@@ -863,9 +878,8 @@ def test_export_excel(client):
     bp_pid = create_project(client, "EXPORT-BP-1", pipeline_type="bp",
                              business_plan_enabled=True, business_plan_year=2030)
     flowback_task = get_task_by_name(client, bp_pid, "Flowback Results")
-    resp = client.patch(f"/api/tasks/{flowback_task['task_id']}/dynamic-fields",
-                         json={"fields": {"flowback_dynamic_ogip_bcf": "12.5"}})
-    assert resp.status_code == 200
+    _save_fields_internal(
+        flowback_task["task_id"], {"flowback_dynamic_ogip_bcf": "12.5"})
 
     resp = client.get("/api/export/excel")
     assert resp.status_code == 200
@@ -957,21 +971,18 @@ def test_export_flowback_columns_read_primary_stage(client):
     bp_pid = create_project(client, "EXPORT-BP-FB1", pipeline_type="bp",
                              business_plan_enabled=True, business_plan_year=2030)
     flowback_task = get_task_by_name(client, bp_pid, "Flowback Results")
-    resp = client.patch(f"/api/tasks/{flowback_task['task_id']}/dynamic-fields",
-                         json={"fields": {
-                             "flowback_stages_rows": json.dumps([
+    resp = client.put(f"/api/business-plan/wells/{bp_pid}/flowback-stages",
+                      json={"rows": [
                                  {"gas_rate_mmscfd": "", "water_rate_bwpd": "",
                                   "choke_size_in": "", "fwhp_psi": ""},
                                  {"gas_rate_mmscfd": "9.5", "water_rate_bwpd": "120",
                                   "liquid_rate_bpd": "75",
                                   "choke_size_in": "0.5", "fwhp_psi": ""},
                                  {"gas_rate_mmscfd": "4.2"},
-                             ]),
-                             # Retired flat keys: must lose to the stage row wholesale.
-                             "flowback_gas_rate_mmscfd": "1.1",
-                             "flowback_fwhp_psi": "888",
-                         }})
+                             ]})
     assert resp.status_code == 200
+    _save_fields_internal(flowback_task["task_id"], {
+        "flowback_gas_rate_mmscfd": "1.1", "flowback_fwhp_psi": "888"})
 
     resp = client.get("/api/export/excel")
     assert resp.status_code == 200
@@ -998,19 +1009,18 @@ def test_export_flowback_depth_only_stage_is_not_primary(client):
     bp_pid = create_project(client, "EXPORT-BP-FB3", pipeline_type="bp",
                              business_plan_enabled=True, business_plan_year=2030)
     flowback_task = get_task_by_name(client, bp_pid, "Flowback Results")
-    resp = client.patch(f"/api/tasks/{flowback_task['task_id']}/dynamic-fields",
-                         json={"fields": {
-                             "flowback_stages_rows": json.dumps([
+    resp = client.put(f"/api/business-plan/wells/{bp_pid}/flowback-stages",
+                      json={"rows": [
                                  {"flowback_top_md": "11200", "flowback_base_md": "11450"},
                                  {"flowback_top_md": "11500", "flowback_base_md": "11720",
                                   "flowback_gas_rate_mmscfd": "6.1", "flowback_choke_size_in": "0.5"},
-                             ]),
-                         }})
+                             ]})
     assert resp.status_code == 200
 
     stored = client.get(f"/api/tasks/{flowback_task['task_id']}/dynamic-fields").get_json()
     rows = json.loads(stored["flowback_stages_rows"])
-    assert rows[0] == {"flowback_top_md": "11200", "flowback_base_md": "11450"}
+    assert rows[0]["top_md"] == "11200"
+    assert rows[0]["base_md"] == "11450"
 
     resp = client.get("/api/export/excel")
     assert resp.status_code == 200
@@ -1031,15 +1041,13 @@ def test_export_flowback_columns_fall_back_to_flat_keys(client):
     bp_pid = create_project(client, "EXPORT-BP-FB2", pipeline_type="bp",
                              business_plan_enabled=True, business_plan_year=2030)
     flowback_task = get_task_by_name(client, bp_pid, "Flowback Results")
-    resp = client.patch(f"/api/tasks/{flowback_task['task_id']}/dynamic-fields",
-                         json={"fields": {
-                             "flowback_gas_rate_mmscfd": "3.3",
-                             "flowback_water_rate_bwpd": "450",
-                             "flowback_liquid_rate_bpd": "60",
-                             "flowback_choke_size_in": "0.75",
-                             "flowback_fwhp_psi": "2100",
-                         }})
-    assert resp.status_code == 200
+    _save_fields_internal(flowback_task["task_id"], {
+        "flowback_gas_rate_mmscfd": "3.3",
+        "flowback_water_rate_bwpd": "450",
+        "flowback_liquid_rate_bpd": "60",
+        "flowback_choke_size_in": "0.75",
+        "flowback_fwhp_psi": "2100",
+    })
 
     resp = client.get("/api/export/excel")
     assert resp.status_code == 200
@@ -1151,9 +1159,14 @@ def test_export_status_reads_sarh_formation_fluid(client):
     shows as the record's Status, since the step-level fluid selects are gone."""
     bp_pid = create_project(client, "EXPORT-FLUID-1", pipeline_type="bp",
                              business_plan_enabled=True, business_plan_year=2030)
-    resp = client.put(f"/api/projects/{bp_pid}/formations",
-                      json={"phase": "final", "rows": [{"formation": "SARH", "fluid": "Oil"}]})
-    assert resp.status_code == 200, resp.get_json()
+    import db
+    import workflow
+    session = db.new_session()
+    try:
+        workflow.upsert_project_formations(
+            session, bp_pid, "final", [{"formation": "SARH", "fluid": "Oil"}])
+    finally:
+        session.close()
 
     resp = client.get("/api/export/excel")
     assert resp.status_code == 200

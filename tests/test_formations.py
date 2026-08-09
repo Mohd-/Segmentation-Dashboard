@@ -25,10 +25,29 @@ SARH_ROW = {
 
 
 def _put(client, pid, phase, rows, source_task_id=None):
-    payload = {"phase": phase, "rows": rows}
-    if source_task_id is not None:
-        payload["source_task_id"] = source_task_id
-    return client.put(f"/api/projects/{pid}/formations", json=payload)
+    # These tests exercise the domain replacement/validation contract. Public
+    # BPE callers now use the specialized step adapter; bypass coverage lives
+    # in test_unified_approval.py.
+    import db
+    import workflow
+
+    class Result:
+        def __init__(self, status_code, body):
+            self.status_code = status_code
+            self._body = body
+
+        def get_json(self):
+            return self._body
+
+    session = db.new_session()
+    try:
+        formations = workflow.upsert_project_formations(
+            session, pid, phase, rows, source_task_id=source_task_id)
+        return Result(200, {"ok": True, "formations": formations})
+    except ValueError as exc:
+        return Result(400, {"detail": str(exc)})
+    finally:
+        session.close()
 
 
 # ---------------------------------------------------------------------------
@@ -694,10 +713,17 @@ def test_a_reopened_step_is_not_fought_by_later_formation_saves(client):
     pid = _bp_project(client, "AUTO-REOPEN-1")
     _put(client, pid, "quicklook", [_water_row()])
     task = get_task_by_name(client, pid, "Flowback Results")
-    # Reopen the auto-completed step via the transition endpoint.
-    resp = client.post(f"/api/tasks/{task['task_id']}/transition",
-                       json={"action": "reopen", "revision": task["revision"]})
-    assert resp.status_code == 200, resp.get_json()
+    # Reopen through the internal automation service; auto-complete tasks do
+    # not publish manual approval actions.
+    import db
+    import workflow
+    session = db.new_session()
+    try:
+        workflow.transition_task(
+            session, task["task_id"], "reopen",
+            expected_revision=task["revision"], automated=True)
+    finally:
+        session.close()
 
     # A save that BREAKS the condition changes nothing (not reversible)...
     assert _put(client, pid, "quicklook", [_water_row("Gas")]).status_code == 200

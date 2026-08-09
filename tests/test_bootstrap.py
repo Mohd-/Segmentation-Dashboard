@@ -438,10 +438,17 @@ def test_migration_v4_leaves_retired_step_data_readable_through_the_fallbacks(cl
     # rather than the two competing by luck of row order.
     sad_update = next(t for t in detail["tasks"] if t["task_name"] == "SAD Update")
     sad_model = next(t for t in detail["tasks"] if t["task_name"] == "SAD Model")
-    assert client.patch(f"/api/tasks/{sad_update['task_id']}/dynamic-fields",
-                        json={"fields": {"resource_update_gas_mean": "20.0"}}).status_code == 200
-    assert client.patch(f"/api/tasks/{sad_model['task_id']}/dynamic-fields",
-                        json={"fields": {"post_drill_fluid_type": "Dry"}}).status_code == 200
+    import workflow
+    session = dbmod.new_session()
+    try:
+        workflow.save_task_dynamic_fields(
+            session, sad_update["task_id"], {"resource_update_gas_mean": "20.0"},
+            reconcile=False)
+        workflow.save_task_dynamic_fields(
+            session, sad_model["task_id"], {"post_drill_fluid_type": "Dry"},
+            reconcile=False)
+    finally:
+        session.close()
 
     detail = client.get(f"/api/projects/{pid}/detail").get_json()
     assert detail["overview"]["post_drill_estimation"] == "20.0"

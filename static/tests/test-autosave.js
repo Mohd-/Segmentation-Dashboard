@@ -15,7 +15,7 @@
  */
 import { test, assert, fixture, mockFetch, waitFor } from './harness.js';
 import { Store } from '../js/state.js';
-import { loadComponent, saveComponent } from '../js/views/detail-form.js';
+import { loadComponent, saveComponent, transitionComponent } from '../js/views/detail-form.js';
 import { initAutoSave, configureAutoSaveDelay, resetAutoSave } from '../js/views/autosave.js';
 import { teardownStakingLetters } from '../js/views/staking-letters.js';
 
@@ -91,7 +91,10 @@ function toastText() {
 function geoxTask(state) {
   return { task_id: 91, task_name: 'Pre-Drilling GeoX Assessment', sequence_no: 12,
            stage_group: 'Pre-Well Delivery', status: 'In Progress', priority: 'Medium',
-           revision: state.revision, comments: state.comments, assigned_to: '' };
+           revision: state.revision, comments: state.comments, assigned_to: '',
+           permissions: { approval_required: false, approval_locked: false, can_edit: true,
+             can_submit: false, can_approve: false, can_return: false, can_reopen: false,
+             can_manage_assignments: true } };
 }
 
 // One mocked backend: fields + comments are real state, every task PATCH bumps
@@ -333,6 +336,88 @@ test('autosave: the indicator walks Saving… → Saved, and a blocked save show
   });
 });
 
+test('autosave: Segmentation Slides submit waits for its pending draft save and uses the fresh revision', function () {
+  return withAutoSave(async function () {
+    fixture(SHELL);
+    configureAutoSaveDelay(5000);
+    var state = { revision: 1, status: 'In Progress', fields: {} };
+    var calls = [];
+    var releasePatch = null;
+
+    function task() {
+      var locked = state.status !== 'In Progress';
+      return {
+        task_id: 92, task_name: 'Segmentation Slides', sequence_no: 9,
+        stage_group: 'Risk Analysis', status: state.status, priority: 'Medium',
+        revision: state.revision, comments: '', assigned_to: 'Employee',
+        permissions: {
+          approval_required: true, approval_locked: locked, can_edit: !locked,
+          can_submit: !locked, can_approve: false, can_return: false,
+          can_reopen: false, can_manage_assignments: true
+        }
+      };
+    }
+
+    mockFetch(function (url, options) {
+      var path = String(url);
+      var method = (options && options.method) || 'GET';
+      if (/\/api\/tasks\/92\/dynamic-fields(\?|$)/.test(path)) return jsonResponse(state.fields);
+      if (path.indexOf('/api/projects/44/component-folder/92') >= 0) {
+        return jsonResponse({ requires_folder: 0 });
+      }
+      if (/\/api\/tasks\/92(\?|$)/.test(path) && method === 'PATCH') {
+        var body = JSON.parse(options.body);
+        calls.push({ kind: 'save', revision: body.revision });
+        return new Promise(function (resolve) {
+          releasePatch = function () {
+            state.revision += 1;
+            state.fields = Object.assign({}, state.fields, body.fields);
+            resolve(jsonResponse({ ok: true, task: task() }));
+          };
+        });
+      }
+      if (path.indexOf('/api/tasks/92/transition') >= 0 && method === 'POST') {
+        var transitionBody = JSON.parse(options.body);
+        calls.push({ kind: 'transition', revision: transitionBody.revision });
+        state.revision += 1;
+        state.status = 'Ready';
+        return jsonResponse({ ok: true, task: task() });
+      }
+      if (path.indexOf('/api/projects/44/detail') >= 0) {
+        return jsonResponse({
+          project: { project_id: 44, project_name: 'Autosave Lead', pipeline_type: 'prospect' },
+          tasks: [task()], fields: { 'Segmentation Slides': state.fields },
+          overview: {}, formations: []
+        });
+      }
+      if (path.indexOf('/api/portfolio/rows') >= 0) return jsonResponse({ rows: [], summary: {} });
+      if (path.indexOf('/api/projects') >= 0) return jsonResponse([]);
+      if (path.indexOf('/api/users') >= 0) return jsonResponse([]);
+      throw new Error('Unexpected request: ' + method + ' ' + path);
+    });
+
+    Store.tasks = [task()];
+    Store.allFields = { 'Segmentation Slides': state.fields };
+    initAutoSave();
+    await loadComponent(Store.tasks[0]);
+    var checkbox = document.querySelector('[data-field="segmentation_slides_loaded"]');
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+
+    var pending = transitionComponent('submit');
+    await waitFor(function () { return calls.length === 1; });
+    assert.deepEqual(calls, [{ kind: 'save', revision: 1 }],
+      'submit is held while the draft PATCH is unresolved');
+    releasePatch();
+    await pending;
+
+    assert.deepEqual(calls, [
+      { kind: 'save', revision: 1 },
+      { kind: 'transition', revision: 2 }
+    ], 'the transition follows the save and uses its refreshed revision');
+  });
+});
+
 // --- the consolidated Staking Letters page rides the same controller ---------
 
 test('autosave: typing the staked Well Name auto-saves the Staking Letters plan (Item B end to end)', function () {
@@ -341,10 +426,16 @@ test('autosave: typing the staked Well Name auto-saves the Staking Letters plan 
     var tasks = [
       { task_id: 201, task_name: 'Approval to Stake', sequence_no: 10,
         stage_group: 'Pre-Well Delivery', status: 'In Progress', priority: 'Medium',
-        revision: 3, comments: '', assigned_to: '' },
+        revision: 3, comments: '', assigned_to: '', permissions: {
+          approval_required: false, approval_locked: false, can_edit: true,
+          can_submit: false, can_approve: false, can_return: false, can_reopen: false,
+          can_manage_assignments: true } },
       { task_id: 202, task_name: 'Well Site Location', sequence_no: 11,
         stage_group: 'Pre-Well Delivery', status: 'In Progress', priority: 'Medium',
-        revision: 5, comments: '', assigned_to: '' }
+        revision: 5, comments: '', assigned_to: '', permissions: {
+          approval_required: false, approval_locked: false, can_edit: true,
+          can_submit: false, can_approve: false, can_return: false, can_reopen: false,
+          can_manage_assignments: true } }
     ];
     var fields = {
       'Approval to Stake': { staking_well_created: '1', approval_stake_letter_loaded: '1' },

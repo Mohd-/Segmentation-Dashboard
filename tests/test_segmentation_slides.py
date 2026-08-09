@@ -195,18 +195,17 @@ def test_the_submission_notifies_the_supervisors(client):
         [{"recipient": SUPERVISOR, "actor": EMPLOYEE, "event": "submitted"}]
 
 
-def test_saving_a_pending_step_does_not_submit_it_again(client):
-    """A step already Ready is waiting on a supervisor: re-saving it (fixing a
-    typo in the comments) must not file the same review request again."""
+def test_saving_a_pending_step_is_locked_and_does_not_submit_again(client):
+    """A step already Ready is immutable until a supervisor returns it."""
     login(client, SUPERVISOR)
     pid = create_project(client, "SS-SUBMIT-2")
     task = assign(client, slides_task(client, pid), EMPLOYEE)
     login(client, EMPLOYEE)
     pending = submit(client, save(client, task, {BOX: "1"}))
 
-    again = save(client, pending, {BOX: "1"}, comments="second thoughts")
+    save(client, pending, {BOX: "1"}, comments="second thoughts", expect=400)
 
-    assert again["status"] == "Ready"
+    assert slides_task(client, pid)["status"] == "Ready"
     assert len([row for row in history(client, task["task_id"])
                 if row["action_type"] == "Component Submitted"]) == 1
     assert len(notifications(client, task["task_id"])) == 1
@@ -227,7 +226,7 @@ def test_an_unchecked_save_is_a_draft_and_leaves_the_status_alone(client):
     assert tracked_items(client, pid)[STEP] == "In Progress"
 
 
-def test_unticking_never_withdraws_a_pending_submission(client):
+def test_unticking_cannot_withdraw_a_locked_pending_submission(client):
     """There is no "withdraw" in the lifecycle, and inventing one here would
     silently cancel a review the supervisor may already be reading."""
     login(client, SUPERVISOR)
@@ -237,9 +236,9 @@ def test_unticking_never_withdraws_a_pending_submission(client):
     pending = submit(client, save(client, task, {BOX: "1"}))
     assert pending["status"] == "Ready"
 
-    still_pending = save(client, pending, {BOX: ""})
+    save(client, pending, {BOX: ""}, expect=400)
 
-    assert still_pending["status"] == "Ready"
+    assert slides_task(client, pid)["status"] == "Ready"
     assert tracked_items(client, pid)[STEP] == "Pending Approval"
 
 
@@ -255,9 +254,9 @@ def test_submitting_an_unassigned_step_is_refused_for_an_employee(client):
     task = slides_task(client, pid)
     assert task["status"] == "Not Assigned"
 
-    saved = save(client, task, {BOX: "1"})
-    assert saved["status"] == "Not Assigned", "still a draft"
-    submit(client, saved, expect=403)
+    save(client, task, {BOX: "1"}, expect=403)
+    assert slides_task(client, pid)["status"] == "Not Assigned"
+    submit(client, task, expect=403)
 
 
 def test_a_supervisor_may_submit_a_step_assigned_to_someone_else(client):

@@ -23,10 +23,7 @@
  *    and error toasts are all suppressed (the save fns take {auto: true} for
  *    exactly this), and the persistent #save-state indicator in the editor
  *    head carries the state instead -- 'Saving...', 'Saved', or the blocking
- *    message. Inline/strip validation errors keep rendering as before. The
- *    ONE exception lives in saveComponent itself: a save that doubled as a
- *    checkbox-submission (Segmentation Slides) still announces it, because a
- *    lifecycle change is not a routine save.
+ *    message. Inline/strip validation errors keep rendering as before.
  *
  * FOCUS PRESERVATION. The save fns re-render the whole form after saving
  * (loadComponent / refreshAfterRecordChange), which would steal the focus and
@@ -71,12 +68,24 @@ var queued = false;
 var session = 0;
 var boundProjectId = null;
 var boundTaskId = null;
+var idleWaiters = [];
+var flushFailed = false;
+
+function resolveIdleWaiters() {
+  if (timer || inFlight || queued) return;
+  var waiters = idleWaiters.slice();
+  idleWaiters = [];
+  var successful = !flushFailed;
+  flushFailed = false;
+  waiters.forEach(function (resolve) { resolve(successful); });
+}
 
 // Auto-save owns persistence ONLY on an editable prospect step page: the
 // record's operating pipeline is prospect AND the user is looking at it (a
 // reference view is read-only, a BP well keeps its Save button).
 export function autoSaveEligible() {
-  return !!Store.task && currentProjectPipeline() === 'prospect' && isCurrentPipelineView();
+  return !!Store.task && !!Store.task.permissions && Store.task.permissions.can_edit === true &&
+    currentProjectPipeline() === 'prospect' && isCurrentPipelineView();
 }
 
 // ---------------------------------------------------------------------------
@@ -98,6 +107,7 @@ export function resetAutoSave() {
   session += 1;
   if (timer) { clearTimeout(timer); timer = null; }
   queued = false;
+  resolveIdleWaiters();
   setSaveState('');
 }
 
@@ -126,7 +136,7 @@ function renderOutcome(outcome) {
 
 function fire() {
   timer = null;
-  if (!autoSaveEligible()) { queued = false; return; }
+  if (!autoSaveEligible()) { queued = false; resolveIdleWaiters(); return; }
   if (inFlight) { queued = true; return; }
   var mySession = session;
   inFlight = true;
@@ -134,10 +144,12 @@ function fire() {
   Promise.resolve()
     .then(function () { return saveComponent(null, { auto: true }); })
     .then(function (outcome) {
+      if (!outcome || !outcome.ok) flushFailed = true;
       if (session === mySession) renderOutcome(outcome);
     }, function (error) {
       // The save fns resolve their own failures; this catch is the belt for a
       // synchronous throw. Never a toast on the auto path.
+      flushFailed = true;
       if (session === mySession) setSaveState('error', error && error.message);
     })
     .then(function () {
@@ -148,6 +160,7 @@ function fire() {
         queued = false;
         if (session === mySession && autoSaveEligible()) fire();
       }
+      resolveIdleWaiters();
     });
 }
 
@@ -158,7 +171,12 @@ export function scheduleAutoSave() {
 
 export function flushAutoSave() {
   if (timer) { clearTimeout(timer); timer = null; }
-  fire();
+  if (!autoSaveEligible() && !inFlight) return Promise.resolve(true);
+  if (!idleWaiters.length) flushFailed = false;
+  var waiting = new Promise(function (resolve) { idleWaiters.push(resolve); });
+  if (inFlight) queued = true;
+  else fire();
+  return waiting;
 }
 
 // ---------------------------------------------------------------------------

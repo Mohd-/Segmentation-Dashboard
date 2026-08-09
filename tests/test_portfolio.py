@@ -69,17 +69,27 @@ def _row_for(client, pid):
 
 
 def _save_fields(client, pid, task_name, fields):
+    import db
+    import workflow
     task = get_task_by_name(client, pid, task_name)
-    resp = client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields", json={"fields": fields})
-    assert resp.status_code == 200, resp.get_json()
+    session = db.new_session()
+    try:
+        workflow.save_task_dynamic_fields(session, task["task_id"], fields)
+    finally:
+        session.close()
 
 
 def _put_sarh_fluid(client, pid, phase, fluid):
     """Upsert a SARH formation row carrying ``fluid`` at ``phase`` (the well
     inherits SARH's per-formation fluid, replacing the old step-level select)."""
-    resp = client.put(f"/api/projects/{pid}/formations",
-                      json={"phase": phase, "rows": [{"formation": "SARH", "fluid": fluid}]})
-    assert resp.status_code == 200, resp.get_json()
+    import db
+    import workflow
+    session = db.new_session()
+    try:
+        workflow.upsert_project_formations(
+            session, pid, phase, [{"formation": "SARH", "fluid": fluid}])
+    finally:
+        session.close()
 
 
 # ---------------------------------------------------------------------------

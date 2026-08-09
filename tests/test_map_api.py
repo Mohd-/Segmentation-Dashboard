@@ -373,10 +373,16 @@ def test_map_reporting_attributes_match_portfolio_semantics(client):
     assert well["p90_area_km2"] == "2.4"
     assert well["p10_area_km2"] == "9.8"
 
-    resp = client.put(f"/api/projects/{pid}/formations", json={
-        "phase": "final", "rows": [{"formation": "SARH", "fluid": "Gas"}],
-    })
-    assert resp.status_code == 200, resp.get_json()
+    # Reporting characterization uses the internal formation adapter; the
+    # public generic endpoint is intentionally unavailable for BPE content.
+    import db as dbmod
+    import workflow
+    session = dbmod.new_session()
+    try:
+        workflow.upsert_project_formations(
+            session, pid, "final", [{"formation": "SARH", "fluid": "Gas"}])
+    finally:
+        session.close()
     assert _well_for(client, pid)["record_status"] == "Gas"
 
 

@@ -18,9 +18,18 @@ from .constants import (
     PAY_INTERVAL_VALUE_FIELDS,
     applicable_stages,
 )
+from . import approval
 from .history import log_task_event
 from .lifecycle import ensure_task_approved, get_task
 from .projects import get_project
+
+
+_FORMATION_TASK_BY_PHASE = {
+    "quicklook": "Quicklook Logs",
+    "post_drill": "SAD Model",
+    "final": "Final Log Analysis",
+    "resource_update": "SAD Update",
+}
 from .users import ensure_system_user
 
 
@@ -236,7 +245,8 @@ def _clean_pay_intervals(raw, formation):
     return cleaned
 
 
-def upsert_project_formations(session, project_id, phase, rows, changed_by="Web User", source_task_id=None):
+def upsert_project_formations(session, project_id, phase, rows, changed_by="Web User", source_task_id=None,
+                              actor_role=None, actor_name=None, public_write=False):
     """Replace the formation rows for one phase; return the fresh full list.
 
     Each PUT is the full row set for its phase: rows in the payload are
@@ -324,6 +334,19 @@ def upsert_project_formations(session, project_id, phase, rows, changed_by="Web 
         project = get_project(session, project_id)
         if not project:
             raise ValueError("Lead / well not found.")
+        if public_write:
+            if approval.project_is_bpe(session, project_id):
+                raise ValueError(
+                    "Business Plan content must be changed through the Business Plan step data API.")
+            if source_task_id is None:
+                raise ValueError("source_task_id is required for a formation content save.")
+            source_task = get_task(session, source_task_id)
+            if not source_task or int(source_task.get("project_id") or 0) != int(project_id):
+                raise ValueError("The source component does not belong to this lead / well.")
+            if source_task.get("task_name") != _FORMATION_TASK_BY_PHASE.get(phase):
+                raise ValueError("The source component does not own this formation phase.")
+            approval.require_content_edit(
+                session, source_task, actor_role, actor_name)
         # Formations currently stored for this phase, captured BEFORE the
         # full-replacement DELETE so a PUT that only removes rows (empty payload
         # clearing a phase, or fewer rows than stored) can still name what it

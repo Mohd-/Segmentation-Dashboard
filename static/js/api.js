@@ -1,7 +1,7 @@
 import { currentUserName } from './state.js';
 import { loginDialog } from './dialog.js';
 
-var API_VERSION = '13';
+var API_VERSION = '14';
 
 export function requestUrl(path) {
   return path + (path.indexOf('?') >= 0 ? '&' : '?') + '_v=' + API_VERSION + '&_t=' + Date.now();
@@ -108,10 +108,6 @@ export var API = {
   saveBusinessPlanFlowback: function (projectId, rows) {
     return api('/api/business-plan/wells/' + projectId + '/flowback-stages',
       jsonOptions('PUT', { rows: rows, changed_by: currentUserName() }));
-  },
-  transitionBusinessPlan: function (projectId, step, action, comment) {
-    return api('/api/business-plan/wells/' + projectId + '/steps/' + encodeURIComponent(step) + '/transition',
-      jsonOptions('POST', { action: action, comment: comment || '', changed_by: currentUserName() }));
   },
   assignBusinessPlan: function (projectId, step, payload) {
     return api('/api/business-plan/wells/' + projectId + '/steps/' + encodeURIComponent(step) + '/assign',

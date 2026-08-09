@@ -7,7 +7,9 @@ In Progress. Every mutation is optimistic-lock guarded (StaleRevisionError
 """
 from __future__ import annotations
 
+import json
 import math
+import uuid
 from typing import Any, Dict, List, Optional, Set
 
 import cos
@@ -45,7 +47,7 @@ from .constants import (
     positive_number,
     unmet_submit_requirements,
 )
-from . import domain_roles
+from . import approval, domain_roles
 from .history import log_task_event
 from .notifications import notify_assignment, notify_transition
 from .projects import _fill_project_surfaces, _sync_completed_at, get_project
@@ -410,7 +412,8 @@ def _apply_dynamic_fields(session, task, fields, changed_by, now):
                        None, None, changed_by, f"Updated inputs: {listed}.")
 
 
-def save_task_dynamic_fields(session, task_id, fields, changed_by="Web User", reconcile=True):
+def save_task_dynamic_fields(session, task_id, fields, changed_by="Web User", reconcile=True,
+                             actor_role=None, actor_name=None, public_write=False):
     """Save a task's dynamic fields only (no status change, no revision check).
 
     Seal CoS is recomputed when the payload carries the form's inputs (a
@@ -454,6 +457,11 @@ def save_task_dynamic_fields(session, task_id, fields, changed_by="Web User", re
     guard_staking_name(session, task, fields)
     now = utc_now_str()
     with db.write_transaction(session):
+        if public_write:
+            locked_task = get_task(session, task_id)
+            approval.reject_generic_bpe_write(session, locked_task)
+            approval.require_content_edit(
+                session, locked_task, actor_role, actor_name)
         _apply_dynamic_fields(session, task, fields, changed_by, now)
         db.execute(session, "UPDATE project_tasks SET last_updated = :now WHERE task_id = :task_id",
                    {"now": now, "task_id": task_id})
@@ -463,7 +471,8 @@ def save_task_dynamic_fields(session, task_id, fields, changed_by="Web User", re
         apply_canonical_name(session, task_id, changed_by)
 
 
-def save_task(session, task_id, payload, changed_by="Web User", allow_priority_change=True):
+def save_task(session, task_id, payload, changed_by="Web User", allow_priority_change=True,
+              actor_role=None, actor_name=None, public_write=False):
     """Save a component atomically: fields, priority, status and workflow state.
 
     ``revision`` is optional for backward compatibility. When provided, stale
@@ -508,6 +517,9 @@ def save_task(session, task_id, payload, changed_by="Web User", allow_priority_c
         task = get_task(session, task_id)
         if not task:
             raise ValueError("Component not found.")
+        if public_write:
+            approval.reject_generic_bpe_write(session, task)
+            approval.require_content_edit(session, task, actor_role, actor_name)
         if not status_supplied:
             status = task.get("status") or "Not Assigned"
         current_revision = int(task.get("revision") or 0)
@@ -1021,69 +1033,76 @@ def update_task_assignees(session, task_id, add_names=None, remove_names=None, c
 
 
 def transition_task(session, task_id, action, changed_by="Web User", expected_revision=None,
-                    actor_role=None, actor_name=None, automated=False):
-    """Advance a component through the v17 lifecycle: submit / approve / return.
+                    actor_role=None, actor_name=None, automated=False, comment="",
+                    public_transition=False):
+    """Run the shared task transition state machine.
 
-    - ``submit``: "In Progress" -> "Ready". Supervisors/staff may submit any
-      component; an 'employee' may only submit a component assigned to them
-      (case-insensitive name match against ``actor_name`` -> PermissionError
-      / 403 otherwise). The supervisor-only gate for approve lives in the
-      route (require_role). A step listed in REQUIRED_FIELDS_FOR_SUBMIT must
-      additionally have its declared checkboxes ticked
-      (_check_submit_requirements -> ValueError / 400).
-    - ``approve``: "Ready" -> "Approved" (stamps actual_finish, backfills
-      actual_start like save_task does for done statuses).
-    - ``return``: "Ready" -> "In Progress" for supervisors or the component's
-      assignee (clears actual_finish if set). Other users receive 403.
-
-    - ``reopen``: "Approved" -> "In Progress". ENGINE-ONLY (see
-      constants.ENGINE_TRANSITIONS): it is not part of TASK_TRANSITIONS, and
-      main.py validates the request body's action against THAT table, so no
-      HTTP caller can reach it. Only the field-completion engine names it, when
-      a user unticks a confirmation on a step the engine itself closed. The
-      assignee is preserved (this function never writes assigned_to).
-
-    Wrong from-state or an unknown action -> ValueError (400). The supervisor-
-    only gate for ``approve`` lives in the route; the assignee check for
-    ``return`` lives here because it needs the task row. Optimistic locking
-    mirrors save_task (StaleRevisionError -> 409).
-    One history event is
-    logged with the old/new status; completed_at is re-synced (approve can
-    complete the applicable set, return/reopen reopens it). Returns the fresh
-    task row.
-
-    ``automated`` marks this transition as one leg of a driver's multi-step
-    walk rather than a human's click; it is forwarded to notify_transition,
-    which suppresses the pointless "asked for approval" fan-out of a submit
-    that the same walk approves microseconds later.
+    Authenticated/public calls are limited to registry approval steps and use
+    the same role matrix for both shells.  Internal automation passes
+    ``automated=True`` and may continue walking auto-complete tasks.  All
+    decision reads occur after the upfront write lock, and the update itself is
+    compare-and-set guarded by the task revision.
     """
     action_key = str(action or "").strip().lower()
     if action_key not in _ALL_TRANSITIONS:
-        raise ValueError("Unknown action. Use one of: submit, approve, return.")
-    required_status, new_status = _ALL_TRANSITIONS[action_key]
+        raise ValueError("Unknown action. Use one of: submit, approve, return, reopen.")
+    new_status = {
+        "submit": "Ready", "approve": "Approved",
+        "return": "In Progress", "reopen": "In Progress",
+    }[action_key]
 
     result: Dict[str, Any] = {}
-    task = get_task(session, task_id)
-    if not task:
-        raise ValueError("Component not found.")
-    project_id = task["project_id"]
-    task_assignee_names = domain_roles.get_assignee_names(session, task_id)
-    actor_lower = (actor_name or "").strip().lower()
-    is_current_assignee = any(a.strip().lower() == actor_lower for a in task_assignee_names)
+    project_id = None
+    bpe_slug = None
+    bpe_before = None
+    bpe_project = None
+    correlation = str(uuid.uuid4())
     with db.write_transaction(session):
-        if action_key == "submit" and actor_role == "employee":
-            if not is_current_assignee:
-                raise PermissionError("Forbidden: you can only submit components assigned to you.")
-        if action_key == "return" and actor_role != "supervisor":
-            if not is_current_assignee:
-                raise PermissionError("Forbidden: you can only return components assigned to you.")
+        task = get_task(session, task_id)
+        if not task:
+            raise ValueError("Component not found.")
+        project_id = task["project_id"]
         _check_expected_revision(task, expected_revision)
 
         old_status = task.get("status") or "Not Assigned"
-        if old_status != required_status:
+        if public_transition:
+            bpe_slug = approval.approval_detail_slug(session, task)
+            if not bpe_slug:
+                raise ValueError("This step completes automatically and does not use approval actions.")
+            permissions = approval.task_permissions(
+                session, task, actor_role, actor_name, bpe_slug if bpe_slug != "segment" else None)
+            permission_key = "can_" + action_key
+            if not permissions.get(permission_key):
+                # Role failures are authorization errors; valid-role clicks in
+                # the wrong lifecycle state are state errors.
+                if action_key in {"approve", "return", "reopen"} and actor_role != "supervisor":
+                    raise PermissionError("Only a Supervisor may perform this approval action.")
+                if action_key == "submit" and not approval.actor_may_edit(
+                        session, task, actor_role, actor_name):
+                    raise PermissionError(
+                        "Forbidden: you can only submit components assigned to you.")
+
+        expected_statuses = {
+            "submit": {"Not Assigned", "In Progress"} if not automated else {"In Progress"},
+            "approve": {"Ready"},
+            "return": {"Ready"},
+            "reopen": {"Approved"},
+        }[action_key]
+        if old_status not in expected_statuses:
             raise ValueError(
-                f'Cannot {action_key} a component in status "{old_status}" -- it must be "{required_status}".')
-        if action_key == "submit":
+                f'Cannot {action_key} a component in status "{old_status}".')
+
+        if public_transition and bpe_slug != "segment":
+            # BPE completeness/effective state remains authoritative, now
+            # called from the shared transition while the write lock is held.
+            from . import business_plan
+            bpe_project, _tasks, _fields, _formations, bpe_before = \
+                business_plan._project_context(session, project_id)
+            if action_key in {"submit", "approve"}:
+                errors = business_plan._approval_errors(bpe_slug, bpe_before)
+                if errors:
+                    raise ValueError(" ".join(errors))
+        elif action_key == "submit":
             _check_submit_requirements(session, task)
 
         today = today_str()
@@ -1108,9 +1127,19 @@ def transition_task(session, task_id, action, changed_by="Web User", expected_re
         if update_result.rowcount != 1:
             raise StaleRevisionError("This component was updated by someone else. Refresh and review the latest values.")
 
+        if bpe_slug and bpe_slug != "segment":
+            history_comment = json.dumps({
+                "role": actor_role,
+                "source": "supervisor" if actor_role == "supervisor" else "user",
+                "comment": str(comment or ""),
+                "correlation": correlation,
+            }, sort_keys=True, separators=(",", ":"))
+        else:
+            history_comment = str(comment or "").strip() or \
+                f"Status moved from {old_status} to {new_status}."
         log_task_event(session, task_id, task["project_id"], task["task_name"],
                        _TRANSITION_EVENTS[action_key], old_status, new_status, changed_by,
-                       f"Status moved from {old_status} to {new_status}.")
+                       history_comment)
 
         # The header bell's rows ride THIS transaction, right beside the audit
         # event they mirror: a transition that fails after this point (stale
@@ -1124,8 +1153,21 @@ def transition_task(session, task_id, action, changed_by="Web User", expected_re
         db.execute(session,
                    "UPDATE projects SET last_updated = :now, revision = revision + 1 WHERE project_id = :project_id",
                    {"now": now, "project_id": project_id})
+        if bpe_slug and bpe_slug != "segment":
+            from . import business_plan
+            new_tasks = business_plan._task_map(session, project_id)
+            new_effective = business_plan._effective_state(
+                bpe_project, new_tasks,
+                business_plan._field_maps(session, project_id),
+                business_plan._formation_rows(session, project_id))
+            business_plan._audit_effective_changes(
+                session, new_tasks, bpe_before, new_effective,
+                changed_by, actor_role, correlation, f"approval={action_key}")
         result = get_task(session, task_id) or {}
-    if action_key == "approve":
+    if bpe_slug and bpe_slug != "segment":
+        from . import business_plan
+        business_plan.activate_bpe_task(session, project_id, changed_by)
+    elif action_key == "approve":
         activate_next_task(session, project_id, changed_by)
     return result
 

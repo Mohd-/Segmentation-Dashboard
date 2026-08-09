@@ -17,6 +17,7 @@ import { numericFieldError, PDF_LABEL } from '../schema.js';
    into two cards. The import is one-directional (views/detail.js does not
    import this module) and both bindings are touched only inside functions. */
 import { wellSummaryBodyHtml, wireWellSummaryFolds } from './detail.js';
+import { approvalActionsMarkup, approvalContentLocked } from './approval-policy.js';
 
 var FLUIDS = ['Gas', 'Gas over Water', 'Water Bearing', 'Dry Hole', 'Oil', 'Oil over Gas', 'Oil over Water'];
 var STAGE_META = [
@@ -1566,23 +1567,9 @@ function drillingCheckHtml(project) {
 }
 
 function approvalMarkup() {
-  if (['business-plan-gate', 'sad-model', 'post-drill-learning-review', 'sad-model-update'].indexOf(state.detailSlug) < 0) return '';
-  if (state.detailSlug === 'sad-model-update' && state.detail.sad_update_branch !== 'manual_update') return '';
-  var tracking = (state.detail.tracking || [])[0] || { status: 'In Progress' };
-  var role = state.detail.role || currentRole();
-  var buttons = '';
-  if (role === 'supervisor') {
-    buttons += '<button type="button" data-bpe-transition="return" class="ghost" ' +
-      (tracking.status !== 'Pending Approval' ? 'disabled' : '') + '>Return</button>';
-    buttons += '<button type="button" data-bpe-transition="approve" ' +
-      (tracking.status !== 'Pending Approval' ? 'disabled' : '') + '>Approve</button>';
-  }
-  buttons += '<button type="button" data-bpe-transition="submit" ' +
-    (tracking.status !== 'In Progress' ? 'disabled' : '') + '>Submit for Approval</button>';
-  if (tracking.status === 'Completed' && role === 'supervisor') {
-    buttons += '<button type="button" data-bpe-transition="reopen" class="ghost">Reopen</button>';
-  }
-  return '<div class="bpe-approval-row">' + buttons + '</div>';
+  var buttons = approvalActionsMarkup(
+    state.detail.permissions, 'data-bpe-transition');
+  return buttons ? '<div class="bpe-approval-row">' + buttons + '</div>' : '';
 }
 
 var DETAIL_FOCUS_ATTRIBUTES = [
@@ -1644,14 +1631,11 @@ function restoreDetailFocus(snapshot) {
 }
 
 function applyDetailControlLocks() {
-  var tracking = (state.detail.tracking || [])[0] || {};
-  var approvalLocked = tracking.source === 'approval' &&
-    (tracking.status === 'Pending Approval' || tracking.status === 'Completed');
-  var comparisonLocked = state.detailSlug === 'sad-model-update' &&
-    state.detail.sad_update_branch !== 'manual_update';
-  if (!approvalLocked && !comparisonLocked) return;
-  all('[data-bpe-field]', byId('bpe-detail-view')).forEach(function (element) {
-    if (element.dataset.bpeField !== state.detail.comments_key) element.disabled = true;
+  if (!approvalContentLocked(state.detail.permissions)) return;
+  all('[data-bpe-field], [data-formation-field], [data-pay-field], [data-flow-field], ' +
+      '#bpe-add-formation, .bpe-add-pay, .bpe-remove-pay, .bpe-remove-formation, ' +
+      '#bpe-add-flow, .bpe-remove-flow', byId('bpe-detail-view')).forEach(function (element) {
+    element.disabled = true;
   });
 }
 
@@ -2335,7 +2319,16 @@ function transition(action) {
     var context = currentContext();
     var comment = value(state.detail.comments_key) || '';
     queueCommandSave(function () {
-      return API.transitionBusinessPlan(context.projectId, context.detailSlug, action, comment);
+      return API.transition(state.detail.task.task_id, {
+        action: action,
+        revision: state.detail.task.revision,
+        comment: comment,
+        changed_by: currentUserName()
+      }).then(function () {
+        return API.businessPlanDetail(context.projectId, context.detailSlug).then(function (detail) {
+          return { ok: true, detail: detail };
+        });
+      });
     }, { context: context, rerender: true });
   });
 }

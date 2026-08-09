@@ -530,20 +530,11 @@ test('schema.SCHEMA: Segmentation Slides is the single slides checkbox (card 3D)
   assert.equal(fields[0].showIf, undefined);
 });
 
-test('schema.CHECKBOX_SUBMIT_STEPS: mirrors the server table and names a real checkbox', function () {
-  // The mirror is what the view layer reads instead of hard-coding a step name;
-  // the SERVER (workflow/constants.py CHECKBOX_SUBMIT_STEPS ->
-  // lifecycle.apply_checkbox_submission) owns the behavior.
-  assert.deepEqual(Object.keys(CHECKBOX_SUBMIT_STEPS), ['Segmentation Slides']);
-  Object.keys(CHECKBOX_SUBMIT_STEPS).forEach(function (step) {
-    var key = CHECKBOX_SUBMIT_STEPS[step];
-    var field = (SCHEMA[step] || []).find(function (f) { return f.key === key; });
-    assert.ok(field, step + ' renders ' + key);
-    assert.equal(field.type, 'checkbox', key + ' is a checkbox');
-    // A submit REQUEST, never a submit GATE: the two mechanisms must not meet.
-    assert.equal(REQUIRED_FIELDS_FOR_SUBMIT[step], undefined,
-      step + ' has no manual submit gate — its save IS the submit');
-  });
+test('schema.CHECKBOX_SUBMIT_STEPS: no checkbox save submits a task', function () {
+  assert.deepEqual(CHECKBOX_SUBMIT_STEPS, {});
+  assert.deepEqual(REQUIRED_FIELDS_FOR_SUBMIT['Segmentation Slides'], [
+    ['segmentation_slides_loaded', 'Segmentation slides placed in the shared folder']
+  ], 'Segmentation Slides uses the checkbox only as an explicit-submit gate');
 });
 
 test('schema.SCHEMA: the completion confirmations are NOT submit-gate checkboxes', function () {

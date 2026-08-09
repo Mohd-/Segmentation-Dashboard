@@ -168,22 +168,17 @@ def test_recall_of_fully_matured_lead_stays_off_the_board(client):
     """Recalling a well whose prospect steps are ALL Approved keeps it off the
     maturation board: it derives as Completed and lands back in the Portfolio
     as a mature lead (Staked)."""
+    import db as dbmod
     import workflow
     pid = create_project(client, "RECALL-MATURE-1")
-    for task in get_tasks(client, pid):
-        if task["stage_group"] in workflow.PROSPECT_STAGES:
-            # A step may declare prerequisites for submitting (Card 3S gave
-            # Segmentation Slides one); satisfy whatever it declares.
-            required = workflow.REQUIRED_FIELDS_FOR_SUBMIT.get(task["task_name"], ())
-            if required:
-                client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
-                             json={"fields": {key: "1" for key, _label in required}})
-            resp = client.post(f"/api/tasks/{task['task_id']}/assign",
-                               json={"assigned_to": "Supervisor", "cascade": False})
-            assert resp.status_code == 200, resp.get_json()
-            client.post(f"/api/tasks/{task['task_id']}/transition", json={"action": "submit"})
-            resp = client.post(f"/api/tasks/{task['task_id']}/transition", json={"action": "approve"})
-            assert resp.status_code == 200, resp.get_json()
+    session = dbmod.new_session()
+    try:
+        for task in get_tasks(client, pid):
+            if task["stage_group"] in workflow.PROSPECT_STAGES:
+                workflow.ensure_task_approved(
+                    session, task["task_id"], "Supervisor", automated=True)
+    finally:
+        session.close()
     client.patch(f"/api/projects/{pid}/flags", json={
         "business_plan_enabled": True, "business_plan_year": 2027,
     })

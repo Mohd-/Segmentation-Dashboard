@@ -102,11 +102,17 @@ def test_moving_approved_back_to_in_progress_clears_actual_finish(client):
     saved = client.get(f"/api/tasks/{task['task_id']}").get_json()
     assert saved["actual_finish"] is not None
 
-    # Reopen (Approved -> In Progress) via the transition endpoint.
-    resp = client.post(f"/api/tasks/{task['task_id']}/transition", json={
-        "action": "reopen", "revision": saved["revision"],
-    })
-    saved2 = resp.get_json()["task"]
+    # Auto-complete tasks have no public approval actions; internal lifecycle
+    # automation can still reopen historical state.
+    import db as dbmod
+    import workflow
+    session = dbmod.new_session()
+    try:
+        saved2 = workflow.transition_task(
+            session, task["task_id"], "reopen",
+            expected_revision=saved["revision"])
+    finally:
+        session.close()
     assert saved2["actual_finish"] is None
     assert saved2["actual_start"] is not None  # actual_start survives
 
@@ -305,61 +311,49 @@ def _bp_project(client, name):
                           business_plan_enabled=True, business_plan_year=2029)
 
 
-def test_submit_is_blocked_until_both_sad_update_checkboxes_are_checked(client):
-    """SAD Update absorbed two sign-offs (the merged-away "SAD Update" and
-    "Executive Summary Final" steps) and may not be submitted until BOTH are
-    ticked. The server is the authority: the request 400s with the unmet
-    boxes named, and only unlocks once both fields hold a truthy value."""
-    pid = _bp_project(client, "GATE-SAD-1")
-    task = _assign_and_ready(client, pid, "SAD Update")
+def test_submit_is_blocked_until_segmentation_slides_checkbox_is_checked(client):
+    """The Segment approval cannot submit before its draft checkbox is saved."""
+    pid = create_project(client, "GATE-SLIDES-1")
+    task = _assign_and_ready(client, pid, "Segmentation Slides")
 
     resp = _submit(client, task)
     assert resp.status_code == 400, resp.get_json()
     message = resp.get_json()["detail"]
-    assert "SAD Update" in message and "Final Executive Summary" in message
+    assert "Segmentation slides" in message
     # Refused, not half-applied.
-    assert get_task_by_name(client, pid, "SAD Update")["status"] == "In Progress"
-
-    # One box is not enough, and the message narrows to what is still missing.
-    client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
-                 json={"fields": {"sad_update_done": "1"}})
-    task = get_task_by_name(client, pid, "SAD Update")
-    resp = _submit(client, task)
-    assert resp.status_code == 400
-    assert "Final Executive Summary" in resp.get_json()["detail"]
+    assert get_task_by_name(client, pid, "Segmentation Slides")["status"] == "In Progress"
 
     client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
-                 json={"fields": {"final_exec_summary_done": "1"}})
-    task = get_task_by_name(client, pid, "SAD Update")
+                 json={"fields": {"segmentation_slides_loaded": "1"}})
+    task = get_task_by_name(client, pid, "Segmentation Slides")
     resp = _submit(client, task)
     assert resp.status_code == 200, resp.get_json()
-    assert get_task_by_name(client, pid, "SAD Update")["status"] == "Ready"
+    assert get_task_by_name(client, pid, "Segmentation Slides")["status"] == "Ready"
 
 
 def test_submit_gate_rejects_a_falsy_checkbox_value(client):
     """An unticked checkbox saves as '' (or '0'), which must not pass the gate
     -- truthiness matches the app's '1'/'true'/'yes'/'on' vocabulary."""
-    pid = _bp_project(client, "GATE-SAD-2")
-    task = _assign_and_ready(client, pid, "SAD Update")
+    pid = create_project(client, "GATE-SLIDES-2")
+    task = _assign_and_ready(client, pid, "Segmentation Slides")
     client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
-                 json={"fields": {"sad_update_done": "1", "final_exec_summary_done": "0"}})
-    task = get_task_by_name(client, pid, "SAD Update")
+                 json={"fields": {"segmentation_slides_loaded": "0"}})
+    task = get_task_by_name(client, pid, "Segmentation Slides")
     assert _submit(client, task).status_code == 400
 
     client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
-                 json={"fields": {"final_exec_summary_done": "yes"}})
-    task = get_task_by_name(client, pid, "SAD Update")
+                 json={"fields": {"segmentation_slides_loaded": "yes"}})
+    task = get_task_by_name(client, pid, "Segmentation Slides")
     assert _submit(client, task).status_code == 200
 
 
-def test_submit_gate_leaves_ungated_steps_alone(client):
-    """The gate is declarative and empty for every other step: a neighbouring
-    BP step with no REQUIRED_FIELDS_FOR_SUBMIT entry submits with no fields at
-    all."""
+def test_auto_complete_steps_expose_no_public_submit(client):
     pid = _bp_project(client, "GATE-SAD-3")
-    task = _assign_and_ready(client, pid, "SAD Model")
-    assert _submit(client, task).status_code == 200
-    assert get_task_by_name(client, pid, "SAD Model")["status"] == "Ready"
+    task = _assign_and_ready(client, pid, "Flowback Results")
+    resp = _submit(client, task)
+    assert resp.status_code == 400
+    assert "completes automatically" in resp.get_json()["detail"]
+    assert get_task_by_name(client, pid, "Flowback Results")["status"] == "In Progress"
 
 
 def test_transition_approve_completes_and_reopen_clears_completed_at(client):
@@ -373,16 +367,14 @@ def test_transition_approve_completes_and_reopen_clears_completed_at(client):
         approve_task(client, task["task_id"])
     last = get_tasks(client, pid)[prospect[-1]["sequence_no"] - 1]
     assert last["task_name"] == "Pre-Drilling GeoX Assessment"
-    assigned = client.post(f"/api/tasks/{last['task_id']}/assign", json={
-        "assigned_to": "Employee", "cascade": False, "revision": last["revision"],
-    }).get_json()["task"]
-    ready = client.post(f"/api/tasks/{last['task_id']}/transition", json={
-        "action": "submit", "revision": assigned["revision"],
-    }).get_json()["task"]
-    resp = client.post(f"/api/tasks/{last['task_id']}/transition", json={
-        "action": "approve", "revision": ready["revision"],
-    })
-    assert resp.status_code == 200, resp.get_json()
+    import db as dbmod
+    import workflow
+    session = dbmod.new_session()
+    try:
+        workflow.ensure_task_approved(
+            session, last["task_id"], "Employee", automated=True)
+    finally:
+        session.close()
 
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["overall_status"] == "Completed"
@@ -391,13 +383,16 @@ def test_transition_approve_completes_and_reopen_clears_completed_at(client):
     assert project["current_stage"] == "Pre-Well Delivery"
     assert project["current_owner"] is None
 
-    # Reopen via the transition endpoint (Approved -> In Progress). The project
-    # reads In Progress again and the completion stamp is gone.
+    # Internal automation may reopen an auto-complete task; the public endpoint
+    # deliberately does not expose approval actions for it.
     approved = client.get(f"/api/tasks/{last['task_id']}").get_json()
-    resp = client.post(f"/api/tasks/{last['task_id']}/transition", json={
-        "action": "reopen", "revision": approved["revision"],
-    })
-    assert resp.status_code == 200, resp.get_json()
+    session = dbmod.new_session()
+    try:
+        workflow.transition_task(
+            session, last["task_id"], "reopen",
+            expected_revision=approved["revision"])
+    finally:
+        session.close()
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["overall_status"] == "In Progress"
     assert project["completed_at"] is None
