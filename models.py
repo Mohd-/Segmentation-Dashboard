@@ -341,10 +341,95 @@ class Notification(Base):
     read_at = Column(Text)
 
     __table_args__ = (
-        # The three lifecycle transitions, and nothing else: an unknown event
-        # string would render as an untitled row in the bell menu.
-        CheckConstraint("event IN ('submitted','approved','returned')"),
+        # The three lifecycle transitions plus assignment, and nothing else: an unknown
+        # event string would render as an untitled row in the bell menu.
+        CheckConstraint("event IN ('submitted','approved','returned','assigned')"),
         Index("idx_notifications_recipient_read", "recipient", "read_at"),
+        {"sqlite_autoincrement": True},
+    )
+
+
+class DomainRole(Base):
+    """A domain role catalog entry (Petrophysicist, Inversion Expert, etc.).
+
+    Domain roles are distinct from auth roles (supervisor/staff/employee).
+    A domain role groups users by expertise area; when a step mapped to that
+    role becomes the next unapproved step, every active member is assigned
+    and notified.
+    """
+    __tablename__ = "domain_roles"
+
+    role_id = Column(Integer, primary_key=True)
+    role_name = Column(Text, nullable=False)
+    created_at = Column(Text)
+
+    __table_args__ = (
+        Index("uq_domain_roles_role_name_lower", text("LOWER(role_name)"), unique=True),
+        {"sqlite_autoincrement": True},
+    )
+
+
+class DomainRoleMembership(Base):
+    """User-to-domain-role membership.
+
+    A user may belong to multiple domain roles. ``is_active`` controls whether
+    the membership counts for future task activation; deactivating a membership
+    is a snapshot change -- it affects only tasks reached afterwards.
+    """
+    __tablename__ = "domain_role_memberships"
+
+    id = Column(Integer, primary_key=True)
+    user_name = Column(Text, nullable=False)
+    role_id = Column(Integer, ForeignKey("domain_roles.role_id", ondelete="CASCADE"), nullable=False)
+    is_active = Column(Integer, nullable=False, server_default=text("1"))
+    created_at = Column(Text)
+
+    __table_args__ = (
+        UniqueConstraint("user_name", "role_id"),
+        Index("idx_domain_role_memberships_role_active", "role_id", "is_active"),
+        {"sqlite_autoincrement": True},
+    )
+
+
+class TaskDomainRoleMapping(Base):
+    """Default domain role per task name.
+
+    When a step becomes the next unapproved step in its active pipeline, the
+    mapped role's active members are assigned. One role per task name; unmapped
+    steps are manually started until a mapping is added.
+    """
+    __tablename__ = "task_domain_role_mappings"
+
+    id = Column(Integer, primary_key=True)
+    task_name = Column(Text, nullable=False, unique=True)
+    role_id = Column(Integer, ForeignKey("domain_roles.role_id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(Text)
+
+    __table_args__ = (
+        {"sqlite_autoincrement": True},
+    )
+
+
+class TaskAssignee(Base):
+    """Per-task multi-assignee rows.
+
+    Replaces the single ``project_tasks.assigned_to`` column as the authoritative
+    assignment relation. Each row records one assignee, whether the assignment
+    came from a role membership or was added manually, and whether the assignment
+    notification was sent (so retries and reopen do not duplicate alerts).
+    """
+    __tablename__ = "task_assignees"
+
+    id = Column(Integer, primary_key=True)
+    task_id = Column(Integer, ForeignKey("project_tasks.task_id", ondelete="CASCADE"), nullable=False)
+    assignee_name = Column(Text, nullable=False)
+    source = Column(Text, nullable=False, server_default=text("'manual'"))
+    notified = Column(Integer, nullable=False, server_default=text("0"))
+    created_at = Column(Text)
+
+    __table_args__ = (
+        UniqueConstraint("task_id", "assignee_name"),
+        Index("idx_task_assignees_task", "task_id"),
         {"sqlite_autoincrement": True},
     )
 

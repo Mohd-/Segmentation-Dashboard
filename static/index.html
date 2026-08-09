@@ -358,7 +358,10 @@
                role=status live region must exist BEFORE text lands to be
                announced, hence static markup rather than JS insertion. -->
           <span id="save-state" class="save-state" role="status" aria-live="polite"></span>
-          <select id="assigned-to" class="editor-assignee" aria-label="Assignee"></select>
+          <div id="assignment-group" class="assignment-group" aria-label="Task assignees">
+            <div id="assigned-members" class="assigned-members"></div>
+            <select id="assigned-to" class="editor-assignee" aria-label="Add assignee"></select>
+          </div>
           <span id="component-status-chip" class="status not-assigned editor-status-chip">Not Assigned</span>
         </div>
         <form id="component-form" class="component-form">

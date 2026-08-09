@@ -18,8 +18,7 @@ from conftest import create_project, get_tasks, raw_sqlite_connect
 # creation-auto-assignment assignees (config.STEP_ASSIGNMENT_RULES /
 # PRE_WELL_ASSIGNEES): they ride config.SEED_USERS so assignment resolves and
 # the assignee dropdown offers them.
-SEEDED = [("Employee", "employee"), ("Saad", "employee"), ("Salem", "employee"),
-          ("Staff Member", "staff"), ("Supervisor", "supervisor"), ("Tahira", "employee")]
+SEEDED = [("Employee", "employee"), ("Staff Member", "staff"), ("Supervisor", "supervisor")]
 
 
 # ---------------------------------------------------------------------------
@@ -29,21 +28,21 @@ SEEDED = [("Employee", "employee"), ("Saad", "employee"), ("Salem", "employee"),
 def test_login_me_logout_round_trip(client):
     # auth_required mirrors config.AUTH_REQUIRED (off by default here).
     me = client.get("/api/me").get_json()
-    assert me == {"authenticated": False, "name": None, "role": None, "auth_required": False}
+    assert me == {"authenticated": False, "name": None, "role": None, "domain_roles": [], "auth_required": False}
 
     resp = client.post("/api/login", json={"name": "  Staff Member  "})
     assert resp.status_code == 200
     assert resp.get_json() == {"ok": True, "name": "Staff Member", "role": "staff"}
 
     me = client.get("/api/me").get_json()
-    assert me == {"authenticated": True, "name": "Staff Member", "role": "staff", "auth_required": False}
+    assert me == {"authenticated": True, "name": "Staff Member", "role": "staff", "domain_roles": [], "auth_required": False}
 
     resp = client.post("/api/logout")
     assert resp.status_code == 200
     assert resp.get_json() == {"ok": True}
 
     me = client.get("/api/me").get_json()
-    assert me == {"authenticated": False, "name": None, "role": None, "auth_required": False}
+    assert me == {"authenticated": False, "name": None, "role": None, "domain_roles": [], "auth_required": False}
 
 
 def test_login_missing_or_bad_name_rejected(client):
@@ -71,7 +70,7 @@ def test_login_case_insensitive_returns_canonical_name(client):
     assert resp.get_json() == {"ok": True, "name": "Supervisor", "role": "supervisor"}
 
     me = client.get("/api/me").get_json()
-    assert me == {"authenticated": True, "name": "Supervisor", "role": "supervisor", "auth_required": False}
+    assert me == {"authenticated": True, "name": "Supervisor", "role": "supervisor", "domain_roles": [], "auth_required": False}
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +81,7 @@ def test_users_returns_seeded_users_ordered_by_name(client):
     resp = client.get("/api/users")
     assert resp.status_code == 200
     users = resp.get_json()
-    assert users == [{"name": name, "role": role} for name, role in SEEDED]
+    assert users == [{"name": name, "role": role, "domain_roles": []} for name, role in SEEDED]
     assert [u["name"] for u in users] == sorted(u["name"] for u in users)
 
 
@@ -94,7 +93,7 @@ def test_users_excludes_inactive(client):
 
     names = [u["name"] for u in client.get("/api/users").get_json()]
     assert "Employee" not in names
-    assert names == ["Saad", "Salem", "Staff Member", "Supervisor", "Tahira"]
+    assert names == ["Staff Member", "Supervisor"]
 
     # Deactivated users can no longer log in either.
     resp = client.post("/api/login", json={"name": "Employee"})
@@ -141,7 +140,7 @@ def test_login_with_configured_passcode(client, monkeypatch):
 
     resp = client.post("/api/login", json={"name": "Supervisor", "passcode": "s3cret"})
     assert resp.status_code == 200
-    assert client.get("/api/me").get_json() == {"authenticated": True, "name": "Supervisor", "role": "supervisor", "auth_required": False}
+    assert client.get("/api/me").get_json() == {"authenticated": True, "name": "Supervisor", "role": "supervisor", "domain_roles": [], "auth_required": False}
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +197,7 @@ def test_auth_required_blocks_api_until_login(client, monkeypatch):
     # /api/me stays open AND advertises auth_required: True so the front-end
     # fronts the app with the full-page login before any data/meta load.
     me = client.get("/api/me").get_json()
-    assert me == {"authenticated": False, "name": None, "role": None, "auth_required": True}
+    assert me == {"authenticated": False, "name": None, "role": None, "domain_roles": [], "auth_required": True}
 
     resp = client.post("/api/login", json={"name": "Supervisor"})
     assert resp.status_code == 200

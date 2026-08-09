@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import create_project, get_tasks, raw_sqlite_connect
+from conftest import approve_task, create_project, get_tasks, raw_sqlite_connect, reach_task
 
 # Seeded by config.SEED_USERS on every bootstrap.
 SUPERVISOR = "Supervisor"
@@ -78,9 +78,30 @@ def first_task(client, project_id):
 
 def assign(client, task_id, assignee):
     resp = client.post(f"/api/tasks/{task_id}/assign",
-                       json={"assignee": assignee, "cascade": False})
+                       json={"assigned_to": assignee, "cascade": False})
     assert resp.status_code == 200, resp.get_json()
-    return resp.get_json()["task"]
+    task = resp.get_json()["task"]
+    # These notification tests exercise transition fan-out, not reached-task
+    # ordering. A future manual assignment is intentionally only a silent
+    # preassignment now, so place it in the desired legacy active state.
+    if task["status"] == "Not Assigned":
+        import db as dbmod
+        import workflow
+        session = dbmod.new_session()
+        try:
+            workflow.lifecycle.activate_task(session, task_id, assignee)
+        finally:
+            session.close()
+        task = client.get(f"/api/tasks/{task_id}").get_json()
+    # These tests are about transition fan-out, not the assignment notification
+    # itself. Remove any assignment rows so assertions stay focused.
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        conn.execute("DELETE FROM notifications WHERE task_id = ? AND event = 'assigned'", (task_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    return task
 
 
 def transition(client, task_id, action, revision=None, expect=200):
@@ -210,14 +231,19 @@ def test_approve_by_the_assignee_themselves_notifies_nobody(client):
 
 
 def test_approve_of_an_unassigned_component_notifies_nobody(client):
-    """An unassigned step is reachable through a direct status write; a blank
+    """An unassigned step driven to Ready programmatically; a blank
     recipient must produce NO row rather than an empty-string one."""
     pid = create_project(client, "NOTIFY-UNASSIGNED-1")
     task = first_task(client, pid)
-    resp = client.patch(f"/api/tasks/{task['task_id']}",
-                        json={"status": "Ready", "revision": task["revision"]})
-    assert resp.status_code == 200
-    assert (resp.get_json()["task"]["assigned_to"] or "") == ""
+    import db as dbmod
+    import workflow
+    session = dbmod.new_session()
+    try:
+        workflow.save_task(session, task["task_id"], {"status": "Ready"})
+    finally:
+        session.close()
+    task = client.get(f"/api/tasks/{task['task_id']}").get_json()
+    assert (task["assigned_to"] or "") == ""
 
     login(client, SUPERVISOR)
     transition(client, task["task_id"], "approve")
@@ -313,11 +339,12 @@ def test_the_feed_shows_only_the_callers_own_rows_newest_first(client):
     pid = create_project(client, "NOTIFY-FEED-1")
     tasks = get_tasks(client, pid)
     for task in tasks[:2]:
+        task = reach_task(client, pid, task["task_name"])
         assign(client, task["task_id"], EMPLOYEE)
-    login(client, EMPLOYEE)
-    for task in tasks[:2]:
+        login(client, EMPLOYEE)
         transition(client, task["task_id"], "submit")
-    logout(client)
+        logout(client)
+        approve_task(client, task["task_id"])
 
     login(client, SUPERVISOR)
     payload = feed(client)
@@ -434,11 +461,12 @@ def test_read_all_is_idempotent_and_reports_how_many_it_marked(client):
     pid = create_project(client, "NOTIFY-READALL-1")
     tasks = get_tasks(client, pid)[:3]
     for task in tasks:
+        task = reach_task(client, pid, task["task_name"])
         assign(client, task["task_id"], EMPLOYEE)
-    login(client, EMPLOYEE)
-    for task in tasks:
+        login(client, EMPLOYEE)
         transition(client, task["task_id"], "submit")
-    logout(client)
+        logout(client)
+        approve_task(client, task["task_id"])
 
     login(client, SUPERVISOR)
     assert feed(client)["unread_count"] == 3
@@ -469,22 +497,29 @@ def test_read_all_with_no_session_is_a_harmless_no_op(client):
 def test_unread_count_tracks_arrivals_and_reads(client):
     pid = create_project(client, "NOTIFY-COUNT-1")
     tasks = get_tasks(client, pid)[:2]
-    for task in tasks:
-        assign(client, task["task_id"], EMPLOYEE)
+
+    # Reach, assign and submit the first task; it is still In Progress at this
+    # point so the employee can submit it.
+    task0 = reach_task(client, pid, tasks[0]["task_name"])
+    assign(client, task0["task_id"], EMPLOYEE)
 
     login(client, SUPERVISOR)
     assert feed(client)["unread_count"] == 0
     logout(client)
 
     login(client, EMPLOYEE)
-    transition(client, tasks[0]["task_id"], "submit")
+    transition(client, task0["task_id"], "submit")
     logout(client)
     login(client, SUPERVISOR)
     assert feed(client)["unread_count"] == 1
     logout(client)
 
+    # Approve the first task so the second one becomes reachable.
+    approve_task(client, task0["task_id"])
+    task1 = reach_task(client, pid, tasks[1]["task_name"])
+    assign(client, task1["task_id"], EMPLOYEE)
     login(client, EMPLOYEE)
-    transition(client, tasks[1]["task_id"], "submit")
+    transition(client, task1["task_id"], "submit")
     logout(client)
     login(client, SUPERVISOR)
     payload = feed(client)
@@ -536,7 +571,7 @@ def test_a_submit_blocked_by_its_required_fields_writes_no_notification(client):
 
     gated_name = next(iter(workflow.REQUIRED_FIELDS_FOR_SUBMIT))
     pid = create_project(client, "NOTIFY-ROLLBACK-3", pipeline_type="bp")
-    task = next(t for t in get_tasks(client, pid) if t["task_name"] == gated_name)
+    task = reach_task(client, pid, gated_name)
     assign(client, task["task_id"], EMPLOYEE)
 
     login(client, EMPLOYEE)
@@ -589,10 +624,12 @@ def test_list_notifications_honours_its_limit(client, app_modules):
     pid = create_project(client, "NOTIFY-LIMIT-1")
     tasks = get_tasks(client, pid)[:4]
     for task in tasks:
+        task = reach_task(client, pid, task["task_name"])
         assign(client, task["task_id"], EMPLOYEE)
-    login(client, EMPLOYEE)
-    for task in tasks:
+        login(client, EMPLOYEE)
         transition(client, task["task_id"], "submit")
+        logout(client)
+        approve_task(client, task["task_id"])
     logout(client)
 
     session = dbmod.new_session()

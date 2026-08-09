@@ -36,7 +36,8 @@ var DROPDOWN_SOURCE = 'header-menus';
 var EVENT_TITLES = {
   submitted: 'Submitted for approval',
   approved: 'Approved',
-  returned: 'Returned for update'
+  returned: 'Returned for update',
+  assigned: 'Assigned to you'
 };
 
 // Minimum gap between two BACKGROUND unread-count refreshes. The board's

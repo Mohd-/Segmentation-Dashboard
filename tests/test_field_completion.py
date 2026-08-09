@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 
 import workflow
-from conftest import create_project, get_task_by_name, raw_sqlite_connect
+from conftest import create_project, get_task_by_name, raw_sqlite_connect, reach_task
 
 SUPERVISOR = "Supervisor"
 EMPLOYEE = "Employee"
@@ -43,6 +43,9 @@ def save(client, task, fields, expect=200, **extra):
     Deliberately sends NO ``status`` key: that is what the v17 UI does, and the
     engine stands down on a save that drives status explicitly.
     """
+    if task.get("status") == "Not Assigned":
+        task = reach_task(client, task["project_id"], task["task_name"])
+        task = _assign(client, task, EMPLOYEE)
     body = {"fields": fields, "revision": task["revision"],
             "priority": task.get("priority") or "Medium"}
     body.update(extra)
@@ -67,13 +70,16 @@ def history(client, task_id):
 def tracked_item(client, pid, label):
     """One tracked item's board status (the dot the lead card renders)."""
     rows = client.get("/api/projects?pipeline_filter=prospect").get_json()
-    row = next(r for r in rows if r["project_id"] == pid)
+    row = next((r for r in rows if r["project_id"] == pid),
+               client.get(f"/api/projects/{pid}").get_json())
     return next(item["status"] for item in row["tracked_items"] if item["label"] == label)
 
 
 def _assign(client, task, assignee):
+    if task.get("status") == "Not Assigned":
+        task = reach_task(client, task["project_id"], task["task_name"])
     resp = client.post(f"/api/tasks/{task['task_id']}/assign",
-                       json={"assignee": assignee, "cascade": False, "revision": task["revision"]})
+                       json={"assigned_to": assignee, "cascade": False, "revision": task["revision"]})
     assert resp.status_code == 200, resp.get_json()
     return resp.get_json()["task"]
 
@@ -214,7 +220,7 @@ def test_checkbox_save_completes_the_step_with_no_approve_click(client):
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-SEISMIC-1")
     task = get_task_by_name(client, pid, "Seismic Signature Validation")
-    assert task["status"] == "In Progress"
+    assert task["status"] == "Not Assigned"
     assert tracked_item(client, pid, "Seismic Validation") == "In Progress"
 
     saved = save(client, task, {"seismic_slides_loaded": "1"})
@@ -242,9 +248,7 @@ def test_completion_logs_one_engine_event_naming_the_saving_user(client):
     assert engine[0]["changed_by"] == SUPERVISOR
     assert {row["changed_by"] for row in events} == {SUPERVISOR}
     # And it really WALKED the machine rather than writing Approved directly.
-    # "Component Assigned" comes FIRST now: creation auto-assignment assigned
-    # the step (In Progress) before any save, so the engine's walk resumes at
-    # submit -> approve with no assign leg of its own.
+    # The helper assigns the step first, then the engine walks submit -> approve.
     assert [row["action_type"] for row in events if row["action_type"].startswith("Component ")] == [
         "Component Assigned", "Component Inputs Updated", "Component Submitted", "Component Approved",
     ]
@@ -588,14 +592,22 @@ def test_legacy_approved_step_reopens_only_once_its_own_form_is_saved(client):
 
 
 def test_a_save_that_drives_status_explicitly_stands_the_engine_down(client):
-    """PATCH with a ``status`` key is a caller driving status directly (the
-    legacy path; the v17 UI never sends it). The engine must not reconcile a
-    deliberate choice straight back out."""
+    """A save that carries a ``status`` key is a caller driving status directly
+    (the legacy path; the v17 UI never sends it). The engine must not reconcile
+    a deliberate choice straight back out. The HTTP PATCH route now rejects
+    status keys, so exercise the domain save_task directly."""
+    import db as dbmod
+    import workflow
+
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-EXPLICIT-1")
     task = get_task_by_name(client, pid, "Seismic Signature Validation")
 
-    saved = save(client, task, {}, status="Approved")
+    session = dbmod.new_session()
+    try:
+        saved = workflow.save_task(session, task["task_id"], {"status": "Approved"})
+    finally:
+        session.close()
     assert saved["status"] == "Approved"
     assert not [row for row in history(client, task["task_id"])
                 if row["action_type"] in ("Field Completion", "Field Reopen")]
@@ -644,8 +656,9 @@ def test_the_engine_walk_does_not_spam_supervisors_with_a_submit(client):
         conn.close()
     assert [r for r in rows if r["event"] == "submitted"] == []
     # The approve resolves to "recipient == actor" (the saver owns the step), so
-    # it is suppressed by the pre-existing generic rule too.
-    assert rows == []
+    # it is suppressed by the pre-existing generic rule too. The manual
+    # pre-assignment may have generated a real "assigned" notification.
+    assert [r for r in rows if r["event"] in ("submitted", "approved")] == []
 
 
 def test_a_manual_submit_still_notifies_supervisors(client):
@@ -664,7 +677,7 @@ def test_a_manual_submit_still_notifies_supervisors(client):
             "SELECT recipient, event FROM notifications WHERE task_id = ?", (task["task_id"],))]
     finally:
         conn.close()
-    assert rows == [{"recipient": SUPERVISOR, "event": "submitted"}]
+    assert {"recipient": SUPERVISOR, "event": "submitted"} in rows
 
 
 # ---------------------------------------------------------------------------
@@ -690,13 +703,17 @@ THICKNESS_OK = {"reservoir_thickness_ft": "200", "formation_thickness_ft": "500"
 
 def _save_step(client, pid, step, fields, expect=200):
     task_name = LEAD_STEP if step in (AREA_STEP, THICKNESS_STEP, GRV_STEP, RA_STEP) else step
-    return save(client, get_task_by_name(client, pid, task_name), fields, expect=expect)
+    task = get_task_by_name(client, pid, task_name)
+    # v14: steps seed Not Assigned. Put the row into In Progress before saving
+    # so the field-completion engine can reconcile it.
+    if task["status"] == "Not Assigned":
+        task = _assign(client, task, EMPLOYEE)
+    return save(client, task, fields, expect=expect)
 
 
-def _assert_lead_lifecycle_not_field_driven(client, pid, expected="In Progress"):
-    # "In Progress" is a fresh logged-in lead's creation state now: the
-    # creation auto-assignment assigns every prospect step to its creator
-    # (or a configured rule assignee), which moves it out of Not Assigned.
+def _assert_lead_lifecycle_not_field_driven(client, pid, expected="Not Assigned"):
+    # v14: a fresh lead's Lead Assessment is inert until it is assigned; the
+    # invariant is that field writes alone never drive it to Approved.
     task = get_task_by_name(client, pid, LEAD_STEP)
     assert task["status"] == expected
     assert not [row for row in history(client, task["task_id"])
@@ -817,7 +834,7 @@ def test_a_completed_area_checkpoint_reopens_without_reopening_the_lifecycle(cli
     task = _save_step(client, pid, AREA_STEP, {"p10_area_km2": ""})
     assert task["status"] == "In Progress"
     assert tracked_item(client, pid, AREA_STEP) != "Completed"
-    _assert_lead_lifecycle_not_field_driven(client, pid)
+    _assert_lead_lifecycle_not_field_driven(client, pid, expected="In Progress")
 
 
 def test_the_tvdss_neither_completes_nor_reopens_area_definition(client):
@@ -1041,7 +1058,7 @@ def test_the_whole_page_one_save_turns_all_four_dots_green_and_auto_approves(cli
                     polygons_surfaces_loaded="1")
     _save_step(client, pid, LEAD_STEP, captured)
     # Three of four checkpoints: the aggregate is unmet, so nothing moved yet.
-    _assert_lead_lifecycle_not_field_driven(client, pid)
+    _assert_lead_lifecycle_not_field_driven(client, pid, expected="In Progress")
     ra = get_task_by_name(client, pid, LEAD_STEP)
     client.patch(f"/api/tasks/{ra['task_id']}/dynamic-fields",
                  json={"fields": {"lead_piip_gas_mean": "19.4"}})
@@ -1173,6 +1190,10 @@ def _direct_save(client, task_id, fields, **kwargs):
 
     session = db.new_session()
     try:
+        task = workflow.get_task(session, task_id)
+        if task and task.get("status") == "Not Assigned":
+            workflow.assign_task(session, task_id, EMPLOYEE, cascade=False,
+                                 changed_by="Bulk Writer")
         workflow.save_task_dynamic_fields(session, task_id, fields,
                                           changed_by="Bulk Writer", **kwargs)
     finally:
@@ -1216,7 +1237,7 @@ def test_the_default_still_reconciles_on_the_same_write(client):
     """
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-BULK-CONTROL")
-    task = get_task_by_name(client, pid, "Seismic Signature Validation")
+    task = reach_task(client, pid, "Seismic Signature Validation")
     # Closes...
     _direct_save(client, task["task_id"], {"seismic_slides_loaded": "1"})
     assert get_task_by_name(client, pid, "Seismic Signature Validation")["status"] == "Approved"
@@ -1236,7 +1257,7 @@ def test_the_http_fields_endpoint_updates_the_resource_checkpoint_without_lifecy
                         json={"fields": {"lead_piip_gas_mean": "19.4"}})
     assert resp.status_code == 200, resp.get_json()
     assert tracked_item(client, pid, RA_STEP) == "Completed"
-    _assert_lead_lifecycle_not_field_driven(client, pid)
+    _assert_lead_lifecycle_not_field_driven(client, pid, expected="In Progress")
 
 
 def test_the_submit_gate_tick_inside_the_approval_walk_does_not_reconcile(client):
@@ -1250,9 +1271,9 @@ def test_the_submit_gate_tick_inside_the_approval_walk_does_not_reconcile(client
     import workflow
 
     login(client, SUPERVISOR)
-    pid = create_project(client, "FC-BULK-GATE", business_plan_enabled=1,
-                         business_plan_year=2027)
-    task = get_task_by_name(client, pid, "SAD Update")
+    pid = create_project(client, "FC-BULK-GATE", pipeline_type="bp",
+                         business_plan_enabled=1, business_plan_year=2027)
+    task = reach_task(client, pid, "SAD Update")
     session = db.new_session()
     try:
         workflow.ensure_task_approved(session, task["task_id"], SUPERVISOR)
@@ -1579,6 +1600,7 @@ def test_the_geox_assessment_auto_approves_when_its_mean_is_stored(client):
     step = "Pre-Drilling GeoX Assessment"
     # The calculator write (the step's only input path) IS the completion.
     task = get_task_by_name(client, pid, step)
+    task = _assign(client, task, EMPLOYEE)
     client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
                  json={"fields": {"pre_drill_piip_gas_mean": "22.8"}})
     assert get_task_by_name(client, pid, step)["status"] == "Approved"
@@ -1610,16 +1632,16 @@ def test_bp_steps_never_auto_approve_on_save_and_keep_the_manual_walk(client):
     saved = save(client, task, {"quicklook_pay_thickness_ft": "45",
                                 "quicklook_average_porosity_pct": "8",
                                 "quicklook_average_swt_pct": "35"})
-    assert saved["status"] == "Not Assigned"
+    assert saved["status"] == "In Progress"
     assert not [row for row in history(client, task["task_id"])
                 if row["action_type"] in ("Field Completion", "Field Reopen")]
-    # A ticked sign-off pair on SAD Update is a submit GATE, not a completion.
-    sad = get_task_by_name(client, pid, "SAD Update")
-    saved = save(client, sad, {"sad_update_done": "1", "final_exec_summary_done": "1"})
-    assert saved["status"] == "Not Assigned"
     # The manual walk is untouched.
     approved = drive_to_approved(client, pid, "Quicklook Logs")
     assert approved["status"] == "Approved"
+    # A ticked sign-off pair on SAD Update is a submit GATE, not a completion.
+    sad = get_task_by_name(client, pid, "SAD Update")
+    saved = save(client, sad, {"sad_update_done": "1", "final_exec_summary_done": "1"})
+    assert saved["status"] == "In Progress"
 
 
 def test_pre_well_delivery_four_of_four_matures_the_whole_lead(client):
@@ -1653,6 +1675,7 @@ def test_pre_well_delivery_four_of_four_matures_the_whole_lead(client):
     _save_step(client, pid, "Seismic Signature Validation", {"seismic_slides_loaded": "1"})
     # Card 3D keeps its human approval, and Card 3S made the request for it
     # explicit: the save is a draft, the submit asks, a supervisor approves.
+    slides = _assign(client, get_task_by_name(client, pid, "Segmentation Slides"), EMPLOYEE)
     slides = _save_step(client, pid, "Segmentation Slides", {"segmentation_slides_loaded": "1"})
     assert slides["status"] == "In Progress", "a save is never a submission"
     slides = _transition(client, slides, "submit")
@@ -1667,6 +1690,7 @@ def test_pre_well_delivery_four_of_four_matures_the_whole_lead(client):
     _save_step(client, pid, STAKE_STEP, STAKE_OK)
     _save_step(client, pid, WELLSITE_STEP, WELLSITE_OK)
     geox = get_task_by_name(client, pid, "Pre-Drilling GeoX Assessment")
+    geox = _assign(client, geox, EMPLOYEE)
     client.patch(f"/api/tasks/{geox['task_id']}/dynamic-fields",
                  json={"fields": {"pre_drill_piip_gas_mean": "17.2"}})
 

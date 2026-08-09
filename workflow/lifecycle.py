@@ -8,13 +8,14 @@ In Progress. Every mutation is optimistic-lock guarded (StaleRevisionError
 from __future__ import annotations
 
 import math
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Set
 
 import cos
 import db
 from helpers import to_float_or_none, today_str, utc_now_str
 
 from .constants import (
+    ACTIVE_STATUSES,
     CANONICAL_RENAME_EVENT,
     CHECKBOX_SUBMIT_FROM_STATUSES,
     CHECKBOX_SUBMIT_STEPS,
@@ -44,11 +45,12 @@ from .constants import (
     positive_number,
     unmet_submit_requirements,
 )
+from . import domain_roles
 from .history import log_task_event
-from .notifications import notify_transition
+from .notifications import notify_assignment, notify_transition
 from .projects import _fill_project_surfaces, _sync_completed_at, get_project
 from .summary import _task_field_value, first_reservoir_cos_row_value
-from .users import ensure_system_user, find_active_user
+from .users import SYSTEM_USER, ensure_system_user, find_active_user
 
 # The Seal CoS form's manual inputs (cos.calculate_seal_cos reads exactly
 # these). Their presence in a save payload is what marks it as a form save
@@ -219,19 +221,114 @@ def _apply_seal_cos_calculation(task, fields):
     return fields
 
 
+def _task_assignee_payload(rows):
+    """Convert task_assignees rows to the API assignee shape."""
+    return [
+        {"name": r["assignee_name"], "source": r["source"], "notified": bool(r["notified"])}
+        for r in rows
+    ]
+
+
+def _enrich_task(session, task):
+    """Add assignees and default_domain_role to a single task dict, in place."""
+    if not task:
+        return task
+    task["assignees"] = _task_assignee_payload(domain_roles.list_task_assignees(session, task["task_id"]))
+    mapping = domain_roles.get_task_mapping(session, task.get("task_name") or "")
+    task["default_domain_role"] = mapping["role_name"] if mapping else None
+    # project_tasks.assigned_to stays the primary (first alphabetical) assignee
+    # for legacy readers; task_assignees is the authoritative source.
+    return task
+
+
+def _enrich_tasks(session, tasks):
+    """Add assignees and default_domain_role to a batch of task dicts, in place."""
+    if not tasks:
+        return tasks
+    task_ids = [t["task_id"] for t in tasks]
+    assignees_map = domain_roles.get_task_assignees_map(session, task_ids)
+    mappings_map = domain_roles.get_task_mappings_for_names(
+        session, [t.get("task_name") for t in tasks if t.get("task_name")])
+    for task in tasks:
+        task["assignees"] = _task_assignee_payload(assignees_map.get(task["task_id"], []))
+        task["default_domain_role"] = mappings_map.get(task.get("task_name"))
+    return tasks
+
+
 def get_project_tasks(session, project_id):
-    """Return the active task rows for a project, ordered by sequence."""
-    return db.fetch_all(session, """
+    """Return the active task rows for a project, ordered by sequence.
+
+    Each row is enriched with ``assignees`` (list of {name, source, notified})
+    and ``default_domain_role`` (mapped role name or None). ``assigned_to`` is
+    retained as the deprecated primary-assignee field.
+    """
+    rows = db.fetch_all(session, """
         SELECT * FROM project_tasks
         WHERE project_id = :project_id AND is_active = 1
         ORDER BY sequence_no
     """, {"project_id": project_id})
+    return _enrich_tasks(session, rows)
 
 
 def get_task(session, task_id):
-    """Return one task row dict, or None."""
-    return db.fetch_one(session, "SELECT * FROM project_tasks WHERE task_id = :task_id",
+    """Return one task row dict, or None.
+
+    The row is enriched with ``assignees`` (list of {name, source, notified})
+    and ``default_domain_role`` (mapped role name or None). ``assigned_to`` is
+    retained as the deprecated primary-assignee field.
+    """
+    task = db.fetch_one(session, "SELECT * FROM project_tasks WHERE task_id = :task_id",
                         {"task_id": task_id})
+    return _enrich_task(session, task)
+
+
+def _reached_task(session, project_id):
+    """Return the first unfinished task in the project's active pipeline.
+
+    A task is *reached* only when every earlier applicable step is Approved.
+    Assignment paths use this one predicate so a supervisor can prepare future
+    work without accidentally starting it, stamping dates, or notifying staff.
+    """
+    project = get_project(session, project_id) or {}
+    stages = applicable_stages(project.get("pipeline_type"))
+    return db.fetch_one(session, """
+        SELECT * FROM project_tasks
+        WHERE project_id = :project_id AND is_active = 1
+          AND stage_group IN :stages AND status != 'Approved'
+        ORDER BY sequence_no
+        LIMIT 1
+    """, {"project_id": project_id, "stages": stages})
+
+
+def _insert_task_assignee(session, task_id, name, source, now):
+    """Insert one assignment if absent; return whether a row was created."""
+    existing = db.fetch_one(session, """
+        SELECT id FROM task_assignees
+        WHERE task_id = :task_id AND assignee_name = :name
+    """, {"task_id": task_id, "name": name})
+    if existing:
+        return False
+    db.execute(session, """
+        INSERT INTO task_assignees (task_id, assignee_name, source, notified, created_at)
+        VALUES (:task_id, :name, :source, 0, :now)
+    """, {"task_id": task_id, "name": name, "source": source, "now": now})
+    return True
+
+
+def _sync_primary_assignee_locked(session, task_id):
+    """Derive the legacy scalar owner from authoritative assignee rows.
+
+    The caller must hold ``db.write_transaction``.  No domain path may write
+    ``project_tasks.assigned_to`` directly: assignment mutations update
+    ``task_assignees`` first, then use this helper to keep the compatibility
+    column in sync for legacy readers.
+    """
+    primary = domain_roles.get_primary_assignee(session, task_id)
+    db.execute(session, """
+        UPDATE project_tasks SET assigned_to = :assigned_to
+        WHERE task_id = :task_id
+    """, {"assigned_to": primary, "task_id": task_id})
+    return primary
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +481,9 @@ def save_task(session, task_id, payload, changed_by="Web User", allow_priority_c
     workflow/promotion.py, the single writer of promotion state).
     """
     payload = payload or {}
+    if "assigned_to" in payload:
+        raise ValueError(
+            "assigned_to is a derived field; use the assignees service to change assignments.")
     fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
     expected_revision = payload.get("revision")
     # ``status`` is optional (the v17 UI drives status via /assign and
@@ -394,8 +494,6 @@ def save_task(session, task_id, payload, changed_by="Web User", allow_priority_c
     status = str(payload.get("status") or "").strip() if status_supplied else None
     if status_supplied and status not in STATUSES:
         raise ValueError("Invalid component status.")
-    assigned_to_supplied = "assigned_to" in payload
-    assigned_to = str(payload.get("assigned_to") or "").strip()
     comments = str(payload.get("comments") or "").strip()
     priority = str(payload.get("priority") or "Medium").strip().title()
     if priority not in {"Low", "Medium", "High"}:
@@ -412,10 +510,6 @@ def save_task(session, task_id, payload, changed_by="Web User", allow_priority_c
             raise ValueError("Component not found.")
         if not status_supplied:
             status = task.get("status") or "Not Assigned"
-        if not assigned_to_supplied:
-            # Assignment is managed by assign_task; a Save without the key must
-            # not clear the assignee.
-            assigned_to = (task.get("assigned_to") or "").strip()
         current_revision = int(task.get("revision") or 0)
         if expected_revision is not None:
             try:
@@ -425,7 +519,6 @@ def save_task(session, task_id, payload, changed_by="Web User", allow_priority_c
                 raise ValueError("Invalid component revision.")
 
         old_status = task.get("status") or "Not Assigned"
-        old_assigned_to = (task.get("assigned_to") or "").strip()
         old_comments = (task.get("comments") or "").strip()
         old_priority = task.get("priority") or "Medium"
         if not allow_priority_change:
@@ -471,17 +564,17 @@ def save_task(session, task_id, payload, changed_by="Web User", allow_priority_c
         # columns still exist in the schema but are no longer written here.
         update_result = db.execute(session, """
             UPDATE project_tasks
-            SET status = :status, assigned_to = :assigned_to, comments = :comments, priority = :priority,
+            SET status = :status, comments = :comments, priority = :priority,
                 actual_start = :actual_start, actual_finish = :actual_finish,
                 last_updated = :now, revision = revision + 1
             WHERE task_id = :task_id AND revision = :expected_revision
-        """, {"status": status, "assigned_to": assigned_to or None, "comments": comments or None,
+        """, {"status": status, "comments": comments or None,
               "priority": priority, "actual_start": actual_start, "actual_finish": actual_finish,
               "now": now, "task_id": task_id, "expected_revision": current_revision})
         if update_result.rowcount != 1:
             raise StaleRevisionError("This component was updated by someone else. Refresh and review the latest values.")
 
-        if status != old_status or assigned_to != old_assigned_to or comments != old_comments or priority != old_priority:
+        if status != old_status or comments != old_comments or priority != old_priority:
             log_task_event(session, task_id, task["project_id"], task["task_name"], "Component Update",
                            old_status, status, changed_by, comments or f"Status set to {status}.")
 
@@ -565,47 +658,48 @@ def _check_expected_revision(task, expected_revision):
 
 
 def assign_task(session, task_id, assignee, cascade=True, changed_by="Web User", expected_revision=None,
-                comment=None):
-    """Assign a component to an active user; optionally cascade to later steps.
+                comment=None, automated=False, force_activation=False):
+    """Add manual assignees to a task, optionally preassigning later tasks.
 
-    The v17 lifecycle has no manual status field: assignment IS the act that
-    moves a step from "Not Assigned" to "In Progress".
+    Only the reached task may move from ``Not Assigned`` to ``In Progress``.
+    A direct assignment or cascade aimed at later work is a silent draft
+    preassignment: it creates ``task_assignees`` rows but leaves lifecycle and
+    notification state untouched until normal activation reaches that step.
 
-    - ``assignee`` must match an active row in the users table
-      (case-insensitive); the canonical casing from the table is stored.
-    - Target task: assigned_to is set; a "Not Assigned" status becomes
-      "In Progress" (other statuses are a pure reassignment and keep their
-      status).
-    - ``cascade``: every SUBSEQUENT (sequence_no greater than the target's)
-      active task in the project's applicable pipeline stages that is still
-      "Not Assigned" receives the same assignee and moves to "In Progress".
-      Rows already In Progress / Ready / Approved are never touched, and rows
-      outside the applicable pipeline stages are never in scope.
-    - Optimistic locking: ``expected_revision`` is checked against the TARGET
-      task only, and the target's UPDATE is itself revision-guarded like
-      save_task/transition_task (StaleRevisionError -> 409). Every changed row
-      gets a revision bump and one "Component Assigned" history event.
-    - ``comment`` optionally replaces the default "Assigned to <name>." history
-      comment on every logged event; creation auto-assignment
-      (workflow.projects._auto_assign_new_lead) uses it to distinguish its
-      events from a human's click without inventing a second event type.
-
-    Returns the fresh target task row (same shape as save_task) so the UI can
-    adopt the new revision.
+    ``force_activation`` is reserved for internal historical/automation walks
+    (:func:`ensure_task_approved`). Those walks retain their audited assign ->
+    submit -> approve trail when an imported record or non-prospective well
+    closes administrative work out of sequence. It is never exposed by an HTTP
+    route and requires ``automated=True``.
     """
+    if force_activation and not automated:
+        raise ValueError("Forced task activation is reserved for automated workflow operations.")
+    if isinstance(assignee, str):
+        names = [assignee]
+    else:
+        names = list(assignee or [])
+    canonical_names = []
+    for name in names:
+        user = find_active_user(session, name)
+        if not user:
+            raise ValueError("Unknown or inactive user.")
+        canonical_names.append(user["name"])
+    canonical_names = sorted(set(canonical_names))
+    if not canonical_names:
+        raise ValueError("At least one assignee is required.")
+    newly_added: List[str] = []
+    notification_names: List[str] = []
     result: Dict[str, Any] = {}
     with db.write_transaction(session):
         task = get_task(session, task_id)
         if not task:
             raise ValueError("Component not found.")
-        user = find_active_user(session, assignee)
-        if not user:
-            raise ValueError("Unknown or inactive user.")
-        canonical_name = user["name"]
         _check_expected_revision(task, expected_revision)
 
         project = get_project(session, task["project_id"]) or {}
         stages = applicable_stages(project.get("pipeline_type"))
+        reached = _reached_task(session, task["project_id"])
+        target_is_reached = bool(reached and reached["task_id"] == task_id)
         now = utc_now_str()
         today = today_str()
 
@@ -620,38 +714,77 @@ def assign_task(session, task_id, assignee, cascade=True, changed_by="Web User",
             """, {"project_id": task["project_id"], "sequence_no": task["sequence_no"],
                   "stages": stages})
 
+        target_old_status = task.get("status") or "Not Assigned"
+        target_activation = (target_is_reached or force_activation) and target_old_status == "Not Assigned"
+        activation_role_names: Set[str] = set()
+        activation_names: Set[str] = set(canonical_names)
+        if target_activation:
+            mapping = domain_roles.get_task_mapping(session, task.get("task_name") or "")
+            if mapping:
+                activation_role_names = set(
+                    domain_roles.get_active_role_members(session, mapping["role_id"]))
+            activation_names.update(
+                row["name"] for row in task.get("assignees", [])
+                if row.get("source") == "manual")
+            activation_names.update(activation_role_names)
+
         for row in targets:
-            old_status = row["status"] or "Not Assigned"
-            new_status = "In Progress" if old_status == "Not Assigned" else old_status
-            # Same stamping rule as save_task: a task entering In Progress gets
-            # actual_start today (never overwriting an existing date).
-            actual_start = row.get("actual_start") or (today if new_status == "In Progress" else None)
-            # The TARGET row's update is guarded on the revision read in this
-            # transaction (same WHERE revision + rowcount pattern as save_task /
-            # transition_task). Under SQLite this is belt-and-braces -- BEGIN
-            # IMMEDIATE already serializes writers -- but it keeps all three
-            # mutation paths on one pattern for a Postgres future, where MVCC
-            # would allow a concurrent commit between our read and this write.
-            # Cascade rows stay unguarded: they were selected inside this same
-            # transaction and carry no client-supplied revision to honor.
             is_target = row["task_id"] == task["task_id"]
-            sql = """
-                UPDATE project_tasks
-                SET assigned_to = :assignee, status = :status, actual_start = :actual_start,
-                    last_updated = :now, revision = COALESCE(revision, 0) + 1
-                WHERE task_id = :task_id
-            """
-            params = {"assignee": canonical_name, "status": new_status, "actual_start": actual_start,
-                      "now": now, "task_id": row["task_id"]}
+            old_status = row["status"] or "Not Assigned"
+
+            row_names = activation_names if is_target and target_activation else set(canonical_names)
+            for name in sorted(row_names):
+                source = "role" if is_target and name in activation_role_names else "manual"
+                if source == "role":
+                    # A user who was manually preassigned before the task was
+                    # reached is part of the role snapshot once activation
+                    # occurs, so the role cannot later be removed manually.
+                    db.execute(session, """
+                        UPDATE task_assignees SET source = 'role'
+                        WHERE task_id = :task_id AND assignee_name = :name
+                    """, {"task_id": row["task_id"], "name": name})
+                if _insert_task_assignee(session, row["task_id"], name, source, now) and is_target:
+                    newly_added.append(name)
+
+            _sync_primary_assignee_locked(session, row["task_id"])
             if is_target:
-                sql += " AND COALESCE(revision, 0) = :current_revision"
-                params["current_revision"] = int(row.get("revision") or 0)
-            update_result = db.execute(session, sql, params)
-            if is_target and update_result.rowcount != 1:
-                raise StaleRevisionError("This component was updated by someone else. Refresh and review the latest values.")
-            log_task_event(session, row["task_id"], row["project_id"], row["task_name"],
-                           "Component Assigned", old_status, new_status, changed_by,
-                           comment or f"Assigned to {canonical_name}.")
+                new_status = "In Progress" if target_activation else old_status
+                actual_start = row.get("actual_start") or (
+                    today if new_status == "In Progress" else None)
+                update_result = db.execute(session, """
+                    UPDATE project_tasks
+                    SET status = :status, actual_start = :actual_start,
+                        last_updated = :now, revision = COALESCE(revision, 0) + 1
+                    WHERE task_id = :task_id AND COALESCE(revision, 0) = :current_revision
+                """, {"status": new_status, "actual_start": actual_start,
+                      "now": now, "task_id": row["task_id"],
+                      "current_revision": int(row.get("revision") or 0)})
+                if update_result.rowcount != 1:
+                    raise StaleRevisionError("This component was updated by someone else. Refresh and review the latest values.")
+
+                listed = ", ".join(sorted(row_names))
+                action = "Component Assigned" if target_activation else "Component Preassigned"
+                log_task_event(session, row["task_id"], row["project_id"], row["task_name"],
+                               action, old_status, new_status, changed_by,
+                               comment or (f"Assigned to {listed}." if target_activation
+                                           else f"Preassigned to {listed} (silent)."))
+                if target_activation:
+                    # Existing future manual preassignments have not been told
+                    # yet, so activation fans out to the complete snapshot.
+                    notification_names = sorted(row_names)
+                elif old_status in ACTIVE_STATUSES:
+                    notification_names = list(newly_added)
+            else:
+                # Cascade targets are always silent preassignments.
+                db.execute(session, """
+                    UPDATE project_tasks SET last_updated = :now,
+                        revision = COALESCE(revision, 0) + 1
+                    WHERE task_id = :task_id
+                """, {"now": now, "task_id": row["task_id"]})
+                listed = ", ".join(sorted(row_names))
+                log_task_event(session, row["task_id"], row["project_id"], row["task_name"],
+                               "Component Preassigned", old_status, old_status, changed_by,
+                               comment or f"Preassigned to {listed} (silent).")
 
         # No completed_at sync: assignment only moves Not Assigned ->
         # In Progress, which can never complete or reopen the applicable set
@@ -659,8 +792,232 @@ def assign_task(session, task_id, assignee, cascade=True, changed_by="Web User",
         db.execute(session,
                    "UPDATE projects SET last_updated = :now, revision = revision + 1 WHERE project_id = :project_id",
                    {"now": now, "project_id": task["project_id"]})
+
+        if notification_names and not automated:
+            recipients = notify_assignment(session, task, notification_names, changed_by)
+            if recipients:
+                db.execute(session, """
+                    UPDATE task_assignees SET notified = 1
+                    WHERE task_id = :task_id AND assignee_name IN :names AND notified = 0
+                """, {"task_id": task_id, "names": recipients})
+
         result = get_task(session, task_id) or {}
-    return result
+    return result, newly_added
+
+
+def _activate_task_locked(session, task, actor):
+    """Claim and activate one freshly resolved eligible task.
+
+    The caller must hold ``db.write_transaction`` and must establish the
+    workflow-specific reachability rule inside that transaction.  This shared
+    primitive deliberately has no generic reachability check so generic and
+    BPE effective-state resolvers can use the same atomic assignment snapshot,
+    history, and notification behavior.
+
+    Returns the activated assignee names.  A task with no available assignees,
+    or one that has already been claimed, is a no-op and returns ``[]``.
+    """
+    task_id = task["task_id"]
+    if (task.get("status") or "Not Assigned") != "Not Assigned":
+        return []
+
+    mapping = domain_roles.get_task_mapping(session, task.get("task_name") or "")
+    role_members = (domain_roles.get_active_role_members(session, mapping["role_id"])
+                    if mapping else [])
+
+    manual_rows = domain_roles.list_task_assignees(session, task_id)
+    manual_names = {r["assignee_name"] for r in manual_rows if r.get("source") == "manual"}
+
+    combined = sorted(set(role_members) | manual_names)
+    if not combined:
+        return []
+
+    project_id = task["project_id"]
+    now = utc_now_str()
+    today = today_str()
+    role_description = f" with role {mapping['role_name']!r}" if mapping else ""
+    old_status = task.get("status") or "Not Assigned"
+    new_status = "In Progress"
+    actual_start = task.get("actual_start") or today
+
+    # Claim before touching the assignment snapshot.  A losing/retry caller
+    # therefore cannot delete rows, reset notified flags, or append audit data.
+    claimed = db.execute(session, """
+        UPDATE project_tasks
+        SET status = :status, actual_start = :actual_start,
+            last_updated = :now, revision = COALESCE(revision, 0) + 1
+        WHERE task_id = :task_id AND status = 'Not Assigned'
+    """, {"status": new_status, "actual_start": actual_start,
+          "now": now, "task_id": task_id})
+    if claimed.rowcount == 0:
+        return []
+
+    db.execute(session, "DELETE FROM task_assignees WHERE task_id = :task_id",
+               {"task_id": task_id})
+    for name in combined:
+        source = "manual" if name in manual_names else "role"
+        db.execute(session, """
+            INSERT INTO task_assignees (task_id, assignee_name, source, notified, created_at)
+            VALUES (:task_id, :name, :source, 0, :now)
+        """, {"task_id": task_id, "name": name, "source": source, "now": now})
+
+    _sync_primary_assignee_locked(session, task_id)
+
+    log_task_event(session, task_id, project_id, task["task_name"],
+                   "Component Activated", old_status, new_status, actor,
+                   f"Activated{role_description}; "
+                   f"assigned to {', '.join(combined)}.")
+
+    recipients = notify_assignment(session, task, combined, actor)
+    if recipients:
+        db.execute(session, """
+            UPDATE task_assignees SET notified = 1
+            WHERE task_id = :task_id AND assignee_name IN :names AND notified = 0
+        """, {"task_id": task_id, "names": recipients})
+
+    _sync_completed_at(session, project_id)
+    db.execute(session,
+               "UPDATE projects SET last_updated = :now, revision = revision + 1 WHERE project_id = :project_id",
+               {"now": now, "project_id": project_id})
+    return combined
+
+
+def activate_task(session, task_id, actor):
+    """Activate the generically reached task with its assignment snapshot.
+
+    - Finds the mapped role for the task via ``domain_roles.get_task_mapping``.
+    - Gathers active members of that role plus any existing manual
+      preassignments from task_assignees (source='manual').
+    - Deduplicates the assignee list; manual preassignments keep source='manual'.
+    - Moves the task from 'Not Assigned' to 'In Progress' and stamps actual_start.
+    - Writes task_assignee rows (source='role' for role members, 'manual' for
+      preassignments), notifies every assignee, and marks them notified.
+    - Updates project_tasks.assigned_to to the primary (first alphabetical)
+      assignee for backward compatibility.
+
+    Activation is atomic: all reads happen inside the write transaction, and
+    the status transition uses a compare-and-set guard (``status = 'Not
+    Assigned'``).  If another concurrent activation already claimed the task,
+    the UPDATE affects zero rows and this call returns ``[]`` without writing
+    history, notifications, or assignee rows.
+
+    If neither a mapped role member nor a manual preassignment exists, the task
+    remains ``Not Assigned``.  A manual preassignment is deliberately enough
+    to start an unmapped or currently unstaffed role once the task is reached.
+    """
+    with db.write_transaction(session):
+        task = get_task(session, task_id)
+        if not task:
+            raise ValueError("Component not found.")
+
+        reached = _reached_task(session, task["project_id"])
+        if not reached or reached["task_id"] != task_id:
+            return []
+        return _activate_task_locked(session, task, actor)
+
+
+def activate_next_task(session, project_id, actor):
+    """Activate the reached ``Not Assigned`` task for a project.
+
+    Called after a task is approved so the next unapproved step can pick up its
+    mapped domain role automatically. After activation, the field-completion
+    engine is run in case draft fields on the newly-activated task already
+    satisfy its predicate.
+    """
+    row = _reached_task(session, project_id)
+    if not row or (row.get("status") or "Not Assigned") != "Not Assigned":
+        return []
+    task_id = row["task_id"]
+    assigned = activate_task(session, task_id, actor)
+    if assigned:
+        apply_field_completion(session, task_id, actor)
+        apply_checkbox_submission(session, task_id, actor)
+    return assigned
+
+
+def update_task_assignees(session, task_id, add_names=None, remove_names=None, changed_by="Web User"):
+    """Add or remove manual assignees for a task.
+
+    - ``add_names`` are validated against active users and inserted as
+      source='manual'. A role-sourced row remains role-sourced; duplicate rows
+      are a no-op.
+    - ``remove_names`` only delete rows where source='manual'; role-sourced
+      assignments are protected from this endpoint.
+    - project_tasks.assigned_to is derived from the remaining assignee rows.
+    - Status, reachability, mutations, activation, and notifications are all
+      decided under one write lock. Future preassignments stay silent and do
+      not change lifecycle state.
+
+    Returns ``(fresh_task_row, newly_added_assignee_names)``.
+    """
+    add_names = [str(n).strip() for n in (add_names or []) if str(n).strip()]
+    remove_names = [str(n).strip() for n in (remove_names or []) if str(n).strip()]
+    newly_added: List[str] = []
+    removed_names: List[str] = []
+    result: Dict[str, Any] = {}
+
+    with db.write_transaction(session):
+        task = get_task(session, task_id)
+        if not task:
+            raise ValueError("Component not found.")
+
+        canonical_add: List[str] = []
+        for name in add_names:
+            user = find_active_user(session, name)
+            if not user:
+                raise ValueError(f"Unknown or inactive user: {name}")
+            canonical_add.append(user["name"])
+
+        current_status = task.get("status") or "Not Assigned"
+        reached = _reached_task(session, task["project_id"])
+        is_reached = bool(reached and reached["task_id"] == task_id)
+        is_active_status = current_status in ACTIVE_STATUSES
+        should_activate = bool(canonical_add and is_reached and current_status == "Not Assigned")
+        now = utc_now_str()
+
+        for name in canonical_add:
+            if _insert_task_assignee(session, task_id, name, "manual", now):
+                newly_added.append(name)
+
+        for name in remove_names:
+            removed = db.execute(session, """
+                DELETE FROM task_assignees
+                WHERE task_id = :task_id AND assignee_name = :name AND source = 'manual'
+            """, {"task_id": task_id, "name": name})
+            if removed.rowcount:
+                removed_names.append(name)
+
+        if newly_added or removed_names:
+            before = ", ".join(row["name"] for row in task.get("assignees", [])) or "Not Assigned"
+            after = ", ".join(domain_roles.get_assignee_names(session, task_id)) or "Not Assigned"
+            log_task_event(session, task_id, task["project_id"], task["task_name"],
+                           "Component Assignees Updated", before, after, changed_by,
+                           "Manual assignee group updated.")
+
+        activated = _activate_task_locked(session, task, changed_by) if should_activate else []
+        if not activated:
+            _sync_primary_assignee_locked(session, task_id)
+            db.execute(session, """
+                UPDATE project_tasks
+                SET last_updated = :now, revision = revision + 1
+                WHERE task_id = :task_id
+            """, {"now": now, "task_id": task_id})
+
+            if newly_added and is_active_status:
+                recipients = notify_assignment(session, task, newly_added, changed_by)
+                if recipients:
+                    db.execute(session, """
+                        UPDATE task_assignees SET notified = 1
+                        WHERE task_id = :task_id AND assignee_name IN :names AND notified = 0
+                    """, {"task_id": task_id, "names": recipients})
+
+            db.execute(session, """
+                UPDATE projects SET last_updated = :now, revision = revision + 1
+                WHERE project_id = :project_id
+            """, {"now": now, "project_id": task["project_id"]})
+
+        result = get_task(session, task_id) or {}
+    return result, newly_added
 
 
 def transition_task(session, task_id, action, changed_by="Web User", expected_revision=None,
@@ -706,17 +1063,19 @@ def transition_task(session, task_id, action, changed_by="Web User", expected_re
     required_status, new_status = _ALL_TRANSITIONS[action_key]
 
     result: Dict[str, Any] = {}
+    task = get_task(session, task_id)
+    if not task:
+        raise ValueError("Component not found.")
+    project_id = task["project_id"]
+    task_assignee_names = domain_roles.get_assignee_names(session, task_id)
+    actor_lower = (actor_name or "").strip().lower()
+    is_current_assignee = any(a.strip().lower() == actor_lower for a in task_assignee_names)
     with db.write_transaction(session):
-        task = get_task(session, task_id)
-        if not task:
-            raise ValueError("Component not found.")
         if action_key == "submit" and actor_role == "employee":
-            assigned = (task.get("assigned_to") or "").strip().lower()
-            if assigned != (actor_name or "").strip().lower():
+            if not is_current_assignee:
                 raise PermissionError("Forbidden: you can only submit components assigned to you.")
         if action_key == "return" and actor_role != "supervisor":
-            assigned = (task.get("assigned_to") or "").strip().lower()
-            if assigned != (actor_name or "").strip().lower():
+            if not is_current_assignee:
                 raise PermissionError("Forbidden: you can only return components assigned to you.")
         _check_expected_revision(task, expected_revision)
 
@@ -761,11 +1120,13 @@ def transition_task(session, task_id, action, changed_by="Web User", expected_re
         notify_transition(session, task, action_key, changed_by, automated=automated)
 
         # Approve may have completed the applicable set; return reopens it.
-        _sync_completed_at(session, task["project_id"])
+        _sync_completed_at(session, project_id)
         db.execute(session,
                    "UPDATE projects SET last_updated = :now, revision = revision + 1 WHERE project_id = :project_id",
-                   {"now": now, "project_id": task["project_id"]})
+                   {"now": now, "project_id": project_id})
         result = get_task(session, task_id) or {}
+    if action_key == "approve":
+        activate_next_task(session, project_id, changed_by)
     return result
 
 
@@ -833,7 +1194,8 @@ def ensure_task_approved(session, task_id, actor, changed_by=None, automated=Fal
         return False
     changed_by = changed_by or actor
     if status == "Not Assigned":
-        assign_task(session, task_id, actor, cascade=False, changed_by=changed_by)
+        assign_task(session, task_id, actor, cascade=False, changed_by=changed_by,
+                    automated=True, force_activation=True)
         status = "In Progress"
     if status == "In Progress":
         satisfy_submit_gate(session, task, changed_by)
@@ -961,10 +1323,12 @@ def apply_field_completion(session, task_id, changed_by):
     task = get_task(session, task_id)
     if not task or task.get("task_name") not in FIELD_COMPLETION_AUTOMATED_STEPS:
         return None
+    status = task.get("status") or "Not Assigned"
+    if status == "Not Assigned":
+        return None
     met = field_completion_met(task["task_name"],
                                get_task_dynamic_fields(session, task_id),
                                _field_present)
-    status = task.get("status") or "Not Assigned"
     if met and status != "Approved":
         assignee = _field_completion_assignee(session, task, changed_by)
         if not assignee:
@@ -1033,7 +1397,7 @@ def apply_checkbox_submission(session, task_id, changed_by):
         assignee = _field_completion_assignee(session, task, changed_by)
         if not assignee:
             return None
-        assign_task(session, task_id, assignee, cascade=False, changed_by=changed_by)
+        assign_task(session, task_id, assignee, cascade=False, changed_by=changed_by, automated=True)
     transition_task(session, task_id, "submit", changed_by=changed_by)
     return get_task(session, task_id)
 

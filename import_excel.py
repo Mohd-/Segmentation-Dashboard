@@ -1028,13 +1028,10 @@ def import_rows(session, rows, update=False, progress=None) -> ImportReport:
                     workflow.update_project_name(session, pid, name, changed_by=IMPORT_USER,
                                                  lead_x=lead_x, lead_y=lead_y)
             else:
-                # auto_assign=False: an imported record carries its own
-                # historical lifecycle state -- the creation auto-assignment
-                # rules are for brand-new leads, and _ensure_approved below
-                # must find steps exactly as a pre-rule creation left them
-                # (Not Assigned, then walked as IMPORT_USER).
+                # Creation no longer auto-assigns steps, so imported records
+                # land with every step Not Assigned and are walked as IMPORT_USER.
                 pid = workflow.add_project(session, name, changed_by=IMPORT_USER,
-                                           lead_x=lead_x, lead_y=lead_y, auto_assign=False)
+                                           lead_x=lead_x, lead_y=lead_y)
                 created_pid = pid
             # NUCD Area is project-level too (projects.nucd_area) and this
             # sheet is its ONLY input -- nothing in the UI writes it. A blank

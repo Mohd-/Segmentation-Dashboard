@@ -51,10 +51,11 @@ from .users import SYSTEM_USER
 # In Progress); an action missing here simply produces no notification.
 #
 # The stored EVENT vocabulary is fixed by models.Notification's CHECK
-# constraint ('submitted','approved','returned') -- the bell renders a row per
-# event, and an unknown string would render untitled. A reopen is therefore
-# filed under 'returned' (both send the step back for update; the fan-out is
-# identical) and carries its own VERB, which is what the message actually says.
+# constraint ('submitted','approved','returned','assigned') -- the bell renders
+# a row per event, and an unknown string would render untitled. A reopen is
+# therefore filed under 'returned' (both send the step back for update; the
+# fan-out is identical) and carries its own VERB, which is what the message
+# actually says.
 _EVENTS = {
     "submit": ("submitted", "submitted"),
     "approve": ("approved", "approved"),
@@ -158,18 +159,72 @@ def notify_transition(session, task, action, actor, automated=False) -> List[str
         recipients = [] if automated or _same_person(actor_name, SYSTEM_USER) \
             else _active_supervisors(session, actor_name)
     else:
-        assignee = _clean(task.get("assigned_to"))
-        recipients = []
-        if assignee and not _same_person(assignee, actor_name) and not _same_person(assignee, SYSTEM_USER):
-            row = db.fetch_one(session, """
-                SELECT name FROM users WHERE LOWER(name) = LOWER(:name) AND is_active = 1
-            """, {"name": assignee})
-            if row:
-                recipients = [row["name"]]
+        # For approve/return/reopen, notify all assignees (not just legacy assigned_to)
+        assignees = db.fetch_all(session, """
+            SELECT assignee_name FROM task_assignees WHERE task_id = :task_id
+        """, {"task_id": task.get("task_id")})
+        if assignees:
+            recipients = []
+            for a in assignees:
+                name = _clean(a["assignee_name"])
+                if name and not _same_person(name, actor_name) and not _same_person(name, SYSTEM_USER):
+                    row = db.fetch_one(session, """
+                        SELECT name FROM users WHERE LOWER(name) = LOWER(:name) AND is_active = 1
+                    """, {"name": name})
+                    if row:
+                        recipients.append(row["name"])
+        else:
+            # Fallback to legacy assigned_to if no task_assignees rows
+            assignee = _clean(task.get("assigned_to"))
+            recipients = []
+            if assignee and not _same_person(assignee, actor_name) and not _same_person(assignee, SYSTEM_USER):
+                row = db.fetch_one(session, """
+                    SELECT name FROM users WHERE LOWER(name) = LOWER(:name) AND is_active = 1
+                """, {"name": assignee})
+                if row:
+                    recipients = [row["name"]]
 
     message = f"{actor_name or 'Someone'} {verb} {task_name}" + (f" on {project_name}" if project_name else "")
     for recipient in recipients:
         _insert(session, recipient, actor_name, event, task, project_name, message)
+    return recipients
+
+
+def notify_assignment(session, task, assignee_names: List[str], actor: str) -> List[str]:
+    """Record the assignment notifications for one task.
+
+    Called when a task becomes the next unapproved step (activation) or when
+    manual assignees are added to an active task. Each recipient gets one
+    notification with event='assigned'. Every active assignee is included,
+    including the person who initiated the assignment: role membership means
+    every group member receives the same reached-step alert. The automation
+    user is excluded because it has no bell. Inactive users are skipped.
+
+    Writes inside the CALLER's transaction (see the module docstring). Returns
+    the recipient names written, so callers can assert the fan-out.
+    """
+    if not assignee_names or not task:
+        return []
+    actor_name = _clean(actor)
+    task_name = _clean(task.get("task_name")) or "a component"
+
+    project = db.fetch_one(session, "SELECT project_name FROM projects WHERE project_id = :project_id",
+                           {"project_id": task.get("project_id")}) or {}
+    project_name = _clean(project.get("project_name"))
+
+    message = f"{actor_name or 'Someone'} assigned {task_name}" + (f" on {project_name}" if project_name else "")
+
+    recipients = []
+    for name in assignee_names:
+        clean_name = _clean(name)
+        if not clean_name or _same_person(clean_name, SYSTEM_USER):
+            continue
+        row = db.fetch_one(session, """
+            SELECT name FROM users WHERE LOWER(name) = LOWER(:name) AND is_active = 1
+        """, {"name": clean_name})
+        if row:
+            _insert(session, row["name"], actor_name, "assigned", task, project_name, message)
+            recipients.append(row["name"])
     return recipients
 
 
@@ -277,5 +332,5 @@ def notification_feed(session, recipient, limit: int = 50) -> Dict[str, Any]:
             "unread_count": unread_count(session, recipient)}
 
 
-__all__ = ["notify_transition", "list_notifications", "unread_count",
+__all__ = ["notify_transition", "notify_assignment", "list_notifications", "unread_count",
            "mark_read", "mark_all_read", "notification_feed"]

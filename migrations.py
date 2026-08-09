@@ -45,7 +45,24 @@ from helpers import utc_now_str
 from models import Base
 from workflow.flowback import normalize_flowback_rows
 
-LATEST_SCHEMA_VERSION = 13
+LATEST_SCHEMA_VERSION = 16
+
+
+# These are product defaults, not migration-only data.  Keep them here beside
+# the bootstrap seeding so a freshly-created database and an upgraded one have
+# the same starting catalog.  Operators can subsequently manage the exact
+# catalog, memberships, and mappings through sync_domain_assignments.py.
+DEFAULT_DOMAIN_ROLES = (
+    "Petrophysicist",
+    "Inversion Expert",
+    "Bureaucratic",
+    "Structural Geologist",
+    "Slides Designer",
+)
+DEFAULT_DOMAIN_ROLE_MAPPINGS = (
+    ("Quicklook Logs", "Petrophysicist"),
+    ("Final Log Analysis", "Petrophysicist"),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +98,55 @@ def _ensure_base_data(session) -> None:
             INSERT OR IGNORE INTO users (name, role, created_at)
             VALUES (:name, :role, :now)
         """, {"name": name, "role": role, "now": utc_now_str()})
+    _ensure_default_domain_roles(session)
+
+
+def _ensure_default_domain_roles(session) -> None:
+    """Seed the built-in role catalog and mappings without clobbering edits.
+
+    ``run`` skips migration steps for a fresh database because ``create_all``
+    has already built the current schema.  This helper therefore belongs in
+    base-data seeding, which runs for both fresh and upgraded databases.
+    """
+    now = utc_now_str()
+    role_ids = {}
+    for role_name in DEFAULT_DOMAIN_ROLES:
+        existing = db.fetch_one(session, """
+            SELECT role_id FROM domain_roles WHERE LOWER(role_name) = LOWER(:role_name)
+            LIMIT 1
+        """, {"role_name": role_name})
+        if existing:
+            role_ids[role_name] = existing["role_id"]
+            continue
+        deleted = db.fetch_one(session, """
+            SELECT key FROM app_settings WHERE key = :key
+        """, {"key": f"role_deleted:{role_name.lower()}"})
+        if deleted:
+            continue
+        result = db.execute(session, """
+            INSERT INTO domain_roles (role_name, created_at)
+            VALUES (:role_name, :created_at)
+        """, {"role_name": role_name, "created_at": now})
+        role_ids[role_name] = result.lastrowid
+
+    for task_name, role_name in DEFAULT_DOMAIN_ROLE_MAPPINGS:
+        if role_name not in role_ids:
+            continue
+        existing = db.fetch_one(session, """
+            SELECT id FROM task_domain_role_mappings WHERE task_name = :task_name
+        """, {"task_name": task_name})
+        if existing:
+            continue
+        deleted = db.fetch_one(session, """
+            SELECT key FROM app_settings WHERE key = :key
+        """, {"key": f"mapping_deleted:{task_name}"})
+        if deleted:
+            continue
+        db.execute(session, """
+            INSERT INTO task_domain_role_mappings (task_name, role_id, created_at)
+            VALUES (:task_name, :role_id, :created_at)
+        """, {"task_name": task_name, "role_id": role_ids[role_name],
+              "created_at": now})
 
 
 # ---------------------------------------------------------------------------
@@ -1165,6 +1231,208 @@ def _migrate_v13_flowback_stage_rows(session, engine) -> None:
               "task_id": row["task_id"], "field_key": "flowback_stages_rows"})
 
 
+def _migrate_v14_domain_roles(session, engine) -> None:
+    """v14: domain roles, multi-assignee task assignments, and assignment notifications.
+
+    Add schema for database-backed domain roles (Petrophysicist, Inversion Expert,
+    etc.), user-to-role memberships, task-to-role mappings, and per-task multi-assignee
+    rows. Backfill existing ``project_tasks.assigned_to`` values as legacy/manual
+    task_assignees. Rebuild the notifications CHECK constraint to include the new
+    'assigned' event while preserving existing notifications.
+
+    The new tables (domain_roles, domain_role_memberships, task_domain_role_mappings,
+    task_assignees) are created by ``create_all`` on fresh databases; this migration
+    handles the upgrade path for existing databases.
+    """
+    now = utc_now_str()
+
+    # Backfill task_assignees from existing project_tasks.assigned_to.
+    # Only tasks with a non-blank assigned_to get a row; source='manual' marks
+    # these as legacy assignments (not role-derived), and notified=0 means no
+    # notification was sent (they predate the assignment event).
+    db.execute(session, """
+        INSERT INTO task_assignees (task_id, assignee_name, source, notified, created_at)
+        SELECT task_id, assigned_to, 'manual', 0, :now
+        FROM project_tasks
+        WHERE assigned_to IS NOT NULL AND trim(assigned_to) != ''
+          AND NOT EXISTS (
+              SELECT 1 FROM task_assignees ta
+              WHERE ta.task_id = project_tasks.task_id
+                AND ta.assignee_name = project_tasks.assigned_to
+          )
+    """, {"now": now})
+
+    # Rebuild the notifications CHECK constraint to include 'assigned'.
+    # SQLite does not support ALTER TABLE DROP CONSTRAINT, so we recreate the table.
+    # This is safe: the table has no foreign keys referencing it, and we preserve
+    # all existing rows.
+    # Drop the old index first so the recreation below is idempotent (the index
+    # name survives an ALTER TABLE RENAME and would collide on replay).
+    db.execute(session, "DROP INDEX IF EXISTS idx_notifications_recipient_read")
+    db.execute(session, "ALTER TABLE notifications RENAME TO notifications_old")
+    db.execute(session, """
+        CREATE TABLE notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            recipient TEXT NOT NULL,
+            actor TEXT,
+            event TEXT NOT NULL,
+            project_id INTEGER REFERENCES projects(project_id) ON DELETE CASCADE,
+            task_id INTEGER,
+            task_name TEXT,
+            project_name TEXT,
+            message TEXT,
+            read_at TEXT,
+            CHECK (event IN ('submitted','approved','returned','assigned'))
+        )
+    """)
+    db.execute(session, """
+        INSERT INTO notifications (id, created_at, recipient, actor, event, project_id,
+                                    task_id, task_name, project_name, message, read_at)
+        SELECT id, created_at, recipient, actor, event, project_id, task_id,
+               task_name, project_name, message, read_at
+        FROM notifications_old
+    """)
+    db.execute(session, "CREATE INDEX idx_notifications_recipient_read ON notifications(recipient, read_at)")
+    db.execute(session, "DROP TABLE notifications_old")
+
+    # The idempotent default catalog must be present immediately after this
+    # upgrade as well as on fresh bootstrap (where migrations do not run).
+    _ensure_default_domain_roles(session)
+
+
+def _migrate_v15_reconcile_assigned_to(session, engine) -> None:
+    """v15: reconcile ``project_tasks.assigned_to`` from ``task_assignees``.
+
+    ``task_assignees`` is the authoritative assignment relation.  ``assigned_to``
+    is retained as a legacy compatibility field that must always equal the
+    primary (first alphabetical) assignee from ``task_assignees``.  This
+    migration fixes any rows where the two have drifted apart.
+    """
+    db.execute(session, """
+        UPDATE project_tasks
+        SET assigned_to = (
+            SELECT MIN(ta.assignee_name)
+            FROM task_assignees ta
+            WHERE ta.task_id = project_tasks.task_id
+        )
+        WHERE EXISTS (
+            SELECT 1 FROM task_assignees ta
+            WHERE ta.task_id = project_tasks.task_id
+        )
+    """)
+    db.execute(session, """
+        UPDATE project_tasks
+        SET assigned_to = NULL
+        WHERE NOT EXISTS (
+            SELECT 1 FROM task_assignees ta
+            WHERE ta.task_id = project_tasks.task_id
+        )
+    """)
+
+
+def _migrate_v16_case_insensitive_roles(session, engine) -> None:
+    """v16: merge case-variant duplicate roles and enforce case-insensitive uniqueness.
+
+    Prior to this migration, ``domain_roles.role_name`` had a case-sensitive
+    UNIQUE constraint, allowing ``Petrophysicist`` and ``petrophysicist`` to
+    coexist.  This migration:
+
+    1. For each set of case-variant duplicates, keeps the row with the lowest
+       ``role_id`` as canonical and repoints memberships and mappings to it.
+    2. Deletes the duplicate rows.
+    3. Normalises ``role_deleted`` markers in ``app_settings`` to lowercase.
+    4. Replaces the case-sensitive UNIQUE constraint with a case-insensitive
+       unique index (``UNIQUE(LOWER(role_name))``).
+    """
+    dupes = db.fetch_all(session, """
+        SELECT LOWER(role_name) AS lc, COUNT(*) AS cnt
+        FROM domain_roles GROUP BY lc HAVING cnt > 1
+    """)
+    for row in dupes:
+        lc_name = row["lc"]
+        variants = db.fetch_all(session, """
+            SELECT role_id, role_name FROM domain_roles
+            WHERE LOWER(role_name) = :lc ORDER BY role_id
+        """, {"lc": lc_name})
+        canonical_id = variants[0]["role_id"]
+        for variant in variants[1:]:
+            old_id = variant["role_id"]
+            old_memberships = db.fetch_all(session, """
+                SELECT id, user_name, is_active, created_at
+                FROM domain_role_memberships
+                WHERE role_id = :old_id
+            """, {"old_id": old_id})
+            for membership in old_memberships:
+                canonical_membership = db.fetch_one(session, """
+                    SELECT id FROM domain_role_memberships
+                    WHERE role_id = :new_id AND user_name = :user_name
+                """, {"new_id": canonical_id,
+                      "user_name": membership["user_name"]})
+                if canonical_membership:
+                    # The same user can belong to both case variants.  Merge
+                    # those rows before repointing to avoid violating the
+                    # UNIQUE(user_name, role_id) constraint.  An active source
+                    # membership keeps the merged membership active, and the
+                    # earliest available creation timestamp is retained.
+                    db.execute(session, """
+                        UPDATE domain_role_memberships
+                        SET is_active = CASE
+                                WHEN is_active = 1 OR :old_active = 1 THEN 1
+                                ELSE 0
+                            END,
+                            created_at = CASE
+                                WHEN created_at IS NULL THEN :old_created_at
+                                WHEN :old_created_at IS NULL THEN created_at
+                                WHEN :old_created_at < created_at THEN :old_created_at
+                                ELSE created_at
+                            END
+                        WHERE id = :canonical_membership_id
+                    """, {
+                        "old_active": membership["is_active"],
+                        "old_created_at": membership["created_at"],
+                        "canonical_membership_id": canonical_membership["id"],
+                    })
+                    db.execute(session, """
+                        DELETE FROM domain_role_memberships WHERE id = :membership_id
+                    """, {"membership_id": membership["id"]})
+                else:
+                    db.execute(session, """
+                        UPDATE domain_role_memberships SET role_id = :new_id
+                        WHERE id = :membership_id
+                    """, {"new_id": canonical_id,
+                          "membership_id": membership["id"]})
+            db.execute(session, """
+                UPDATE task_domain_role_mappings SET role_id = :new_id
+                WHERE role_id = :old_id
+            """, {"new_id": canonical_id, "old_id": old_id})
+            db.execute(session, "DELETE FROM domain_roles WHERE role_id = :old_id",
+                       {"old_id": old_id})
+
+    old_markers = db.fetch_all(session, """
+        SELECT key FROM app_settings WHERE key LIKE 'role_deleted:%'
+    """)
+    for m in old_markers:
+        old_key = m["key"]
+        role_name = old_key[len("role_deleted:"):]
+        new_key = f"role_deleted:{role_name.lower()}"
+        if new_key != old_key:
+            existing = db.fetch_one(session, """
+                SELECT key FROM app_settings WHERE key = :key
+            """, {"key": new_key})
+            if not existing:
+                db.execute(session, """
+                    UPDATE app_settings SET key = :new_key WHERE key = :old_key
+                """, {"new_key": new_key, "old_key": old_key})
+            else:
+                db.execute(session, "DELETE FROM app_settings WHERE key = :old_key",
+                           {"old_key": old_key})
+
+    db.execute(session, "DROP INDEX IF EXISTS uq_domain_roles_role_name")
+    db.execute(session, "CREATE UNIQUE INDEX IF NOT EXISTS uq_domain_roles_role_name_lower "
+                        "ON domain_roles(LOWER(role_name))")
+
+
 # List of (version, fn) dispatched by run() in ascending order against the
 # stored schema_version. Append new steps with the next integer version and
 # bump LATEST_SCHEMA_VERSION to match; never edit or remove a shipped step.
@@ -1181,6 +1449,9 @@ MIGRATIONS = [
     (11, _migrate_v11_tvdss_positive),
     (12, _migrate_v12_project_nucd_area),
     (13, _migrate_v13_flowback_stage_rows),
+    (14, _migrate_v14_domain_roles),
+    (15, _migrate_v15_reconcile_assigned_to),
+    (16, _migrate_v16_case_insensitive_roles),
 ]
 
 

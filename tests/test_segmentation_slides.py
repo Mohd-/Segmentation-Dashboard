@@ -17,7 +17,7 @@ payload -- exactly what the detail form's Save sends -- and POST
 """
 from __future__ import annotations
 
-from conftest import create_project, get_task_by_name, raw_sqlite_connect
+from conftest import create_project, get_task_by_name, raw_sqlite_connect, reach_task
 
 SUPERVISOR = "Supervisor"
 EMPLOYEE = "Employee"
@@ -60,9 +60,20 @@ def transition(client, task, action, expect=200):
 
 
 def assign(client, task, assignee):
+    if task.get("status") == "Not Assigned":
+        task = reach_task(client, task["project_id"], task["task_name"])
     resp = client.post(f"/api/tasks/{task['task_id']}/assign",
-                       json={"assignee": assignee, "cascade": False, "revision": task["revision"]})
+                       json={"assigned_to": assignee, "cascade": False, "revision": task["revision"]})
     assert resp.status_code == 200, resp.get_json()
+    # These tests assert the notification fan-out of the submit/approve walk;
+    # strip out the assignment notification so the assertions stay focused.
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        conn.execute("DELETE FROM notifications WHERE task_id = ? AND event = 'assigned'",
+                     (task["task_id"],))
+        conn.commit()
+    finally:
+        conn.close()
     return resp.get_json()["task"]
 
 
@@ -389,14 +400,23 @@ def test_pending_approval_stays_this_step_alone_under_the_new_flow(client):
     """The board's one display rule, re-pinned for the checkbox path: a save
     that submits Segmentation Slides must not make any OTHER step read
     "Pending Approval"."""
+    import db as dbmod
+    import workflow
+
     login(client, SUPERVISOR)
     pid = create_project(client, "SS-BOARD-1")
     task = assign(client, slides_task(client, pid), EMPLOYEE)
-    # ... and park a sibling in Ready the manual way for contrast.
-    other = assign(client, get_task_by_name(client, pid, "Lead Assessment"), EMPLOYEE)
+    # ... and park a sibling in Ready via the domain save_task for contrast.
+    other = get_task_by_name(client, pid, "Lead Assessment")
+    session = dbmod.new_session()
+    try:
+        workflow.save_task(session, other["task_id"], {"status": "Ready"})
+    finally:
+        session.close()
+    other = client.get(f"/api/tasks/{other['task_id']}").get_json()
+    assert other["status"] == "Ready"
     login(client, EMPLOYEE)
     submit(client, save(client, task, {BOX: "1"}))
-    transition(client, other, "submit")
 
     items = tracked_items(client, pid)
     assert items[STEP] == "Pending Approval"

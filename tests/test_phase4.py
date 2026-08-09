@@ -6,7 +6,7 @@ completion-month reporting bucketed by completed_at.
 """
 from __future__ import annotations
 
-from conftest import create_project, get_tasks
+from conftest import approve_task, create_project, get_tasks
 
 PROSPECT_STAGES = {"Lead Assessment", "Risk Analysis", "Pre-Well Delivery"}
 
@@ -57,10 +57,9 @@ def test_internal_error_returns_generic_500_without_leaking(client, monkeypatch)
 def _approve_all_prospect_tasks(client, pid):
     for task in get_tasks(client, pid):
         if task["stage_group"] in PROSPECT_STAGES and task["status"] != "Approved":
-            resp = client.patch(f"/api/tasks/{task['task_id']}", json={
-                "status": "Approved", "revision": task["revision"],
-            })
-            assert resp.status_code == 200, resp.get_json()
+            approve_task(client, task["task_id"])
+            task = client.get(f"/api/tasks/{task['task_id']}").get_json()
+            assert task["status"] == "Approved"
 
 
 def test_completed_at_set_on_completion_and_cleared_on_reopen(client):
@@ -74,8 +73,8 @@ def test_completed_at_set_on_completion_and_cleared_on_reopen(client):
 
     # Reopen one component: the project returns to In Progress and the stamp clears.
     first = client.get(f"/api/tasks/{first_task_id}").get_json()
-    resp = client.patch(f"/api/tasks/{first_task_id}", json={
-        "status": "In Progress", "revision": first["revision"],
+    resp = client.post(f"/api/tasks/{first_task_id}/transition", json={
+        "action": "reopen", "revision": first["revision"],
     })
     assert resp.status_code == 200
     project = client.get(f"/api/projects/{pid}").get_json()
@@ -95,9 +94,12 @@ def test_dashboard_metrics_function_excludes_archived_projects(client):
     pid = create_project(client, "METRICS-ARCHIVED-1")
     task = get_tasks(client, pid)[0]
     # v17 lifecycle: 'Ready' is the awaiting-approval state (the metric formerly
-    # counted 'Under Review').
-    resp = client.patch(f"/api/tasks/{task['task_id']}", json={
-        "status": "Ready", "revision": task["revision"],
+    # counted 'Under Review'). Put the first task there via assign -> submit.
+    assigned = client.post(f"/api/tasks/{task['task_id']}/assign", json={
+        "assigned_to": "Employee", "cascade": False, "revision": task["revision"],
+    }).get_json()["task"]
+    resp = client.post(f"/api/tasks/{task['task_id']}/transition", json={
+        "action": "submit", "revision": assigned["revision"],
     })
     assert resp.status_code == 200
 

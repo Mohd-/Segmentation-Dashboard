@@ -18,6 +18,31 @@ def get_active_users(session) -> List[Dict[str, Any]]:
                         "SELECT name, role FROM users WHERE is_active = 1 ORDER BY name")
 
 
+def get_active_users_with_roles(session) -> List[Dict[str, Any]]:
+    """Active users as [{name, role, domain_roles}] ordered by name.
+
+    ``domain_roles`` is the list of active domain-role names the user belongs to.
+    """
+    users = get_active_users(session)
+    if not users:
+        return []
+    names = [u["name"] for u in users]
+    rows = db.fetch_all(session, """
+        SELECT u.name, r.role_name
+        FROM users u
+        JOIN domain_role_memberships m ON m.user_name = u.name AND m.is_active = 1
+        JOIN domain_roles r ON r.role_id = m.role_id
+        WHERE u.is_active = 1 AND u.name IN :names
+        ORDER BY u.name, r.role_name
+    """, {"names": names})
+    roles_map: Dict[str, List[str]] = {}
+    for row in rows:
+        roles_map.setdefault(row["name"], []).append(row["role_name"])
+    for user in users:
+        user["domain_roles"] = roles_map.get(user["name"], [])
+    return users
+
+
 def find_active_user(session, name: str) -> Optional[Dict[str, Any]]:
     """Look up an active user by name, case-insensitively.
 

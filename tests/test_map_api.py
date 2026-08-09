@@ -16,7 +16,7 @@ import json
 import pytest
 import shapefile  # pyshp
 
-from conftest import create_project, get_task_by_name, get_tasks
+from conftest import approve_task, create_project, get_task_by_name, get_tasks
 
 # Two rings: a 100 km square with a 20 km square hole. Pins the part-splitting
 # in map_layers._shape_geometry -- the outer ring and the hole must come back
@@ -360,10 +360,7 @@ def test_map_reporting_attributes_match_portfolio_semantics(client):
     _save_fields(client, pid, "Lead Assessment", {"lead_piip_gas_mean": "12.5"})
 
     stake = get_task_by_name(client, pid, "Approval to Stake")
-    resp = client.patch(f"/api/tasks/{stake['task_id']}", json={
-        "status": "Approved", "revision": stake["revision"],
-    })
-    assert resp.status_code == 200, resp.get_json()
+    approve_task(client, stake["task_id"])
 
     well = _well_for(client, pid)
     assert well["year"] == 2031
@@ -424,10 +421,9 @@ def test_completed_positioned_lead_remains_on_the_map(client):
     pid = create_project(client, "MAP-DONE-1", lead_x="500000", lead_y="2800000")
     for task in get_tasks(client, pid):
         if task["stage_group"] in {"Lead Assessment", "Risk Analysis", "Pre-Well Delivery"}:
-            resp = client.patch(f"/api/tasks/{task['task_id']}", json={
-                "status": "Approved", "revision": task["revision"],
-            })
-            assert resp.status_code == 200, resp.get_json()
+            approve_task(client, task["task_id"])
+            task = client.get(f"/api/tasks/{task['task_id']}").get_json()
+            assert task["status"] == "Approved"
 
     well = _well_for(client, pid)
     assert well["overall_status"] == "Completed"

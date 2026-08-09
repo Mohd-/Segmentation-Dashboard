@@ -31,6 +31,7 @@ Conventions:
 - Module imports stay acyclic: constants/history at the bottom, then
   users/projects, then lifecycle/promotion/summary, then formations.
 """
+from . import domain_roles
 from .constants import (
     ACTIVE_STATUSES,
     AUTO_APPROVE_ON_SAVE_STEPS,
@@ -92,6 +93,8 @@ from .formations import (
 )
 from .history import log_task_event
 from .lifecycle import (
+    activate_next_task,
+    activate_task,
     apply_canonical_name,
     apply_checkbox_submission,
     apply_field_completion,
@@ -106,6 +109,7 @@ from .lifecycle import (
     save_task_dynamic_fields,
     set_task_priority,
     transition_task,
+    update_task_assignees,
 )
 from .mapdata import map_wells
 from .notifications import (
@@ -142,7 +146,7 @@ from .summary import (
     get_project_overview,
     total_cos_from_fields,
 )
-from .users import SYSTEM_USER, ensure_system_user, find_active_user, get_active_users
+from .users import SYSTEM_USER, ensure_system_user, find_active_user, get_active_users, get_active_users_with_roles
 from .business_plan import (
     APPROVAL_DETAILS as BPE_APPROVAL_DETAILS,
     CLASSIFICATIONS as BPE_CLASSIFICATIONS,
@@ -186,18 +190,21 @@ __all__ = [
     "unmet_submit_requirements",
     # users
     "SYSTEM_USER", "ensure_system_user", "find_active_user", "get_active_users",
+    "get_active_users_with_roles",
     # projects
     "add_project", "archive_project", "delete_project", "get_project",
     "get_projects", "project_completion_percent", "restore_project",
     "annotate_canonical_names", "canonical_record_name",
     "set_nucd_area", "set_project_priority", "update_project_name",
     # lifecycle
+    "activate_next_task", "activate_task",
     "apply_canonical_name", "apply_checkbox_submission", "apply_field_completion",
     "guard_staking_name", "assign_task",
     "ensure_task_approved",
     "get_project_tasks", "get_task",
     "get_task_dynamic_fields", "satisfy_submit_gate", "save_task",
     "save_task_dynamic_fields", "set_task_priority", "transition_task",
+    "update_task_assignees",
     # mapdata
     "map_wells",
     # notifications

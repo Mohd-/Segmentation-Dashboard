@@ -18,7 +18,7 @@ import json
 
 import pytest
 
-from conftest import create_project, get_task_by_name, get_tasks
+from conftest import approve_task, create_project, get_task_by_name, get_tasks, reach_task
 
 BP_KWARGS = {"business_plan_enabled": True, "business_plan_year": 2027}
 PROSPECT_STAGES = {"Lead Assessment", "Risk Analysis", "Pre-Well Delivery"}
@@ -39,10 +39,9 @@ def _approve_all_prospect_tasks(client, pid):
     assert resp.status_code == 200, resp.get_json()
     for task in get_tasks(client, pid):
         if task["stage_group"] in PROSPECT_STAGES and task["status"] != "Approved":
-            resp = client.patch(f"/api/tasks/{task['task_id']}", json={
-                "status": "Approved", "revision": task["revision"],
-            })
-            assert resp.status_code == 200, resp.get_json()
+            approve_task(client, task["task_id"])
+            task = client.get(f"/api/tasks/{task['task_id']}").get_json()
+            assert task["status"] == "Approved"
 
 
 def _approve_all_bp_tasks(client, pid):
@@ -53,10 +52,9 @@ def _approve_all_bp_tasks(client, pid):
     """
     for task in get_tasks(client, pid):
         if task["stage_group"] in BP_STAGES and task["status"] != "Approved":
-            resp = client.patch(f"/api/tasks/{task['task_id']}", json={
-                "status": "Approved", "revision": task["revision"],
-            })
-            assert resp.status_code == 200, resp.get_json()
+            approve_task(client, task["task_id"])
+            task = client.get(f"/api/tasks/{task['task_id']}").get_json()
+            assert task["status"] == "Approved"
 
 
 def _rows(client, **query):
@@ -216,11 +214,8 @@ def test_status_defaults_to_proposed(client):
 
 def test_status_staked_when_approval_to_stake_approved(client):
     pid = create_project(client, "STATUS-2", **BP_KWARGS)
-    task = get_task_by_name(client, pid, "Approval to Stake")
-    resp = client.patch(f"/api/tasks/{task['task_id']}", json={
-        "status": "Approved", "revision": task["revision"],
-    })
-    assert resp.status_code == 200, resp.get_json()
+    task = reach_task(client, pid, "Approval to Stake")
+    approve_task(client, task["task_id"])
     row = _row_for(client, pid)
     assert row["status"] == "Staked"
     assert row["fluid"] == ""  # no fluid recorded yet
@@ -240,7 +235,7 @@ def test_status_staked_is_driven_by_card_4b_s_two_checkboxes(client):
     pid = create_project(client, "STATUS-4B", **BP_KWARGS)
     task = get_task_by_name(client, pid, "Approval to Stake")
 
-    # The letter alone: still Proposed.
+    # The letter alone on an unreached step is inert: still Proposed.
     resp = client.patch(f"/api/tasks/{task['task_id']}", json={
         "fields": {"approval_stake_letter_loaded": "1"}, "revision": task["revision"],
     })
@@ -248,8 +243,13 @@ def test_status_staked_is_driven_by_card_4b_s_two_checkboxes(client):
     assert resp.get_json()["task"]["status"] != "Approved"
     assert _row_for(client, pid)["status"] == "Proposed"
 
-    # Both boxes: the engine approves the step and the record reads Staked.
-    task = get_task_by_name(client, pid, "Approval to Stake")
+    # Both boxes: activate the step first, then the engine approves it and the
+    # record reads Staked.
+    task = reach_task(client, pid, "Approval to Stake")
+    resp = client.post(f"/api/tasks/{task['task_id']}/assign",
+                       json={"assigned_to": "Employee", "cascade": False, "revision": task["revision"]})
+    assert resp.status_code == 200, resp.get_json()
+    task = resp.get_json()["task"]
     resp = client.patch(f"/api/tasks/{task['task_id']}", json={
         "fields": {"staking_well_created": "1", "approval_stake_letter_loaded": "1"},
         "revision": task["revision"],
@@ -525,11 +525,8 @@ def test_portfolio_membership_includes_bp_wells_and_leads_at_every_stage(client)
 
 def test_risking_passed_true_when_only_segmentation_slides_approved(client):
     pid = create_project(client, "RISK-PASSED-1")
-    task = get_task_by_name(client, pid, "Segmentation Slides")
-    resp = client.patch(f"/api/tasks/{task['task_id']}", json={
-        "status": "Approved", "revision": task["revision"],
-    })
-    assert resp.status_code == 200, resp.get_json()
+    task = reach_task(client, pid, "Segmentation Slides")
+    approve_task(client, task["task_id"])
     assert _row_for(client, pid)["risking_passed"] == 1
 
 

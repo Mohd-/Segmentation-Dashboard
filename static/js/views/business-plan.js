@@ -1397,21 +1397,43 @@ function railMarkup() {
     '</aside>';
 }
 
-function assigneeOptions() {
-  var users = state.users || Store.users || [];
-  return [{ value: '', label: 'Not Assigned' }].concat(users.map(function (user) { return { value: user.name, label: user.name }; }));
+function detailAssignees() {
+  var task = (state.detail || {}).task || {};
+  if (task.assignees && task.assignees.length) return task.assignees;
+  return state.detail && state.detail.assignee ? [{ name: state.detail.assignee, source: 'manual' }] : [];
 }
 
-// The editor head's control wears the maturation editor's compact select
-// chrome (.editor-assignee). Assignee is the only control here: priority moved
-// to the click-to-cycle chip beside the record name, because it belongs to the
-// WELL and not to the step this editor is showing -- a per-step-looking
-// dropdown invited the reading that each step carries its own priority.
-function topControlsMarkup() {
+function assigneeOptions() {
+  var users = state.users || Store.users || [];
+  var assigned = detailAssignees().map(function (member) { return member.name; });
+  return [{ value: '', label: 'Add assignee' }].concat(users.filter(function (user) {
+    return assigned.indexOf(user.name) < 0;
+  }).map(function (user) { return { value: user.name, label: user.name }; }));
+}
+
+function assignmentControlsMarkup() {
   var role = state.detail.role || currentRole();
-  return '<div class="bpe-detail-controls">' +
-    '<label>Assignee<select id="bpe-assignee" class="editor-assignee" ' +
-    (role === 'employee' ? 'disabled' : '') + '>' + selectOptions(assigneeOptions(), state.detail.assignee) + '</select></label></div>';
+  var editable = role !== 'employee';
+  var assignees = detailAssignees();
+  var chips = assignees.length ? assignees.map(function (member) {
+    var source = member.source === 'role' ? 'Role' : 'Manual';
+    var removable = member.source !== 'role';
+    return '<span class="assignee-chip" title="' + source + ' assignment">' + esc(member.name) +
+      '<span class="assignee-chip-source">' + source + '</span>' +
+      (removable ? '<button type="button" class="assignee-remove" data-bpe-remove-assignee="' + esc(member.name) +
+        '" aria-label="Remove ' + esc(member.name) + '" ' + (editable ? '' : 'disabled') + '>&times;</button>' : '') +
+      '</span>';
+  }).join('') : '<span class="assignee-chip">Unassigned</span>';
+  return '<div id="bpe-assignment-group" class="assignment-group">' +
+    '<div class="assigned-members">' + chips + '</div>' +
+    '<label><span class="sr-only">Add assignee</span><select id="bpe-assignee" class="editor-assignee" ' +
+    (editable ? '' : 'disabled') + '>' + selectOptions(assigneeOptions(), '') + '</select></label></div>';
+}
+
+// Assignee is the editor-head assignment group. Priority remains a well-level
+// chip beside the record name, never a per-step control.
+function topControlsMarkup() {
+  return '<div class="bpe-detail-controls">' + assignmentControlsMarkup() + '</div>';
 }
 
 // Card 3I: the maturation editor head is a numbered chip, the step title, its
@@ -1651,12 +1673,41 @@ function ensureUsers() {
   if (state.users || Store.users) return;
   API.users().then(function (users) {
     state.users = users || [];
-    if (byId('bpe-assignee')) {
-      var selected = state.detail.assignee || '';
-      byId('bpe-assignee').innerHTML = selectOptions(assigneeOptions(), selected);
-      byId('bpe-assignee').value = selected;
-    }
+    renderBpeAssignmentControls();
   }).catch(function () {});
+}
+
+function renderBpeAssignmentControls() {
+  var group = byId('bpe-assignment-group');
+  if (!group || !state.detail) return;
+  group.outerHTML = assignmentControlsMarkup();
+  wireBpeAssignmentControls();
+}
+
+function wireBpeAssignmentControls() {
+  var assignee = byId('bpe-assignee');
+  if (assignee && !assignee.dataset.bound) {
+    assignee.dataset.bound = '1';
+    assignee.addEventListener('change', function () {
+      var selected = assignee.value;
+      if (!selected) return;
+      var context = currentContext();
+      queueCommandSave(function () {
+        return API.assignBusinessPlan(context.projectId, context.detailSlug, { add: [selected] });
+      }, { context: context, rerender: true });
+    });
+  }
+  all('[data-bpe-remove-assignee]').forEach(function (button) {
+    if (button.dataset.bound) return;
+    button.dataset.bound = '1';
+    button.addEventListener('click', function () {
+      var context = currentContext();
+      var name = button.dataset.bpeRemoveAssignee;
+      queueCommandSave(function () {
+        return API.assignBusinessPlan(context.projectId, context.detailSlug, { remove: [name] });
+      }, { context: context, rerender: true });
+    });
+  });
 }
 
 // The house .save-state indicator's three moods. The TEXTS are the contract
@@ -2440,14 +2491,7 @@ function bindDetail() {
       msg('Shared-folder path copied.', 'success');
     }).catch(function () { msg('The shared-folder path could not be copied.', 'error'); });
   });
-  var assignee = byId('bpe-assignee');
-  if (assignee) assignee.addEventListener('change', function () {
-    var context = currentContext();
-    var selected = assignee.value;
-    queueCommandSave(function () { return API.assignBusinessPlan(context.projectId, context.detailSlug, selected); }, {
-      context: context, rerender: true
-    });
-  });
+  wireBpeAssignmentControls();
   // The chip cycles Low -> Medium -> High -> Low, exactly as the maturation
   // shell's does. It is rendered `disabled` for anyone but a supervisor, so
   // the click can never fire for them.

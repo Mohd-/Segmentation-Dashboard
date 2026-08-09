@@ -148,6 +148,50 @@ def get_task_by_name(client, project_id, task_name):
     return None
 
 
+def reach_task(client, project_id, task_name):
+    """Put a test's target at the front of its pipeline through the API.
+
+    Lifecycle-focused tests often exercise one later component in isolation.
+    Role assignment deliberately leaves such a component ``Not Assigned``
+    until every preceding component has been approved, so those tests must
+    establish that workflow position before assigning or field-completing the
+    target.  This uses the internal domain service to walk each preceding task
+    through the real lifecycle (assign -> submit -> approve), never a direct
+    status PATCH.
+    """
+    import workflow
+    import db as dbmod
+    for task in get_tasks(client, project_id):
+        if task["task_name"] == task_name:
+            return task
+        if task["status"] == "Approved":
+            continue
+        session = dbmod.new_session()
+        try:
+            workflow.lifecycle.ensure_task_approved(
+                session, task["task_id"], "Employee", automated=True)
+        finally:
+            session.close()
+    raise AssertionError(f"Unknown task {task_name!r}")
+
+
+def approve_task(client, task_id, assignee="Employee"):
+    """Approve a single task programmatically via the domain service.
+
+    Walks the real lifecycle (assign -> submit -> satisfy any submit gate ->
+    approve).  Use this for test setup that needs a task in the Approved state
+    without exercising the HTTP transition endpoint.
+    """
+    import workflow
+    import db as dbmod
+    session = dbmod.new_session()
+    try:
+        workflow.lifecycle.ensure_task_approved(
+            session, task_id, assignee, automated=True)
+    finally:
+        session.close()
+
+
 def raw_sqlite_connect(client_db_path):
     """Open a direct sqlite3 connection to the same DB file the app is using.
 

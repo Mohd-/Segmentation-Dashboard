@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from conftest import create_project, get_task_by_name, get_tasks
+from conftest import approve_task, create_project, get_task_by_name, get_tasks, reach_task
 
 PROSPECT_STAGES = {"Lead Assessment", "Risk Analysis", "Pre-Well Delivery"}
 
@@ -28,23 +28,10 @@ def _fill_assessment_checkpoints(client, pid):
     assert resp.status_code == 200, resp.get_json()
 
 
-# The steps the creation auto-assignment rules cover for an ANONYMOUS creation
-# (config.STEP_ASSIGNMENT_RULES -> Tahira; config.PRE_WELL_ASSIGNEES ->
-# Saad/Salem on every Pre-Well Delivery step). The creator-default tier stays
-# inert here: the anonymous "Web User" actor is not an active users row.
-AUTO_ASSIGNED_FRESH_STEPS = {
-    "Seismic Signature Validation", "Moving Tolerance", "Approval to Stake",
-    "Well Site Location", "Pre-Drilling GeoX Assessment",
-}
-
-
-def test_new_prospect_project_has_24_tasks_with_only_rule_steps_assigned(client):
-    # v17 lifecycle: a step starts Not Assigned and assignment is what moves it
-    # to In Progress. Creation auto-assignment applies exactly that mechanism
-    # to the configured rule steps, so THOSE arrive In Progress with an
-    # assignee while everything else still starts Not Assigned. current_task
-    # still anchors on the first step. v7 consolidates four assessment rows
-    # into one.
+def test_new_prospect_project_has_24_tasks_and_none_are_auto_assigned(client):
+    # v14: creation no longer auto-assigns steps. Every task seeds Not Assigned;
+    # assignment only happens when a step is manually assigned or reaches its
+    # turn in the pipeline. current_task still anchors on the first step.
     pid = create_project(client, "SEED-PROSPECT-1")
     tasks = get_tasks(client, pid)
     assert len(tasks) == 24
@@ -54,11 +41,8 @@ def test_new_prospect_project_has_24_tasks_with_only_rule_steps_assigned(client)
     assert first["status"] == "Not Assigned"
 
     for task in tasks[1:]:
-        if task["task_name"] in AUTO_ASSIGNED_FRESH_STEPS:
-            assert task["status"] == "In Progress", task["task_name"]
-            assert task["assigned_to"], task["task_name"]
-        else:
-            assert task["status"] == "Not Assigned", task["task_name"]
+        assert task["status"] == "Not Assigned", task["task_name"]
+        assert task["assigned_to"] is None, task["task_name"]
 
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["current_task"] == "Lead Assessment"
@@ -93,8 +77,8 @@ def test_new_bp_project_seeds_all_24_tasks_not_assigned(client):
 def test_in_progress_sets_actual_start_to_today(client):
     pid = create_project(client, "TRANSITION-1")
     task = get_tasks(client, pid)[0]
-    resp = client.patch(f"/api/tasks/{task['task_id']}", json={
-        "status": "In Progress", "revision": task["revision"],
+    resp = client.post(f"/api/tasks/{task['task_id']}/assign", json={
+        "assigned_to": "Employee", "cascade": False, "revision": task["revision"],
     })
     saved = resp.get_json()["task"]
     assert saved["actual_start"] == date.today().isoformat()
@@ -105,10 +89,8 @@ def test_approved_sets_actual_finish_and_backfills_actual_start(client):
     task = get_tasks(client, pid)[0]
     # Task starts with no actual_start; go straight to Approved.
     assert task["actual_start"] is None
-    resp = client.patch(f"/api/tasks/{task['task_id']}", json={
-        "status": "Approved", "revision": task["revision"],
-    })
-    saved = resp.get_json()["task"]
+    approve_task(client, task["task_id"])
+    saved = client.get(f"/api/tasks/{task['task_id']}").get_json()
     assert saved["actual_finish"] == date.today().isoformat()
     assert saved["actual_start"] == date.today().isoformat()
 
@@ -116,14 +98,13 @@ def test_approved_sets_actual_finish_and_backfills_actual_start(client):
 def test_moving_approved_back_to_in_progress_clears_actual_finish(client):
     pid = create_project(client, "TRANSITION-3")
     task = get_tasks(client, pid)[0]
-    resp = client.patch(f"/api/tasks/{task['task_id']}", json={
-        "status": "Approved", "revision": task["revision"],
-    })
-    saved = resp.get_json()["task"]
+    approve_task(client, task["task_id"])
+    saved = client.get(f"/api/tasks/{task['task_id']}").get_json()
     assert saved["actual_finish"] is not None
 
-    resp = client.patch(f"/api/tasks/{task['task_id']}", json={
-        "status": "In Progress", "revision": saved["revision"],
+    # Reopen (Approved -> In Progress) via the transition endpoint.
+    resp = client.post(f"/api/tasks/{task['task_id']}/transition", json={
+        "action": "reopen", "revision": saved["revision"],
     })
     saved2 = resp.get_json()["task"]
     assert saved2["actual_finish"] is None
@@ -133,15 +114,20 @@ def test_moving_approved_back_to_in_progress_clears_actual_finish(client):
 def test_not_assigned_also_clears_actual_start(client):
     pid = create_project(client, "TRANSITION-4")
     task = get_tasks(client, pid)[0]
-    resp = client.patch(f"/api/tasks/{task['task_id']}", json={
-        "status": "Approved", "revision": task["revision"],
-    })
-    saved = resp.get_json()["task"]
+    approve_task(client, task["task_id"])
+    saved = client.get(f"/api/tasks/{task['task_id']}").get_json()
 
-    resp = client.patch(f"/api/tasks/{task['task_id']}", json={
-        "status": "Not Assigned", "revision": saved["revision"],
-    })
-    saved2 = resp.get_json()["task"]
+    # Moving from Approved back to Not Assigned is not a public lifecycle
+    # transition; exercise the domain save_task directly to pin the side effect
+    # on actual_start / actual_finish.
+    import db as dbmod
+    import workflow
+    session = dbmod.new_session()
+    try:
+        workflow.save_task(session, task["task_id"], {"status": "Not Assigned"})
+    finally:
+        session.close()
+    saved2 = client.get(f"/api/tasks/{task['task_id']}").get_json()
     assert saved2["actual_start"] is None
     assert saved2["actual_finish"] is None
 
@@ -150,9 +136,7 @@ def test_approving_first_task_advances_current_task(client):
     pid = create_project(client, "ADVANCE-1")
     task = get_tasks(client, pid)[0]
     assert task["task_name"] == "Lead Assessment"
-    client.patch(f"/api/tasks/{task['task_id']}", json={
-        "status": "Approved", "revision": task["revision"],
-    })
+    approve_task(client, task["task_id"])
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["current_task"] == "Reservoir CoS"
 
@@ -168,10 +152,13 @@ def test_optimistic_locking_stale_revision_rejected(client):
     fetched = client.get(f"/api/tasks/{task_id}").get_json()
     revision = fetched["revision"]
 
-    ok = client.patch(f"/api/tasks/{task_id}", json={"status": "In Progress", "revision": revision})
-    assert ok.status_code == 200
+    assigned = client.post(f"/api/tasks/{task_id}/assign", json={
+        "assigned_to": "Employee", "cascade": False, "revision": revision,
+    }).get_json()["task"]
 
-    stale = client.patch(f"/api/tasks/{task_id}", json={"status": "Approved", "revision": revision})
+    stale = client.post(f"/api/tasks/{task_id}/transition", json={
+        "action": "submit", "revision": revision,
+    })
     assert stale.status_code == 409
 
 
@@ -196,9 +183,7 @@ def test_completion_percent_scoped_to_bp_stages_for_bp_well(client):
     assert len(applicable) == 15
 
     for task in applicable[:2]:
-        client.patch(f"/api/tasks/{task['task_id']}", json={
-            "status": "Approved", "revision": task["revision"],
-        })
+        approve_task(client, task["task_id"])
     resp = client.get(f"/api/projects/{pid}/completion")
     assert resp.get_json() == {"percent": round(2 / 15 * 100, 1)}
 
@@ -214,9 +199,7 @@ def test_completion_percent_known_arithmetic_for_prospect(client):
     assert len(prospect_tasks) == 9
     _fill_assessment_checkpoints(client, pid)  # four completed items
     for task in prospect_tasks[1:2]:           # plus Reservoir CoS
-        client.patch(f"/api/tasks/{task['task_id']}", json={
-            "status": "Approved", "revision": task["revision"],
-        })
+        approve_task(client, task["task_id"])
     resp = client.get(f"/api/projects/{pid}/completion")
     assert resp.get_json() == {"percent": round(5 / 12 * 100, 1)}
 
@@ -231,10 +214,9 @@ def test_approving_all_prospect_tasks_completes_project(client):
     tasks = get_tasks(client, pid)
     for task in tasks:
         if task["stage_group"] in PROSPECT_STAGES and task["status"] != "Approved":
-            resp = client.patch(f"/api/tasks/{task['task_id']}", json={
-                "status": "Approved", "revision": task["revision"],
-            })
-            assert resp.status_code == 200, resp.get_json()
+            approve_task(client, task["task_id"])
+            task = client.get(f"/api/tasks/{task['task_id']}").get_json()
+            assert task["status"] == "Approved"
 
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["overall_status"] == "Completed"
@@ -259,10 +241,9 @@ def test_approving_all_bp_tasks_completes_bp_well_anchored_on_pda(client):
     )
     for task in get_tasks(client, pid):
         if task["stage_group"] not in PROSPECT_STAGES and task["status"] != "Approved":
-            resp = client.patch(f"/api/tasks/{task['task_id']}", json={
-                "status": "Approved", "revision": task["revision"],
-            })
-            assert resp.status_code == 200, resp.get_json()
+            approve_task(client, task["task_id"])
+            task = client.get(f"/api/tasks/{task['task_id']}").get_json()
+            assert task["status"] == "Approved"
 
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["overall_status"] == "Completed"
@@ -282,13 +263,10 @@ def test_derived_pointers_track_first_open_task_after_assessment(client):
     # assignee, on both the single-project read and the board row.
     pid = create_project(client, "DERIVED-POINTERS-1")
     tasks = get_tasks(client, pid)
-    resp = client.patch(f"/api/tasks/{tasks[0]['task_id']}", json={
-        "status": "Approved", "revision": tasks[0]["revision"],
-    })
-    assert resp.status_code == 200, resp.get_json()
+    approve_task(client, tasks[0]["task_id"])
     reservoir = get_tasks(client, pid)[1]
     resp = client.post(f"/api/tasks/{reservoir['task_id']}/assign", json={
-        "assignee": "Employee", "cascade": False, "revision": reservoir["revision"],
+        "assigned_to": "Employee", "cascade": False, "revision": reservoir["revision"],
     })
     assert resp.status_code == 200, resp.get_json()
 
@@ -311,9 +289,9 @@ def test_derived_pointers_track_first_open_task_after_assessment(client):
 
 def _assign_and_ready(client, pid, task_name):
     """Assign a step to Employee so it sits In Progress; return the fresh row."""
-    task = get_task_by_name(client, pid, task_name)
+    task = reach_task(client, pid, task_name)
     return client.post(f"/api/tasks/{task['task_id']}/assign", json={
-        "assignee": "Employee", "cascade": False, "revision": task["revision"],
+        "assigned_to": "Employee", "cascade": False, "revision": task["revision"],
     }).get_json()["task"]
 
 
@@ -385,21 +363,18 @@ def test_submit_gate_leaves_ungated_steps_alone(client):
 
 
 def test_transition_approve_completes_and_reopen_clears_completed_at(client):
-    # Approve steps 1-11 directly; walk the final prospect step (Approval to
-    # Stake) through assign -> submit -> approve so transition_task performs
-    # the completing write. Then reopen and confirm completed_at clears.
+    # Approve steps 1-11 programmatically; walk the final prospect step through
+    # assign -> submit -> approve so transition_task performs the completing
+    # write. Then reopen and confirm completed_at clears.
     pid = create_project(client, "DERIVED-COMPLETE-1")
     tasks = get_tasks(client, pid)
     prospect = [t for t in tasks if t["stage_group"] in PROSPECT_STAGES]
     for task in prospect[:-1]:
-        resp = client.patch(f"/api/tasks/{task['task_id']}", json={
-            "status": "Approved", "revision": task["revision"],
-        })
-        assert resp.status_code == 200, resp.get_json()
+        approve_task(client, task["task_id"])
     last = get_tasks(client, pid)[prospect[-1]["sequence_no"] - 1]
     assert last["task_name"] == "Pre-Drilling GeoX Assessment"
     assigned = client.post(f"/api/tasks/{last['task_id']}/assign", json={
-        "assignee": "Employee", "cascade": False, "revision": last["revision"],
+        "assigned_to": "Employee", "cascade": False, "revision": last["revision"],
     }).get_json()["task"]
     ready = client.post(f"/api/tasks/{last['task_id']}/transition", json={
         "action": "submit", "revision": assigned["revision"],
@@ -416,21 +391,11 @@ def test_transition_approve_completes_and_reopen_clears_completed_at(client):
     assert project["current_stage"] == "Pre-Well Delivery"
     assert project["current_owner"] is None
 
-    # Reopen: send the final step back to Ready (save path), then return it to
-    # In Progress (transition path). The project reads In Progress again and
-    # the completion stamp is gone.
+    # Reopen via the transition endpoint (Approved -> In Progress). The project
+    # reads In Progress again and the completion stamp is gone.
     approved = client.get(f"/api/tasks/{last['task_id']}").get_json()
-    resp = client.patch(f"/api/tasks/{last['task_id']}", json={
-        "status": "Ready", "revision": approved["revision"],
-    })
-    assert resp.status_code == 200, resp.get_json()
-    project = client.get(f"/api/projects/{pid}").get_json()
-    assert project["overall_status"] == "In Progress"
-    assert project["completed_at"] is None
-
-    reready = client.get(f"/api/tasks/{last['task_id']}").get_json()
     resp = client.post(f"/api/tasks/{last['task_id']}/transition", json={
-        "action": "return", "revision": reready["revision"],
+        "action": "reopen", "revision": approved["revision"],
     })
     assert resp.status_code == 200, resp.get_json()
     project = client.get(f"/api/projects/{pid}").get_json()
@@ -445,10 +410,10 @@ def test_owner_filter_matches_derived_owner(client):
     task_a = get_tasks(client, pid_a)[0]
     task_b = get_tasks(client, pid_b)[0]
     client.post(f"/api/tasks/{task_a['task_id']}/assign", json={
-        "assignee": "Employee", "cascade": False, "revision": task_a["revision"],
+        "assigned_to": "Employee", "cascade": False, "revision": task_a["revision"],
     })
     client.post(f"/api/tasks/{task_b['task_id']}/assign", json={
-        "assignee": "Staff Member", "cascade": False, "revision": task_b["revision"],
+        "assigned_to": "Staff Member", "cascade": False, "revision": task_b["revision"],
     })
 
     rows = client.get("/api/projects?owner_filter=Employee").get_json()
@@ -517,8 +482,8 @@ def test_activity_log_order_is_deterministic_within_same_second(client):
     pid = create_project(client, "ACTIVITY-ORDER-1")
     tasks = get_tasks(client, pid)
     for task in tasks[:4]:
-        resp = client.patch(f"/api/tasks/{task['task_id']}", json={
-            "status": "In Progress", "revision": task["revision"],
+        resp = client.post(f"/api/tasks/{task['task_id']}/assign", json={
+            "assigned_to": "Employee", "cascade": False, "revision": task["revision"],
         })
         assert resp.status_code == 200, resp.get_json()
 

@@ -376,7 +376,6 @@ def test_total_cos_computed_at_read_via_task_save_endpoint(client):
     assert get_task_by_name(client, pid, "Presence CoS Evaluation") is None  # step removed in v18
 
     resp = client.patch(f"/api/tasks/{reservoir['task_id']}", json={
-        "status": reservoir["status"],
         "revision": reservoir["revision"],
         "fields": {"reservoir_cos_rows": json.dumps([
             {"pull_up": "Yes", "amplitude_ratio": "0.5", "base_tight_sarah": "0.5"},

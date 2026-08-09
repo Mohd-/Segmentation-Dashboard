@@ -22,6 +22,8 @@ from .constants import (
 )
 from .flowback import FLOWBACK_STAGE_FIELDS, normalize_flowback_rows
 from .history import log_task_event
+from . import domain_roles
+from .lifecycle import get_task, update_task_assignees
 from .notifications import notify_transition
 from .projects import _sync_completed_at
 from .promotion import ACTIVE_DRILLING_FIELD, get_lead_summary_snapshot
@@ -140,6 +142,13 @@ ITEM_TASK_NAMES = {
     for slug, _detail_label, task_name in stage["details"]
     if slug == detail_slug
 }
+# ``well-letters`` is a shared editor backed by three distinct workflow rows.
+# Its detail-level task name is only the navigation anchor; each tracking item
+# must resolve to the row that owns its field.
+ITEM_TASK_NAMES.update({
+    "site-preparation": "Site Preparation",
+    "approval-to-drill": "Approval To Drill",
+})
 ITEM_STAGE_KEYS = {
     key: stage["key"] for stage in STAGES for key, _label, _detail_slug in stage["items"]
 }
@@ -632,20 +641,21 @@ def current_stage_key(session, project_id):
     return effective["current_stage"]["key"]
 
 
-def _assignees(tasks):
-    values = []
-    for task_name in TASK_NAMES:
-        name = str((tasks.get(task_name) or {}).get("assigned_to") or "").strip()
-        if name and name not in values:
-            values.append(name)
-    return values
+def _assignees(session, tasks):
+    """Return every assigned person across the Business Plan task set."""
+    task_ids = [task["task_id"] for task in tasks.values() if task]
+    rows_by_task = domain_roles.get_task_assignees_map(session, task_ids)
+    values = set()
+    for rows in rows_by_task.values():
+        values.update(row["assignee_name"] for row in rows if row.get("assignee_name"))
+    return sorted(values, key=str.lower)
 
 
-def _well_projection(project, tasks, fields, formations, effective):
+def _well_projection(session, project, tasks, fields, formations, effective):
     current = effective["current_stage"]
     items = effective["stages"][current["key"]]
     completed = sum(1 for item in items if item["status"] == "Completed")
-    assignees = _assignees(tasks)
+    assignees = _assignees(session, tasks)
     # Card 3V: a record is known by the name it was STAKED under, once staking
     # is CONFIRMED; the lead name it was matured under travels alongside so the
     # pairing stays recoverable. `field` is still derived from the LEAD name --
@@ -762,7 +772,7 @@ def get_dashboard(session, filters=None):
         field_map = _field_maps(session, project["project_id"])
         formations = _formation_rows(session, project["project_id"])
         effective = _effective_state(project, tasks, field_map, formations)
-        well = _well_projection(project, tasks, field_map, formations, effective)
+        well = _well_projection(session, project, tasks, field_map, formations, effective)
         all_wells.append(well)
         context_by_id[project["project_id"]] = (field_map, well)
         if well["field"]:
@@ -880,6 +890,10 @@ def get_detail(session, project_id, detail_slug):
     task = tasks.get(detail["task_name"])
     if not task:
         raise ValueError("Business Plan component not found.")
+    # ``_task_map`` is intentionally a lean internal projection. The detail
+    # API is an assignment surface, so return the same enriched task shape as
+    # the generic workflow editor (all assignees + default domain role).
+    task = get_task(session, task["task_id"])
     state_keys = [key for key, _label, slug in next(
         stage for stage in STAGES if stage["key"] == detail["stage_key"]
     )["items"] if slug == detail_slug]
@@ -1133,6 +1147,7 @@ def save_field(session, project_id, detail_slug, key, value, actor="Web User", r
             session, new_tasks, effective, new_effective, actor, role, correlation,
             f"field={key}",
         )
+    activate_bpe_task(session, project_id, actor)
     return get_detail(session, project_id, detail_slug)
 
 
@@ -1268,45 +1283,43 @@ def transition_approval(session, project_id, detail_slug, action, actor="Web Use
             session, new_tasks, effective, new_effective, actor, role, correlation,
             f"approval={action}",
         )
+    activate_bpe_task(session, project_id, actor)
     return get_detail(session, project_id, detail_slug)
 
 
-def assign_detail(session, project_id, detail_slug, assignee, actor="Web User", role="staff"):
+def assign_detail(session, project_id, detail_slug, assignee=None, actor="Web User", role="staff",
+                  add_names=None, remove_names=None):
+    """Apply one shared manual-assignee change to a BPE detail's task rows.
+
+    ``well-letters`` deliberately owns three persisted workflow tasks; the
+    same add/remove request is applied to each, while the lifecycle service
+    decides which (if any) is reached and may start today.  The historical
+    singular ``assignee`` payload remains an additive compatibility alias.
+    """
     if role not in {"supervisor", "staff"}:
         raise PermissionError("Forbidden: requires supervisor or staff role.")
     if detail_slug not in DETAILS:
         raise ValueError("Unknown Business Plan detail step.")
-    assignee = str(assignee or "").strip()
-    if assignee:
-        user = db.fetch_one(session, """
-            SELECT name FROM users WHERE is_active = 1 AND lower(name) = lower(:name)
-        """, {"name": assignee})
-        if not user:
-            raise ValueError("Assignee must be an active user.")
-        assignee = user["name"]
+    if add_names is None and remove_names is None:
+        legacy_name = str(assignee or "").strip()
+        add_names = [legacy_name] if legacy_name else []
+        remove_names = []
+    else:
+        add_names = add_names or []
+        remove_names = remove_names or []
+    if not isinstance(add_names, list) or not isinstance(remove_names, list):
+        raise ValueError("add and remove must be arrays.")
+
     project, tasks, _fields, _formations, _effective = _project_context(session, project_id)
     task_names = set(DETAIL_FIELD_OWNERS.get(detail_slug, {}).values()) or {DETAILS[detail_slug]["task_name"]}
-    now = utc_now_str()
-    with db.write_transaction(session):
-        for task_name in task_names:
-            task = tasks.get(task_name)
-            if not task or str(task.get("assigned_to") or "") == assignee:
-                continue
-            old = task.get("assigned_to") or "Not Assigned"
-            new_status = "In Progress" if assignee and task.get("status") == "Not Assigned" else task.get("status")
-            db.execute(session, """
-                UPDATE project_tasks
-                SET assigned_to = :assignee, status = :status, actual_start = :actual_start,
-                    last_updated = :now, revision = revision + 1
-                WHERE task_id = :task_id
-            """, {"assignee": assignee or None, "status": new_status,
-                  "actual_start": task.get("actual_start") or (today_str() if assignee else None),
-                  "now": now, "task_id": task["task_id"]})
-            log_task_event(session, task["task_id"], project_id, task_name, "Assignment Changed",
-                           old, assignee or "Not Assigned", actor,
-                           json.dumps({"role": role, "source": "user"}, separators=(",", ":")))
-        db.execute(session, "UPDATE projects SET last_updated = :now WHERE project_id = :project_id",
-                   {"now": now, "project_id": project_id})
+    for task_name in sorted(task_names):
+        task = tasks.get(task_name)
+        if task:
+            update_task_assignees(session, task["task_id"], add_names, remove_names, actor)
+    # Generic assignment reachability follows persisted lifecycle statuses.
+    # BPE reachability is field-derived, so a manual addition to its current
+    # item needs the same effective-state activation hook as a field save.
+    activate_bpe_task(session, project_id, actor)
     return get_detail(session, project_id, detail_slug)
 
 
@@ -1641,6 +1654,7 @@ def save_formations(session, project_id, detail_slug, rows, actor="Web User", ro
             session, final_tasks, old_effective, final_effective, actor, role, correlation,
             f"formations={phase}",
         )
+    activate_bpe_task(session, project_id, actor)
     return get_detail(session, project_id, detail_slug)
 
 
@@ -1726,6 +1740,7 @@ def save_flowback_stages(session, project_id, rows, actor="Web User", role="empl
             session, final_tasks, old_effective, final_effective, actor, role, correlation,
             "flowback stages",
         )
+    activate_bpe_task(session, project_id, actor)
     return get_detail(session, project_id, "flowback-results")
 
 
@@ -1814,3 +1829,61 @@ def get_field_options(session):
         WHERE archived = 0 AND (pipeline_type = 'bp' OR business_plan_enabled = 1)
     """)
     return sorted({_field_from_name(row["project_name"]) for row in rows if row.get("project_name")}, key=str.lower)
+
+
+def _bpe_reached_task(session, project_id):
+    """Return the project_tasks row for the first incomplete BPE tracking item.
+
+    BPE progress is derived from fields and formations, not persisted task
+    status.  This resolver walks the tracking items in stage order and returns
+    the task row for the first item whose effective state is not ``Completed``.
+    Returns None if every BPE item is completed or the project has no BPE.
+    """
+    project = db.fetch_one(session, "SELECT * FROM projects WHERE project_id = :project_id",
+                           {"project_id": project_id})
+    if not project:
+        return None
+    if not (str(project.get("pipeline_type") or "").lower() == "bp"
+            or int(project.get("business_plan_enabled") or 0) == 1):
+        return None
+    tasks = _task_map(session, project_id)
+    fields = _field_maps(session, project_id)
+    formations = _formation_rows(session, project_id)
+    effective = _effective_state(project, tasks, fields, formations)
+    for stage in STAGES:
+        for key, _label, _detail_slug in stage["items"]:
+            item_state = effective["states"].get(key) or {}
+            if item_state.get("status") == "Completed":
+                continue
+            task_name = ITEM_TASK_NAMES.get(key)
+            if not task_name:
+                continue
+            task = tasks.get(task_name)
+            if task:
+                return task
+    return None
+
+
+def activate_bpe_task(session, project_id, actor="Web User"):
+    """Activate the BPE-reached task if it is Not Assigned and mapped.
+
+    Uses the BPE-specific reachability resolver (field-derived effective state)
+    rather than the generic ``_reached_task`` which only considers persisted
+    status.  Resolves eligibility under the write lock, then delegates to the
+    shared locked activation primitive for role snapshots, assignee rows,
+    notifications, and atomic claiming.
+
+    Returns the list of assigned names, or ``[]`` if no activation occurred.
+    """
+    from .lifecycle import _activate_task_locked
+
+    # Resolve effective reachability after taking the write lock.  The shared
+    # primitive then claims exactly this freshly resolved task; it deliberately
+    # does not revalidate through the generic persisted-status resolver.
+    with db.write_transaction(session):
+        task = _bpe_reached_task(session, project_id)
+        if not task:
+            return []
+        if (task.get("status") or "Not Assigned") != "Not Assigned":
+            return []
+        return _activate_task_locked(session, task, actor)

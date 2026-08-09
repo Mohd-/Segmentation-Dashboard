@@ -203,58 +203,7 @@ SEED_USERS = [
     ("Supervisor", "supervisor"),
     ("Staff Member", "staff"),
     ("Employee", "employee"),
-    # Named step assignees for the creation auto-assignment rules below
-    # (STEP_ASSIGNMENT_RULES / PRE_WELL_ASSIGNEES). Assignment always requires
-    # an ACTIVE ``users`` row (workflow.lifecycle.assign_task), so the three
-    # ride the seed list -- as employees -- until the real roster replaces it.
-    ("Tahira", "employee"),
-    ("Saad", "employee"),
-    ("Salem", "employee"),
 ]
-
-
-# ---------------------------------------------------------------------------
-# Step auto-assignment at lead creation
-# ---------------------------------------------------------------------------
-# When a NEW prospect lead is created, every step of its operating pipeline
-# (the Lead Assessment / Risk Analysis / Pre-Well Delivery stage groups) is
-# assigned automatically -- which also moves it Not Assigned -> In Progress,
-# exactly like a manual assignment would. BP-pipeline records ("Well added to
-# BP") are never touched by these rules, and neither is promotion.
-#
-# Resolution order, per step (first match wins; see
-# workflow.projects._resolve_creation_assignee):
-#   1. an explicit per-step rule below naming "assignees";
-#   2. the Pre-Well Delivery stage rule (PRE_WELL_ASSIGNEES);
-#   3. a per-step "role" rule, resolved through STEP_ROLE_POOLS (skipped while
-#      that role's pool is empty);
-#   4. the lead's CREATOR (the signed-in name that created it). A creator that
-#      is blank, "System", or not an active user leaves the step Not Assigned.
-# When a rule lists several candidates, one is picked at RANDOM.
-#
-# This file is hand-edited by the owner: keep the shapes below exactly --
-# plain lists of names, and per-step dicts with either an "assignees" list or
-# a "role" string.
-
-# Role name -> list of member names. !!! PLACEHOLDER -- fill from Nawaf's
-# sheet when it arrives !!! While a pool is empty, any "role" rule pointing at
-# it simply does not fire (the step falls through to the creator default), so
-# populating this dict is the only edit needed to turn role rules on.
-# Example: {"petrophysicist": ["Name A", "Name B"],
-#           "structural geologist": ["Name C"]}
-STEP_ROLE_POOLS = {}
-
-# Every Pre-Well Delivery step is auto-assigned to a random pick from this
-# list at lead creation (unless an explicit per-step rule above it wins).
-PRE_WELL_ASSIGNEES = ["Saad", "Salem"]
-
-# Per-step overrides: step name -> {"assignees": [names...]} for a fixed
-# assignment, or {"role": "role name"} to draw from STEP_ROLE_POOLS.
-STEP_ASSIGNMENT_RULES = {
-    "Seismic Signature Validation": {"assignees": ["Tahira"]},
-    # Role-based example (inert until STEP_ROLE_POOLS carries the pool):
-    # "Reservoir CoS": {"role": "petrophysicist"},
-}
 
 
 # ---------------------------------------------------------------------------

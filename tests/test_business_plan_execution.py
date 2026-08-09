@@ -865,6 +865,159 @@ def _notifications(client, project_id):
         conn.close()
 
 
+def _map_petrophysicist(app_modules, task_names, member="Employee"):
+    """Populate the bootstrap role and map the requested BPE task rows."""
+    import workflow
+
+    _main, dbmod = app_modules
+    session = dbmod.new_session()
+    try:
+        role = workflow.domain_roles.get_role(session, "Petrophysicist")
+        assert role
+        memberships = workflow.domain_roles.list_memberships(
+            session, role_id=role["role_id"], user_name=member)
+        if not memberships:
+            workflow.domain_roles.add_membership(session, member, role["role_id"])
+        for task_name in task_names:
+            workflow.domain_roles.set_task_mapping(session, task_name, role["role_id"])
+    finally:
+        session.close()
+
+
+def _set_task_statuses(client, project_id, task_names, status="Approved"):
+    conn = raw_sqlite_connect(client.db_path)
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE project_tasks SET status = ? "
+                "WHERE project_id = ? AND task_name IN (%s)"
+                % ", ".join("?" for _name in task_names),
+                [status, project_id] + list(task_names),
+            )
+    finally:
+        conn.close()
+
+
+def test_bpe_effective_reach_activates_quicklook_role_and_notifies(client, app_modules):
+    _map_petrophysicist(app_modules, ["Quicklook Logs"])
+    project_id = _bp_project(client, "BPE-ROLE-QUICKLOOK")
+    _set_task_statuses(client, project_id, ["BP Execution Gate"])
+    _raw_fields(client, project_id, "Well Proposal", {"well_proposal_shared": "1"})
+    _raw_fields(client, project_id, "Site Preparation", {"site_preparation_shared": "1"})
+    _raw_fields(client, project_id, "Approval To Drill", {"approval_to_drill_shared": "1"})
+    _raw_fields(client, project_id, "GHEER", {"gheer_geophysical_shared": "1"})
+
+    reached = _save(
+        client, project_id, "gheer-inputs", "gheer_geomechanical_shared", True)
+    assert reached.status_code == 200, reached.get_json()
+
+    quicklook = get_task_by_name(client, project_id, "Quicklook Logs")
+    assert quicklook["status"] == "In Progress"
+    assert quicklook["assigned_to"] == "Employee"
+    assert quicklook["assignees"] == [
+        {"name": "Employee", "source": "role", "notified": True},
+    ]
+    assert [(row["recipient"], row["event"], row["task_name"])
+            for row in _notifications(client, project_id)] == [
+        ("Employee", "assigned", "Quicklook Logs"),
+    ]
+    # BPE completion remains field-derived; ordinary predecessor rows are not
+    # rewritten merely to make the generic lifecycle resolver advance.
+    assert get_task_by_name(client, project_id, "Well Proposal")["status"] == "Not Assigned"
+
+
+def test_manual_assignment_activates_the_current_bpe_item(client):
+    project_id = _bp_project(client, "BPE-MANUAL-QUICKLOOK")
+    _set_task_statuses(client, project_id, ["BP Execution Gate"])
+    _raw_fields(client, project_id, "Well Proposal", {"well_proposal_shared": "1"})
+    _raw_fields(client, project_id, "Site Preparation", {"site_preparation_shared": "1"})
+    _raw_fields(client, project_id, "Approval To Drill", {"approval_to_drill_shared": "1"})
+    _raw_fields(client, project_id, "GHEER", {
+        "gheer_geophysical_shared": "1",
+        "gheer_geomechanical_shared": "1",
+    })
+
+    assigned = client.post(
+        f"/api/business-plan/wells/{project_id}/steps/quicklook-logs/assign",
+        json={"add": ["Employee"]},
+    )
+    assert assigned.status_code == 200, assigned.get_json()
+    quicklook = get_task_by_name(client, project_id, "Quicklook Logs")
+    assert quicklook["status"] == "In Progress"
+    assert quicklook["assignees"] == [
+        {"name": "Employee", "source": "manual", "notified": True},
+    ]
+    assert [(row["recipient"], row["event"], row["task_name"])
+            for row in _notifications(client, project_id)] == [
+        ("Employee", "assigned", "Quicklook Logs"),
+    ]
+
+
+def test_well_letters_items_activate_their_own_persisted_tasks(client, app_modules):
+    _map_petrophysicist(app_modules, ["Site Preparation", "Approval To Drill"])
+    project_id = _bp_project(client, "BPE-ROLE-WELL-LETTERS")
+    _set_task_statuses(client, project_id, ["BP Execution Gate"])
+
+    proposal_done = _save(
+        client, project_id, "well-letters", "well_proposal_shared", True)
+    assert proposal_done.status_code == 200, proposal_done.get_json()
+    site = get_task_by_name(client, project_id, "Site Preparation")
+    proposal = get_task_by_name(client, project_id, "Well Proposal")
+    assert site["status"] == "In Progress"
+    assert site["assigned_to"] == "Employee"
+    assert proposal["status"] == "Not Assigned"
+    assert proposal["assignees"] == []
+
+    site_done = _save(
+        client, project_id, "well-letters", "site_preparation_shared", True)
+    assert site_done.status_code == 200, site_done.get_json()
+    approval = get_task_by_name(client, project_id, "Approval To Drill")
+    assert approval["status"] == "In Progress"
+    assert approval["assigned_to"] == "Employee"
+    assert [(row["task_name"], row["event"])
+            for row in _notifications(client, project_id)] == [
+        ("Site Preparation", "assigned"),
+        ("Approval To Drill", "assigned"),
+    ]
+
+
+def test_bpe_effective_reach_activates_final_logs_role(client, app_modules):
+    _map_petrophysicist(app_modules, ["Final Log Analysis"])
+    project_id = _bp_project(client, "BPE-ROLE-FINAL-LOGS")
+    _set_task_statuses(client, project_id, [
+        "BP Execution Gate", "SAD Model", "Post-Well Outcome & Decision Gate",
+    ])
+    _raw_fields(client, project_id, "Well Proposal", {"well_proposal_shared": "1"})
+    _raw_fields(client, project_id, "Site Preparation", {"site_preparation_shared": "1"})
+    _raw_fields(client, project_id, "Approval To Drill", {"approval_to_drill_shared": "1"})
+    _raw_fields(client, project_id, "GHEER", {
+        "gheer_geophysical_shared": "1",
+        "gheer_geomechanical_shared": "1",
+    })
+    _raw_fields(client, project_id, "Quicklook Logs", {
+        "quicklook_pdf": "1", "quicklook_las": "1",
+    })
+    _raw_fields(client, project_id, "Aramco Picks", {"aap_geoknowledge_loaded": "1"})
+    quicklook = _put_formations(
+        client, project_id, "quicklook-logs", [_formation("Dry Hole")])
+    assert quicklook.status_code == 200, quicklook.get_json()
+
+    reached = _save(
+        client, project_id, "aramco-approved-pics", "aap_petrel_loaded", True)
+    assert reached.status_code == 200, reached.get_json()
+
+    final_logs = get_task_by_name(client, project_id, "Final Log Analysis")
+    assert final_logs["status"] == "In Progress"
+    assert final_logs["assigned_to"] == "Employee"
+    assert final_logs["assignees"] == [
+        {"name": "Employee", "source": "role", "notified": True},
+    ]
+    assert [(row["recipient"], row["event"], row["task_name"])
+            for row in _notifications(client, project_id)] == [
+        ("Employee", "assigned", "Final Log Analysis"),
+    ]
+
+
 def _login(client, name):
     resp = client.post("/api/login", json={"name": name})
     assert resp.status_code == 200, resp.get_json()
@@ -887,19 +1040,42 @@ def test_bpe_transitions_notify_the_same_people_a_lifecycle_transition_does(clie
     _login(client, "Employee")
     assert _transition(client, project_id, "submit").status_code == 200
     assert [(row["recipient"], row["event"]) for row in _notifications(client, project_id)] == [
-        ("Supervisor", "submitted")]
+        ("Employee", "assigned"), ("Supervisor", "submitted")]
 
     _login(client, "Supervisor")
     assert _transition(client, project_id, "approve").status_code == 200
     assert _transition(client, project_id, "reopen").status_code == 200
     rows = _notifications(client, project_id)
     assert [(row["recipient"], row["actor"], row["event"]) for row in rows] == [
+        ("Employee", "Supervisor", "assigned"),
         ("Supervisor", "Employee", "submitted"),
         ("Employee", "Supervisor", "approved"),
         ("Employee", "Supervisor", "returned"),
     ]
     assert "reopened for update" in rows[-1]["message"]
     assert {row["task_name"] for row in rows} == {"BP Execution Gate"}
+
+
+def test_bpe_assignment_uses_the_shared_manual_group(client):
+    _login(client, "Supervisor")
+    project_id = _bp_project(client, "BPE-GROUP-1")
+    endpoint = f"/api/business-plan/wells/{project_id}/steps/business-plan-gate/assign"
+
+    response = client.post(endpoint, json={"add": ["Employee", "Staff Member"]})
+    assert response.status_code == 200, response.get_json()
+    task = response.get_json()["detail"]["task"]
+    assert [member["name"] for member in task["assignees"]] == ["Employee", "Staff Member"]
+    assert {member["source"] for member in task["assignees"]} == {"manual"}
+    assert task["status"] == "In Progress"
+
+    response = client.post(endpoint, json={"remove": ["Employee"]})
+    assert response.status_code == 200, response.get_json()
+    task = response.get_json()["detail"]["task"]
+    assert task["assignees"] == [{"name": "Staff Member", "source": "manual", "notified": True}]
+
+    dashboard = client.get(f"/api/business-plan/dashboard?year={date.today().year}").get_json()
+    well = next(row for row in dashboard["wells"] if row["project_id"] == project_id)
+    assert well["assignees"] == ["Staff Member"]
 
 
 def test_bpe_un_approving_actions_are_supervisor_only_at_the_route(client):

@@ -40,9 +40,11 @@ function mount(role, name, pipeline) {
 function button(id) { return document.getElementById(id); }
 function visible(id) { return !button(id).classList.contains('hidden'); }
 
-function task(name, status, assignee) {
-  return { task_id: 7, task_name: name, status: status,
-           assigned_to: assignee === undefined ? 'Employee' : assignee };
+function task(name, status, assignee, assignees) {
+  var t = { task_id: 7, task_name: name, status: status,
+            assigned_to: assignee === undefined ? 'Employee' : assignee };
+  if (assignees) t.assignees = assignees;
+  return t;
 }
 
 function withStore(fn) {
@@ -70,6 +72,12 @@ var DETAIL_SHELL =
   '<button id="reopen-component" type="button" class="ghost hidden">Reopen</button>' +
   '<button id="save-component" type="submit">Save Updates</button>' +
   '</div></form><div id="summary-card-head"></div><div id="lead-summary"></div></div>';
+
+var ASSIGNMENT_DETAIL_SHELL = DETAIL_SHELL.replace(
+  '<span id="component-status-chip"></span><select id="assigned-to"></select>',
+  '<span id="component-status-chip"></span><div id="assignment-group">' +
+    '<div id="assigned-members"></div><select id="assigned-to"></select></div>'
+);
 
 function response(body) {
   return new Response(JSON.stringify(body), {
@@ -147,6 +155,38 @@ test('detail-form GeoX: loadComponent renders the seven manual external-result c
     assert.equal(document.getElementById('resource-calculator-panel'), null);
     assert.equal(document.querySelectorAll('#dynamic-fields [data-field^="pre_drill_piip_"]').length, 7);
     assert.equal(document.querySelector('[data-field="pre_drill_piip_gas_p90"]').value, '80');
+  });
+});
+
+test('detail-form assignment group shows every member and protects role members', async function () {
+  await withDetailStore(async function () {
+    fixture(ASSIGNMENT_DETAIL_SHELL);
+    var component = {
+      task_id: 95, task_name: 'Reservoir CoS', sequence_no: 2,
+      stage_group: 'Risk Analysis', status: 'In Progress', priority: 'Medium',
+      assigned_to: 'Employee', default_domain_role: 'Petrophysicist',
+      assignees: [
+        { name: 'Employee', source: 'role', notified: true },
+        { name: 'Staff Member', source: 'manual', notified: true }
+      ]
+    };
+    Store.tasks = [component];
+    mockFetch(function (url) {
+      var path = String(url);
+      if (path.indexOf('/api/tasks/95/dynamic-fields') >= 0) return response({});
+      if (path.indexOf('/api/projects/44/component-folder/95') >= 0) return response({ requires_folder: 0 });
+      throw new Error('Unexpected request: ' + path);
+    });
+
+    await loadComponent(component);
+    var chips = Array.from(document.querySelectorAll('#assigned-members .assignee-chip'));
+    assert.equal(chips.length, 2);
+    assert.ok(chips[0].textContent.indexOf('Employee') >= 0);
+    assert.ok(chips[0].textContent.indexOf('Role') >= 0);
+    assert.equal(chips[0].querySelector('.assignee-remove'), null,
+      'role-derived membership cannot be removed manually');
+    assert.ok(chips[1].querySelector('.assignee-remove'),
+      'manual additions remain removable');
   });
 });
 
@@ -391,6 +431,71 @@ test('detail-form action row: the overridden buttons are restored for the next s
     assert.equal(button('return-component').textContent, 'Return for Update');
     assert.equal(button('return-component').className, 'ghost');
     assert.equal(button('approve-component').disabled, false);
+  });
+});
+
+// --- multi-assignee: non-primary assignees can act on their work -------------
+
+test('detail-form action row: a non-primary assignee can submit Segmentation Slides', function () {
+  withStore(function () {
+    mount('employee', 'Zed');
+    renderActionButtons(task('Segmentation Slides', 'In Progress', 'Alice',
+      [{ name: 'Alice', source: 'role' }, { name: 'Zed', source: 'role' }]));
+    assert.equal(visible('submit-component'), true,
+      'Zed is in task.assignees even though assigned_to is Alice');
+    assert.equal(visible('approve-component'), false);
+    assert.equal(visible('return-component'), false);
+  });
+});
+
+test('detail-form action row: a non-primary assignee can submit a generic BP step', function () {
+  withStore(function () {
+    mount('employee', 'Zed', 'bp');
+    renderActionButtons(task('Flowback Results', 'In Progress', 'Alice',
+      [{ name: 'Alice', source: 'role' }, { name: 'Zed', source: 'role' }]));
+    assert.equal(visible('submit-component'), true,
+      'the generic submit button also honours task.assignees');
+  });
+});
+
+test('detail-form action row: a non-primary assignee can return a Ready BP step', function () {
+  withStore(function () {
+    mount('employee', 'Zed', 'bp');
+    renderActionButtons(task('Flowback Results', 'Ready', 'Alice',
+      [{ name: 'Alice', source: 'role' }, { name: 'Zed', source: 'role' }]));
+    assert.equal(visible('return-component'), true,
+      'the Return button is visible to any assignee');
+  });
+});
+
+test('detail-form action row: a non-assignee employee cannot submit', function () {
+  withStore(function () {
+    mount('employee', 'Bobby');
+    renderActionButtons(task('Segmentation Slides', 'In Progress', 'Alice',
+      [{ name: 'Alice', source: 'role' }, { name: 'Zed', source: 'role' }]));
+    assert.equal(button('submit-component').disabled, true,
+      'Bobby is not in assignees; submit must be disabled');
+  });
+});
+
+test('detail-form action row: assignee matching is case-insensitive', function () {
+  withStore(function () {
+    mount('employee', 'zed');
+    renderActionButtons(task('Segmentation Slides', 'In Progress', 'Alice',
+      [{ name: 'Alice', source: 'role' }, { name: 'Zed', source: 'role' }]));
+    assert.equal(visible('submit-component'), true,
+      'lowercase user "zed" matches assignee "Zed"');
+  });
+});
+
+test('detail-form action row: assigned_to fallback works when assignees array is absent', function () {
+  withStore(function () {
+    mount('employee', 'Alice');
+    var t = task('Segmentation Slides', 'In Progress', 'Alice');
+    delete t.assignees;
+    renderActionButtons(t);
+    assert.equal(visible('submit-component'), true,
+      'the legacy scalar assigned_to still gates the action row');
   });
 });
 

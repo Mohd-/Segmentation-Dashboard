@@ -9,7 +9,7 @@ the source task, and /detail exposure.
 """
 from __future__ import annotations
 
-from conftest import create_project, get_task_by_name, get_tasks
+from conftest import approve_task, create_project, get_task_by_name, get_tasks
 
 SARH_ROW = {
     "formation": "SARH",
@@ -677,13 +677,7 @@ def test_an_already_approved_step_is_left_alone(client):
     only ever moves steps FORWARD."""
     pid = _bp_project(client, "AUTO-PREAPPROVED-1")
     task = get_task_by_name(client, pid, "Flowback Results")
-    task = client.post(f"/api/tasks/{task['task_id']}/assign", json={
-        "assignee": "Employee", "cascade": False, "revision": task["revision"]}).get_json()["task"]
-    client.post(f"/api/tasks/{task['task_id']}/transition",
-                json={"action": "submit", "revision": task["revision"]})
-    task = get_task_by_name(client, pid, "Flowback Results")
-    client.post(f"/api/tasks/{task['task_id']}/transition",
-                json={"action": "approve", "revision": task["revision"]})
+    approve_task(client, task["task_id"])
 
     _put(client, pid, "quicklook", [_water_row()])
     assert all(_statuses(client, pid)[name] == "Approved" for name in AUTO_STEPS)
@@ -695,13 +689,14 @@ def test_a_reopened_step_is_not_fought_by_later_formation_saves(client):
     """The rule fires ONCE PER STEP, EVER (the Auto-Completed history row is
     the marker). A user who reopens an auto-completed step keeps it open --
     whether the next formations save still matches or not. Nothing is reverted
-    either: an edit that breaks the condition leaves the other approvals
-    standing, and the audit trail explains them."""
+    either: an edit that breaks the condition changes nothing (not reversible),
+    and the audit trail explains them."""
     pid = _bp_project(client, "AUTO-REOPEN-1")
     _put(client, pid, "quicklook", [_water_row()])
     task = get_task_by_name(client, pid, "Flowback Results")
-    resp = client.patch(f"/api/tasks/{task['task_id']}",
-                        json={"status": "In Progress", "revision": task["revision"]})
+    # Reopen the auto-completed step via the transition endpoint.
+    resp = client.post(f"/api/tasks/{task['task_id']}/transition",
+                       json={"action": "reopen", "revision": task["revision"]})
     assert resp.status_code == 200, resp.get_json()
 
     # A save that BREAKS the condition changes nothing (not reversible)...

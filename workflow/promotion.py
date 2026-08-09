@@ -10,7 +10,14 @@ from helpers import utc_now_str
 
 from .constants import BP_EXECUTION_STAGES, PROSPECT_STAGES
 from .history import log_task_event
+from .lifecycle import activate_next_task
 from .projects import _sync_completed_at, get_project
+
+
+def _activate_bpe_safe(session, project_id, actor):
+    """Call BPE activation; import deferred to avoid a cycle with business_plan."""
+    from .business_plan import activate_bpe_task
+    activate_bpe_task(session, project_id, actor)
 
 
 def get_lead_summary_snapshot(session, project_id: int):
@@ -156,6 +163,10 @@ def set_business_plan(session, project_id, enabled, year=None, changed_by="Admin
         # reopen the project (e.g. a fully-approved prospect promoted into an
         # unstarted BP pipeline is no longer complete).
         _sync_completed_at(session, project_id)
+
+    if enabled_int:
+        activate_next_task(session, project_id, changed_by)
+        _activate_bpe_safe(session, project_id, changed_by)
 
 
 def update_project_flags(session, project_id, business_plan_enabled=None, active_well_enabled=None, business_plan_year=None, changed_by="Web User", allow_historical_year=False, active_drilling=None):

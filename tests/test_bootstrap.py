@@ -15,7 +15,7 @@ import json
 
 import pytest
 
-from conftest import create_project, get_task_by_name, get_tasks, raw_sqlite_connect
+from conftest import create_project, get_task_by_name, get_tasks, raw_sqlite_connect, reach_task
 
 
 def test_fresh_bootstrap_creates_exactly_the_modeled_tables(client):
@@ -1236,6 +1236,12 @@ def test_v7_prospect_completion_counts_four_derived_lead_checkpoints(client):
     """The v7 row reduction must never change the board's 12-item denominator."""
     pid = create_project(client, "V7-CHECKPOINT-COMPLETION-1")
     task = get_task_by_name(client, pid, "Lead Assessment")
+    # v14: unreached tasks are inert; activate the row before saving so the
+    # field-completion engine can reconcile it.
+    resp = client.post(f"/api/tasks/{task['task_id']}/assign",
+                       json={"assigned_to": "Employee", "cascade": False, "revision": task["revision"]})
+    assert resp.status_code == 200, resp.get_json()
+    task = resp.get_json()["task"]
     response = client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields", json={"fields": {
         "p90_area_km2": "10", "p10_area_km2": "20",
         "reservoir_thickness_ft": "20", "formation_thickness_ft": "100",
@@ -1735,16 +1741,16 @@ def test_migration_v13_normalizes_flowback_stage_rows_and_replays(client, app_mo
 
 def test_segmentation_slides_ready_still_reads_pending_approval(client):
     """The one display rule that survived the restructure verbatim."""
-    task = None
     pid = create_project(client, "V5-PENDING-1")
-    task = get_task_by_name(client, pid, "Segmentation Slides")
+    # Reach the step so it can be assigned and submitted.
+    task = reach_task(client, pid, "Segmentation Slides")
     # Card 3S made the shared-folder confirmation a submit REQUIREMENT rather
     # than the submission itself, so it is ticked before asking for review.
     client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
                  json={"fields": {"segmentation_slides_loaded": "1"}})
     task = get_task_by_name(client, pid, "Segmentation Slides")
     task = client.post(f"/api/tasks/{task['task_id']}/assign",
-                       json={"assignee": "Employee", "cascade": False,
+                       json={"assigned_to": "Employee", "cascade": False,
                              "revision": task["revision"]}).get_json()["task"]
     resp = client.post(f"/api/tasks/{task['task_id']}/transition",
                        json={"action": "submit", "revision": task["revision"]})

@@ -71,6 +71,9 @@ export var API = {
   saveFields: function (id, fields) { return api('/api/tasks/' + id + '/dynamic-fields', jsonOptions('PATCH', { fields: fields, changed_by: currentUserName() })); },
   updateTask: function (id, payload) { return api('/api/tasks/' + id, jsonOptions('PATCH', payload)); },
   assign: function (id, payload) { return api('/api/tasks/' + id + '/assign', jsonOptions('POST', payload)); },
+  updateTaskAssignees: function (id, payload) {
+    return api('/api/tasks/' + id + '/assignees', jsonOptions('POST', payload));
+  },
   transition: function (id, payload) { return api('/api/tasks/' + id + '/transition', jsonOptions('POST', payload)); },
   // Resource Assessment calculator (views/resource-calculator.js): taskId is
   // the Resource Assessment component's own task_id.
@@ -110,9 +113,9 @@ export var API = {
     return api('/api/business-plan/wells/' + projectId + '/steps/' + encodeURIComponent(step) + '/transition',
       jsonOptions('POST', { action: action, comment: comment || '', changed_by: currentUserName() }));
   },
-  assignBusinessPlan: function (projectId, step, assignee) {
+  assignBusinessPlan: function (projectId, step, payload) {
     return api('/api/business-plan/wells/' + projectId + '/steps/' + encodeURIComponent(step) + '/assign',
-      jsonOptions('POST', { assignee: assignee, changed_by: currentUserName() }));
+      jsonOptions('POST', Object.assign({}, payload || {}, { changed_by: currentUserName() })));
   },
   portfolioRows: function (query) {
     var qs = new URLSearchParams(query || {}).toString();

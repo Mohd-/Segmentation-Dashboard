@@ -763,10 +763,9 @@ def test_commit_failure_mid_batch_recovers_and_continues(client, app_modules, tm
 
     def flaky_commit():
         calls["count"] += 1
-        # Call #1 seeds the import user, #2 creates CF-1; #3 is a field save
-        # inside CF-1's record -- failing THERE leaves a committed partial
-        # project for the cleanup path to remove.
-        if calls["count"] == 3:
+        # Fail after the project has been created but before the row's field
+        # saves finish, leaving a committed partial project for cleanup.
+        if calls["count"] == 4:
             raise RuntimeError("simulated commit failure")
         real_commit()
 

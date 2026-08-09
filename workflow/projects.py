@@ -7,10 +7,6 @@ task rows at read time -- never stored (see _annotate_derived_state).
 from __future__ import annotations
 
 import logging
-# Module-level on purpose: the creation auto-assignment picks randomly from
-# multi-candidate pools (random.choice), and tests seed/monkeypatch through
-# this module attribute for determinism.
-import random
 from datetime import date
 from typing import Any, Dict, List
 
@@ -27,6 +23,7 @@ from .constants import (BP_EXECUTION_STAGES, LATEST_MEAN_GAS_SOURCES,
                         LEAD_ASSESSMENT_CHECKPOINTS, PIPELINE_TEMPLATES,
                         PROSPECT_STAGES, STAGE_ORDER, applicable_stages,
                         lead_assessment_checkpoint_met)
+from . import domain_roles
 from .history import log_task_event
 
 logger = logging.getLogger(__name__)
@@ -150,123 +147,20 @@ def _fill_project_surfaces(session, project_id):
 
 
 # ---------------------------------------------------------------------------
-# Creation auto-assignment (owner items 6-9)
+# Creation auto-assignment: REMOVED (v14)
 # ---------------------------------------------------------------------------
-
-# The distinguishing history comment on every creation auto-assignment event
-# (the event type stays "Component Assigned" -- same mechanism as POST /assign,
-# one event per step, so the audit trail reads uniformly).
-AUTO_ASSIGN_COMMENT_SUFFIX = "(auto-assigned at creation)"
-
-# The stage-level rule's stage (owner item 9): every step of this stage group
-# draws from config.PRE_WELL_ASSIGNEES unless an explicit per-step rule wins.
-_PRE_WELL_STAGE = "Pre-Well Delivery"
-
-
-def _resolve_creation_assignee(task_name, stage_group, creator):
-    """The assignee a NEW prospect step gets at creation, or None. (pure)
-
-    Resolution order (first match wins; each tier is skipped when it yields no
-    usable candidate, falling through to the next):
-
-      1. explicit per-step rule: config.STEP_ASSIGNMENT_RULES[step]["assignees"]
-         (owner item 6 -- Seismic Signature Validation -> Tahira);
-      2. stage rule: any Pre-Well Delivery step draws from
-         config.PRE_WELL_ASSIGNEES (owner item 9 -- Saad/Salem);
-      3. role rule: config.STEP_ASSIGNMENT_RULES[step]["role"], resolved
-         through config.STEP_ROLE_POOLS (owner item 8); an empty/absent pool
-         means the rule does not fire yet -- the pools ship empty until
-         Nawaf's sheet arrives;
-      4. the CREATOR (owner item 7). A blank or "System" creator (an
-         automated/anonymous context, not a person) yields None -- the step
-         stays Not Assigned rather than being pinned on a placeholder.
-
-    Multi-candidate tiers pick RANDOMLY via the module-level ``random``
-    (assumption flagged: "randomly selected member" is owner item 8's wording,
-    applied to Saad/Salem as well; tests seed/monkeypatch it).
-    """
-    rule = config.STEP_ASSIGNMENT_RULES.get(task_name) or {}
-    explicit = [str(name).strip() for name in (rule.get("assignees") or ())
-                if str(name or "").strip()]
-    if explicit:
-        return random.choice(explicit)
-    if stage_group == _PRE_WELL_STAGE:
-        stage_pool = [str(name).strip() for name in (config.PRE_WELL_ASSIGNEES or ())
-                      if str(name or "").strip()]
-        if stage_pool:
-            return random.choice(stage_pool)
-    role = str(rule.get("role") or "").strip()
-    if role:
-        role_pool = [str(name).strip() for name in (config.STEP_ROLE_POOLS.get(role) or ())
-                     if str(name or "").strip()]
-        if role_pool:
-            return random.choice(role_pool)
-    creator = str(creator or "").strip()
-    if creator and creator.lower() != "system":
-        return creator
-    return None
-
-
-def _auto_assign_new_lead(session, project_id, changed_by):
-    """Assign every prospect step of a NEWLY created lead per the config rules.
-
-    POST-COMMIT (called by add_project after the creation transaction), because
-    it WALKS the real assignment mechanism: one lifecycle.assign_task call per
-    step (cascade=False -- neighbouring steps carry different rules), which
-    opens its own write transaction, stamps actual_start, moves
-    Not Assigned -> In Progress and logs one "Component Assigned" event per
-    step -- exactly what POST /api/tasks/<id>/assign leaves behind, with the
-    AUTO_ASSIGN_COMMENT_SUFFIX comment marking it as creation automation.
-    Never a raw status UPDATE, and assignment triggers no completion hooks
-    (assign_task has none), so a fresh lead's empty fields stay untouched.
-
-    Scope: the PROSPECT operating pipeline only (owner item 7's "all steps"
-    read as all steps of the lead's operating pipeline). The 15 BP-execution
-    rows a prospect also materializes stay Not Assigned, so promotion to BP
-    keeps its current behavior; BP-pipeline records never reach here at all
-    (add_project gates on pipeline_type).
-
-    A resolved name that is not an ACTIVE users-table row is logged and
-    SKIPPED (the step stays Not Assigned): assign_task refuses unknown
-    assignees, and a mistyped config name must surface as an unassigned step,
-    not fail lead creation. The local imports avoid the projects <-> lifecycle
-    module cycle (lifecycle imports _fill_project_surfaces from here).
-    """
-    from .lifecycle import assign_task
-    from .users import find_active_user
-
-    tasks = db.fetch_all(session, """
-        SELECT task_id, task_name, stage_group, status
-        FROM project_tasks
-        WHERE project_id = :project_id AND is_active = 1
-          AND stage_group IN :stages AND status = 'Not Assigned'
-        ORDER BY sequence_no
-    """, {"project_id": project_id, "stages": PROSPECT_STAGES})
-    for task in tasks:
-        assignee = _resolve_creation_assignee(task["task_name"], task["stage_group"], changed_by)
-        if not assignee:
-            continue
-        user = find_active_user(session, assignee)
-        if not user:
-            logger.warning("Project %s: creation auto-assignment of %r resolved %r, "
-                           "which is not an active user; leaving the step Not Assigned",
-                           project_id, task["task_name"], assignee)
-            continue
-        assign_task(session, task["task_id"], user["name"], cascade=False,
-                    changed_by=changed_by,
-                    comment=f"Assigned to {user['name']} {AUTO_ASSIGN_COMMENT_SUFFIX}.")
+# Role-based assignment replaced the hardcoded creation auto-assignment. Steps
+# are now assigned when they become the next unapproved step (activation), not
+# at project creation. See workflow.domain_roles and workflow.lifecycle for the
+# activation logic.
 
 
 def add_project(session, project_name, start_date=None, target_date=None, changed_by="System", lead_x=None, lead_y=None,
-                business_plan_year=None, business_plan_enabled=False, active_well_enabled=False, pipeline_type="prospect",
-                auto_assign=True):
+                business_plan_year=None, business_plan_enabled=False, active_well_enabled=False, pipeline_type="prospect"):
     """Create a project and materialize its 24 workflow tasks; return project_id.
 
-    ``auto_assign`` (default True) applies the creation auto-assignment rules
-    (see _auto_assign_new_lead) to a PROSPECT lead's steps. import_excel passes
-    False: an imported record carries its own historical lifecycle state, and
-    the importer's _ensure_approved walk must find steps exactly as a pre-rule
-    creation left them.
+    Role-based assignment happens on activation (when a step becomes the next
+    unapproved step), not at creation. All steps start Not Assigned.
     """
     project_name = (project_name or '').strip()
     if not project_name:
@@ -320,10 +214,9 @@ def add_project(session, project_name, start_date=None, target_date=None, change
         project_id = _insert_project_with_tasks(session, project_name, start_date, target_date, changed_by,
                                                 lead_x, lead_y, year_val, bp_enabled, active_well_enabled,
                                                 pipeline_type, first_template, now)
-        # Post-commit, prospect only: BP records and promotion are untouched.
-        if auto_assign and pipeline_type == "prospect":
-            _auto_assign_new_lead(session, project_id, changed_by)
         _fill_project_surfaces(session, project_id)
+        from .lifecycle import activate_next_task
+        activate_next_task(session, project_id, changed_by)
         return project_id
     except IntegrityError as exc:
         # UNIQUE(project_name) race lost to a concurrent insert.
@@ -501,18 +394,21 @@ def _tracked_items(status_by_task, lead_assessment_fields=None):
     return items
 
 
-def _annotate_card_state(project, rows, stages, lead_assessment_fields=None):
+def _annotate_card_state(project, rows, stages, lead_assessment_fields=None, assignees_map=None):
     """Attach the Card 1B card fields to one project dict, in place.
 
     ``rows`` are the project's active task rows (already loaded); ``stages`` its
-    applicable stage groups. No query, no write.
+    applicable stage groups. ``assignees_map`` is {task_id: [task_assignee rows]}
+    for the same task rows. No query, no write.
     """
     applicable = [r for r in rows if r["stage_group"] in stages]
+    assignees_map = assignees_map or {}
     assignees = []
     for row in applicable:
-        name = (row.get("assigned_to") or "").strip()
-        if name and name not in assignees:
-            assignees.append(name)
+        for assignee_row in assignees_map.get(row["task_id"], []):
+            name = (assignee_row.get("assignee_name") or "").strip()
+            if name and name not in assignees:
+                assignees.append(name)
     project["assignees"] = assignees
     # Since v9 the lead's priority IS the stored projects.priority (already on
     # the project dict -- both readers select the full row); NULL reads "Low".
@@ -736,13 +632,20 @@ def _annotate_derived_state(session, projects):
         """, {"task_ids": lead_task_ids}):
             lead_fields_by_task.setdefault(row["task_id"], {})[row["field_key"]] = row["field_value"] or ""
 
+    # Role-based shared assignment: task_assignees is authoritative for owners.
+    # Batch-load assignees for every task row we already have.
+    assignees_map = domain_roles.get_task_assignees_map(
+        session, [r["task_id"] for r in task_rows])
+
     for project in projects:
         rows = by_project.get(project["project_id"], [])
         stages = applicable_stages(project.get("pipeline_type"))
         open_task = next((r for r in rows if r["stage_group"] in stages and r["status"] != "Approved"), None)
         if open_task:
             anchor = open_task
-            current_owner = open_task["assigned_to"]
+            open_assignees = assignees_map.get(open_task["task_id"], [])
+            current_owners = sorted({a["assignee_name"] for a in open_assignees if a.get("assignee_name")})
+            current_owner = current_owners[0] if current_owners else None
             overall_status = "In Progress"
         else:
             # Completed: anchor on the final applicable step of the project's
@@ -754,6 +657,7 @@ def _annotate_derived_state(session, projects):
                 or {"task_name": fallback[1] if fallback else None,
                     "stage_group": fallback[2] if fallback else stages[-1]}
             current_owner = None
+            current_owners = []
             overall_status = "Completed"
         current_stage = anchor["stage_group"]
         started = [r["actual_start"] for r in rows
@@ -761,6 +665,7 @@ def _annotate_derived_state(session, projects):
         project["current_stage"] = current_stage
         project["current_task"] = anchor["task_name"]
         project["current_owner"] = current_owner
+        project["current_owners"] = current_owners
         project["overall_status"] = overall_status
         project["current_stage_started_at"] = min(started) if started else project.get("start_date")
         # Priority is a LEAD/WELL-LEVEL stored attribute since v9. The stored
@@ -778,7 +683,8 @@ def _annotate_derived_state(session, projects):
         # The board card fields, off the SAME already-loaded rows.
         lead_row = next((row for row in rows if row["task_name"] == "Lead Assessment"), None)
         _annotate_card_state(project, rows, stages,
-                             lead_fields_by_task.get((lead_row or {}).get("task_id"), {}))
+                             lead_fields_by_task.get((lead_row or {}).get("task_id"), {}),
+                             assignees_map)
 
     # Card 1E's mean gas is the one derived field the task rows above cannot
     # supply (it lives in task_dynamic_fields), so it gets its own single
@@ -861,7 +767,7 @@ def get_projects(session, search_text="", stage_filter="All", status_filter="All
             continue
         if status_filter != "All" and item.get("overall_status") != status_filter:
             continue
-        if owner_filter != "All" and item.get("current_owner") != owner_filter:
+        if owner_filter != "All" and owner_filter not in (item.get("current_owners") or []):
             continue
         if health_filter != "All" and item["health"] != health_filter:
             continue

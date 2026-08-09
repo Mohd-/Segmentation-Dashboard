@@ -55,11 +55,11 @@ def dashboard_metrics(session):
     owner_workload: Dict[str, int] = {}
     for row in rows:
         stage = row["current_stage"]
-        owner = row["current_owner"]
         if stage in stage_counts:
             stage_counts[stage] += 1
-        if owner:
-            owner_workload[owner] = owner_workload.get(owner, 0) + 1
+        for owner in row.get("current_owners") or []:
+            if owner:
+                owner_workload[owner] = owner_workload.get(owner, 0) + 1
     return metrics, stage_counts, owner_workload
 
 

@@ -324,29 +324,35 @@ def me():
     request in dev mode reports role None here so the front-end hides the
     signed-in chip, even though role checks would treat it as supervisor.
 
+    ``domain_roles`` lists the domain-role names the user belongs to (empty for
+    anonymous users).
+
     ``auth_required`` mirrors config.AUTH_REQUIRED, read here at REQUEST time
     (like the before_request gate, so tests can monkeypatch it). The front-end
     reads it to decide whether to front the app with the full-page login screen
     before any data/meta loads (which WOULD 401 under AUTH_REQUIRED).
     """
     name: Optional[str] = flask_session.get("name")
+    session = db.get_session()
+    user_roles = workflow.domain_roles.get_user_roles(session, name) if name else []
     return json_response({
         "authenticated": bool(name),
         "name": name if name else None,
         "role": (flask_session.get("role") or "employee") if name else None,
+        "domain_roles": [r["role_name"] for r in user_roles],
         "auth_required": config.AUTH_REQUIRED,
     })
 
 
 @app.get("/api/users")
 def users():
-    """Active users as [{name, role}] ordered by name (assignee/login dropdowns).
+    """Active users as [{name, role, domain_roles}] ordered by name.
 
     Exempt from AUTH_REQUIRED -- see the _AUTH_EXEMPT_PATHS comment for the
     tradeoff.
     """
     session = db.get_session()
-    return json_response(workflow.get_active_users(session))
+    return json_response(workflow.get_active_users_with_roles(session))
 
 
 @app.get("/")
@@ -410,7 +416,7 @@ def health():
 # reverting to the raw row.
 _PROJECT_LIST_FIELDS = (
     "project_id", "project_name", "pipeline_type",
-    "current_stage", "current_task", "current_owner",
+    "current_stage", "current_task", "current_owner", "current_owners",
     "overall_status", "current_task_priority", "health",
     "business_plan_year", "active_well_enabled", "active_drilling",
     "has_high_priority_tasks",
@@ -647,6 +653,10 @@ def task(task_id):
 def update_task(task_id):
     session = db.get_session()
     payload = request.get_json(silent=True) or {}
+    if "status" in payload:
+        raise ValueError("Lifecycle status must be changed through the transition endpoint, not PATCH.")
+    if "assigned_to" in payload:
+        raise ValueError("assigned_to is a derived field; use the assignees endpoint to change assignments.")
     task_after_save = workflow.save_task(
         session, task_id, payload, actor(payload),
         allow_priority_change=current_role() == "supervisor",
@@ -656,15 +666,57 @@ def update_task(task_id):
 
 @app.post("/api/tasks/<int:task_id>/assign")
 def assign_task(task_id):
-    """Assign a component (supervisor/staff only); cascade defaults to true."""
+    """Assign a component (supervisor/staff only); cascade defaults to true.
+
+    Accepts either the legacy ``assigned_to`` single-name payload or a new
+    ``assignees`` array. Both write source='manual' task_assignees rows and set
+    project_tasks.assigned_to to the primary (first alphabetical) assignee.
+    """
     require_role("supervisor", "staff")
     session = db.get_session()
     payload = request.get_json(silent=True) or {}
     cascade = payload.get("cascade")
-    task_after = workflow.assign_task(
-        session, task_id, payload.get("assignee", ""),
+
+    if "assignees" in payload:
+        assignees = payload["assignees"]
+        if not isinstance(assignees, list):
+            raise ValueError("assignees must be an array.")
+        if not assignees:
+            raise ValueError("At least one assignee is required.")
+    elif "assignee" in payload:
+        assignees = [payload["assignee"]]
+    elif "assigned_to" in payload:
+        assignees = [payload["assigned_to"]]
+    else:
+        raise ValueError("assignees or assigned_to is required.")
+
+    task_after, _new_assignees = workflow.assign_task(
+        session, task_id, assignees,
         True if cascade is None else bool(cascade),
         actor(payload), payload.get("revision"),
+    )
+    return json_response({"ok": True, "task": task_after})
+
+
+@app.post("/api/tasks/<int:task_id>/assignees")
+def manage_task_assignees(task_id):
+    """Add or remove manual assignees for a task (supervisor/staff only).
+
+    Body: {"add": ["Name1", "Name2"], "remove": ["Name3"]}. Add creates
+    source='manual' rows and notifies when the task is active; remove only
+    deletes manual rows (role-sourced assignees are protected).
+    """
+    require_role("supervisor", "staff")
+    session = db.get_session()
+    payload = request.get_json(silent=True) or {}
+    add_names = payload.get("add")
+    remove_names = payload.get("remove")
+    if add_names is not None and not isinstance(add_names, list):
+        raise ValueError("add must be an array.")
+    if remove_names is not None and not isinstance(remove_names, list):
+        raise ValueError("remove must be an array.")
+    task_after, _new_assignees = workflow.update_task_assignees(
+        session, task_id, add_names or [], remove_names or [], actor(payload),
     )
     return json_response({"ok": True, "task": task_after})
 
@@ -945,9 +997,15 @@ def business_plan_assign(project_id, detail_slug):
     require_role("supervisor", "staff")
     session = db.get_session()
     payload = request.get_json(silent=True) or {}
+    add_names = payload.get("add")
+    remove_names = payload.get("remove")
+    if add_names is not None and not isinstance(add_names, list):
+        raise ValueError("add must be an array.")
+    if remove_names is not None and not isinstance(remove_names, list):
+        raise ValueError("remove must be an array.")
     result = workflow.assign_bpe_detail(
         session, project_id, detail_slug, payload.get("assignee", ""),
-        actor(payload), current_role(),
+        actor(payload), current_role(), add_names=add_names, remove_names=remove_names,
     )
     result["role"] = current_role()
     return json_response({"ok": True, "detail": result})

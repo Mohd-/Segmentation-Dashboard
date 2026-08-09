@@ -64,29 +64,47 @@ function renderStatusChip(status) {
 // disabled instead of a dead, unauthorized dropdown.
 function syncAssigneeGate(referenceOnly) {
   var select = byId('assigned-to');
-  if (!select) return;
   var reference = referenceOnly === undefined ? !isCurrentPipelineView() : !!referenceOnly;
-  select.disabled = !canManageAssignments() || reference;
+  var editable = canManageAssignments() && !reference;
+  if (select) select.disabled = !editable;
+  all('.assignee-remove').forEach(function (button) { button.disabled = !editable; });
 }
 
 function renderAssigneeSelect(task, load) {
   var select = byId('assigned-to');
-  if (!select) return;
+  var members = byId('assigned-members');
+  if (!select && !members) return;
   ensureUsers().then(function (users) {
     // Component loads are asynchronous. Never let a users response for the
     // previous component repaint the shared assignee control after navigation.
     if (!componentLoadIsCurrent(load)) return;
-    var current = task.assigned_to || '';
+    var assignees = (task.assignees || []).slice();
+    if (!assignees.length && task.assigned_to) {
+      assignees = [{ name: task.assigned_to, source: 'manual' }];
+    }
+    var assignedNames = assignees.map(function (member) { return member.name; });
     var names = users.map(function (user) { return user.name; });
-    // Keep a legacy/deactivated assignee visible even if no longer selectable
-    // as a new choice.
-    if (current && names.indexOf(current) < 0) names.push(current);
-    select.innerHTML = '<option value="">Unassigned</option>' + names.map(function (name) {
-      return '<option ' + (name === current ? 'selected' : '') + '>' + esc(name) + '</option>';
-    }).join('');
-    select.value = current;
-    // Only supervisors/staff assign (anonymous dev mode acts as supervisor,
-    // matching the backend's current_role()).
+    if (members) {
+      members.innerHTML = assignees.length ? assignees.map(function (member) {
+        var source = member.source === 'role' ? 'Role' : 'Manual';
+        var removable = member.source !== 'role';
+        return '<span class="assignee-chip" title="' + source + ' assignment">' + esc(member.name) +
+          '<span class="assignee-chip-source">' + source + '</span>' +
+          (removable ? '<button type="button" class="assignee-remove" data-assignee-name="' + esc(member.name) +
+            '" aria-label="Remove ' + esc(member.name) + '">&times;</button>' : '') + '</span>';
+      }).join('') : '<span class="assignee-chip">Unassigned</span>';
+      all('.assignee-remove', members).forEach(function (button) {
+        button.addEventListener('click', function () { removeManualAssignee(button.dataset.assigneeName); });
+      });
+    }
+    if (select) {
+      select.innerHTML = '<option value="">Add assignee</option>' + names.filter(function (name) {
+        return assignedNames.indexOf(name) < 0;
+      }).map(function (name) {
+        return '<option value="' + esc(name) + '">' + esc(name) + '</option>';
+      }).join('');
+      select.value = '';
+    }
     syncAssigneeGate();
   });
 }
@@ -220,8 +238,13 @@ export function renderActionButtons(task) {
   var role = currentRole();
   var manage = canManageAssignments();
   var editable = isCurrentPipelineView();
-  var isAssignee = !!(Store.user && Store.user.name &&
-    String(Store.user.name).toLowerCase() === String(task.assigned_to || '').toLowerCase());
+  var isAssignee = (function () {
+    if (!Store.user || !Store.user.name) return false;
+    var me = String(Store.user.name).toLowerCase();
+    var list = (task.assignees || []).map(function (m) { return String(m.name || '').toLowerCase(); });
+    if (!list.length && task.assigned_to) list = [String(task.assigned_to).toLowerCase()];
+    return list.indexOf(me) >= 0;
+  })();
   var buttons = actionButtons();
   resetActionButtons(buttons);
   // ITEM A: prospect step pages have no Save button -- persistence is the
@@ -424,15 +447,11 @@ export function assignComponent() {
   if (!isCurrentPipelineView()) return msg('Switch back to the current pipeline to change assignments.', 'error');
   var select = byId('assigned-to');
   var assignee = select.value;
-  var previous = Store.task.assigned_to || '';
-  if (!assignee || assignee === previous) {
-    select.value = previous; // clearing is not an /assign action; snap back
-    return;
-  }
+  if (!assignee) return;
   confirmDialog({
-    title: 'Assign component',
-    message: 'Assign remaining steps to ' + assignee + ' as well?',
-    confirmLabel: 'Yes, assign following steps',
+    title: 'Add assignee',
+    message: 'Also preassign following steps to ' + assignee + '?',
+    confirmLabel: 'Yes, preassign following steps',
     cancelLabel: 'Only this step'
   }).then(function (cascade) {
     return API.assign(Store.task.task_id, {
@@ -442,9 +461,21 @@ export function assignComponent() {
       changed_by: currentUserName()
     });
   }).then(function () {
-    return refreshAfterRecordChange('Component assigned to ' + assignee + '.');
+    return refreshAfterRecordChange(assignee + ' added to the assignment group.');
   }).catch(function (error) {
-    select.value = previous;
+    select.value = '';
+    msg(error.message, 'error');
+  });
+}
+
+function removeManualAssignee(name) {
+  if (!Store.task || !name || !isCurrentPipelineView()) return;
+  API.updateTaskAssignees(Store.task.task_id, {
+    remove: [name],
+    changed_by: currentUserName()
+  }).then(function () {
+    return refreshAfterRecordChange(name + ' removed from the assignment group.');
+  }).catch(function (error) {
     msg(error.message, 'error');
   });
 }

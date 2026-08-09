@@ -236,7 +236,7 @@ def _complete_task(session, task, assignee, role_by_name, approver, cycle=False)
     """
     role = role_by_name.get(assignee)
     _satisfy_submit_gate(session, task, assignee)
-    task = workflow.assign_task(session, task["task_id"], assignee, cascade=False, changed_by=assignee)
+    task, _ = workflow.assign_task(session, task["task_id"], assignee, cascade=False, changed_by=assignee)
     task = workflow.transition_task(session, task["task_id"], "submit", changed_by=assignee,
                                      actor_role=role, actor_name=assignee)
     if cycle:
@@ -253,7 +253,7 @@ def _advance_to(session, task, status, assignee, role_by_name):
     actual_start/finish stamping stay realistic)."""
     if status == "Not Assigned":
         return task
-    task = workflow.assign_task(session, task["task_id"], assignee, cascade=False, changed_by=assignee)
+    task, _ = workflow.assign_task(session, task["task_id"], assignee, cascade=False, changed_by=assignee)
     if status == "In Progress":
         return task
     _satisfy_submit_gate(session, task, assignee)

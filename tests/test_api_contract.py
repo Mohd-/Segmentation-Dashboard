@@ -349,11 +349,10 @@ def test_list_projects_row_shape(client):
     # later card can't quietly drop one the board renders from.
     row = rows[0]
     assert row["display_stage"] == "Lead Assessment"      # the stored stage group itself
-    # Creation auto-assignment: the configured rule assignees (Tahira on
-    # Seismic Signature Validation, then the Saad/Salem Pre-Well picks) appear
-    # on a brand-new lead; the anonymous creator does not.
-    assert row["assignees"][0] == "Tahira"
-    assert set(row["assignees"][1:]) <= {"Saad", "Salem"}
+    # v14: no creation auto-assignment; a brand-new lead has no assignees and
+    # no current owner until a step is manually activated or assigned.
+    assert row["assignees"] == []
+    assert row["current_owner"] is None
     assert row["lead_priority"] in ("High", "Medium", "Low")
     assert len(row["tracked_items"]) == 12
     # Card 2A widened each ITEM by one key: `steps`, the item's source step
@@ -549,7 +548,7 @@ def test_save_task_ok(client):
     pid = create_project(client, "TASKSAVE-1")
     task = get_tasks(client, pid)[0]
     resp = client.patch(f"/api/tasks/{task['task_id']}", json={
-        "status": "In Progress", "revision": task["revision"],
+        "fields": {"comments": "saved"}, "revision": task["revision"],
     })
     assert resp.status_code == 200
     body = resp.get_json()
@@ -571,11 +570,11 @@ def test_save_task_stale_revision_conflict(client):
     task = get_tasks(client, pid)[0]
     stale_revision = task["revision"]
     resp1 = client.patch(f"/api/tasks/{task['task_id']}", json={
-        "status": "In Progress", "revision": stale_revision,
+        "fields": {"comments": "first"}, "revision": stale_revision,
     })
     assert resp1.status_code == 200
     resp2 = client.patch(f"/api/tasks/{task['task_id']}", json={
-        "status": "Approved", "revision": stale_revision,
+        "fields": {"comments": "second"}, "revision": stale_revision,
     })
     assert resp2.status_code == 409
     assert "detail" in resp2.get_json()
@@ -590,7 +589,7 @@ def test_assign_task_shape_and_canonical_casing(client):
     task = get_tasks(client, pid)[0]
     # Lowercase on purpose: the response must carry the users-table casing.
     resp = client.post(f"/api/tasks/{task['task_id']}/assign", json={
-        "assignee": "supervisor", "cascade": False, "revision": task["revision"],
+        "assigned_to": "supervisor", "cascade": False, "revision": task["revision"],
     })
     assert resp.status_code == 200
     body = resp.get_json()
@@ -604,7 +603,7 @@ def test_assign_task_stale_revision_conflict(client):
     pid = create_project(client, "ASSIGN-CONTRACT-2")
     task = get_tasks(client, pid)[0]
     resp = client.post(f"/api/tasks/{task['task_id']}/assign", json={
-        "assignee": "Supervisor", "revision": task["revision"] + 5,
+        "assigned_to": "Supervisor", "revision": task["revision"] + 5,
     })
     assert resp.status_code == 409
     assert "detail" in resp.get_json()
@@ -614,7 +613,7 @@ def test_assign_task_unknown_assignee(client):
     pid = create_project(client, "ASSIGN-CONTRACT-3")
     task = get_tasks(client, pid)[0]
     resp = client.post(f"/api/tasks/{task['task_id']}/assign", json={
-        "assignee": "Nobody In Particular", "revision": task["revision"],
+        "assigned_to": "Nobody In Particular", "revision": task["revision"],
     })
     assert resp.status_code == 400
     assert resp.get_json()["detail"] == "Unknown or inactive user."
@@ -628,7 +627,7 @@ def test_transition_task_shape(client):
     pid = create_project(client, "TRANSITION-CONTRACT-1")
     task = get_tasks(client, pid)[0]
     assigned = client.post(f"/api/tasks/{task['task_id']}/assign", json={
-        "assignee": "Supervisor", "cascade": False, "revision": task["revision"],
+        "assigned_to": "Supervisor", "cascade": False, "revision": task["revision"],
     }).get_json()["task"]
     resp = client.post(f"/api/tasks/{task['task_id']}/transition", json={
         "action": "submit", "revision": assigned["revision"],
@@ -644,7 +643,7 @@ def test_transition_task_stale_revision_conflict(client):
     pid = create_project(client, "TRANSITION-CONTRACT-2")
     task = get_tasks(client, pid)[0]
     assigned = client.post(f"/api/tasks/{task['task_id']}/assign", json={
-        "assignee": "Supervisor", "cascade": False, "revision": task["revision"],
+        "assigned_to": "Supervisor", "cascade": False, "revision": task["revision"],
     }).get_json()["task"]
     resp = client.post(f"/api/tasks/{task['task_id']}/transition", json={
         "action": "submit", "revision": assigned["revision"] + 5,

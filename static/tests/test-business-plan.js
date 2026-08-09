@@ -401,6 +401,40 @@ function detailPayload(slug, values) {
   };
 }
 
+test('business-plan detail renders the shared assignment group', async function () {
+  var host = fixture('<div id="bpe-main-view"></div><section id="bpe-detail-view" class="hidden"></section>');
+  var hooks = businessPlanTestHooks();
+  var savedUsers = hooks.state.users;
+  var detail = detailPayload('business-plan-gate', {});
+  detail.task.assignees = [
+    { name: 'Employee', source: 'role', notified: true },
+    { name: 'Staff Member', source: 'manual', notified: true }
+  ];
+  detail.assignee = 'Employee';
+  hooks.state.users = [
+    { name: 'Employee' }, { name: 'Staff Member' }, { name: 'Supervisor' }
+  ];
+  mockFetch(function (url) {
+    if (String(url).indexOf('/api/business-plan/wells/7/steps/business-plan-gate') >= 0) {
+      return response(detail);
+    }
+    throw new Error('Unexpected request: ' + url);
+  });
+  try {
+    await openBusinessPlanDetail(7, 'business-plan-gate');
+    var chips = host.querySelectorAll('#bpe-assignment-group .assignee-chip');
+    assert.equal(chips.length, 2);
+    assert.equal(chips[0].querySelector('.assignee-remove'), null,
+      'role assignment remains protected in the BPE editor');
+    assert.ok(chips[1].querySelector('.assignee-remove'));
+    assert.deepEqual(Array.prototype.map.call(host.querySelector('#bpe-assignee').options, function (option) {
+      return option.value;
+    }), ['', 'Supervisor']);
+  } finally {
+    hooks.state.users = savedUsers;
+  }
+});
+
 test('business-plan serializes auto-saves and a stale response cannot replace newer input', async function () {
   var host = fixture('<div id="bpe-main-view"></div><section id="bpe-detail-view" class="hidden"></section>');
   var base = detailPayload('business-plan-gate', {});

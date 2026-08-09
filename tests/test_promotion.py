@@ -179,7 +179,7 @@ def test_recall_of_fully_matured_lead_stays_off_the_board(client):
                 client.patch(f"/api/tasks/{task['task_id']}/dynamic-fields",
                              json={"fields": {key: "1" for key, _label in required}})
             resp = client.post(f"/api/tasks/{task['task_id']}/assign",
-                               json={"assignee": "Supervisor", "cascade": False})
+                               json={"assigned_to": "Supervisor", "cascade": False})
             assert resp.status_code == 200, resp.get_json()
             client.post(f"/api/tasks/{task['task_id']}/transition", json={"action": "submit"})
             resp = client.post(f"/api/tasks/{task['task_id']}/transition", json={"action": "approve"})
@@ -229,15 +229,21 @@ def test_bp_stage_data_entered_before_promotion_survives_promotion(client):
     # derive-don't-store: promotion is a pure pipeline switch. BP-stage work
     # entered while the record is still a prospect (status + dynamic fields)
     # must carry through promotion untouched -- no status/data rewrite.
+    # The guarded PATCH route no longer accepts status, so drive the setup
+    # state through the domain save_task directly.
     pid = create_project(client, "BP-SURVIVE-1")
     proposal = get_task_by_name(client, pid, "Well Proposal")
-    saved = client.patch(f"/api/tasks/{proposal['task_id']}", json={
-        "fields": {"sarh_formation_prognosis_pre_drill": "2500 ft"},
-        "status": "Approved",
-        "revision": proposal["revision"],
-    })
-    assert saved.status_code == 200, saved.get_json()
-    assert saved.get_json()["task"]["status"] == "Approved"
+    import db as dbmod
+    import workflow
+    session = dbmod.new_session()
+    try:
+        saved = workflow.save_task(session, proposal["task_id"], {
+            "fields": {"sarh_formation_prognosis_pre_drill": "2500 ft"},
+            "status": "Approved",
+        })
+    finally:
+        session.close()
+    assert saved["status"] == "Approved"
 
     resp = client.patch(f"/api/projects/{pid}/flags", json={
         "business_plan_enabled": True, "business_plan_year": 2030,
@@ -345,13 +351,15 @@ def test_save_task_ignores_smuggled_business_plan_keys(client):
     pid = create_project(client, "SMUGGLE-SAVE-1")
     task = get_tasks(client, pid)[0]
     resp = client.patch(f"/api/tasks/{task['task_id']}", json={
-        "status": "In Progress",
+        "fields": {"p90_area_km2": "5"},
         "revision": task["revision"],
         "business_plan_enabled": True,
         "business_plan_year": 2027,
     })
     assert resp.status_code == 200, resp.get_json()
-    assert resp.get_json()["task"]["status"] == "In Progress"  # save itself applied
+    # The save itself applied (dynamic fields round-trip through the detail payload).
+    detail = client.get(f"/api/projects/{pid}/detail").get_json()
+    assert detail["fields"]["Lead Assessment"]["p90_area_km2"] == "5"
 
     # The project was neither promoted nor given a year: /flags stays the
     # single writer of promotion state.

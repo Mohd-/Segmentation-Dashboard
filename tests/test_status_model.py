@@ -12,20 +12,18 @@ optional status / preserved assignee, and API rejection of legacy statuses.
 """
 from __future__ import annotations
 
-from conftest import create_project, get_tasks
+import pytest
+
+from conftest import approve_task, create_project, get_tasks
 
 PROSPECT_STAGES = {"Lead Assessment", "Risk Analysis", "Pre-Well Delivery"}
 
-# Creation auto-assignment: on an ANONYMOUS creation the configured rule steps
-# arrive In Progress (SSV -> Tahira, every Pre-Well Delivery step ->
-# Saad/Salem); the creator-default tier is inert ("Web User" is not a user).
-# By sequence_no: 4 = Seismic Signature Validation, 6-9 = Pre-Well Delivery.
-AUTO_ASSIGNED_FRESH_SEQS = {4, 6, 7, 8, 9}
+
 
 
 def _assign(client, task_id, assignee, revision, cascade=False):
     resp = client.post(f"/api/tasks/{task_id}/assign", json={
-        "assignee": assignee, "cascade": cascade, "revision": revision,
+        "assigned_to": assignee, "cascade": cascade, "revision": revision,
     })
     assert resp.status_code == 200, resp.get_json()
     return resp.get_json()["task"]
@@ -66,8 +64,9 @@ def test_reassigning_an_in_progress_task_keeps_its_status(client):
     task = get_tasks(client, pid)[0]
     first = _assign(client, task["task_id"], "Employee", task["revision"])
     second = _assign(client, task["task_id"], "Staff Member", first["revision"])
-    assert second["status"] == "In Progress"  # reassignment, not a state change
-    assert second["assigned_to"] == "Staff Member"
+    assert second["status"] == "In Progress"  # adding a member is not a state change
+    assert [member["name"] for member in second["assignees"]] == ["Employee", "Staff Member"]
+    assert second["assigned_to"] == "Employee"  # legacy primary is derived, never reassigned
 
 
 def test_submit_approve_flow_advances_project(client):
@@ -146,7 +145,7 @@ def test_employee_cannot_assign(client):
     task = get_tasks(client, pid)[0]
     _login(client, "Employee")
     resp = client.post(f"/api/tasks/{task['task_id']}/assign", json={
-        "assignee": "Employee", "revision": task["revision"],
+        "assigned_to": "Employee", "revision": task["revision"],
     })
     assert resp.status_code == 403
 
@@ -172,8 +171,9 @@ def test_only_supervisor_can_approve_and_only_assignee_or_supervisor_can_return(
     assert resp.status_code == 403
 
     # Staff can return a different Ready component just like an employee.
+    staff_pid = create_project(client, "ROLES-APPROVE-STAFF")
     _login(client, "Supervisor")
-    staff_task = get_tasks(client, pid)[1]
+    staff_task = get_tasks(client, staff_pid)[0]
     staff_assigned = _assign(client, staff_task["task_id"], "Staff Member", staff_task["revision"])
     staff_ready = _transition(client, staff_task["task_id"], "submit", staff_assigned["revision"]).get_json()["task"]
     _login(client, "Staff Member")
@@ -289,37 +289,56 @@ def test_assign_cascade_covers_subsequent_not_assigned_prospect_steps_only(clien
     by_seq = {t["sequence_no"]: t for t in tasks}
 
     # Pre-existing work that the cascade must never touch:
-    # step 5 Approved, step 6 In Progress and REASSIGNED to Employee (it was
-    # born In Progress on a creation auto-assignee). Steps 4 and 7-9 keep their
-    # creation auto-assignment -- also In Progress, also never cascade targets.
-    resp = client.patch(f"/api/tasks/{by_seq[5]['task_id']}", json={
-        "status": "Approved", "revision": by_seq[5]["revision"],
-    })
-    assert resp.status_code == 200
-    _assign(client, by_seq[6]["task_id"], "Employee", by_seq[6]["revision"])
+    # step 5 Approved, step 6 In Progress and assigned to Employee,
+    # steps 4 and 7-9 already In Progress with other owners.
+    # The guarded PATCH and domain save service do not accept assigned_to, so
+    # drive these setup states through the authoritative assignment service.
+    import db as dbmod
+    import workflow
+    session = dbmod.new_session()
+    try:
+        workflow.save_task(session, by_seq[5]["task_id"], {"status": "Approved"})
+    finally:
+        session.close()
+    for sequence_no, assignee in [(6, "Employee"), (4, "Supervisor"),
+                                  (7, "Staff Member"), (8, "Staff Member"),
+                                  (9, "Staff Member")]:
+        task = next(t for t in get_tasks(client, pid) if t["sequence_no"] == sequence_no)
+        session = dbmod.new_session()
+        try:
+            workflow.lifecycle.assign_task(
+                session, task["task_id"], assignee, cascade=False,
+                changed_by="System", automated=True, force_activation=True)
+        finally:
+            session.close()
 
-    # Assign step 1 with cascade: steps 1..9 that are still Not Assigned
-    # (1, 2, 3 -- the rest are already busy) all go In Progress with the same
-    # assignee.
+    # Assign step 1 with cascade: only subsequent prospect steps that are still
+    # Not Assigned (2, 3) are touched; Approved / already-In-Progress rows are
+    # skipped, including the explicitly-set steps 4 and 7-9.
     _assign(client, by_seq[1]["task_id"], "Staff Member", by_seq[1]["revision"], cascade=True)
 
     after = {t["sequence_no"]: t for t in get_tasks(client, pid)}
-    # Target + subsequent Not Assigned prospect steps cascade.
-    for seq in (1, 2, 3):
-        assert after[seq]["status"] == "In Progress", seq
+    # Target is activated; cascade targets are silently preassigned but stay
+    # Not Assigned until they become the next unapproved step.
+    assert after[1]["status"] == "In Progress"
+    assert after[1]["assigned_to"] == "Staff Member"
+    assert after[1]["revision"] == by_seq[1]["revision"] + 1
+    for seq in (2, 3):
+        assert after[seq]["status"] == "Not Assigned", seq
         assert after[seq]["assigned_to"] == "Staff Member", seq
         assert after[seq]["revision"] == by_seq[seq]["revision"] + 1, seq
-    # Pre-existing Approved / In Progress rows are never touched -- including
-    # the creation auto-assigned ones.
+    # Pre-existing Approved / In Progress rows are never touched.
     assert after[5]["status"] == "Approved"
     assert after[5]["assigned_to"] is None
     assert after[6]["status"] == "In Progress"
     assert after[6]["assigned_to"] == "Employee"
-    assert after[4]["assigned_to"] == "Tahira"
+    assert after[4]["assigned_to"] == "Supervisor"
     for seq in (7, 8, 9):
         assert after[seq]["status"] == "In Progress", seq
-        assert after[seq]["assigned_to"] in {"Saad", "Salem"}, seq
-        assert after[seq]["revision"] == by_seq[seq]["revision"], seq
+        assert after[seq]["assigned_to"] == "Staff Member", seq
+        # The explicit legacy-state setup now uses one domain save_task call,
+        # so the later cascade must not touch an already active task.
+        assert after[seq]["revision"] == by_seq[seq]["revision"] + 1, seq
     # BP-stage tasks are outside a prospect's applicable pipeline.
     for seq, task in after.items():
         if task["stage_group"] not in PROSPECT_STAGES:
@@ -333,8 +352,7 @@ def test_assign_without_cascade_touches_only_the_target(client):
     before = {t["task_id"]: t["assigned_to"] for t in tasks}
     _assign(client, tasks[2]["task_id"], "Employee", tasks[2]["revision"], cascade=False)
     after = get_tasks(client, pid)
-    # Relative to the creation state (which already carries the auto-assigned
-    # rule steps), the ONLY changed assignment is the target's.
+    # Steps seed Not Assigned; only the target row should become assigned.
     changed = [t for t in after if t["assigned_to"] != before[t["task_id"]]]
     assert [t["task_id"] for t in changed] == [tasks[2]["task_id"]]
     assert changed[0]["assigned_to"] == "Employee"
@@ -351,13 +369,20 @@ def test_assign_cascade_for_bp_project_stays_in_bp_stages(client):
     first_bp = next(t for t in tasks if t["stage_group"] not in PROSPECT_STAGES)
     _assign(client, first_bp["task_id"], "Employee", first_bp["revision"], cascade=True)
     after = get_tasks(client, pid)
+    bp_tasks = [t for t in after if t["stage_group"] not in PROSPECT_STAGES]
+    first_bp_seq = min(t["sequence_no"] for t in bp_tasks)
     for task in after:
         if task["stage_group"] in PROSPECT_STAGES:
             # Outside the BP well's operating pipeline: untouched by the cascade.
             assert task["status"] == "Not Assigned", task["task_name"]
             assert task["assigned_to"] is None, task["task_name"]
-        else:
+        elif task["sequence_no"] == first_bp_seq:
+            # The primary BP target is activated.
             assert task["status"] == "In Progress", task["task_name"]
+            assert task["assigned_to"] == "Employee"
+        else:
+            # Subsequent BP cascade targets are silently preassigned only.
+            assert task["status"] == "Not Assigned", task["task_name"]
             assert task["assigned_to"] == "Employee"
 
 
@@ -380,12 +405,23 @@ def test_save_without_status_keeps_current_status_and_assignee(client):
 
 
 def test_save_rejects_not_applicable_and_legacy_statuses(client):
+    """The domain save_task still rejects legacy/invalid statuses; the HTTP
+    PATCH route now rejects ALL status keys before reaching save_task."""
     pid = create_project(client, "SAVE-REJECT-1")
     task = get_tasks(client, pid)[0]
+    import db as dbmod
+    import workflow
     for bad in ("Not Applicable", "Under Review", "Ready for Review",
                 "Ready for Approval", "Returned for Update", "Assigned"):
+        # The PATCH route refuses any status key outright.
         resp = client.patch(f"/api/tasks/{task['task_id']}", json={
             "status": bad, "revision": task["revision"],
         })
         assert resp.status_code == 400, bad
-        assert resp.get_json()["detail"] == "Invalid component status."
+        # The domain function still validates the value when called directly.
+        session = dbmod.new_session()
+        try:
+            with pytest.raises(ValueError, match="Invalid component status."):
+                workflow.save_task(session, task["task_id"], {"status": bad})
+        finally:
+            session.close()
