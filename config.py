@@ -280,7 +280,7 @@ SHARED_PASSCODE = os.environ.get("SEGMENT_TRACKER_PASSCODE") or None
 # and /api/me requires a logged-in session (enforced by main.py's before_request
 # hook, which reads this attribute at REQUEST time so tests can monkeypatch it).
 # Default false: the API stays open exactly as before.
-AUTH_REQUIRED = os.environ.get("AUTH_REQUIRED", "false").strip().lower() in {"1", "true", "yes", "on"}
+AUTH_REQUIRED = os.environ.get("AUTH_REQUIRED", "true").strip().lower() in {"1", "true", "yes", "on"}
 
 # Mark the session cookie Secure (HTTPS-only). Leave false for the plain-HTTP
 # internal deployment; set SEGMENT_TRACKER_COOKIE_SECURE=1 once the app is
@@ -383,7 +383,7 @@ AR_TO_SEISMIC_BLOCK = _invert_seismic_block_ar_map(SEISMIC_BLOCK_AR_MAP)
 # Populate a row here and the client picks the derivation up on its next
 # /api/meta read (GET /api/meta serves this map as twt_thickness_coefficients);
 # there is no code change and no migration.
-TWT_THICKNESS_COEFFICIENTS = {}
+TWT_THICKNESS_COEFFICIENTS = {"reservoir": {"m": 6.67, "b": 0.91}, "formation": {"m": 7.93, "b": -8.4}}
 
 
 # ---------------------------------------------------------------------------
