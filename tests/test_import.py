@@ -137,6 +137,7 @@ def test_four_record_types_placed_correctly(client, app_modules, tmp_path):
             if task_data["stage_group"] in BP_EXECUTION_STAGES:
                 assert task_data["status"] == "Approved", \
                     f"HIST-1 task '{task_name}' ({task_data['stage_group']}) should be Approved"
+        assert workflow.get_project(session, _pid(session, "HIST-1"))["current_stage"] == "Post-Testing"
 
         # The escape hatch: HIST-1's 2019 year is well before today, yet the
         # import path (allow_historical_year=True) still enabled it -- a
@@ -151,17 +152,14 @@ def test_four_record_types_placed_correctly(client, app_modules, tmp_path):
         session.close()
 
 
-def test_lead_columns_share_the_consolidated_assessment_task_and_export(client, app_modules, tmp_path):
-    """Area, thickness and lead PIIP keys now have one active EAV owner.
-
-    The export is intentionally field-key based and retired-inclusive, so the
-    task merge changes no column names or values on the round trip.
-    """
+def test_sarh_thickness_imports_as_bpe_actual_thickness(client, app_modules, tmp_path):
+    """SARH thickness is an actual BPE formation measurement, not a Lead
+    Assessment estimate."""
     import import_excel
     import workflow
 
     row = {
-        "Well Name": "ONE-LA-1", "Status": "Proposed",
+        "Well Name": "ONE-BPE-1", "Status": "Gas", "BP Year": 2027,
         "P90 Area (km2)": 4, "P10 Area (km2)": 12,
         "SARH Formation Thickness (ft)": 85,
         "OGIP P90 (BCF)": 6, "OGIP Mean (BCF)": 10, "OGIP P10 (BCF)": 18,
@@ -174,23 +172,70 @@ def test_lead_columns_share_the_consolidated_assessment_task_and_export(client, 
             session, import_excel.parse_workbook(str(tmp_path / "one-la.xlsx"))).results[0]
         assert result.outcome == "created", result.reason
 
-        tasks = _tasks_by_name(session, "ONE-LA-1")
+        tasks = _tasks_by_name(session, "ONE-BPE-1")
         assert "Lead Assessment" in tasks
         assert not ({"Area Definition", "Thickness Estimation", "GRV Inputs", "Resource Assessment"}
                     & set(tasks)), "retired checkpoint labels are not runnable tasks"
         fields = workflow.get_task_dynamic_fields(session, tasks["Lead Assessment"]["task_id"])
         assert fields["p90_area_km2"] == "4"
         assert fields["p10_area_km2"] == "12"
-        assert fields["formation_thickness_ft"] == "85"
-        assert fields["lead_piip_gas_mean"] == "10"
+        assert "formation_thickness_ft" not in fields
+        sad_fields = workflow.get_task_dynamic_fields(
+            session, tasks["SAD Update"]["task_id"])
+        assert sad_fields["resource_update_gas_mean"] == "10"
 
-        exported = _export_by_name(session)["ONE-LA-1"]
+        final_sarh = next(row for row in workflow.get_project_formations(
+            session, _pid(session, "ONE-BPE-1"))
+            if row["phase"] == "final" and row["formation"] == "SARH")
+        assert float(final_sarh["thickness_ft"]) == 85
+
+        exported = _export_by_name(session)["ONE-BPE-1"]
         assert float(exported["P90 Area (km2)"]) == 4
         assert float(exported["P10 Area (km2)"]) == 12
         assert float(exported["SARH Formation Thickness (ft)"]) == 85
         assert float(exported["OGIP Mean (BCF)"]) == 10
     finally:
         session.close()
+
+
+def test_staked_bp_year_graduates_but_leaves_bp_gate_open(client, app_modules, tmp_path):
+    """Staked records leave Segment Maturation, enter BPE for a non-zero year,
+    and do not get an automatically approved BP gate."""
+    import import_excel
+    import workflow
+    from datetime import datetime
+
+    assert import_excel.classify_row({
+        "Well Name": "STAKED-HIST-1", "Status": "Staked",
+        "BP Year": str(datetime.now().year - 1),
+    }) == ("bp", [])
+
+    _write_sheet(tmp_path / "staked-bp.xlsx", [{
+        "Well Name": "STAKED-BP-1", "Status": "Staked", "BP Year": 2027,
+        "Classification": "Exploration", "P90 Area (km2)": 3,
+    }], header_row=1)
+    session = _session(app_modules)
+    try:
+        result = import_excel.import_rows(
+            session, import_excel.parse_workbook(str(tmp_path / "staked-bp.xlsx"))).results[0]
+        assert result.outcome == "created", result.reason
+
+        prospect_names = {p["project_name"] for p in workflow.get_projects(
+            session, pipeline_filter="prospect")}
+        bp_names = {p["project_name"] for p in workflow.get_projects(
+            session, pipeline_filter="bp")}
+        assert "STAKED-BP-1" not in prospect_names
+        assert "STAKED-BP-1" in bp_names
+        assert _tasks_by_name(session, "STAKED-BP-1")["BP Execution Gate"]["status"] != "Approved"
+    finally:
+        session.close()
+
+
+def test_zero_bp_year_is_blank_and_blank_status_is_graduated(client, app_modules):
+    import import_excel
+
+    assert import_excel.classify_row({"Well Name": "ZERO-1", "BP Year": "0"}) == ("mature", [])
+    assert import_excel.classify_row({"Well Name": "BLANK-1", "Status": ""}) == ("mature", [])
 
 
 def test_export_folds_v7_retired_lead_rows_then_prefers_active_values(client, app_modules):

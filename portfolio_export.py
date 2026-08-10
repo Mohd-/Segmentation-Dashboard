@@ -384,7 +384,11 @@ def get_portfolio_export_rows(session) -> List[dict]:
             "Reservoir CoS (%)": reservoir_cos_pct,
             "P90 Area (km2)": _first_filled(fields.get("p90_area_km2")),
             "P10 Area (km2)": _first_filled(fields.get("p10_area_km2")),
-            "SARH Formation Thickness (ft)": _first_filled(fields.get("formation_thickness_ft")),
+            # A BP well's SARH thickness is an actual formation measurement;
+            # leads retain the Lead Assessment estimate as their fallback.
+            "SARH Formation Thickness (ft)": _first_filled(
+                sarh_row.get("thickness_ft") if sarh_row is not None else None,
+                fields.get("formation_thickness_ft")),
             "P50 Pay Thickness (ft)": p50_pay,
             "P50 Porosity (%)": p50_porosity,
             "Water Saturation (%)": water_saturation,

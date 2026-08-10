@@ -57,8 +57,10 @@ Flagged assumptions (documented, cheap to change)
    is grouped with the bp-without-fluid case -> pre_drill_piip.)
 2. SARH formation phase for the P50 Pay/Porosity/Swt + fluid row: 'final' for a
    record that carries a fluid status (a drilled well), else 'quicklook'. The
-   owning step used as ``source_task_id`` follows: 'Final Log Analysis' for
-   final, 'Quicklook Logs' for quicklook.
+   imported SARH formation thickness is an actual BPE measurement and follows
+   the drilled row to the 'final' phase; it is never written to Lead
+   Assessment. The owning step used as ``source_task_id`` follows: 'Final Log
+   Analysis' for final, 'Quicklook Logs' for quicklook.
 3. Dry-run: the domain layer owns its own commits (``db.write_transaction``), so
    an in-process rollback of already-committed work is not available. ``--dry-run``
    therefore runs the identical flow against a throwaway *copy* of the target
@@ -335,10 +337,11 @@ def _analyze(row: Dict[str, str]) -> Tuple[Optional[str], List[str], Optional[in
     and already-in-DB checks need cross-row / DB context and live in
     :func:`import_rows`.
 
-    A well with BP year < current year is classified as 'historical' and must
-    have a known fluid status (Gas, Water Bearing, Dry Hole, etc.) -- it is a
-    drilled well placed in the post-testing phase with everything marked
-    complete. The current year is determined at runtime, not hardcoded.
+    A drilled well (fluid status) with BP year < current year is classified as
+    'historical' and is placed in post-testing with everything marked complete.
+    Staked rows are graduated but not drilled, so even with a historical BP
+    year they enter BPE at the open gate. The current year is determined at
+    runtime, not hardcoded.
     """
     errors: List[str] = []
     name = _text(row, "Well Name")
@@ -371,6 +374,9 @@ def _analyze(row: Dict[str, str]) -> Tuple[Optional[str], List[str], Optional[in
         parsed = _to_int(year_raw)
         if parsed is None:
             errors.append(f"BP Year is not an integer: {year_raw!r}")
+        elif parsed == 0:
+            # The export's zero/default sentinel is equivalent to blank.
+            year_raw = ""
         elif parsed > 2040:
             errors.append(f"BP Year {parsed} is after 2040")
         elif parsed < 1990:
@@ -384,24 +390,31 @@ def _analyze(row: Dict[str, str]) -> Tuple[Optional[str], List[str], Optional[in
     if status_kind == "fluid" and year is None and not year_raw:
         errors.append("a drilled well needs a BP Year")
 
-    # A well with a past BP year must be a drilled well with known fluid status
-    # (Gas, Water Bearing, Dry Hole, etc.) -- it is placed in the post-testing
-    # phase with everything marked complete. An undrilled well cannot have a
-    # past BP year.
+    # A past BP year is a completed historical well only when the row carries
+    # a drilled fluid status. Staked rows are the one undrilled exception: they
+    # are graduated from maturation but must still enter BPE at the gate.
     current_year = datetime.now().year
-    if year is not None and year < current_year and status_kind != "fluid":
+    if (year is not None and year < current_year
+            and status_kind not in ("fluid", "staked")):
         errors.append("a well with a past BP year must have a known fluid status "
-                      "(Gas, Water Bearing, Dry Hole, etc.)")
+                      "(Gas, Water Bearing, Dry Hole, etc.) unless it is Staked")
 
     if errors:
         return None, errors, year, fluid
 
     if year is not None:
-        record_type = "historical" if year < current_year else "bp"
+        record_type = ("historical"
+                       if year < current_year and status_kind == "fluid"
+                       else "bp")
     elif status_kind == "staked":
         record_type = "mature"
-    else:  # "proposed" or blank
-        record_type = "proposed"
+    else:
+        # Only an explicit Proposed status remains in Segment Maturation. A
+        # blank status is not a proposal; with no BP year it is already
+        # graduated, while a non-zero BP year was classified above as bp.
+        if status_kind == "proposed":
+            return "proposed", errors, year, fluid
+        return "mature", errors, year, fluid
     return record_type, errors, year, fluid
 
 
@@ -542,9 +555,11 @@ def _flowback_contribution(row: Dict[str, str], warnings: List[str]) -> Tuple[Op
 
 def _sarh_values(row: Dict[str, str], fluid: str, warnings: List[str]) -> dict:
     """The SARH project_formations row's new values from the sheet: P50 Pay /
-    Porosity / Swt (only non-blank) plus ``fluid`` when the record is drilled."""
+    Porosity / Swt (only non-blank), actual formation thickness, plus ``fluid``
+    when the record is drilled."""
     values: dict = {}
-    for col, key in (("P50 Pay Thickness (ft)", "pay_ft"),
+    for col, key in (("SARH Formation Thickness (ft)", "thickness_ft"),
+                     ("P50 Pay Thickness (ft)", "pay_ft"),
                      ("P50 Porosity (%)", "porosity_pct"),
                      ("Water Saturation (%)", "swt_pct")):
         value = _num(row, col, warnings)
@@ -675,10 +690,6 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
             area[key] = value
     if area:
         _save(session, tid(_LEAD_ASSESSMENT_STEP), area, data_bearing)
-
-    thickness = _num(row, "SARH Formation Thickness (ft)", warnings)
-    if thickness is not None:
-        _save(session, tid(_LEAD_ASSESSMENT_STEP), {"formation_thickness_ft": thickness}, data_bearing)
 
     reservoir_contribution = _reservoir_contribution(row, warnings)
     if reservoir_contribution:
@@ -840,10 +851,16 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
                     changed_by=IMPORT_USER, source_task_id=tid("Final Log Analysis"))
                 data_bearing.add(tid("Final Log Analysis"))
 
-        # bp well: only data-bearing BP steps (stays on the BP board). historical:
-        # ALL BP steps (completed -> leaves the BP board under the completed-wells
-        # -exit rule).
+        # bp well: only data-bearing BP steps (stays on the BP board). A Staked
+        # row is deliberately held at the BP gate even when Classification was
+        # supplied in the sheet: staking graduates the prospect, but does not
+        # approve the execution gate. Historical drilled rows still complete
+        # ALL BP steps and leave the BP board under the completed-wells exit
+        # rule.
         for task in bp_tasks:
+            if (record_type == "bp" and not has_fluid
+                    and task["task_name"] == "BP Execution Gate"):
+                continue
             if record_type == "bp" and task["task_id"] not in data_bearing:
                 continue
             _ensure_approved(session, task["task_id"])
