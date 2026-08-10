@@ -309,6 +309,14 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   // group; the gate's slides confirmation is the checkbox card).
   assert.equal(host.querySelectorAll('.bpe-detail-form .radio-group .radio-option').length, 3);
   assert.ok(host.querySelector('.bpe-detail-form .check-label'));
+  assert.equal(host.querySelector('[data-bpe-output="bp_gate_calculated_td_ft_md"]').parentElement.querySelector('span').textContent,
+    'Calculated BP TD');
+  assert.equal(host.querySelector('[data-bpe-field="bp_gate_actual_td_ft_md"]').parentElement.querySelector('span').textContent,
+    'Actual BP TD (ft MD)*');
+  assert.equal(host.querySelector('[data-bpe-field="bp_gate_pressure_points"]').parentElement.querySelector('span').textContent,
+    'Pressure');
+  assert.equal(host.querySelector('[data-bpe-field="bp_gate_fluid_samples"]').parentElement.querySelector('span').textContent,
+    'Fluid');
   assert.ok(host.querySelector('.folder-card #bpe-copy-folder'));
   assert.ok(host.querySelector('#bpe-save-feedback').classList.contains('save-state'));
   // The Well Summary is the Lead Summary card's anatomy, and its progress bar
@@ -622,6 +630,10 @@ test('business-plan keeps zero Flowback panels after the final stage is deleted'
   assert.equal(host.querySelector('.rail-stage-lead.is-active').getAttribute('data-stage'), 'post_testing');
   assert.equal(host.querySelectorAll('.rail-stage-head.open').length, 1);
   assert.equal(host.querySelectorAll('.bpe-flow-stage').length, 1);
+  assert.equal(host.querySelector('[data-flow-field="top_md"]').parentElement.querySelector('span').textContent,
+    'Top (MD)*');
+  assert.equal(host.querySelector('[data-flow-field="base_md"]').parentElement.querySelector('span').textContent,
+    'Base (MD)*');
   assert.equal(host.querySelector('[data-flow-field="formation"]').tagName, 'SELECT',
     'Formation remains a dropdown even when its current value is blank');
   // Removals are confirmed through the app dialog (#app-dialog in

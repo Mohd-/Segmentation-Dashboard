@@ -944,8 +944,8 @@ function gateForm() {
   return '<div class="bpe-form-section"><h3>Well Classification</h3>' +
     radioGroup('bp_gate_classification', 'Well Classification', ['Development', 'Appraisal', 'Exploration'], false, true) + '</div>' +
     '<div class="bpe-form-section"><h3>Depth &amp; Schedule</h3><div class="bpe-gate-depth">' +
-    calculatedOutput('bp_gate_calculated_td_ft_md', 'Calculated Business Plan TD', 'ft MD') +
-    textInput('bp_gate_actual_td_ft_md', 'Actual Business Plan TD (ft MD)', { type: 'number', required: true }) +
+    calculatedOutput('bp_gate_calculated_td_ft_md', 'Calculated BP TD', 'ft MD') +
+    textInput('bp_gate_actual_td_ft_md', 'Actual BP TD (ft MD)', { type: 'number', required: true }) +
     calculatedOutput('bp_gate_calculated_drilling_days', 'Calculated Drilling Days', 'days') +
     textInput('bp_gate_actual_drilling_days', 'Actual Drilling Days (days)', { type: 'number', required: true }) +
     '</div></div>' +
@@ -960,8 +960,8 @@ function gateForm() {
       required: true, placeholder: 'Select Formation', invalid: intervalConflict
     }) +
     textInput('bp_gate_swc', 'SWC', { type: 'number', required: true }) +
-    textInput('bp_gate_pressure_points', 'Pressure Points', { type: 'number', required: true }) +
-    textInput('bp_gate_fluid_samples', 'Fluid Samples', { type: 'number', required: true }) + '</div>' +
+    textInput('bp_gate_pressure_points', 'Pressure', { type: 'number', required: true }) +
+    textInput('bp_gate_fluid_samples', 'Fluid', { type: 'number', required: true }) + '</div>' +
     (intervalConflict ? '<p class="bpe-field-error" role="alert">Interval From and Interval To must differ for Standard A and Standard B.</p>' : '') +
     '</div>' +
     '<div class="bpe-form-section"><h3>Coring Program</h3><div class="bpe-gate-coring">' +
@@ -1202,8 +1202,8 @@ function flowbackForm() {
       '" aria-label="Delete Stage ' + (index + 1) + '" ' + (locked ? 'disabled' : '') + '>' + icon('x') + '</button>' +
       '<h4>Stage ' + (index + 1) + '</h4></header><div class="bpe-flow-grid">' +
       flowCell(index, 'formation', 'Formation', true, row.formation) +
-      flowCell(index, 'top_md', 'Top (Measured Depth)', true) +
-      flowCell(index, 'base_md', 'Base (Measured Depth)', true) +
+      flowCell(index, 'top_md', 'Top (MD)', true) +
+      flowCell(index, 'base_md', 'Base (MD)', true) +
       flowCell(index, 'dynamic_area_km2', 'Dynamic Area (km²)', false) +
       flowCell(index, 'dynamic_ogip_bcf', 'Dynamic OGIP (BCF)', false) +
       flowCell(index, 'gas_rate_mmscfd', 'Gas Rate (MMSCFD)', false) +
