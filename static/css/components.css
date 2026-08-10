@@ -650,7 +650,9 @@
   flex: 1 1 auto;
   min-width: 0;
   font-family: var(--font-display);
-  font-size: var(--text-md);
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.2;
   font-weight: 700;
   color: var(--asas-navy);
   letter-spacing: .01em;
