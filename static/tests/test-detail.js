@@ -254,6 +254,31 @@ test('detail the delta fold compares Area bound against matching bound', functio
   ]);
 });
 
+test('detail the delta fold reads the frozen Lead Assessment SARH prognosis', function () {
+  var host = mountWellCard({
+    'Lead Assessment': { sarh_formation_prognosis_pre_drill: '6500' },
+    'Well Proposal': { sarh_formation_prognosis_pre_drill: '8000' }
+  }, {
+    'Lead Assessment': { sarh_formation_prognosis_pre_drill: '6400' }
+  });
+  var row = Array.prototype.filter.call(host.querySelectorAll('.summary-pva-row'), function (element) {
+    var label = element.querySelector('.summary-pva-label');
+    return label && label.textContent === 'Top SARH';
+  })[0];
+  assert.equal(row.querySelectorAll('.summary-pva-cell')[0].textContent, '6400');
+});
+
+test('detail the delta fold retains legacy TVDSS values during the rename', function () {
+  var host = mountWellCard({
+    'Area Definition': { top_formation_tvdss_ft: '6200' }
+  });
+  var row = Array.prototype.filter.call(host.querySelectorAll('.summary-pva-row'), function (element) {
+    var label = element.querySelector('.summary-pva-label');
+    return label && label.textContent === 'Top SARH';
+  })[0];
+  assert.equal(row.querySelectorAll('.summary-pva-cell')[0].textContent, '6200');
+});
+
 test('detail SAD Update supersedes SAD Model as the actual area', function () {
   var host = mountWellCard({
     'Lead Assessment': { p90_area_km2: '4' },

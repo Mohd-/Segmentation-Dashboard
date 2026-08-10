@@ -648,12 +648,12 @@ test('validateStepFields: bigOk-flagged fields are exempt from the 9999 cap', fu
 // field; ASAS now stores the MAGNITUDE, and migration v11 converted what was
 // already stored while keeping each prior signed value in the Audit Trail.
 test('validateStepFields: Lead Assessment TVDSS is a magnitude, not a signed depth', function () {
-  assert.equal(validateStepFields('Lead Assessment', { top_formation_tvdss_ft: '-6500' }),
-    'Top Formation TVDSS (ft) must not be negative.');
-  assert.equal(validateStepFields('Lead Assessment', { top_formation_tvdss_ft: '6500' }), null);
+  assert.equal(validateStepFields('Lead Assessment', { sarh_formation_prognosis_pre_drill: '-6500' }),
+    'SARH Prognosis TVDss (fT) must not be negative.');
+  assert.equal(validateStepFields('Lead Assessment', { sarh_formation_prognosis_pre_drill: '6500' }), null);
   // bigOk survives the change: a depth runs past four digits, which the
   // generic 9999 sanity cap would otherwise refuse. That is a separate rule.
-  assert.equal(validateStepFields('Lead Assessment', { top_formation_tvdss_ft: '12000' }), null);
+  assert.equal(validateStepFields('Lead Assessment', { sarh_formation_prognosis_pre_drill: '12000' }), null);
 });
 
 test('validateStepFields: (d) numericFieldError rejects an out-of-range percentage', function () {

@@ -54,8 +54,11 @@ export var LEGACY_LEAD_ASSESSMENT_STEPS = [
 // (see the comments note on buildSavePlan below).
 export var PRIMARY_STEP = 'Lead Assessment';
 
-// Every key now belongs to the single merged task. Keys are the EAV contract --
-// never rename one, because a rename orphans stored data.
+// Every key now belongs to the single merged task. Keys are the EAV contract.
+// The TVDSS input uses the existing SARH prognosis key so the lead assessment
+// and the Well Summary speak about one value. The former top_formation key is
+// read as a legacy alias below and remains the write key only for a stale
+// pre-v7 task roster.
 export var KEY_OWNER = {
   // Section 1 -- Thickness Estimation. The two *_thickness_ft keys are the
   // pre-existing canonical reads (Lead Summary, portfolio, the box model);
@@ -68,10 +71,9 @@ export var KEY_OWNER = {
   // Section 2 left -- Area Definition (existing keys, reused verbatim).
   p90_area_km2: PRIMARY_STEP,
   p10_area_km2: PRIMARY_STEP,
-  // Section 3's TVDSS rides on Area Definition: it is a structural reading of
-  // the same mapped surface the areas come off, and it must NOT gate that
-  // step's completion (the server's FIELD_COMPLETION entry omits it).
-  top_formation_tvdss_ft: PRIMARY_STEP,
+  // Section 3's SARH prognosis TVDSS is reference information, not a
+  // completion gate (the server's FIELD_COMPLETION entry omits it).
+  sarh_formation_prognosis_pre_drill: PRIMARY_STEP,
   // Section 2 right -- GRV Inputs (new keys).
   grv_p90_thousand_acre_ft: PRIMARY_STEP,
   grv_p10_thousand_acre_ft: PRIMARY_STEP,
@@ -87,9 +89,24 @@ var LEGACY_KEY_OWNER = {
   twt_reservoir_ms: 'Thickness Estimation', twt_formation_ms: 'Thickness Estimation',
   reservoir_thickness_ft: 'Thickness Estimation', formation_thickness_ft: 'Thickness Estimation',
   thickness_source_mode: 'Thickness Estimation', p90_area_km2: 'Area Definition',
-  p10_area_km2: 'Area Definition', top_formation_tvdss_ft: 'Area Definition',
+  p10_area_km2: 'Area Definition',
+  sarh_formation_prognosis_pre_drill: 'Area Definition',
   grv_p90_thousand_acre_ft: 'GRV Inputs', grv_p10_thousand_acre_ft: 'GRV Inputs',
   polygons_surfaces_loaded: 'Resource Assessment'
+};
+
+// Existing records may still carry the former structural key on Lead
+// Assessment, and pre-v7 records may carry it on Area Definition. Hydrate both
+// shapes, then write the canonical key once the user edits the value.
+var LEGACY_FIELD_ALIASES = {
+  sarh_formation_prognosis_pre_drill: ['top_formation_tvdss_ft']
+};
+
+// A stale pre-v7 frontend still expects the old field key on Area Definition.
+// Keep that rolling-deploy path intact while current clients write the
+// canonical key on Lead Assessment.
+var LEGACY_WRITE_KEYS = {
+  sarh_formation_prognosis_pre_drill: 'top_formation_tvdss_ft'
 };
 
 
@@ -107,12 +124,11 @@ export var MESSAGES = {
   // A value that is present but not a usable magnitude. Every input on this
   // page except the TVDSS is a physical quantity that cannot be zero or less.
   number: function (label) { return label + ' must be a number greater than 0.'; },
-  // The TVDSS is the one exception: numeric parse only, sign and magnitude free
-  // (a subsea depth is legitimately negative on some datums).
-  tvdss: 'Top Formation TVDSS must be numeric.',
-  // Card 3H. Depths are stored as magnitudes; a horizon above the datum still
-  // reads negative in the field, but the value recorded here is its depth.
-  tvdssNegative: 'Top Formation TVDSS must not be negative.',
+  // The SARH prognosis TVDSS is validated separately as a non-negative
+  // magnitude, while remaining optional reference information.
+  tvdss: 'SARH Prognosis TVDSS must be numeric.',
+  // Card 3H. Depths are stored as magnitudes; negative entries are rejected.
+  tvdssNegative: 'SARH Prognosis TVDSS must not be negative.',
   // Ordering. Rejected on EQUALITY too, in both directions -- a pair whose two
   // sides are the same number is a mis-entry, not a degenerate distribution --
   // and never silently swapped: swapping would quietly rewrite what the user
@@ -151,7 +167,7 @@ export var LABELS = {
   p10_area_km2: 'Area P10 (km²)',
   grv_p90_thousand_acre_ft: 'GRV P90 (10³ acre.ft)',
   grv_p10_thousand_acre_ft: 'GRV P10 (10³ acre.ft)',
-  top_formation_tvdss_ft: 'Top Formation TVDSS (ft)'
+  sarh_formation_prognosis_pre_drill: 'SARH Prognosis TVDss (ft)'
 };
 
 // ---------------------------------------------------------------------------
@@ -169,7 +185,7 @@ export function numberError(key, raw) {
   return null;
 }
 
-// Section 3's TVDSS. Card 3H made it a magnitude like every other measure, so
+// Section 3's SARH prognosis TVDSS. Card 3H made it a magnitude like every other measure, so
 // it now refuses a negative as well as a non-number. Still no completion
 // effect -- it is reference information, not a gate.
 export function tvdssError(raw) {
@@ -227,8 +243,8 @@ export function validateVolumeSection(values) {
 export function validateLeadAssessment(values) {
   values = values || {};
   var errors = Object.assign({}, validateThicknessSection(values), validateVolumeSection(values));
-  var tvdss = tvdssError(values.top_formation_tvdss_ft);
-  if (tvdss) errors.top_formation_tvdss_ft = tvdss;
+  var tvdss = tvdssError(values.sarh_formation_prognosis_pre_drill);
+  if (tvdss) errors.sarh_formation_prognosis_pre_drill = tvdss;
   return errors;
 }
 
@@ -236,7 +252,7 @@ export function validateLeadAssessment(values) {
 var ERROR_ORDER = [
   'twt_reservoir_ms', 'twt_formation_ms', 'reservoir_thickness_ft', 'formation_thickness_ft',
   'p90_area_km2', 'p10_area_km2', 'grv_p90_thousand_acre_ft', 'grv_p10_thousand_acre_ft',
-  'top_formation_tvdss_ft'
+  'sarh_formation_prognosis_pre_drill'
 ];
 export function firstError(errors) {
   errors = errors || {};
@@ -452,6 +468,8 @@ export function tvdssLabel(formations) {
   return name ? 'Top ' + name + ' Formation TVDSS (ft)' : 'Top Formation TVDSS (ft)';
 }
 
+export var TVDSS_HINT = 'SARH Prognosis TVDss (fT)';
+
 // ---------------------------------------------------------------------------
 // Pure: the batched save plan
 // ---------------------------------------------------------------------------
@@ -484,23 +502,42 @@ export function buildSavePlan(values, saved, taskNames) {
   var byTask = {};
   Object.keys(KEY_OWNER).forEach(function (key) {
     var taskName = merged ? KEY_OWNER[key] : LEGACY_KEY_OWNER[key];
+    var writeKey = !merged && LEGACY_WRITE_KEYS[key] ? LEGACY_WRITE_KEYS[key] : key;
     if (!byTask[taskName]) byTask[taskName] = {};
-    byTask[taskName][key] = values[key] == null ? '' : String(values[key]);
+    byTask[taskName][writeKey] = values[key] == null ? '' : String(values[key]);
   });
   return order.filter(function (taskName) {
     var fields = byTask[taskName] || {};
-    var stored = saved[taskName] || {};
-    return Object.keys(fields).some(function (key) {
-      // The dirty check reads exactly what hydration showed the user: the
-      // merged bucket first, the legacy owner's bucket as the fallback.
-      var storedValue = stored[key];
-      if (storedValue == null) storedValue = (saved[KEY_OWNER[key]] || {})[key];
-      if (storedValue == null) storedValue = (saved[LEGACY_KEY_OWNER[key]] || {})[key];
-      return String(storedValue == null ? '' : storedValue) !== fields[key];
+    return Object.keys(fields).some(function (writeKey) {
+      var key = writeKey;
+      Object.keys(LEGACY_WRITE_KEYS).forEach(function (canonical) {
+        if (LEGACY_WRITE_KEYS[canonical] === writeKey) key = canonical;
+      });
+      var storedValue = storedValueForKey(saved, key);
+      return String(storedValue == null ? '' : storedValue) !== fields[writeKey];
     });
   }).map(function (taskName) {
     return { taskName: taskName, fields: byTask[taskName] };
   });
+}
+
+function storedValueForKey(allFields, key) {
+  var source = allFields || {};
+  var owners = [KEY_OWNER[key], LEGACY_KEY_OWNER[key]];
+  var keys = [key].concat(LEGACY_FIELD_ALIASES[key] || []);
+  var blank = null;
+  for (var oi = 0; oi < owners.length; oi += 1) {
+    if (!owners[oi]) continue;
+    var fields = source[owners[oi]] || {};
+    if (Object.prototype.hasOwnProperty.call(fields, key)) return fields[key];
+    for (var ki = 0; ki < keys.length; ki += 1) {
+      if (keys[ki] === key) continue;
+      if (fields[keys[ki]] == null) continue;
+      if (isFilled(fields[keys[ki]])) return fields[keys[ki]];
+      if (blank === null) blank = fields[keys[ki]];
+    }
+  }
+  return blank;
 }
 
 // The three NON-primary steps' comments, non-empty ones only, in rail order.
@@ -529,7 +566,7 @@ export function earlierComments(tasks) {
 
 function numberInput(key, value, options) {
   options = options || {};
-  // Card 3H: every measure on this page is a magnitude, Top Formation TVDSS
+  // Card 3H: every measure on this page is a magnitude, SARH Prognosis TVDSS
   // included. It used to be the one exemption; migration v11 converted the
   // stored values and kept each prior signed one in the Audit Trail.
   return '<input type="number" step="any" min="0"' +
@@ -547,7 +584,7 @@ function numberInput(key, value, options) {
 var SECTION_FIELDS = {
   thickness: ['twt_reservoir_ms', 'twt_formation_ms', 'reservoir_thickness_ft', 'formation_thickness_ft'],
   volume: ['p90_area_km2', 'p10_area_km2', 'grv_p90_thousand_acre_ft', 'grv_p10_thousand_acre_ft'],
-  structure: ['top_formation_tvdss_ft']
+  structure: ['sarh_formation_prognosis_pre_drill']
 };
 
 // The card-bottom strip itself: hidden (and costing no height) while clean.
@@ -621,8 +658,8 @@ export function structureSectionMarkup(values, formations) {
     '<div class="la-wide-row">' +
     '<span class="la-num" aria-hidden="true">3</span>' +
     '<div class="la-tvdss">' +
-    numberInput('top_formation_tvdss_ft', values.top_formation_tvdss_ft,
-                { label: label, placeholder: label }) +
+    numberInput('sarh_formation_prognosis_pre_drill', values.sarh_formation_prognosis_pre_drill,
+                { label: label, placeholder: TVDSS_HINT }) +
     '</div>' +
     '<label class="check-label la-polygons"><input type="checkbox" data-la-field="polygons_surfaces_loaded"' +
     (truthy(values.polygons_surfaces_loaded) ? ' checked' : '') + '> ' + esc(POLYGONS_LABEL) + '</label>' +
@@ -763,8 +800,7 @@ function taskNamed(name) {
 function readStoredValues(allFields) {
   var values = {};
   Object.keys(KEY_OWNER).forEach(function (key) {
-    var stored = (allFields[KEY_OWNER[key]] || {})[key];
-    if (stored == null) stored = (allFields[LEGACY_KEY_OWNER[key]] || {})[key];
+    var stored = storedValueForKey(allFields, key);
     values[key] = stored == null ? '' : String(stored);
   });
   return values;

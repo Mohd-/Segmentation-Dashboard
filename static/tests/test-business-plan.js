@@ -110,6 +110,7 @@ test('business-plan renders the approved dashboard and one auto-save approval de
     // CoS -- the same four inputs the maturation shell hands the same builder.
     well_summary: {
       fields: {
+        'Lead Assessment': { sarh_formation_prognosis_pre_drill: 6400 },
         'SAD Model': { post_drill_piip_gas_p90: 90, post_drill_piip_gas_mean: 116, post_drill_piip_gas_p10: 140 },
         'Flowback Results': { flowback_stages_rows: JSON.stringify([
           { id: 'bpe-stage-1', formation: 'SARH', gas_rate_mmscfd: 12.5,
@@ -120,7 +121,8 @@ test('business-plan renders the approved dashboard and one auto-save approval de
       formations: [{ formation: 'SARH', phase: 'final', top_tvdss_ft: 8120, thickness_ft: 96,
                      pay_ft: 74, porosity_pct: 0.214, swt_pct: 0.209, fluid: 'Gas' }],
       lead_summary: { captured_at: '2026-01-09T00:00:00', captured_by: 'Supervisor',
-                      fields: { 'Lead Assessment': { reservoir_thickness_ft: 88, lead_piip_gas_mean: 101 } } },
+                      fields: { 'Lead Assessment': { sarh_formation_prognosis_pre_drill: 6300,
+                        reservoir_thickness_ft: 88, lead_piip_gas_mean: 101 } } },
       derisking: '42'
     },
     fluid_state: { decision: 'incomplete', successful: false, fluids: [] }, sad_update_branch: 'blocked_fluid',
@@ -372,6 +374,9 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   assert.deepEqual(Array.prototype.map.call(host.querySelectorAll('#bpe-summary-fold-pva-body .summary-pva-label'), function (cell) {
     return cell.textContent;
   }), ['', 'Top SARH', 'Thickness (ft)', 'Area P90 (km²)', 'Area P10 (km²)', 'Mean (BCF)']);
+  var topSarh = host.querySelector('#bpe-summary-fold-pva-body .summary-pva-row:nth-child(2)');
+  assert.equal(topSarh.querySelectorAll('.summary-pva-cell')[0].textContent, '6300',
+    'the frozen Lead Assessment prognosis wins over live and legacy Well Proposal values');
   folds[0].click();
   assert.equal(folds[0].getAttribute('aria-expanded'), 'false');
   assert.ok(host.querySelector('.bpe-save-line').textContent.indexOf('All changes are saved automatically') >= 0);

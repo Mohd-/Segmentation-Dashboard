@@ -20,7 +20,7 @@ import {
   coefficientsFor, conversionConfigured, thicknessFromTwt, twtFromThickness,
   applyConversion, resolveSourceMode, isDerivedCell, columnOf, ROW_KEYS,
   resolveCalculation, calculationPayload, calculationSignature,
-  scenarioList, showsLiquid, primaryFormationName, tvdssLabel,
+  scenarioList, showsLiquid, primaryFormationName, tvdssLabel, TVDSS_HINT,
   buildSavePlan, earlierComments,
   workspaceMarkup, thicknessSectionMarkup, volumeSectionMarkup,
   structureSectionMarkup, piipSectionMarkup, earlierCommentsMarkup,
@@ -58,7 +58,7 @@ function goodValues(overrides) {
     p10_area_km2: '17.30',
     grv_p90_thousand_acre_ft: '12.60',
     grv_p10_thousand_acre_ft: '17.30',
-    top_formation_tvdss_ft: '-6500',
+    sarh_formation_prognosis_pre_drill: '6500',
     polygons_surfaces_loaded: ''
   }, overrides || {});
 }
@@ -189,7 +189,7 @@ test('lead-assessment: Section 3 pairs the TVDSS input with the exact confirmati
   var box = root.querySelector('[data-la-field="polygons_surfaces_loaded"]');
   assert.equal(box.type, 'checkbox');
   assert.equal(box.checked, false);
-  assert.equal(root.querySelector('[data-la-field="top_formation_tvdss_ft"]').value, '-6500');
+  assert.equal(root.querySelector('[data-la-field="sarh_formation_prognosis_pre_drill"]').value, '6500');
 });
 
 /* -------------------------------------------------------------------------
@@ -211,8 +211,8 @@ test('lead-assessment: a lead with no formation rows falls back to the generic l
   assert.equal(tvdssLabel(null), 'Top Formation TVDSS (ft)');
   assert.equal(tvdssLabel([{ formation: '  ' }]), 'Top Formation TVDSS (ft)');
   var root = fixture(structureSectionMarkup(goodValues(), []));
-  assert.equal(root.querySelector('[data-la-field="top_formation_tvdss_ft"]').placeholder,
-    'Top Formation TVDSS (ft)');
+  assert.equal(root.querySelector('[data-la-field="sarh_formation_prognosis_pre_drill"]').placeholder,
+    TVDSS_HINT);
 });
 
 /* -------------------------------------------------------------------------
@@ -281,14 +281,14 @@ test('lead-assessment: an unusable value reports ITSELF, not the ordering it als
 // signed measure. It is now a magnitude like the rest, so a negative is
 // refused; zero and large depths still pass, and it still gates nothing.
 test('lead-assessment: the TVDSS is a magnitude, and still gates nothing', function () {
-  assert.equal(tvdssError('-6500'), 'Top Formation TVDSS must not be negative.');
+  assert.equal(tvdssError('-6500'), 'SARH Prognosis TVDSS must not be negative.');
   assert.equal(tvdssError('0'), null);
   assert.equal(tvdssError('12000'), null, 'and it is exempt from the generic 9999 cap');
   assert.equal(tvdssError(''), null, 'blank is not an error -- the field is optional');
-  assert.equal(tvdssError('deep'), 'Top Formation TVDSS must be numeric.');
-  assert.equal(validateLeadAssessment(goodValues({ top_formation_tvdss_ft: 'deep' })).top_formation_tvdss_ft,
+  assert.equal(tvdssError('deep'), 'SARH Prognosis TVDSS must be numeric.');
+  assert.equal(validateLeadAssessment(goodValues({ sarh_formation_prognosis_pre_drill: 'deep' })).sarh_formation_prognosis_pre_drill,
     MESSAGES.tvdss);
-  assert.equal(validateLeadAssessment(goodValues({ top_formation_tvdss_ft: '-10' })).top_formation_tvdss_ft,
+  assert.equal(validateLeadAssessment(goodValues({ sarh_formation_prognosis_pre_drill: '-10' })).sarh_formation_prognosis_pre_drill,
     MESSAGES.tvdssNegative);
 });
 
@@ -573,6 +573,14 @@ test('lead-assessment: the plan writes one whole merged-task payload', function 
                                          { thickness_source_mode: 'twt' }), {});
   assert.deepEqual(plan.map(function (entry) { return entry.taskName; }), ['Lead Assessment']);
   assert.deepEqual(Object.keys(plan[0].fields).sort(), Object.keys(KEY_OWNER).sort());
+  assert.equal(plan[0].fields.sarh_formation_prognosis_pre_drill, '6500');
+  assert.equal(plan[0].fields.top_formation_tvdss_ft, undefined,
+    'the renamed field is not written under the legacy key on current records');
+  var legacySaved = Object.assign({}, goodValues());
+  delete legacySaved.sarh_formation_prognosis_pre_drill;
+  legacySaved.top_formation_tvdss_ft = '6500';
+  assert.deepEqual(buildSavePlan(goodValues(), { 'Lead Assessment': legacySaved }), [],
+    'a legacy Lead Assessment value hydrates as the canonical field without a rewrite');
   // Every value is a string, and a missing one is '' rather than undefined.
   var sparse = buildSavePlan({ p90_area_km2: '3' }, {});
   assert.equal(sparse[0].fields.p10_area_km2, '');
@@ -597,7 +605,7 @@ test('lead-assessment: without a Lead Assessment row the plan groups per LEGACY 
   // taskNamed fallback row.
   var roster = LEGACY_LEAD_ASSESSMENT_STEPS.slice();
   var saved = {
-    'Area Definition': { p90_area_km2: '12.60', p10_area_km2: '17.30', top_formation_tvdss_ft: '-6500' },
+    'Area Definition': { p90_area_km2: '12.60', p10_area_km2: '17.30', top_formation_tvdss_ft: '6500' },
     'Thickness Estimation': { twt_reservoir_ms: '1500', twt_formation_ms: '1800',
                               reservoir_thickness_ft: '200', formation_thickness_ft: '500',
                               thickness_source_mode: '' },
@@ -1184,7 +1192,7 @@ test('lead-assessment: the source marker is a bounded select, not free text', fu
 test('lead-assessment: the depth-ish keys are exempt from the generic 9999 cap', function () {
   // A TVDSS and a two-way time both run past four digits in real data; the
   // generic numeric scan would otherwise reject them as "too large".
-  ['top_formation_tvdss_ft'].forEach(function (key) {
+  ['sarh_formation_prognosis_pre_drill'].forEach(function (key) {
     assert.equal(SCHEMA['Lead Assessment'].find(function (f) { return f.key === key; }).bigOk, true);
   });
   ['twt_reservoir_ms', 'twt_formation_ms'].forEach(function (key) {

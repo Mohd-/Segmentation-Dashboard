@@ -939,8 +939,8 @@ function fieldMarkup(field, value, classes, showIfAttr) {
     return '<div class="summary-box' + classes + '"><p><a href="' + esc(field.value || '#') + '" target="_blank" rel="noreferrer">' + esc(field.linkText || 'New Request') + '</a></p></div>';
   }
   // min="0" is the browser-level twin of numericFieldError's negative guard
-  // (schema.js): the ONE field that opts out is Top Formation TVDSS, which is
-  // legitimately signed above datum and carries allowNegative in the schema.
+  // (schema.js): SARH Prognosis TVDSS is a magnitude and keeps the generic
+  // non-negative browser guard.
   return '<label class="' + classes + '"' + showIfAttr + '>' + esc(field.label) +
     '<input type="number" step="any"' + (field.allowNegative ? '' : ' min="0"') +
     ' data-field="' + esc(field.key) + '" value="' + esc(value) + '"></label>';

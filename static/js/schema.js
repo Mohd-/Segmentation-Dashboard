@@ -277,12 +277,12 @@ export var SCHEMA = {
     { key: 'p10_area_km2', label: 'P10 Area (km²)', type: 'number', row: 'lead_area' },
     { key: 'grv_p90_thousand_acre_ft', label: 'GRV (10³ acre.ft) P90', type: 'number', bigOk: true, section: 'GRV Inputs', row: 'lead_grv' },
     { key: 'grv_p10_thousand_acre_ft', label: 'GRV (10³ acre.ft) P10', type: 'number', bigOk: true, row: 'lead_grv' },
-    // Reference information, not a checkpoint completion gate. TVDSS may be
-    // negative; the dedicated Lead Assessment validator applies parse-only.
-    // Card 3H made TVDSS a magnitude like every other measure, so allowNegative
-    // is gone. bigOk stays: a depth runs past four digits, which the generic
-    // 9999 sanity cap would otherwise refuse.
-    { key: 'top_formation_tvdss_ft', label: 'Top Formation TVDSS (ft)', type: 'number', bigOk: true, section: 'Structure' },
+    // Reference information, not a checkpoint completion gate. The canonical
+    // key is shared with the legacy Well Proposal field so the Lead Assessment
+    // snapshot and the BPE Well Summary use one SARH prognosis value.
+    // Card 3H made TVDSS a magnitude like every other measure, so bigOk stays:
+    // a depth runs past four digits, which the generic 9999 cap would refuse.
+    { key: 'sarh_formation_prognosis_pre_drill', label: 'SARH Prognosis TVDss (fT)', type: 'number', bigOk: true, section: 'Structure' },
     // PIIP output keys remain intentionally unregistered because the auto-run
     // writes them directly; this confirmation is the editable checkpoint input.
     { key: 'polygons_surfaces_loaded', label: 'Polygons and surfaces placed in the shared folder', type: 'checkbox', section: 'Resource Assessment' }

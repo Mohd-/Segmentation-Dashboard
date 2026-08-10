@@ -561,6 +561,8 @@ function blockForAr(map, ar) {
    value on the current step always supersedes the frozen/retired one. */
 var AREA_STEPS = ['Lead Assessment', 'Area Definition', 'Reservoir Area Definition'];
 var THICKNESS_STEPS = ['Lead Assessment', 'Thickness Estimation'];
+var SARH_PROGNOSIS_KEY = 'sarh_formation_prognosis_pre_drill';
+var LEGACY_SARH_PROGNOSIS_KEY = 'top_formation_tvdss_ft';
 // Card 3E's Area delta. Both sides are stored as a P90/P10 PAIR with no mean
 // between them (schema.js RANGE_PAIRS), so there is no single "area" to
 // compare -- each bound is compared against its own counterpart. Ladders read
@@ -581,6 +583,34 @@ export function fieldFrom(map, taskNames, key) {
   for (var i = 0; i < taskNames.length; i += 1) {
     var value = (source[taskNames[i]] || {})[key];
     if (isFilled(value)) return value;
+  }
+  return '';
+}
+
+// The lead assessment owns the canonical SARH prognosis TVDSS. Older records
+// used top_formation_tvdss_ft on Lead Assessment or Area Definition, while a
+// few pre-existing wells put the same user-facing value on Well Proposal.
+// Prefer the frozen/current lead value, then retain those historical fallbacks
+// without allowing a BPE task to become the new source of truth.
+function leadPrognosisValue(snapshot, allFields) {
+  var legacySteps = ['Lead Assessment', 'Area Definition', 'Reservoir Area Definition'];
+  var maps = [snapshot || {}, allFields || {}];
+  var canonicalBlank = false;
+  for (var mi = 0; mi < maps.length; mi += 1) {
+    var canonicalFields = maps[mi]['Lead Assessment'] || {};
+    if (Object.prototype.hasOwnProperty.call(canonicalFields, SARH_PROGNOSIS_KEY)) {
+      if (isFilled(canonicalFields[SARH_PROGNOSIS_KEY])) return canonicalFields[SARH_PROGNOSIS_KEY];
+      canonicalBlank = true;
+    }
+  }
+  if (canonicalBlank) return '';
+  for (var li = 0; li < maps.length; li += 1) {
+    var legacy = fieldFrom(maps[li], legacySteps, LEGACY_SARH_PROGNOSIS_KEY);
+    if (isFilled(legacy)) return legacy;
+  }
+  for (var wi = 0; wi < maps.length; wi += 1) {
+    var proposal = fieldFrom(maps[wi], ['Well Proposal'], SARH_PROGNOSIS_KEY);
+    if (isFilled(proposal)) return proposal;
   }
   return '';
 }
@@ -1062,7 +1092,6 @@ export function wellSummaryBodyHtml(source, folds, prefix) {
   // post_drill (the drilled results only). Mean feeds Prediction vs Actual.
   var postDrillTrio = gasTrio(POST_DRILL_PIIP_SOURCES, fields);
   var meanPostDrill = postDrillTrio.mean;
-  var prognosis = (fields['Well Proposal'] || {}).sarh_formation_prognosis_pre_drill;
   // SARH top prefers the formation row; legacy wells stored the top at step
   // level (final then quicklook), so fall back there before blanking.
   var topSarh = sarh ? sarh.top_tvdss_ft : '';
@@ -1158,6 +1187,7 @@ export function wellSummaryBodyHtml(source, folds, prefix) {
   // Prediction vs Actual: predicted values read the frozen lead snapshot,
   // falling back to live fields where the plan allows.
   var snap = (leadSummary && leadSummary.fields) || {};
+  var prognosis = leadPrognosisValue(snap, fields);
   var predThickness = fieldFrom(snap, THICKNESS_STEPS, 'reservoir_thickness_ft');
   if (!isFilled(predThickness)) predThickness = fieldFrom(fields, THICKNESS_STEPS, 'reservoir_thickness_ft');
   var predMean = '';
