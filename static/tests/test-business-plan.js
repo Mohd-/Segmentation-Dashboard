@@ -316,9 +316,9 @@ test('business-plan renders the approved dashboard and one auto-save approval de
   assert.equal(host.querySelector('[data-bpe-field="bp_gate_actual_td_ft_md"]').parentElement.querySelector('span').textContent,
     'Actual BP TD (ft MD)*');
   assert.equal(host.querySelector('[data-bpe-field="bp_gate_pressure_points"]').parentElement.querySelector('span').textContent,
-    'Pressure');
+    'Pressure*');
   assert.equal(host.querySelector('[data-bpe-field="bp_gate_fluid_samples"]').parentElement.querySelector('span').textContent,
-    'Fluid');
+    'Fluid*');
   assert.ok(host.querySelector('.folder-card #bpe-copy-folder'));
   assert.ok(host.querySelector('#bpe-save-feedback').classList.contains('save-state'));
   // The Well Summary is the Lead Summary card's anatomy, and its progress bar
@@ -752,6 +752,41 @@ test('business-plan bounds percentages and refuses a negative TVDSS', async func
   top.value = '11500';
   top.dispatchEvent(new Event('input', { bubbles: true }));
   assert.equal(top.classList.contains('bpe-invalid'), false);
+});
+
+test('business-plan fills formation thickness from top and base', async function () {
+  var host = fixture('<div id="bpe-main-view"></div><section id="bpe-detail-view" class="hidden"></section>');
+  resetBusinessPlanState();
+  var detail = detailPayload('quicklook-logs', {});
+  detail.formations = [{ id: 1, formation: 'SARH', top_tvdss_ft: '1000', base_tvdss_ft: '1120',
+    thickness_ft: '999', pay_intervals: [] }];
+  var puts = [];
+  mockFetch(function (url, options) {
+    var path = String(url);
+    var method = (options && options.method) || 'GET';
+    if (path.indexOf('/api/business-plan/wells/7/steps/quicklook-logs') >= 0 && method === 'GET') {
+      return response(detail);
+    }
+    if (path.indexOf('/formations') >= 0 && method === 'PUT') {
+      puts.push(JSON.parse(options.body).rows);
+      return response({ ok: true, detail: detail });
+    }
+    if (path.indexOf('/api/users') >= 0) return response([]);
+    throw new Error('Unexpected request: ' + method + ' ' + path);
+  });
+
+  await openBusinessPlanDetail(7, 'quicklook-logs');
+  var top = host.querySelector('[data-formation-field="top_tvdss_ft"]');
+  var base = host.querySelector('[data-formation-field="base_tvdss_ft"]');
+  var thickness = host.querySelector('[data-formation-field="thickness_ft"]');
+  assert.equal(thickness.value, '120');
+  assert.equal(thickness.readOnly, true);
+
+  base.value = '1150';
+  base.dispatchEvent(new Event('input', { bubbles: true }));
+  await waitFor(function () { return puts.length === 1; });
+  assert.equal(puts[0][0].thickness_ft, '150');
+  assert.equal(top.value, '1000');
 });
 
 // ---------------------------------------------------------------------------

@@ -1056,6 +1056,7 @@ function learningForm() {
 }
 
 function formationRowMarkup(row, formationIndex) {
+  row.thickness_ft = formationThickness(row);
   var options = (state.detail.formation_options || []).slice();
   if (row.formation && options.indexOf(row.formation) < 0) options.push(row.formation);
   var payRows = (row.pay_intervals || []).map(function (interval, payIndex) {
@@ -1079,10 +1080,18 @@ function formationRowMarkup(row, formationIndex) {
     '<div class="bpe-formation-envelope">' +
     formationEnvelopeCell(formationIndex, 'top_tvdss_ft', 'Formation Top*', row.top_tvdss_ft) +
     formationEnvelopeCell(formationIndex, 'base_tvdss_ft', 'Formation Base*', row.base_tvdss_ft) +
-    formationEnvelopeCell(formationIndex, 'thickness_ft', 'Formation Thickness*', row.thickness_ft) + '</div>' +
+    formationEnvelopeCell(formationIndex, 'thickness_ft', 'Formation Thickness*', formationThickness(row), true) + '</div>' +
     '<div class="bpe-pay-heading"><h4>Pay Intervals</h4><button type="button" class="ghost bpe-add-pay" data-formation-index="' +
     formationIndex + '">' + icon('plus') + ' Add Pay Interval</button></div>' +
     '<div class="bpe-pay-list">' + (payRows || '<div class="bpe-inline-empty">No Pay Intervals.</div>') + '</div></section>';
+}
+
+function formationThickness(row) {
+  if (!row || !isFilled(row.top_tvdss_ft) || !isFilled(row.base_tvdss_ft)) {
+    return row && row.thickness_ft != null ? row.thickness_ft : '';
+  }
+  var thickness = Number(row.base_tvdss_ft) - Number(row.top_tvdss_ft);
+  return isFinite(thickness) ? String(thickness) : '';
 }
 
 // TVDSS is the one signed measure in this form (above datum reads negative);
@@ -1146,10 +1155,11 @@ function numericEditAllowed(element, key) {
   return true;
 }
 
-function formationEnvelopeCell(index, key, label, cellValue) {
+function formationEnvelopeCell(index, key, label, cellValue, readonly) {
   return '<label><span>' + esc(label) + '</span><input type="number" step="any"' + numericFloor() +
     ' data-formation-index="' + index +
-    '" data-formation-field="' + esc(key) + '" value="' + esc(cellValue == null ? '' : cellValue) + '"></label>';
+    '" data-formation-field="' + esc(key) + '" value="' + esc(cellValue == null ? '' : cellValue) + '"' +
+    (readonly ? ' readonly' : '') + '></label>';
 }
 
 function formationCell(formationIndex, payIndex, key, label, cellValue, type) {
@@ -2045,6 +2055,23 @@ function updateFormationBuffer(element) {
   }
 }
 
+function syncFormationThickness(element) {
+  var formationIndex = Number(element.dataset.formationIndex);
+  var row = state.detail.formations[formationIndex];
+  if (!row) return;
+  var root = byId('bpe-detail-view');
+  var selector = '[data-formation-index="' + formationIndex + '"]';
+  var top = root.querySelector('[data-formation-field="top_tvdss_ft"]' + selector);
+  var base = root.querySelector('[data-formation-field="base_tvdss_ft"]' + selector);
+  var topValue = top ? top.value : row.top_tvdss_ft;
+  var baseValue = base ? base.value : row.base_tvdss_ft;
+  var thickness = Number(baseValue) - Number(topValue);
+  row.thickness_ft = isFilled(topValue) && isFilled(baseValue) && isFinite(thickness) ? String(thickness) : '';
+  all('[data-formation-field="thickness_ft"]' + selector, root).forEach(function (input) {
+    input.value = row.thickness_ft;
+  });
+}
+
 function saveFormationBuffer(rerender) {
   var version = markStructureDraft('formations', state.detail.formations || []);
   return enqueueStructureDraft('formations', version, rerender);
@@ -2086,6 +2113,9 @@ function bindFormationInputs() {
       var cellKey = element.dataset.payField || element.dataset.formationField;
       if (!numericEditAllowed(element, cellKey)) return;
       updateFormationBuffer(element);
+      if (element.dataset.formationField === 'top_tvdss_ft' || element.dataset.formationField === 'base_tvdss_ft') {
+        syncFormationThickness(element);
+      }
       var version = markStructureDraft('formations', state.detail.formations || []);
       clearTimeout(state.timers.formations);
       state.timers.formations = setTimeout(function () {

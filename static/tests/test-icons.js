@@ -14,7 +14,12 @@ test('icons: the application exposes the pinned official Lucide set', function (
   REQUIRED.forEach(function (key) {
     assert.ok(ICONS[key], key + ' is available');
     assert.match(ICONS[key], new RegExp('class="lucide lucide-' + key + '"'));
-    assert.match(ICONS[key], /stroke="currentColor"/);
+    if (key === 'drill') {
+      assert.match(ICONS[key], /Font Awesome Free/);
+      assert.match(ICONS[key], /fill="currentColor"/);
+    } else {
+      assert.match(ICONS[key], /stroke="currentColor"/);
+    }
     assert.match(ICONS[key], /aria-hidden="true"/);
     assert.match(ICONS[key], /focusable="false"/);
   });

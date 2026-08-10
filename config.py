@@ -280,7 +280,7 @@ SHARED_PASSCODE = os.environ.get("SEGMENT_TRACKER_PASSCODE") or None
 # and /api/me requires a logged-in session (enforced by main.py's before_request
 # hook, which reads this attribute at REQUEST time so tests can monkeypatch it).
 # Default false: the API stays open exactly as before.
-AUTH_REQUIRED = os.environ.get("AUTH_REQUIRED", "true").strip().lower() in {"1", "true", "yes", "on"}
+AUTH_REQUIRED = os.environ.get("AUTH_REQUIRED", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 # Mark the session cookie Secure (HTTPS-only). Leave false for the plain-HTTP
 # internal deployment; set SEGMENT_TRACKER_COOKIE_SECURE=1 once the app is

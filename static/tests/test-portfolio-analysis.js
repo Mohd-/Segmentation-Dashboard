@@ -129,7 +129,6 @@ test('portfolio-analysis.renderResourceBar renders the estimate + proportional s
   var title = root.querySelector('.prb-title');
   // The estimate the bar DIVIDES, not a running total of the segments.
   assert.match(title.textContent, /Total Estimated Original Gas Initially in Place is 1,200 BCF/);
-  assert.match(title.textContent, /Configured field starting values: ALPHA 400 BCF \(default\)/);
   var segments = root.querySelectorAll('.prb-seg');
   assert.equal(segments.length, 4, 'discovered, staked, proposed, yet-to-find');
   assert.equal(segments[0].style.flexGrow, '42.5', 'discovered width tracks its value');

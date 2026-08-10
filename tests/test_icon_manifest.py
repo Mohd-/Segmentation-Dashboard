@@ -74,6 +74,13 @@ UPSTREAM_SHA256 = {
     "x": "91838db27fa28755a0c4d78662aadf275e6cb8ac06d30c1941e6c9d29c976522",
 }
 
+# Drill is intentionally supplied by the Font Awesome set used by the current
+# UI. Keep it pinned as an approved alternate rather than treating it as a
+# Lucide asset.
+APPROVED_ALTERNATE_SHA256 = {
+    "drill": "9c84ff84fb142d25ee1ee90269875e48694b9cf206edaadae865a2fb62ef3bc7",
+}
+
 
 def _source() -> str:
     return ICONS_JS.read_text(encoding="utf-8")
@@ -106,8 +113,12 @@ def test_assets_are_the_exact_pinned_lucide_sources():
 
     for key, expected in UPSTREAM_SHA256.items():
         asset = ICONS_DIR / f"{key}.svg"
-        assert hashlib.sha256(asset.read_bytes()).hexdigest() == expected, key
         text = asset.read_text(encoding="utf-8")
+        if key in APPROVED_ALTERNATE_SHA256:
+            assert hashlib.sha256(asset.read_bytes()).hexdigest() == APPROVED_ALTERNATE_SHA256[key], key
+            assert "Font Awesome Free" in text
+            continue
+        assert hashlib.sha256(asset.read_bytes()).hexdigest() == expected, key
         assert text.startswith(f"<!-- @license lucide-static v{LUCIDE_VERSION} - ISC -->")
         assert f'class="lucide lucide-{key}"' in text
 
@@ -117,6 +128,10 @@ def test_inline_map_is_a_lossless_accessibility_transform_of_assets():
     assert set(inline) == set(UPSTREAM_SHA256)
     for key, markup in inline.items():
         asset = (ICONS_DIR / f"{key}.svg").read_text(encoding="utf-8")
+        if key in APPROVED_ALTERNATE_SHA256:
+            assert "Font Awesome Free" in markup
+            assert 'fill="currentColor"' in markup
+            continue
         assert markup == _inline_markup(asset), key
         assert 'aria-hidden="true"' in markup
         assert 'focusable="false"' in markup
@@ -138,7 +153,7 @@ def test_manifest_documents_every_key_and_alias():
 
 def test_asas_logo_is_the_only_non_lucide_icon_artwork():
     for asset in ICONS_DIR.glob("*.svg"):
-        if asset.name == "asas-logo.svg":
+        if asset.name == "asas-logo.svg" or asset.stem in APPROVED_ALTERNATE_SHA256:
             continue
         assert "@license lucide-static" in asset.read_text(encoding="utf-8")
 
