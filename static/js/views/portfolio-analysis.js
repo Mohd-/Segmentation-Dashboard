@@ -202,7 +202,6 @@ export function renderResourceBar(rows, ytfConfig) {
   element.innerHTML =
     '<p class="prb-title">Total Estimated Original Gas Initially in Place is <b>' +
     esc(fmtBcf(summary.total)) + ' BCF</b>' +
-    '<small class="prb-title-note">' + esc(configuredPhrase) + '</small></p>' +
     '<div class="prb-bar" role="img" aria-label="Of ' + esc(fmtBcf(summary.total)) +
     ' BCF estimated: discovered ' + esc(fmtBcf(summary.discovered.bcf)) +
     ' BCF, undiscovered staked ' + esc(fmtBcf(summary.staked.bcf)) +

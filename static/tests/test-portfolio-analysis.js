@@ -89,8 +89,6 @@ test('portfolio-analysis.renderResourceBar describes heterogeneous field startin
     { gas_field: 'ALPHA', status: 'Gas', mean_ogip: 100, is_lead: 0 },
     { gas_field: 'BETA', status: 'Proposed', mean_ogip: 50, is_lead: 1 }
   ], { default_bcf: 300, fields: { alpha: 500 } });
-  assert.match(root.querySelector('.prb-title-note').textContent,
-    /ALPHA 500 BCF · BETA 300 BCF \(default\)/);
   assert.match(root.querySelector('.prb-ytf').title,
     /Configured field starting values: ALPHA 500 BCF · BETA 300 BCF \(default\)/);
   assert.match(root.querySelector('.prb-bar').getAttribute('aria-label'), /Of 800 BCF estimated/);
@@ -115,7 +113,6 @@ test('portfolio refresh passes API YTF configuration into the visible resource b
 
   await refreshPortfolio();
   assert.match(host.querySelector('.prb-title').textContent, /is 800 BCF/);
-  assert.match(host.querySelector('.prb-title-note').textContent, /A 500 BCF · B 300 BCF \(default\)/);
 });
 
 test('portfolio-analysis.crossPlotPoints keeps only rows with both measures, CoS as fraction', function () {
