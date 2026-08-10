@@ -1143,20 +1143,20 @@ def test_approved_lead_assessment_reconciles_only_on_its_own_save(client):
 # ---------------------------------------------------------------------------
 
 def test_meta_serves_the_twt_thickness_coefficients(client):
-    """The client reads the conversion from Store.meta, and it SHIPS EMPTY.
+    """The client reads the configured conversion from Store.meta.
 
-    Empty is the shipped state on purpose (config.TWT_THICKNESS_COEFFICIENTS):
-    until an owner supplies calibrated coefficients, Section 1 is two manual
-    inputs plus a pending note rather than a guessed derivation. The KEY has to
-    be present regardless -- an absent key and an empty map must not be two
-    different client states.
+    The key has to be present regardless -- an absent key and a configured map
+    must not be two different client states.
     """
     import config
 
     meta = client.get("/api/meta").get_json()
     assert "twt_thickness_coefficients" in meta
     assert meta["twt_thickness_coefficients"] == config.TWT_THICKNESS_COEFFICIENTS
-    assert config.TWT_THICKNESS_COEFFICIENTS == {}, "ships empty; populate per deployment"
+    assert config.TWT_THICKNESS_COEFFICIENTS == {
+        "reservoir": {"m": 6.67, "b": 0.91},
+        "formation": {"m": 7.93, "b": -8.4},
+    }
 
 
 def test_the_polygons_folder_resolves_under_the_LEADS_share(client):

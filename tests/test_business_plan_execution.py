@@ -361,6 +361,16 @@ def test_quicklook_and_final_logs_preserve_existing_file_confirmation_sets(clien
     assert quick.status_code == 200, quick.get_json()
     assert quick.get_json()["detail"]["formation_options"][:3] == ["SARH", "QASM", "QWRH"]
     assert quick.get_json()["detail"]["tracking"][0]["status"] == "In Progress"
+    final_response = client.get(
+        f"/api/business-plan/wells/{project_id}/steps/final-log-analysis"
+    )
+    assert final_response.status_code == 200, final_response.get_json()
+    final_preview = final_response.get_json()["formations"]
+    assert len(final_preview) == 1
+    assert final_preview[0]["id"] is None
+    assert final_preview[0]["phase"] == "final"
+    assert final_preview[0]["pay_intervals"][0]["id"] is None
+    assert final_preview[0]["pay_intervals"][0]["fluid"] == "Gas"
     quick = _save(client, project_id, "quicklook-logs", "quicklook_las", True)
     assert quick.get_json()["detail"]["tracking"][0]["status"] == "Completed"
 

@@ -862,7 +862,7 @@ export function wireWellSummaryFolds(root, folds, onToggle) {
   });
 }
 // Scoped to THIS card, not the document: the Business Plan Execution shell has
-// folds of its own (its Well Summary and its Formation Interpretation sheet),
+// folds of its own (its Well Summary),
 // and a document-wide bind would hand them a second handler that undoes the
 // first one's toggle.
 function wireFolds() {

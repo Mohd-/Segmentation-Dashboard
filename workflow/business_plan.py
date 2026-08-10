@@ -429,6 +429,25 @@ def _formation_complete(formations, phase):
     return True
 
 
+def _clone_formations_for_final(formations):
+    """Seed an unsaved Final Log sheet from the Quicklook interpretation."""
+    cloned = []
+    for row in formations:
+        if row.get("phase") != "quicklook":
+            continue
+        copy = dict(row)
+        copy["id"] = None
+        copy["phase"] = "final"
+        copy["pay_intervals"] = []
+        for interval in row.get("pay_intervals", []):
+            interval_copy = dict(interval)
+            interval_copy["id"] = None
+            interval_copy["phase"] = "final"
+            copy["pay_intervals"].append(interval_copy)
+        cloned.append(copy)
+    return cloned
+
+
 def _sad_complete(values, update=False):
     prefix = "resource_update" if update else "post_drill_piip"
     base = "sad_update" if update else "sad"
@@ -918,6 +937,9 @@ def get_detail(session, project_id, detail_slug):
     custom_formations = sorted({
         row["formation"] for row in formations if row.get("formation") not in FORMATIONS
     })
+    step_formations = [row for row in formations if row.get("phase") == expected_phase]
+    if detail_slug == "final-log-analysis" and not step_formations:
+        step_formations = _clone_formations_for_final(formations)
     return {
         "project": {
             "project_id": project["project_id"],
@@ -949,7 +971,7 @@ def get_detail(session, project_id, detail_slug):
         "assignee": task.get("assigned_to") or "",
         "values": effective["values"],
         "comments_key": "bpe_comments_" + detail_slug.replace("-", "_"),
-        "formations": [row for row in formations if row.get("phase") == expected_phase],
+        "formations": step_formations,
         # Card 3E: the Well Summary beside the step is the SAME card the
         # maturation shell renders (static/js/views/detail.js
         # wellSummaryBodyHtml), so it needs the record-level inputs that card

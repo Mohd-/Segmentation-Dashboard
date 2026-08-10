@@ -1160,41 +1160,15 @@ function formationCell(formationIndex, payIndex, key, label, cellValue, type) {
     esc(cellValue == null ? '' : cellValue) + '"></label>';
 }
 
-// Card 3C. The formation sheet IS the work on Quicklook Logs and Final Log
-// Analysis, so it opens on first entry rather than making everyone click
-// before they can type. The open state is remembered per (well, step): the
-// re-render that follows every auto-save keeps whatever the user chose, while
-// walking to a different step or well is a first load again and opens it.
-// Only these two steps render the section at all, so the default is scoped by
-// construction -- no other workflow's disclosure changes.
-var formationsFoldContext = null;
-var formationsFoldOpen = true;
-
-function formationsFoldIsOpen() {
-  var context = state.projectId + '|' + state.detailSlug;
-  if (formationsFoldContext !== context) {
-    formationsFoldContext = context;
-    formationsFoldOpen = true;
-  }
-  return formationsFoldOpen;
-}
-
 function formationsForm() {
   var rows = state.detail.formations || [];
-  var open = formationsFoldIsOpen();
   var confirmations = state.detailSlug === 'quicklook-logs' ?
     checkbox('quicklook_pdf', PDF_LABEL) + checkbox('quicklook_las', 'Logs as LAS') :
     checkbox('final_petrel', 'Logs in Petrel') + checkbox('final_pdf', PDF_LABEL) + checkbox('final_las', 'Logs as LAS');
-  return '<div class="summary-fold bpe-formations-fold">' +
-      '<button type="button" id="bpe-formations-head" class="summary-fold-head' + (open ? ' open' : '') +
-        '" aria-expanded="' + open + '" aria-controls="bpe-formations">' +
-        '<span class="summary-fold-title">Formation Interpretation</span>' +
-        '<span class="summary-fold-chevron" aria-hidden="true">' + icon('chevron-down') + '</span></button>' +
-      '<div id="bpe-formations" class="bpe-formations summary-fold-body' + (open ? '' : ' collapsed') + '">' +
+  return '<div id="bpe-formations" class="bpe-formations summary-fold-body">' +
         rows.map(formationRowMarkup).join('') +
         '<button type="button" id="bpe-add-formation" class="ghost">' + icon('plus') + ' Add Formation</button>' +
       '</div>' +
-    '</div>' +
     confirmations + commonTail();
 }
 
@@ -2119,17 +2093,6 @@ function bindFormationInputs() {
       }, element.tagName === 'SELECT' ? 0 : state.saveDelay);
     });
   });
-  // Toggle in place: the sheet holds live inputs and a pending auto-save, so
-  // re-rendering the page to open a disclosure would be both wasteful and a
-  // way to lose a half-typed cell.
-  var formationsHead = byId('bpe-formations-head');
-  if (formationsHead) formationsHead.addEventListener('click', function () {
-    formationsFoldOpen = !formationsFoldOpen;
-    formationsHead.classList.toggle('open', formationsFoldOpen);
-    formationsHead.setAttribute('aria-expanded', String(formationsFoldOpen));
-    var body = byId('bpe-formations');
-    if (body) body.classList.toggle('collapsed', !formationsFoldOpen);
-  });
   var addFormation = byId('bpe-add-formation');
   if (addFormation) addFormation.addEventListener('click', function () {
     var used = state.detail.formations.map(function (row) { return row.formation; });
@@ -2357,8 +2320,8 @@ function wireSummaryPanel() {
   if (edit) edit.addEventListener('click', openAllFields);
   wireDrillingFlag();
   // Card 3E's two expandable sections. Bound inside the panel, so this never
-  // reaches the editor's own Formation Interpretation fold, and toggling one
-  // writes nothing beyond the local open-state map.
+  // reaches the editor's own formation section, and toggling one writes
+  // nothing beyond the local open-state map.
   wireWellSummaryFolds(panel, summaryFolds);
 }
 
