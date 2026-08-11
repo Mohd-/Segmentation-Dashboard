@@ -24,10 +24,27 @@ function handleResponse(response) {
   }
   return contentType.indexOf('json') >= 0 ? response.json() : response;
 }
+// Slow-request telemetry: the server stamps its own time in X-Duration-Ms
+// (main.py's timing hook); anything past these floors lands in the console so
+// a sluggish save can be attributed to the server vs the wire at a glance.
+var SLOW_SERVER_MS = 100;
+var SLOW_WALL_MS = 250;
+
+function logSlowRequest(path, options, response, startedAt) {
+  var wallMs = performance.now() - startedAt;
+  var serverMs = response && response.headers ? parseFloat(response.headers.get('X-Duration-Ms')) : NaN;
+  if (!(serverMs > SLOW_SERVER_MS) && !(wallMs > SLOW_WALL_MS)) return;
+  console.debug('[api] slow request', ((options && options.method) || 'GET'), path,
+    'server=' + (isNaN(serverMs) ? '?' : serverMs.toFixed(0)) + 'ms',
+    'wall=' + wallMs.toFixed(0) + 'ms');
+}
+
 export function api(path, options) {
   var opts = options || {};
   opts.cache = 'no-store';
+  var startedAt = performance.now();
   return fetch(requestUrl(path), opts).then(function (response) {
+    logSlowRequest(path, opts, response, startedAt);
     // AUTH_REQUIRED deployments answer 401 until a session exists: open the
     // login dialog, then retry the original request ONCE. The retry path goes
     // straight to handleResponse, so a second 401 surfaces as a normal error

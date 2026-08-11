@@ -33,12 +33,13 @@ from __future__ import annotations
 import gzip
 import os
 import secrets
+import time
 from datetime import date
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Optional
 
-from flask import Flask, jsonify, request, send_file, send_from_directory
+from flask import Flask, g, jsonify, request, send_file, send_from_directory
 from flask import session as flask_session
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash
@@ -67,6 +68,34 @@ app.config["SESSION_COOKIE_SECURE"] = config.SESSION_COOKIE_SECURE
 # Bootstrap schema/migrations once when the application process starts.
 db.init_db()
 app.teardown_appcontext(db.remove_session)
+
+# Slow requests below this take are logged; every response carries its server
+# time in X-Duration-Ms so the front-end (and curl) can see where a save's
+# wall-clock goes without a profiler. Overridable for a full request log.
+_SLOW_REQUEST_MS = float(os.environ.get("DASH_SLOW_REQUEST_MS", "100"))
+
+
+@app.before_request
+def _stamp_request_start():
+    g._t0 = time.perf_counter()
+
+
+# Registered FIRST on purpose: after_request hooks run in reverse registration
+# order, so this one executes last and its duration includes the gzip and
+# cache-header hooks below.
+@app.after_request
+def _time_request(response):
+    started = getattr(g, "_t0", None)
+    if started is None:
+        return response
+    duration_ms = (time.perf_counter() - started) * 1000.0
+    response.headers["X-Duration-Ms"] = "%.1f" % duration_ms
+    if duration_ms > _SLOW_REQUEST_MS:
+        # warning, not info: Flask's logger drops info-level records unless
+        # debug mode is on, and a silent profiler is no profiler.
+        app.logger.warning("slow request: %s %s -> %s in %.1fms",
+                           request.method, request.path, response.status_code, duration_ms)
+    return response
 
 
 def json_response(data, status=200):

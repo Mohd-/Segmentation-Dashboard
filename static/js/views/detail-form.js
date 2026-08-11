@@ -6,7 +6,7 @@ import { SCHEMA, formationNames, FORMATION_METRICS, FLUID_TYPES, SEISMIC_BLOCKS,
 import { calculateTrapCos, calculateSealCos } from '../cos-rules.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 import { renderDetail, renderRightPanel, chooseInitialTask, tasksForPipeline, parseRepeatableRows, refreshAfterRecordChange, revealTaskStage } from './detail.js';
-import { refreshAllBoards } from './pipeline.js';
+import { markBoardsStale } from './pipeline.js';
 import { renderResourceCalculator, teardownResourceCalculator } from './resource-calculator.js';
 // Card 2B: the consolidated Lead Assessment workspace, which REPLACES the
 // generic per-step form for that stage's four steps on a lead page.
@@ -307,6 +307,13 @@ export function componentLoadIsCurrent(load) {
 
 export function loadComponent(task) {
   if (!task) return;
+  // Item A: this function owns focus/typing preservation for every write it
+  // makes into #component-form. A snapshot is only trustworthy if taken in the
+  // same tick as the DOM wipe it guards -- anything typed after an early
+  // snapshot would be clobbered by the wipe and then "restored" away. It must
+  // precede beginComponentLoad, whose #dynamic-fields reset destroys the
+  // focused control.
+  var focusSnapshot = captureEditorFocus();
   var load = beginComponentLoad(task);
   Store.task = task;
   // Item A: navigation to a DIFFERENT task resets the auto-save controller
@@ -323,6 +330,9 @@ export function loadComponent(task) {
   renderActionButtons(task);
   byId('comments').placeholder = commentPlaceholder(task.task_name);
   byId('comments').value = task.comments || '';
+  // The comments assignment above is the one synchronous write into the form:
+  // hand the focused control its typed value straight back, same tick.
+  restoreEditorFocus(focusSnapshot);
   var consolidated = consolidatedPageFor(task);
   setConsolidatedChrome(consolidated);
   teardownOtherConsolidatedPages(consolidated);
@@ -336,15 +346,21 @@ export function loadComponent(task) {
     consolidated.render(byId('dynamic-fields'), { onCopy: copyText });
     setComponentReferenceMode(!isCurrentPipelineView());
     renderRightPanel(tasksForPipeline(Store.pipeline));
+    restoreEditorFocus(focusSnapshot);
     return Promise.resolve();
   }
   return Promise.all([API.fields(task.task_id), API.componentFolder(Store.projectId, task.task_id)]).then(function (results) {
     if (!componentLoadIsCurrent(load)) return;
+    // #dynamic-fields was emptied at entry, but the comments box lives through
+    // the fetch -- re-snapshot in case the newest keystrokes landed there;
+    // otherwise the entry snapshot stands.
+    focusSnapshot = captureEditorFocus() || focusSnapshot;
     renderFields(task.task_name, results[0] || {});
     renderResourceCalculatorSection(task, results[0] || {});
     renderComponentFolder(results[1] || {});
     setComponentReferenceMode(!isCurrentPipelineView());
     renderRightPanel(tasksForPipeline(Store.pipeline));
+    restoreEditorFocus(focusSnapshot);
   }).catch(function (error) {
     if (componentLoadIsCurrent(load)) msg(error.message, 'error');
   });
@@ -1304,6 +1320,7 @@ export function saveComponent(event, options) {
   var submitButton = byId('save-component');
   if (submitButton) submitButton.disabled = true;
   var savedTask = null;
+  var formationsSaved = false;
   // No status / assigned_to keys: Save only persists inputs. Status moves via
   // /transition and assignment via /assign; the backend preserves both when
   // the keys are absent. Priority now has its own chip/endpoint, but save_task
@@ -1320,6 +1337,7 @@ export function saveComponent(event, options) {
   }).then(function (response) {
     savedTask = (response && response.task) || null;
     if (formationsField && formationDirty[formationsField.phase]) {
+      formationsSaved = true;
       return API.saveFormations(Store.projectId, {
         phase: formationsField.phase,
         rows: formationRowsForSave(formationsField.phase),
@@ -1329,13 +1347,55 @@ export function saveComponent(event, options) {
     }
     return null;
   }).then(function () {
-    return API.detail(Store.projectId);
-  }).then(function (detail) {
-    // The re-render below replaces the form's DOM, which would steal focus and
-    // discard anything typed while the PATCH was in flight. Snapshot the
-    // focused control NOW (its value is the newest typing) and put it back
-    // once the fresh markup is in place -- see autosave.js.
-    var focusSnapshot = captureEditorFocus();
+    // FAST PATH: an auto-save whose response shows nothing structural moved
+    // updates the Store straight from the PATCH echo and skips the /detail
+    // fetch and the full re-render/remount -- one request per typing pause,
+    // no DOM wipe, no focus dance. Anything the /detail re-render exists to
+    // repaint takes the full chain instead: a status change (completion/
+    // checkbox walks move the rail dot, buttons, locks), a formations write
+    // (Store.formations + mini-sheets), or a step whose save recomputes
+    // fields server-side. The Lead Summary fold may lag one structural
+    // refresh behind on this path -- accepted trade-off.
+    if (auto && savedTask && !formationsSaved &&
+        savedTask.status === Store.task.status &&
+        !STRUCTURAL_SAVE_STEPS[Store.task.task_name]) {
+      Store.task = savedTask;
+      var taskIndex = Store.tasks.findIndex(function (task) { return task.task_id === savedTask.task_id; });
+      if (taskIndex >= 0) Store.tasks[taskIndex] = savedTask;
+      var storedFields = Store.allFields[savedTask.task_name] || {};
+      Store.allFields[savedTask.task_name] = Object.assign({}, storedFields, fields);
+      renderRightPanel(tasksForPipeline(Store.pipeline));
+      markBoardsStale();
+      return { ok: true, state: 'saved' };
+    }
+    return runFullSaveRefresh(auto, savedTask);
+  }).catch(function (error) {
+    if (!auto) msg(error.message, 'error');
+    return { ok: false, state: 'error', message: error.message };
+  }).finally(function () {
+    if (submitButton) submitButton.disabled = false;
+  });
+}
+
+// Steps whose PATCH makes the server rewrite fields the form did not send
+// (CoS recomputation) or rename the record (staking canonical name): the DOM
+// cannot know those values, so their saves always take the full /detail
+// re-render. The two staking steps normally mount as the consolidated Staking
+// Letters page and never reach the generic path; listed for safety.
+var STRUCTURAL_SAVE_STEPS = {
+  'Reservoir CoS': 1,
+  'Trap and Seal CoS': 1,
+  'Approval to Stake': 1,
+  'Well Site Location': 1
+};
+
+// The pre-fast-path save tail: full /detail refresh, detail re-render, step
+// remount. Still the path for every manual save, structural auto-save, and
+// the consolidated pages' refreshAfterRecordChange twin in detail.js.
+function runFullSaveRefresh(auto, savedTask) {
+  return API.detail(Store.projectId).then(function (detail) {
+    // loadComponent below preserves the focused control and its in-flight
+    // typing across its own re-render -- see autosave.js.
     var selectedTaskId = Store.task.task_id;
     Store.project = detail.project || {};
     Store.tasks = detail.tasks || [];
@@ -1347,17 +1407,11 @@ export function saveComponent(event, options) {
     var nextTask = Store.tasks.find(function (task) { return task.task_id === selectedTaskId; }) ||
       chooseInitialTask(tasksForPipeline(Store.pipeline));
     return Promise.resolve(loadComponent(nextTask)).then(function () {
-      restoreEditorFocus(focusSnapshot);
-      refreshAllBoards();
+      markBoardsStale();
       var savedNote = savedMessage(savedTask);
       if (!auto) msg(savedNote, 'success');
       return { ok: true, state: 'saved' };
     });
-  }).catch(function (error) {
-    if (!auto) msg(error.message, 'error');
-    return { ok: false, state: 'error', message: error.message };
-  }).finally(function () {
-    if (submitButton) submitButton.disabled = false;
   });
 }
 // Shared grid template so the header row and every data row line up: each

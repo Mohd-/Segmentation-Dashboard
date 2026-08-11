@@ -178,13 +178,15 @@ function assigneeFilterValue(id) {
 /* Card 1C: the lead board fetches its dataset UNFILTERED, once per refresh,
    and every filter is applied client-side by views/lead-filters.js -- the one
    place that decides which leads are on the board (cards, column badges, and
-   later the KPIs all read the same filtered rowset). `include_completed`
-   opts out of the server's "a fully matured lead leaves the board" rule,
-   because the board now offers Completed as an explicit status and shows
-   those leads by default. Rendering happens through the filter module's
-   onChange (wired in main.js), never straight from this response. */
+   later the KPIs all read the same filtered rowset). The fetch deliberately
+   does NOT pass `include_completed`, so the server's exit rule applies: a
+   fully matured lead -- including a freshly staked one, which the backend's
+   staking hook auto-matures -- derives Completed, leaves this board, and
+   appears in the Portfolio instead. Completed rows never reach this payload.
+   Rendering happens through the filter module's onChange (wired in main.js),
+   never straight from this response. */
 export function refreshProspect() {
-  return API.projects({ pipeline_filter: 'prospect', include_completed: '1' })
+  return API.projects({ pipeline_filter: 'prospect' })
     .then(function (rows) { setLeadRows(rows || []); })
     .catch(function (error) { msg(error.message, 'error'); });
 }
@@ -193,11 +195,31 @@ export function refreshBP() {
 }
 
 export function refreshAllBoards(options) {
+  boardsStale = false;
   var businessPlanYear = options && options.businessPlanYear;
   refreshProspect();
   if (businessPlanYear == null) refreshBP();
   else syncBusinessPlanPromotion(businessPlanYear);
   refreshPortfolio();
+}
+
+/* Saves on the detail shell used to call refreshAllBoards directly -- three
+   full-database reads re-rendering boards the user cannot see, on every
+   typing pause. The save paths now only MARK the boards stale; the refresh
+   runs once, when a board actually comes back into view (back-to-board in
+   main.js; tab activation clears the flag through refreshAllBoards/showTab's
+   per-tab refreshes). Structural flows that change board membership while a
+   board is visible (create, delete, promote/recall, project editor) keep
+   calling refreshAllBoards eagerly. */
+var boardsStale = false;
+
+export function markBoardsStale() {
+  boardsStale = true;
+}
+
+export function refreshBoardsIfStale() {
+  if (!boardsStale) return;
+  refreshAllBoards();
 }
 
 /* Lead creation moved out to views/lead-create.js with Card 1D: the Add New

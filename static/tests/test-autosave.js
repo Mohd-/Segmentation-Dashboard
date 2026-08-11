@@ -18,6 +18,7 @@ import { Store } from '../js/state.js';
 import { loadComponent, saveComponent, transitionComponent } from '../js/views/detail-form.js';
 import { initAutoSave, configureAutoSaveDelay, resetAutoSave } from '../js/views/autosave.js';
 import { teardownStakingLetters } from '../js/views/staking-letters.js';
+import { refreshBoardsIfStale } from '../js/views/pipeline.js';
 
 // The lead detail shell with every id the save→refresh→re-render chain
 // touches (renderDetail + loadComponent + renderRightPanel), plus the board
@@ -90,7 +91,7 @@ function toastText() {
 
 function geoxTask(state) {
   return { task_id: 91, task_name: 'Pre-Drilling GeoX Assessment', sequence_no: 12,
-           stage_group: 'Pre-Well Delivery', status: 'In Progress', priority: 'Medium',
+           stage_group: 'Pre-Well Delivery', status: state.status || 'In Progress', priority: 'Medium',
            revision: state.revision, comments: state.comments, assigned_to: '',
            permissions: { approval_required: false, approval_locked: false, can_edit: true,
              can_submit: false, can_approve: false, can_return: false, can_reopen: false,
@@ -102,11 +103,19 @@ function geoxTask(state) {
 // maximum number of SIMULTANEOUSLY unresolved PATCHes. `tracker.holdPatch`
 // (set to []) parks PATCH responses until the test releases them.
 function mockGeoxBackend(state) {
-  var tracker = { patches: [], concurrent: 0, maxConcurrent: 0, holdPatch: null };
+  var tracker = { patches: [], requests: [], concurrent: 0, maxConcurrent: 0, holdPatch: null, holdFields: null };
   mockFetch(function (url, options) {
     var path = String(url);
     var method = (options && options.method) || 'GET';
-    if (/\/api\/tasks\/91\/dynamic-fields(\?|$)/.test(path)) return jsonResponse(state.fields);
+    tracker.requests.push(method + ' ' + path.split('?')[0]);
+    if (/\/api\/tasks\/91\/dynamic-fields(\?|$)/.test(path)) {
+      if (tracker.holdFields) {
+        return new Promise(function (resolve) {
+          tracker.holdFields.push(function () { resolve(jsonResponse(state.fields)); });
+        });
+      }
+      return jsonResponse(state.fields);
+    }
     if (path.indexOf('/api/projects/44/component-folder/91') >= 0) {
       return jsonResponse({ requires_folder: 0 });
     }
@@ -120,6 +129,9 @@ function mockGeoxBackend(state) {
         state.revision += 1;
         state.fields = Object.assign({}, state.fields, body.fields);
         state.comments = body.comments;
+        // `nextStatus` simulates the backend's field-completion walk moving
+        // the step on this save (a STRUCTURAL response -> full refresh path).
+        if (state.nextStatus) { state.status = state.nextStatus; state.nextStatus = null; }
         return jsonResponse({ task: geoxTask(state) });
       };
       if (tracker.holdPatch) {
@@ -265,6 +277,10 @@ test('autosave: focus, caret and mid-flight typing survive the post-save re-rend
     // A number input: the re-render replaces the node; focus must land on its
     // successor with the value intact.
     var input = document.querySelector('[data-field="pre_drill_piip_gas_p90"]');
+    // Status flips make both saves STRUCTURAL so they take the full
+    // re-render path this test exists to exercise (a fast-path save leaves
+    // the DOM alone and would pass trivially).
+    state.nextStatus = 'Returned for Update';
     input.focus();
     type(input, '42');
     await waitFor(function () { return indicator().textContent === 'Saved'; });
@@ -273,6 +289,7 @@ test('autosave: focus, caret and mid-flight typing survive the post-save re-rend
       'focus lands on the re-rendered control');
     assert.equal(successor.value, '42');
     // The comments textarea: value AND caret survive.
+    state.nextStatus = 'In Progress';
     var comments = byId('comments');
     comments.focus();
     comments.value = 'hello world';
@@ -285,6 +302,110 @@ test('autosave: focus, caret and mid-flight typing survive the post-save re-rend
     assert.equal(byId('comments').value, 'hello world');
     assert.equal(byId('comments').selectionStart, 5, 'the caret did not move');
     assert.equal(byId('comments').selectionEnd, 5);
+  });
+});
+
+test('autosave: typing in the comments box during the post-save FIELDS fetch survives and is persisted', function () {
+  return withAutoSave(async function () {
+    var state = { revision: 1, comments: '', fields: { pre_drill_piip_gas_p90: '' } };
+    var tracker = await mountGeox(state);
+    var input = document.querySelector('[data-field="pre_drill_piip_gas_p90"]');
+    // A status flip in the PATCH response classifies the save STRUCTURAL, so
+    // it takes the full /detail + remount chain this test exercises.
+    state.nextStatus = 'Returned for Update';
+    // Park the post-save reload's dynamic-fields fetch: the save's re-render
+    // chain suspends AFTER beginComponentLoad emptied the field grid but with
+    // the comments box still live -- the window where a snapshot taken at
+    // /detail time is already stale.
+    tracker.holdFields = [];
+    input.focus();
+    type(input, '4');
+    await waitFor(function () { return tracker.holdFields.length === 1; });
+    // Keystrokes landing in this window used to be overwritten by the stale
+    // snapshot's restore once renderFields finished.
+    var comments = byId('comments');
+    comments.focus();
+    comments.value = 'typed mid-reload';
+    comments.setSelectionRange(5, 5);
+    comments.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle(60);
+    assert.equal(tracker.patches.length, 1, 'the trailing save waits for the parked reload');
+    tracker.holdFields.shift()();
+    tracker.holdFields = null;
+    await waitFor(function () { return tracker.patches.length === 2; });
+    await waitFor(function () { return indicator().textContent === 'Saved'; });
+    await settle();
+    assert.equal(byId('comments').value, 'typed mid-reload', 'the mid-reload typing survives the re-render');
+    assert.equal(document.activeElement, byId('comments'), 'focus stays in the comments box');
+    assert.equal(byId('comments').selectionStart, 5, 'the caret did not move');
+    assert.equal(tracker.patches[1].comments, 'typed mid-reload', 'and the trailing save persists it');
+    assert.equal(tracker.patches[1].fields.pre_drill_piip_gas_p90, '4', 'alongside the field value');
+  });
+});
+
+test('autosave: a save marks the hidden boards stale instead of refetching them', function () {
+  return withAutoSave(async function () {
+    var state = { revision: 1, comments: '', fields: { pre_drill_piip_gas_p90: '' } };
+    var tracker = await mountGeox(state);
+    tracker.requests.length = 0;
+    type(document.querySelector('[data-field="pre_drill_piip_gas_p90"]'), '3');
+    await waitFor(function () { return indicator().textContent === 'Saved'; });
+    await settle();
+    var boardRequests = tracker.requests.filter(function (entry) {
+      return entry.indexOf('/api/projects/44') < 0 && entry.indexOf('/api/tasks/') < 0;
+    });
+    assert.equal(JSON.stringify(boardRequests), '[]',
+      'no board endpoints fetched while the boards are hidden');
+    // The deferred refresh lands exactly once, on return-to-board.
+    refreshBoardsIfStale();
+    await settle();
+    var boardFetches = tracker.requests.filter(function (entry) {
+      return entry.indexOf('/api/portfolio/rows') >= 0;
+    });
+    assert.equal(boardFetches.length, 1, 'return-to-board runs the board refresh');
+    tracker.requests.length = 0;
+    refreshBoardsIfStale();
+    await settle();
+    assert.equal(tracker.requests.length, 0, 'a second return without edits refetches nothing');
+  });
+});
+
+test('autosave: FAST PATH — a plain typing save is one PATCH, no refetch, no re-render', function () {
+  return withAutoSave(async function () {
+    var state = { revision: 1, comments: '', fields: { pre_drill_piip_gas_p90: '' } };
+    var tracker = await mountGeox(state);
+    var input = document.querySelector('[data-field="pre_drill_piip_gas_p90"]');
+    var gridBefore = byId('dynamic-fields').innerHTML;
+    input.focus();
+    tracker.requests.length = 0;
+    type(input, '7');
+    await waitFor(function () { return indicator().textContent === 'Saved'; });
+    await settle();
+    assert.equal(JSON.stringify(tracker.requests), '["PATCH /api/tasks/91"]',
+      'the whole save is exactly one request');
+    assert.equal(byId('dynamic-fields').innerHTML, gridBefore, 'the field grid is not re-rendered');
+    assert.equal(document.activeElement, input, 'focus never moves');
+    assert.equal(Store.task.revision, 2, 'Store.task carries the PATCHed revision');
+    assert.equal(Store.tasks[0].revision, 2, 'and the rail task list agrees');
+    assert.equal(Store.allFields['Pre-Drilling GeoX Assessment'].pre_drill_piip_gas_p90, '7',
+      'the saved value lands in Store.allFields');
+  });
+});
+
+test('autosave: a STRUCTURAL save (status moved) still takes the full refresh chain', function () {
+  return withAutoSave(async function () {
+    var state = { revision: 1, comments: '', fields: { pre_drill_piip_gas_p90: '' } };
+    var tracker = await mountGeox(state);
+    state.nextStatus = 'Returned for Update';
+    tracker.requests.length = 0;
+    type(document.querySelector('[data-field="pre_drill_piip_gas_p90"]'), '9');
+    await waitFor(function () { return indicator().textContent === 'Saved'; });
+    await settle();
+    assert.ok(tracker.requests.some(function (entry) { return entry.indexOf('/detail') >= 0; }),
+      'the /detail refresh runs');
+    assert.ok(tracker.requests.some(function (entry) { return entry.indexOf('/dynamic-fields') >= 0; }),
+      'the step remounts');
+    assert.equal(Store.task.status, 'Returned for Update', 'the moved status is painted from /detail');
   });
 });
 

@@ -2,7 +2,7 @@ import { byId, all } from './dom.js';
 import { Store } from './state.js';
 import { API } from './api.js';
 import { activateTab, backToBoard } from './navigation.js';
-import { refreshProspect, refreshBP, renderLeadBoard } from './views/pipeline.js';
+import { refreshProspect, refreshBP, renderLeadBoard, refreshBoardsIfStale } from './views/pipeline.js';
 import { initLeadFilters, setLeadUsers } from './views/lead-filters.js';
 import { initLeadKpis, renderLeadKpis } from './views/lead-kpis.js';
 import { initLeadCreate } from './views/lead-create.js';
@@ -112,8 +112,10 @@ export function wire() {
   safeOn('return-component', 'click', function () { transitionComponent('return'); });
   // Supervisor-gated server-side and rendered from the task's permissions.
   safeOn('reopen-component', 'click', function () { transitionComponent('reopen'); });
-  safeOn('back-to-overview', 'click', backToBoard);
-  safeOn('back-to-board', 'click', backToBoard);
+  // Returning to a board is the moment deferred board refreshes land: saves
+  // made on the detail shell only mark the boards stale (pipeline.js).
+  safeOn('back-to-overview', 'click', function () { backToBoard(); refreshBoardsIfStale(); });
+  safeOn('back-to-board', 'click', function () { backToBoard(); refreshBoardsIfStale(); });
   safeOn('open-project-editor', 'click', function () {
     if (Store.projectId) openProjectEditor(Store.projectId);
   });

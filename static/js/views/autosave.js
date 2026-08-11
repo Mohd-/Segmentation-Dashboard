@@ -28,13 +28,16 @@
  * FOCUS PRESERVATION. The save fns re-render the whole form after saving
  * (loadComponent / refreshAfterRecordChange), which would steal the focus and
  * clobber anything typed while the save was in flight. captureEditorFocus /
- * restoreEditorFocus -- called by those re-render sites, not from here -- take
- * a snapshot of the focused control (a stable data-*-field/id selector, its
- * CURRENT value, and the caret) immediately before the DOM is replaced and put
- * all three back once the fresh markup is in place. The captured value is
- * authoritative for the focused control: it is what the user has typed, and
- * any difference from the just-saved value is exactly what the queued trailing
- * save persists next.
+ * restoreEditorFocus -- called by loadComponent, not from here -- take a
+ * snapshot of the focused control (a stable data-*-field/id selector, its
+ * CURRENT value, and the caret) and put all three back once the fresh markup
+ * is in place. The snapshot MUST be taken in the same tick as the DOM write
+ * it guards (loadComponent re-captures after its field fetch, right before
+ * the innerHTML wipe): a snapshot taken a round-trip earlier misses the
+ * keystrokes typed since, and restoring it would overwrite them. The captured
+ * value is authoritative for the focused control: it is what the user has
+ * typed, and any difference from the just-saved value is exactly what the
+ * queued trailing save persists next.
  *
  * NAVIGATION. syncAutoSaveContext (called on every loadComponent) resets the
  * controller ONLY when the mounted task actually changed: the post-save reload

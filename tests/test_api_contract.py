@@ -44,6 +44,16 @@ def test_health_ok(client):
     assert body["version"] == "v18"
 
 
+def test_every_response_carries_server_timing(client):
+    """X-Duration-Ms is the profiling contract the front-end's slow-request
+    console log reads; it must be present on every API response."""
+    resp = client.get("/api/health")
+    assert resp.status_code == 200
+    duration = resp.headers.get("X-Duration-Ms")
+    assert duration is not None
+    assert float(duration) >= 0.0
+
+
 # ---------------------------------------------------------------------------
 # /api/meta
 # ---------------------------------------------------------------------------
