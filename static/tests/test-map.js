@@ -339,6 +339,32 @@ test('map: summary drops wells-inside when the containing layer is hidden', func
   assert.equal(summary.wellsInside, 2, 'W3 was only inside the now-hidden layer');
 });
 
+test('map: summary totals nothing while the wells overlay is unticked', function () {
+  var layers = associationLayers(true);
+  var wells = associationWells();
+  var assoc = computeAssociations(wells, layers);
+  var shown = computeSummary(layers, wells, assoc, true);
+  var hidden = computeSummary(layers, wells, assoc, false);
+  assert.deepEqual(
+    [hidden.wellsPlotted, hidden.wellsInside, hidden.totalOgip, hidden.totalArea],
+    [0, 0, 0, 0], 'nothing is drawn, so nothing is counted');
+  assert.equal(hidden.wellsHidden, true);
+  assert.equal(hidden.wellsTotal, 4, 'the payload behind the overlay is unchanged');
+  assert.equal(hidden.visibleLayers, 3, 'the layer count is its own figure');
+  // The three-argument call predates the flag and has always meant visible.
+  assert.equal(computeSummary(layers, wells, assoc).wellsPlotted, shown.wellsPlotted);
+  assert.equal(computeSummary(layers, wells, assoc).wellsHidden, false);
+});
+
+test('map: the summary panel says WHY it reads zero', function () {
+  var hidden = summaryHtml({ wellsPlotted: 0, totalOgip: 0, totalArea: 0, wellsHidden: true });
+  assert.match(hidden, /Wells shown<\/span><span class="map-summary-value">0/);
+  assert.match(hidden, /The wells overlay is hidden/);
+  assert.equal(/No project coordinates/.test(hidden), false, 'the overlay is off, not the data missing');
+  var empty = summaryHtml({ wellsPlotted: 0, totalOgip: 0, totalArea: 0, wellsHidden: false });
+  assert.match(empty, /No project coordinates are recorded yet/);
+});
+
 test('map: summary of an empty world is all zeros', function () {
   var summary = computeSummary([], [], computeAssociations([], []));
   assert.deepEqual(
@@ -1024,6 +1050,8 @@ var MAP_MARKUP = [
   '<div id="map-sidebar-body">',
   '<button id="map-fit-all" type="button"></button>',
   '<button id="map-reload" type="button"></button>',
+  '<button id="map-clear-filters" type="button" disabled></button>',
+  '<button id="map-toggle-layers" type="button"></button>',
   '<section id="map-filters-fold" class="map-fold">',
   '<button id="map-filters-toggle" class="map-fold-head open" aria-expanded="true"></button>',
   '<div id="map-filter-list"></div>',
@@ -1132,6 +1160,18 @@ test('map: refreshMap boots the tab — sidebar order, summary figures, toolbox 
     assert.equal(root.querySelectorAll('.map-well-filter').length, 4);
     assert.equal(root.querySelectorAll('.map-well-filter[data-filter="field"] input').length, 2);
     assert.equal(root.querySelectorAll('.map-well-filter[data-filter="quadrant"] input').length, 4);
+    // Clear filters: dead until there is something to clear. It lives in the
+    // sticky actions block, NOT inside a fold — a reset parked at the foot of
+    // the checklists was clipped out of the scrolled sidebar entirely.
+    var clearBtn = document.getElementById('map-clear-filters');
+    var layersReset = document.getElementById('map-toggle-layers');
+    assert.equal(root.querySelectorAll('#map-filter-list button').length, 0,
+      'the filter fold renders no buttons of its own');
+    assert.equal(document.getElementById('map-filter-list').contains(clearBtn)
+      || document.getElementById('map-layer-list').contains(layersReset), false,
+      'neither reset lives inside a fold that scrolls out from under the pointer');
+    assert.equal(clearBtn.disabled, true, 'nothing selected, nothing to clear');
+
     var south = root.querySelector('.map-well-filter[data-filter="field"] input[value="South"]');
     south.checked = true;
     south.dispatchEvent(new Event('change', { bubbles: true }));
@@ -1139,8 +1179,51 @@ test('map: refreshMap boots the tab — sidebar order, summary figures, toolbox 
     assert.match(summary, /Wells shown1/);
     assert.match(summary, /Total Mean OGIP0\.0 BCF/);
     assert.match(summary, /Total Area2\.0 km²/);
-    south.checked = false;
-    south.dispatchEvent(new Event('change', { bubbles: true }));
+    // A tick arms the control in place — no re-render, so the checkbox the user
+    // is looking at is still the same node.
+    assert.equal(root.querySelector('.map-well-filter[data-filter="field"] input[value="South"]'), south,
+      'a tick does not rebuild the sidebar');
+    assert.equal(clearBtn.disabled, false);
+
+    // Clear filters wipes every checklist selection and puts the full overlay
+    // back — and touches no layer row.
+    clearBtn.click();
+    assert.equal(root.querySelectorAll('.map-well-filter input:checked').length, 0,
+      'every checkbox is unticked after Clear filters');
+    summary = document.getElementById('map-summary-body').textContent;
+    assert.match(summary, /Wells shown3/, 'Clear filters restores every well to the overlay');
+    assert.equal(root.querySelector('.map-layer[data-layer="' + WELLS_ID + '"] .map-layer-count').textContent, '3',
+      'the wells row count follows the cleared overlay');
+    assert.equal(clearBtn.disabled, true, 'the control disarms once there is nothing left to clear');
+    assert.equal(root.querySelectorAll('.map-layer-check:checked').length, 4, 'the layer rows are left alone');
+
+    // Hide layers unticks EVERY row, wells overlay included, and flips to the
+    // control that puts them back.
+    var layersBtn = layersReset;
+    assert.equal(layersBtn.textContent, 'Hide layers');
+    layersBtn.click();
+    assert.equal(root.querySelectorAll('.map-layer-check:checked').length, 0, 'every layer row is unticked');
+    assert.equal(layersBtn.textContent, 'Show layers', 'the button flips once there is nothing left showing');
+    assert.equal(JSON.parse(window.localStorage.getItem(MAP_STATE_KEY)).visible[WELLS_ID], false,
+      'the hidden state is persisted like any other visibility change');
+    // The summary follows the canvas: nothing drawn, nothing totalled, and it
+    // says which kind of zero this is.
+    summary = document.getElementById('map-summary-body').textContent;
+    assert.match(summary, /Wells shown0/);
+    assert.match(summary, /Total Mean OGIP0\.0 BCF/);
+    assert.match(summary, /Total Area0\.0 km²/);
+    assert.match(summary, /The wells overlay is hidden/);
+
+    layersBtn.click();
+    assert.equal(root.querySelectorAll('.map-layer-check:checked').length, 4, 'and puts every row back');
+    assert.equal(layersBtn.textContent, 'Hide layers');
+    summary = document.getElementById('map-summary-body').textContent;
+    assert.match(summary, /Wells shown3/, 'the figures come back with the overlay');
+    assert.equal(/hidden/.test(summary), false);
+    // Unticking one row on its own must not flip the button.
+    root.querySelector('.map-layer[data-layer="blocks"] .map-layer-check').click();
+    assert.equal(layersBtn.textContent, 'Hide layers', 'one row hidden is not every row hidden');
+    root.querySelector('.map-layer[data-layer="blocks"] .map-layer-check').click();
 
     // The up control really moves a layer, re-renders and persists.
     root.querySelector('.map-layer[data-layer="blocks"] .map-layer-move[data-dir="1"]').click();

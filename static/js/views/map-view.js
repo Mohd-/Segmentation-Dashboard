@@ -172,13 +172,37 @@ export function summaryHtml(summary) {
     return '<div class="map-summary-row"><span class="map-summary-key">' + esc(row[0])
       + '</span><span class="map-summary-value">' + esc(row[1]) + '</span></div>';
   }).join('');
-  var note = summary.wellsPlotted === 0
-    ? '<p class="map-summary-note">No project coordinates are recorded yet.</p>'
-    : '';
+  /* Zero has two very different causes, and the panel has to say which: an
+     unticked overlay (the user's own doing, one click to undo) reads nothing
+     like a payload that carries no coordinates. */
+  var note = '';
+  if (summary.wellsHidden) {
+    note = '<p class="map-summary-note">The wells overlay is hidden — tick Wells (projects) to count them again.</p>';
+  } else if (summary.wellsPlotted === 0) {
+    note = '<p class="map-summary-note">No project coordinates are recorded yet.</p>';
+  }
   return body + note;
 }
 
 var FILTER_LABELS = { field: 'Field', year: 'BP Year', status: 'Status', quadrant: 'Quadrant' };
+
+function activeFilterCount() {
+  return MAP_FILTER_KEYS.reduce(function (total, key) {
+    return total + (store.wellFilters[key] || []).length;
+  }, 0);
+}
+
+// Every row of the layer list, wells overlay included: what "Hide layers"
+// unticks and what "Show layers" puts back.
+function everyRowHidden() {
+  if (store.wellsVisible) return false;
+  return store.sidebarOrder().every(function (layer) { return !layer.visible; });
+}
+
+function setEveryRowVisible(visible) {
+  store.setVisible(WELLS_ID, visible);
+  store.sidebarOrder().forEach(function (layer) { store.setVisible(layer.name, visible); });
+}
 
 function wellFilterHtml() {
   return '<div class="map-well-filters" aria-label="Well filters">'
@@ -191,8 +215,29 @@ function wellFilterHtml() {
             + (selected.indexOf(value) >= 0 ? ' checked' : '') + '><span>' + esc(value) + '</span></label>';
         }).join('') + '</div></fieldset>';
     }).join('')
-    + '<div class="map-filters-actions"><button type="button" class="map-filters-clear ghost">Clear all</button></div>'
     + '</div>';
+}
+
+/* The two action buttons and the wells row count are DERIVED, never stored:
+   Clear filters is dead while nothing is ticked, and the layer button reads
+   "Show layers" only once every row is already unticked. Patched in place
+   rather than re-rendered — a tick must not rebuild the sidebar, which would
+   throw away the scroll position of a list the user is halfway down. */
+function syncSidebarChrome() {
+  var list = byId('map-layer-list');
+  var count = list && list.querySelector('.map-layer[data-layer="' + WELLS_ID + '"] .map-layer-count');
+  if (count) count.textContent = String(store.plottedWells().length);
+
+  var clearBtn = byId('map-clear-filters');
+  if (clearBtn) clearBtn.disabled = activeFilterCount() === 0;
+
+  var layersBtn = byId('map-toggle-layers');
+  if (!layersBtn) return;
+  var hidden = everyRowHidden();
+  layersBtn.textContent = hidden ? 'Show layers' : 'Hide layers';
+  layersBtn.title = hidden
+    ? 'Tick every layer again, the wells overlay included'
+    : 'Untick every layer, the wells overlay included';
 }
 
 function selectionsFromSidebar(list) {
@@ -276,26 +321,17 @@ function renderSidebar() {
   all('.map-well-filter input[type="checkbox"]', filters).forEach(function (box) {
     box.addEventListener('change', function () {
       store.setWellFilters(selectionsFromSidebar(filters));
-      var count = list.querySelector('.map-layer[data-layer="' + WELLS_ID + '"] .map-layer-count');
-      if (count) count.textContent = String(store.plottedWells().length);
+      syncSidebarChrome();
       afterDataChange();
     });
   });
-
-  var clearBtn = filters.querySelector('.map-filters-clear');
-  if (clearBtn) {
-    clearBtn.addEventListener('click', function () {
-      store.setWellFilters({});
-      renderSidebar();
-      afterDataChange();
-    });
-  }
 
   all('.map-layer', list).forEach(function (rowEl) {
     var id = rowEl.getAttribute('data-layer');
     rowEl.querySelector('.map-layer-check').addEventListener('change', function (event) {
       store.setVisible(id, event.target.checked);
       persist();
+      syncSidebarChrome();
       // Repaint immediately (a hide is instant), and again once a
       // just-revealed layer's geometry has actually arrived.
       afterDataChange();
@@ -313,6 +349,11 @@ function renderSidebar() {
     });
     rowEl.querySelector('.map-layer-zoom').addEventListener('click', function () { zoomToRow(id); });
   });
+
+  // The two action buttons live outside both containers (they must stay
+  // reachable however far the sidebar is scrolled), so a re-render leaves them
+  // holding the previous state until they are told otherwise.
+  syncSidebarChrome();
 }
 
 function zoomToRow(id) {
@@ -647,6 +688,30 @@ function wire() {
     });
   });
   byId('map-reload').addEventListener('click', function () { loadLayers(); loadWells(); });
+
+  /* The sidebar's two resets, side by side. They are deliberately separate:
+     one empties the four well checklists, the other unticks the layer rows —
+     the wells overlay included, per the button's own tooltip. */
+  byId('map-clear-filters').addEventListener('click', function () {
+    var filters = byId('map-filter-list');
+    // Unticked in place rather than re-rendered: the handlers already attached
+    // stay valid, and the sidebar keeps the scroll position — and the four
+    // inner list positions — it was clicked at.
+    all('.map-well-filter input[type="checkbox"]', filters).forEach(function (box) { box.checked = false; });
+    store.setWellFilters({});
+    syncSidebarChrome();
+    afterDataChange();
+  });
+
+  byId('map-toggle-layers').addEventListener('click', function () {
+    var show = everyRowHidden();   // everything already off -> put it all back
+    setEveryRowVisible(show);
+    persist();
+    renderSidebar();               // every row's checkbox changed
+    afterDataChange();
+    // Geometry a layer never had is only fetched when it is revealed.
+    if (show) store.loadVisible().then(function () { afterDataChange(); });
+  });
   byId('map-zoom-in').addEventListener('click', function () { view.zoomCenter(1.3); });
   byId('map-zoom-out').addEventListener('click', function () { view.zoomCenter(1 / 1.3); });
 

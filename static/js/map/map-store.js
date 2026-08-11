@@ -268,25 +268,34 @@ export function computeAssociations(wells, layers) {
    returns positioned projects, so these are the dots visible on the map.
    Total Area sums areaMidpoint's one-bound fallback across that filtered
    payload at full precision. The coordinate guard remains backwards-safe for
-   older/cached rows when counting wells shown and Total Mean OGIP. */
-export function computeSummary(layers, wells, associations) {
+   older/cached rows when counting wells shown and Total Mean OGIP.
+
+   The panel counts what the canvas DRAWS, so an unticked wells overlay totals
+   nothing at all — "Wells shown" would otherwise keep reporting dots that are
+   not on the map. `wellsTotal` is the payload behind that, and stays put.
+   wellsVisible left undefined means "not told", which has always meant
+   visible. */
+export function computeSummary(layers, wells, associations, wellsVisible) {
   var visibleLayers = (layers || []).filter(function (layer) { return layer && layer.visible; }).length;
-  var plotted = (wells || []).filter(hasCoords);
+  var hidden = wellsVisible === false;
+  var drawn = hidden ? [] : (wells || []);
+  var plotted = drawn.filter(hasCoords);
   var polysFor = (associations && associations.polysFor) || [];
   var wellsInside = 0;
-  (wells || []).forEach(function (well, index) {
+  drawn.forEach(function (well, index) {
     if (!hasCoords(well)) return;
     if ((polysFor[index] || []).length) wellsInside += 1;
   });
   var totalOgip = plotted.reduce(function (sum, well) { return sum + ogipValue(well.mean_gas_bcf); }, 0);
-  var totalArea = (wells || []).reduce(function (sum, well) { return sum + areaMidpoint(well); }, 0);
+  var totalArea = drawn.reduce(function (sum, well) { return sum + areaMidpoint(well); }, 0);
   return {
     visibleLayers: visibleLayers,
     wellsPlotted: plotted.length,
     wellsInside: wellsInside,
     wellsTotal: (wells || []).length,
     totalOgip: totalOgip,
-    totalArea: totalArea
+    totalArea: totalArea,
+    wellsHidden: hidden
   };
 }
 
@@ -687,5 +696,5 @@ export class LayerStore {
     return this._assoc;
   }
 
-  summary() { return computeSummary(this.drawOrder(), this.wells, this.associations()); }
+  summary() { return computeSummary(this.drawOrder(), this.wells, this.associations(), this.wellsVisible); }
 }

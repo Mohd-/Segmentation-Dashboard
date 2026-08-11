@@ -245,9 +245,16 @@
               <span class="map-collapse-icon" data-lucide-icon="chevron-down" aria-hidden="true"></span>
             </button>
             <div id="map-sidebar-body" class="map-sidebar-body">
+              <!-- Four actions, two by two, and STICKY: everything below them
+                   scrolls (the four checklists alone are taller than the box),
+                   so a reset parked at the foot of a fold was clipped out of
+                   reach by the sidebar's own overflow. The second row holds the
+                   two resets — filters, then layer rows. -->
               <div class="map-sidebar-actions">
                 <button id="map-fit-all" type="button" class="ghost" title="Zoom to fit every visible layer">Fit all</button>
                 <button id="map-reload" type="button" class="ghost" title="Reload the layer list and wells from the server">Reload</button>
+                <button id="map-clear-filters" type="button" class="ghost" title="Untick every well filter" disabled>Clear filters</button>
+                <button id="map-toggle-layers" type="button" class="ghost" title="Untick every layer, the wells overlay included">Hide layers</button>
               </div>
               <section id="map-filters-fold" class="map-fold">
                 <button id="map-filters-toggle" type="button" class="map-fold-head open"
