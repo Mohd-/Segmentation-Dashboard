@@ -693,15 +693,25 @@ function renderStageBoard(payload) {
       '<div class="lead-cards">' + body + '</div>' +
       '</section>';
   }).join('');
-  var gateToggle = byId('bpe-gate-toggle');
-  if (gateToggle) gateToggle.addEventListener('click', function () {
-    gateOnly = !gateOnly;
-    renderStageBoard(payload);
-  });
-  all('.lead-card', board).forEach(function (card) {
-    card.addEventListener('click', function () {
-      openBusinessPlanDetail(Number(card.dataset.projectId), card.dataset.step);
-    });
+  wireBoardClicks(board);
+}
+
+// ONE delegated listener on the board host: the board's innerHTML is replaced
+// on every filter change, and re-wiring a listener per card each repaint is
+// O(wells) work at production scale (330+ cards). The marker keys the wiring
+// to the ELEMENT, not module state -- repaints only replace its children, so
+// the listener survives them, and a rebuilt host gets wired afresh.
+function wireBoardClicks(board) {
+  if (board.dataset.boardClicksWired) return;
+  board.dataset.boardClicksWired = '1';
+  board.addEventListener('click', function (event) {
+    if (event.target.closest('#bpe-gate-toggle')) {
+      gateOnly = !gateOnly;
+      if (state.dashboard) renderStageBoard(state.dashboard);
+      return;
+    }
+    var card = event.target.closest('.lead-card');
+    if (card) openBusinessPlanDetail(Number(card.dataset.projectId), card.dataset.step);
   });
 }
 

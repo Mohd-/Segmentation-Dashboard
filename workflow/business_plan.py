@@ -394,9 +394,26 @@ def _flat_values(fields):
 
 
 def _fluid_state(formations):
-    intervals = [interval for row in formations if row.get("phase") == "quicklook"
-                 for interval in row.get("pay_intervals", [])]
-    values = [str(interval.get("fluid") or "").strip() for interval in intervals]
+    # The quicklook pay intervals are the drilling-time read this state
+    # models. A well can carry its fluid verdict elsewhere, though: an
+    # externally imported drilled well has no quicklook rows at all (its
+    # fluid sits on the FINAL-phase SARH row), and the reservoir-properties
+    # phases (SAD Update / SAD Model) record row-level fluids of their own.
+    # When no quicklook interval exists, walk the row-level fluids down the
+    # same phase ladder :func:`reporting.resolve_well_fluid` uses (final is
+    # the petrophysical authority), so the success-rate KPI classifies these
+    # wells instead of reading N/A. Quicklook intervals keep precedence, so
+    # wells drilled through the app are unaffected.
+    values = [str(interval.get("fluid") or "").strip()
+              for row in formations if row.get("phase") == "quicklook"
+              for interval in row.get("pay_intervals", [])]
+    if not values:
+        for phase in ("final", "resource_update", "post_drill", "quicklook"):
+            values = [str(row.get("fluid") or "").strip()
+                      for row in formations
+                      if row.get("phase") == phase and str(row.get("fluid") or "").strip()]
+            if values:
+                break
     success = any(value in PRODUCTIVE_FLUIDS for value in values)
     if not values or any(value not in FLUIDS for value in values):
         decision = "incomplete"
@@ -608,6 +625,23 @@ def _effective_state(project, tasks, fields, formations):
         locked=dry_path,
     )
 
+    # An item whose backing task is Approved is done, whatever its checkboxes
+    # say: the checkbox route exists to DRIVE the approval, not to outrank it.
+    # Interactively the two never disagree (these tasks only reach Approved
+    # through the field-completion engine, which requires the fields first);
+    # the fallback matters for automated walks -- import_excel approves every
+    # BP step of a drilled well, and that well must read Post-Testing /
+    # Completed here even though nobody ticked its confirmation boxes. Field-
+    # driven completion runs first so provenance stays "manual"/"system"
+    # whenever the fields did the work.
+    for stage in STAGES:
+        for key, _label, detail_slug in stage["items"]:
+            if states[key]["status"] == "Completed":
+                continue
+            task = tasks.get(DETAILS[detail_slug]["task_name"])
+            if (task or {}).get("status") == "Approved":
+                states[key] = _state(completed=True, source="approval")
+
     state_by_stage = {}
     for stage in STAGES:
         items = []
@@ -674,11 +708,14 @@ def _assignees(session, tasks):
     return sorted(values, key=str.lower)
 
 
-def _well_projection(session, project, tasks, fields, formations, effective):
+def _well_projection(session, project, tasks, fields, formations, effective, assignees=None):
     current = effective["current_stage"]
     items = effective["stages"][current["key"]]
     completed = sum(1 for item in items if item["status"] == "Completed")
-    assignees = _assignees(session, tasks)
+    # get_dashboard passes the whole population's assignees prefetched; the
+    # lookup here is the single-well fallback.
+    if assignees is None:
+        assignees = _assignees(session, tasks)
     # Card 3V: a record is known by the name it was STAKED under, once staking
     # is CONFIRMED; the lead name it was matured under travels alongside so the
     # pairing stays recoverable. `field` is still derived from the LEAD name --
@@ -782,6 +819,85 @@ def _matches_filters(well, filters):
     return True
 
 
+# The dashboard population, shared by get_dashboard's projects query and the
+# bulk prefetches below so they can never drift apart.
+_DASHBOARD_POPULATION_WHERE = "archived = 0 AND (pipeline_type = 'bp' OR business_plan_enabled = 1)"
+_DASHBOARD_POPULATION_IDS = (
+    "SELECT project_id FROM projects WHERE " + _DASHBOARD_POPULATION_WHERE
+)
+
+
+def _dashboard_context_bulk(session):
+    """Per-project (tasks, field maps, formations, assignees) for the WHOLE
+    dashboard population in five queries total.
+
+    get_dashboard used to call the per-well helpers (_task_map, _field_maps,
+    _formation_rows, _assignees) inside its project loop -- five statements
+    per well, ~1,700 per request at 300+ wells, which made every BPE board
+    filter change an O(N) round-trip scan. Each grouping below reproduces its
+    per-well helper's output shape and ordering exactly; the population is
+    scoped by the same predicate as the projects query, not an IN list of
+    ids, so it also sidesteps SQLite's bound-variable cap.
+    """
+    # Only the columns the dashboard projection reads (_effective_state and
+    # _well_projection consume just `status`), NOT pt.* -- that would drag the
+    # free-text `comments` column across ~25 rows per well.
+    tasks_by_project = {}
+    for row in db.fetch_all(session, """
+        SELECT pt.project_id, pt.task_name, pt.status FROM project_tasks pt
+        WHERE pt.is_active = 1 AND pt.project_id IN (%s)
+        ORDER BY pt.project_id, pt.is_active, pt.sequence_no
+    """ % _DASHBOARD_POPULATION_IDS):
+        tasks_by_project.setdefault(row["project_id"], {})[row["task_name"]] = row
+
+    # No is_active filter, same as _field_maps: retired steps' values remain
+    # readable, and the is_active ordering lets an active twin's value
+    # overwrite a retired one's in the merged per-step map.
+    fields_by_project = {}
+    for row in db.fetch_all(session, """
+        SELECT pt.project_id, pt.task_name, f.field_key, f.field_value
+        FROM project_tasks pt
+        JOIN task_dynamic_fields f ON f.task_id = pt.task_id
+        WHERE pt.project_id IN (%s)
+        ORDER BY pt.project_id, pt.is_active, pt.sequence_no
+    """ % _DASHBOARD_POPULATION_IDS):
+        fields_by_project.setdefault(row["project_id"], {}) \
+            .setdefault(row["task_name"], {})[row["field_key"]] = row["field_value"]
+
+    formations_by_project = {}
+    interval_groups = {}
+    for interval in db.fetch_all(session, """
+        SELECT * FROM project_formation_pay_intervals
+        WHERE project_id IN (%s)
+        ORDER BY project_id, formation, seq, id
+    """ % _DASHBOARD_POPULATION_IDS):
+        interval_groups.setdefault(
+            (interval["project_id"], interval["phase"], interval["formation"]), []).append(interval)
+    for row in db.fetch_all(session, """
+        SELECT * FROM project_formations
+        WHERE project_id IN (%s)
+        ORDER BY project_id, id
+    """ % _DASHBOARD_POPULATION_IDS):
+        row["pay_intervals"] = interval_groups.get(
+            (row["project_id"], row["phase"], row["formation"]), [])
+        formations_by_project.setdefault(row["project_id"], []).append(row)
+
+    # Same population as _assignees: names on ACTIVE tasks only.
+    assignee_sets = {}
+    for row in db.fetch_all(session, """
+        SELECT pt.project_id, ta.assignee_name
+        FROM task_assignees ta
+        JOIN project_tasks pt ON pt.task_id = ta.task_id
+        WHERE pt.is_active = 1 AND pt.project_id IN (%s)
+    """ % _DASHBOARD_POPULATION_IDS):
+        if row["assignee_name"]:
+            assignee_sets.setdefault(row["project_id"], set()).add(row["assignee_name"])
+    assignees_by_project = {
+        pid: sorted(names, key=str.lower) for pid, names in assignee_sets.items()
+    }
+    return tasks_by_project, fields_by_project, formations_by_project, assignees_by_project
+
+
 def get_dashboard(session, filters=None):
     filters = dict(filters or {})
     filters.setdefault("assignee", "All Assignees")
@@ -792,20 +908,24 @@ def get_dashboard(session, filters=None):
 
     projects = db.fetch_all(session, """
         SELECT * FROM projects
-        WHERE archived = 0 AND (pipeline_type = 'bp' OR business_plan_enabled = 1)
+        WHERE %s
         ORDER BY project_name, project_id
-    """)
+    """ % _DASHBOARD_POPULATION_WHERE)
+    tasks_by_project, fields_by_project, formations_by_project, assignees_by_project = \
+        _dashboard_context_bulk(session)
     all_wells = []
     fields_set = set()
     assignees_set = set()
     out_of_range_years = set()
     context_by_id = {}
     for project in projects:
-        tasks = _task_map(session, project["project_id"])
-        field_map = _field_maps(session, project["project_id"])
-        formations = _formation_rows(session, project["project_id"])
+        project_id = project["project_id"]
+        tasks = tasks_by_project.get(project_id, {})
+        field_map = fields_by_project.get(project_id, {})
+        formations = formations_by_project.get(project_id, [])
         effective = _effective_state(project, tasks, field_map, formations)
-        well = _well_projection(session, project, tasks, field_map, formations, effective)
+        well = _well_projection(session, project, tasks, field_map, formations, effective,
+                                assignees=assignees_by_project.get(project_id, []))
         all_wells.append(well)
         context_by_id[project["project_id"]] = (field_map, well)
         if well["field"]:
