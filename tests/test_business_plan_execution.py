@@ -592,6 +592,72 @@ def test_success_rate_no_fluid_excluded_from_calculation(client):
     assert body["kpis"]["classified_rate"] == 0
 
 
+def _insert_final_row_fluid(client, project_id, fluid):
+    """A FINAL-phase SARH formation row carrying a row-level fluid and no pay
+    intervals -- exactly what import_excel writes for a drilled well."""
+    conn = raw_sqlite_connect(client.db_path)
+    with conn:
+        conn.execute("""
+            INSERT INTO project_formations
+              (project_id, formation, phase, top_tvdss_ft, base_tvdss_ft, thickness_ft, fluid)
+            VALUES (?, 'SARH', 'final', 1000, 1100, 100, ?)
+        """, (project_id, fluid or ""))
+    conn.close()
+
+
+def test_blank_quicklook_interval_fluids_defer_to_the_final_phase_verdict(client):
+    """An --update import lands a drilled status on a well whose quicklook
+    intervals were started in the app but never given a fluid. A list of empty
+    strings is not an empty list: testing the list itself stranded such a well
+    at 'incomplete' even though its Final Logs recorded the verdict."""
+    project_id = _bp_project(client, "SR-BLANK-QL")
+    _insert_quicklook_fluid(client, project_id, "")
+    _insert_final_row_fluid(client, project_id, "Gas")
+    body = client.get(f"/api/business-plan/dashboard?year={date.today().year}&step=all").get_json()
+    well = next(w for w in body["wells"] if w["project_id"] == project_id)
+    assert well["fluid_decision"] == "productive"
+    assert well["successful"] is True
+    assert body["kpis"]["success_rate_pct"] == 100
+    assert body["kpis"]["classified_rate"] == 1
+
+
+def test_blank_quicklook_interval_fluids_defer_to_a_dry_final_verdict(client):
+    """The same deferral must be able to report FAILURE, not just success."""
+    project_id = _bp_project(client, "SR-BLANK-DRY")
+    _insert_quicklook_fluid(client, project_id, "")
+    _insert_final_row_fluid(client, project_id, "Dry Hole")
+    body = client.get(f"/api/business-plan/dashboard?year={date.today().year}&step=all").get_json()
+    well = next(w for w in body["wells"] if w["project_id"] == project_id)
+    assert well["fluid_decision"] == "all_water_or_dry"
+    assert well["successful"] is False
+    assert body["kpis"]["success_rate_pct"] == 0
+    assert body["kpis"]["classified_rate"] == 1
+
+
+def test_partially_filled_quicklook_fluids_stay_incomplete(client):
+    """The deferral is for a set that says NOTHING. One filled interval means
+    the interpretation is under way and simply unfinished -- it must keep
+    reading 'incomplete', which is what holds the SAD Model submission gate
+    shut, rather than being overridden by a later phase."""
+    project_id = _bp_project(client, "SR-PARTIAL-QL")
+    _insert_quicklook_fluid(client, project_id, "Gas")
+    conn = raw_sqlite_connect(client.db_path)
+    with conn:
+        conn.execute("""
+            INSERT INTO project_formation_pay_intervals
+              (project_id, formation, phase, seq, top_tvdss_ft, base_tvdss_ft,
+               phit_pct, swt_pct, ngr_pct, kint_md, fluid)
+            VALUES (?, 'SARH', 'quicklook', 2, 1070, 1090, 13, 35, 18, 2.5, '')
+        """, (project_id,))
+    conn.close()
+    _insert_final_row_fluid(client, project_id, "Dry Hole")
+    body = client.get(f"/api/business-plan/dashboard?year={date.today().year}&step=all").get_json()
+    well = next(w for w in body["wells"] if w["project_id"] == project_id)
+    assert well["fluid_decision"] == "incomplete"
+    assert body["kpis"]["success_rate_pct"] is None
+    assert body["kpis"]["classified_rate"] == 0
+
+
 def test_success_rate_mixed_classified_and_unclassified(client):
     pid_classified = _bp_project(client, "SR-MIX-C")
     pid_unclassified = _bp_project(client, "SR-MIX-U")

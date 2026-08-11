@@ -399,14 +399,24 @@ def _fluid_state(formations):
     # externally imported drilled well has no quicklook rows at all (its
     # fluid sits on the FINAL-phase SARH row), and the reservoir-properties
     # phases (SAD Update / SAD Model) record row-level fluids of their own.
-    # When no quicklook interval exists, walk the row-level fluids down the
-    # same phase ladder :func:`reporting.resolve_well_fluid` uses (final is
+    # When no quicklook interval SAYS anything, walk the row-level fluids down
+    # the same phase ladder :func:`reporting.resolve_well_fluid` uses (final is
     # the petrophysical authority), so the success-rate KPI classifies these
     # wells instead of reading N/A. Quicklook intervals keep precedence, so
     # wells drilled through the app are unaffected.
-    values = [str(interval.get("fluid") or "").strip()
-              for row in formations if row.get("phase") == "quicklook"
-              for interval in row.get("pay_intervals", [])]
+    #
+    # "Says nothing" is ALL-BLANK, not merely absent: an --update import lands a
+    # drilled status on a well whose quicklook intervals were started in the app
+    # but never given a fluid, and a list of empty strings is not an empty list
+    # -- testing the list itself stranded those wells at 'incomplete' forever.
+    # A PARTIALLY filled set is left alone on purpose: it still reads
+    # 'incomplete', which is what holds the SAD Model submission gate
+    # ("Complete the Quicklook Pay Interval Fluid selections") shut until the
+    # interpretation is finished. Only a set with nothing to say defers.
+    quicklook = [str(interval.get("fluid") or "").strip()
+                 for row in formations if row.get("phase") == "quicklook"
+                 for interval in row.get("pay_intervals", [])]
+    values = quicklook if any(quicklook) else []
     if not values:
         for phase in ("final", "resource_update", "post_drill", "quicklook"):
             values = [str(row.get("fluid") or "").strip()
