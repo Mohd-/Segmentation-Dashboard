@@ -52,7 +52,7 @@ var state = {
   detailSlug: null,
   saveQueue: Promise.resolve(),
   saveVersion: 0,
-  saveDelay: 500,
+  saveDelay: 1500,
   contextId: 0,
   fieldDrafts: {},
   structureDrafts: { formations: null, flowback: null },
@@ -2467,7 +2467,7 @@ export function businessPlanTestHooks() {
     currentFilters: currentFilters,
     statusIcon: statusIcon,
     blankFlowbackStage: blankFlowbackStage,
-    configureSaveDelay: function (delay) { state.saveDelay = delay == null ? 500 : delay; },
+    configureSaveDelay: function (delay) { state.saveDelay = delay == null ? 1500 : delay; },
     flushPendingSaves: flushPendingSaves,
     state: state
   };

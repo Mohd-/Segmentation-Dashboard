@@ -986,7 +986,7 @@ test('lead-assessment: teardown makes a late response a no-op', function () {
    saw this: an edit to ANY key in KEY_OWNER is auto-saved, and the save
    REMOUNTS this page (saveLeadAssessment -> refreshAfterRecordChange ->
    loadComponent -> renderLeadAssessment). The calc debounce is 600ms and the
-   save debounce is 800ms, so the calculation is normally still in flight when
+   save debounce is 1500ms, so the calculation is normally still in flight when
    that happens. A scenario change touches no owned key, saves nothing and
    never remounts — which is the ONLY reason it always produced a plot while an
    area edit often did not.

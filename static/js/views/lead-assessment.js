@@ -747,7 +747,7 @@ export function workspaceMarkup(state) {
 // to a key in KEY_OWNER (an Area, a thickness, a GRV) is auto-saved, and the
 // save REMOUNTS this page: saveLeadAssessment -> refreshAfterRecordChange ->
 // loadComponent -> renderLeadAssessment, which builds a brand-new state object.
-// The calc debounce (600ms) is shorter than the save debounce (800ms), so the
+// The calc debounce (600ms) is shorter than the save debounce (1500ms), so the
 // calculation is typically still in flight when that happens. A scenario change
 // touches no owned key, so it never remounts -- which is the only reason it
 // always produced a plot and an area edit did not.

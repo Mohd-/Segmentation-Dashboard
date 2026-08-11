@@ -16,7 +16,9 @@
 import { test, assert, fixture, mockFetch, waitFor } from './harness.js';
 import { Store } from '../js/state.js';
 import { loadComponent, saveComponent, transitionComponent } from '../js/views/detail-form.js';
-import { initAutoSave, configureAutoSaveDelay, resetAutoSave } from '../js/views/autosave.js';
+import {
+  AUTOSAVE_DEBOUNCE_MS, initAutoSave, configureAutoSaveDelay, resetAutoSave
+} from '../js/views/autosave.js';
 import { teardownStakingLetters } from '../js/views/staking-letters.js';
 import { refreshBoardsIfStale } from '../js/views/pipeline.js';
 
@@ -197,6 +199,10 @@ async function mountGeox(state) {
   await loadComponent(Store.tasks[0]);
   return tracker;
 }
+
+test('autosave: the production quiet period is 1500ms', function () {
+  assert.equal(AUTOSAVE_DEBOUNCE_MS, 1500);
+});
 
 test('autosave: a burst of inputs schedules ONE debounced save carrying the final value', function () {
   return withAutoSave(async function () {

@@ -55,6 +55,12 @@ function navigation() {
   ];
 }
 
+test('business-plan: the production autosave quiet period is 1500ms', function () {
+  var hooks = businessPlanTestHooks();
+  hooks.configureSaveDelay(null);
+  assert.equal(hooks.state.saveDelay, 1500);
+});
+
 test('business-plan renders the approved dashboard and one auto-save approval detail shell', async function () {
   // The band as index.html builds it: the five selects are the hidden STATE
   // STORE, #bpe-filter-row holds the visible triggers, #bpe-kpis the tiles.

@@ -44,7 +44,7 @@
  * of the same task must not drop a queued trailing save, while moving to
  * another step must never let a stale timer save the wrong task. A pending
  * debounce is deliberately dropped on navigation -- same unsaved-edit loss the
- * old explicit-Save world had, minus the 800ms window.
+ * old explicit-Save world had, minus the 1500ms window.
  */
 import { byId, msg } from '../dom.js';
 import { Store, currentProjectPipeline, isCurrentPipelineView } from '../state.js';
@@ -53,11 +53,11 @@ import { Store, currentProjectPipeline, isCurrentPipelineView } from '../state.j
 // called at module-eval time.
 import { saveComponent } from './detail-form.js';
 
-export var AUTOSAVE_DEBOUNCE_MS = 800;
+export var AUTOSAVE_DEBOUNCE_MS = 1500;
 var debounceMs = AUTOSAVE_DEBOUNCE_MS;
 
 // Test hook: the suite shrinks the quiet window so a debounce assertion does
-// not cost 800 real milliseconds. null restores the production value.
+// not cost 1500 real milliseconds. null restores the production value.
 export function configureAutoSaveDelay(ms) {
   debounceMs = ms == null ? AUTOSAVE_DEBOUNCE_MS : ms;
 }
