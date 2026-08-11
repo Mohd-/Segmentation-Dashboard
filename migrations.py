@@ -45,7 +45,7 @@ from helpers import utc_now_str
 from models import Base
 from workflow.flowback import normalize_flowback_rows
 
-LATEST_SCHEMA_VERSION = 16
+LATEST_SCHEMA_VERSION = 17
 
 
 # These are product defaults, not migration-only data.  Keep them here beside
@@ -1433,6 +1433,128 @@ def _migrate_v16_case_insensitive_roles(session, engine) -> None:
                         "ON domain_roles(LOWER(role_name))")
 
 
+# ---------------------------------------------------------------------------
+# v17: staked leads mature -- frozen constants and helpers
+#
+# Runtime now auto-approves the two post-staking prospect steps the moment
+# "Approval to Stake" is approved (workflow.lifecycle). This step brings the
+# EXISTING data in line: leads staked before that rule shipped still hold an
+# open "Well Site Location" / "Pre-Drilling GeoX Assessment" and therefore
+# linger on the Segment Maturation board. Everything below is a frozen private
+# copy (v5 pattern): a shipped migration must not change behaviour when the
+# runtime helper it would otherwise borrow is edited, and ensure_task_approved
+# cannot run here anyway -- run() holds one BEGIN IMMEDIATE around every step,
+# while ensure_task_approved opens its own write transactions.
+# ---------------------------------------------------------------------------
+_V17_STAKING_STEP = "Approval to Stake"
+_V17_MATURED_STEPS = ("Well Site Location", "Pre-Drilling GeoX Assessment")
+_V17_MIGRATION_ACTOR = "System (migration v17)"
+_V17_EVENT = "Migration-Completed"
+_V17_COMMENT = (
+    "Migration-approved: approving Approval to Stake now matures the remaining "
+    "prospect steps, so this already-staked lead's step is closed out to match. "
+    "No actual dates recorded (nobody did the work on a date)."
+)
+# Frozen copy of workflow.constants.PROSPECT_STAGES as of v17, for the
+# completed_at sweep below.
+_V17_PROSPECT_STAGES = ("Lead Assessment", "Risk Analysis", "Pre-Well Delivery")
+
+
+def _v17_log(session, task_id, project_id, task_name, action_type, comment,
+             old_status=None, new_status=None):
+    """Append one task_history row, raw.
+
+    Deliberately NOT workflow.history.log_task_event, and deliberately not a
+    reuse of another step's logger: each shipped step owns its trail shape.
+    """
+    db.execute(session, """
+        INSERT INTO task_history (task_id, project_id, task_name, action_type,
+                                  old_status, new_status, changed_at, changed_by, comment)
+        VALUES (:task_id, :project_id, :task_name, :action_type,
+                :old_status, :new_status, :changed_at, :changed_by, :comment)
+    """, {"task_id": task_id, "project_id": project_id, "task_name": task_name,
+          "action_type": action_type, "old_status": old_status, "new_status": new_status,
+          "changed_at": utc_now_str(), "changed_by": _V17_MIGRATION_ACTOR, "comment": comment})
+
+
+def _migrate_v17_staked_leads_mature(session, engine) -> None:
+    """v17: already-staked leads get their post-staking prospect steps approved.
+
+    "Staked" = an active, Approved "Approval to Stake" row. For every such
+    project, any active NON-Approved "Well Site Location" / "Pre-Drilling GeoX
+    Assessment" row is approved in place -- status, last_updated, revision --
+    with a Migration-Completed history event per row and NULL actual dates
+    (the v5 backfill rule: nobody did the work on a date).
+
+    Then, restricted to the projects just touched, a completed_at sweep that
+    mirrors workflow.projects._sync_completed_at in direct SQL: a
+    prospect-pipeline project whose prospect-stage active task set is now
+    fully Approved and whose completed_at is empty gets stamped. Every touched
+    project also gets its last_updated/revision bumped, matching what a
+    runtime transition would have done.
+
+    Idempotent by construction: a replay finds no non-Approved rows behind an
+    approved stake, selects nothing, and touches nothing.
+    """
+    now = utc_now_str()
+    rows = db.fetch_all(session, """
+        SELECT pt.task_id AS task_id, pt.project_id AS project_id,
+               pt.task_name AS task_name, pt.status AS status
+        FROM project_tasks pt
+        WHERE pt.is_active = 1
+          AND pt.task_name IN :matured
+          AND pt.status != 'Approved'
+          AND EXISTS (
+              SELECT 1 FROM project_tasks stake
+              WHERE stake.project_id = pt.project_id
+                AND stake.task_name = :staking
+                AND stake.is_active = 1
+                AND stake.status = 'Approved'
+          )
+        ORDER BY pt.project_id, pt.sequence_no, pt.task_id
+    """, {"matured": list(_V17_MATURED_STEPS), "staking": _V17_STAKING_STEP})
+
+    touched = []
+    for row in rows:
+        db.execute(session, """
+            UPDATE project_tasks
+            SET status = 'Approved', last_updated = :now,
+                revision = COALESCE(revision, 0) + 1
+            WHERE task_id = :task_id
+        """, {"now": now, "task_id": row["task_id"]})
+        _v17_log(session, row["task_id"], row["project_id"], row["task_name"],
+                 _V17_EVENT, _V17_COMMENT, row["status"], "Approved")
+        if row["project_id"] not in touched:
+            touched.append(row["project_id"])
+
+    for project_id in touched:
+        db.execute(session, """
+            UPDATE projects
+            SET last_updated = :now, revision = COALESCE(revision, 0) + 1
+            WHERE project_id = :project_id
+        """, {"now": now, "project_id": project_id})
+        project = db.fetch_one(session, """
+            SELECT pipeline_type, completed_at FROM projects
+            WHERE project_id = :project_id
+        """, {"project_id": project_id})
+        if not project:
+            continue
+        if str(project["pipeline_type"] or "prospect").lower() == "bp":
+            # A BP well's applicable set is the BP stages, which this step
+            # never writes -- its completeness cannot have changed here.
+            continue
+        open_count = db.fetch_one(session, """
+            SELECT COUNT(*) AS c FROM project_tasks
+            WHERE project_id = :project_id AND is_active = 1
+              AND stage_group IN :stages AND status != 'Approved'
+        """, {"project_id": project_id, "stages": list(_V17_PROSPECT_STAGES)})["c"]
+        if int(open_count or 0) == 0 and not project["completed_at"]:
+            db.execute(session, """
+                UPDATE projects SET completed_at = :now
+                WHERE project_id = :project_id
+            """, {"now": now, "project_id": project_id})
+
+
 # List of (version, fn) dispatched by run() in ascending order against the
 # stored schema_version. Append new steps with the next integer version and
 # bump LATEST_SCHEMA_VERSION to match; never edit or remove a shipped step.
@@ -1452,6 +1574,7 @@ MIGRATIONS = [
     (14, _migrate_v14_domain_roles),
     (15, _migrate_v15_reconcile_assigned_to),
     (16, _migrate_v16_case_insensitive_roles),
+    (17, _migrate_v17_staked_leads_mature),
 ]
 
 

@@ -270,11 +270,22 @@ def _seed_pipeline_progress(session, tasks, approve_count, anchor_status, users,
     placement is controlled precisely by ``approve_count``.
     """
     for task in tasks[:approve_count]:
+        # Approving 'Approval to Stake' fires the lifecycle hook that
+        # auto-approves the remaining prospect steps (Well Site Location,
+        # Pre-Drilling GeoX Assessment), so a later iteration may find its
+        # task already Approved -- refetch the fresh status and skip it
+        # (driving submit on an Approved task raises).
+        fresh = workflow.get_task(session, task["task_id"])
+        if fresh is None or fresh["status"] == "Approved":
+            continue
         assignee = random.choice(users)
         approver = random.choice(supervisors)
-        _complete_task(session, task, assignee, role_by_name, approver, cycle=random.random() < 0.25)
+        _complete_task(session, fresh, assignee, role_by_name, approver, cycle=random.random() < 0.25)
     if approve_count < len(tasks) and anchor_status != "Not Assigned":
-        _advance_to(session, tasks[approve_count], anchor_status, random.choice(users), role_by_name)
+        # Same hook guard for the anchor: never re-drive an auto-Approved task.
+        anchor = workflow.get_task(session, tasks[approve_count]["task_id"])
+        if anchor is not None and anchor["status"] != "Approved":
+            _advance_to(session, anchor, anchor_status, random.choice(users), role_by_name)
 
 
 def _sprinkle_priorities(session, tasks, changed_by):
@@ -571,6 +582,11 @@ def _seed_prospect_leads(session, users, role_by_name, supervisors):
     reads the first non-Approved task in sequence order): approving a stage's
     full prefix and leaving the next task un-Approved lands the board's
     current_stage on it.
+
+    Invariant (staking auto-matures): an on-board lead never has 'Approval to
+    Stake' Approved -- the lifecycle hook would auto-approve the last two
+    prospect steps and complete the lead -- so within Pre-Well Delivery the
+    seeded anchors are limited to 'Moving Tolerance' and 'Approval to Stake'.
     """
     windows = _prospect_stage_windows()
     stage_targets = []
@@ -592,6 +608,16 @@ def _seed_prospect_leads(session, users, role_by_name, supervisors):
 
         start, count = windows[stage]
         approve_count = start + random.randint(0, count - 1)
+        # Staking auto-matures (workflow/lifecycle.py): approving 'Approval to
+        # Stake' auto-approves the remaining prospect steps, deriving the lead
+        # Completed and dropping it OFF the maturation board. A lead meant to
+        # REMAIN on the board must therefore never approve the stake step, so
+        # the only reachable on-board Pre-Well Delivery anchors are 'Moving
+        # Tolerance' and 'Approval to Stake' itself -- clamp the approved
+        # prefix to stop just short of the stake step.
+        stake_index = next(idx for idx, t in enumerate(tasks)
+                           if t["task_name"] == "Approval to Stake")
+        approve_count = min(approve_count, stake_index)
         anchor_status = random.choice(["Not Assigned", "In Progress", "Ready"])
         _seed_pipeline_progress(session, tasks, approve_count, anchor_status, users, role_by_name, supervisors)
         # A real approved (or in-progress) step has its inputs filled: seed
@@ -603,9 +629,11 @@ def _seed_prospect_leads(session, users, role_by_name, supervisors):
         _sprinkle_priorities(session, tasks, random.choice(users))
         project_ids.append(pid)
 
-    # 2-3 fully-mature leads: every prospect-phase task (incl. 'Approval to
-    # Stake') driven to Approved via the SAME _complete_task path used above,
-    # so they exit the Prospect board (workflow.get_projects's
+    # 2-3 fully-mature leads: driven to Approved via the SAME _complete_task
+    # path used above, through 'Approval to Stake' -- at which point the
+    # staking auto-maturation hook approves the remaining two prospect steps
+    # itself (_seed_pipeline_progress skips them as already Approved). They
+    # exit the Prospect board (workflow.get_projects's
     # pipeline_filter=='prospect' branch drops overall_status=='Completed'
     # rows) and surface in the Portfolio as is_mature_lead=1 rows
     # (reporting._portfolio_projects). No prospect-stage task carries a fluid
@@ -815,11 +843,31 @@ def _seed_bp_wells(session, users, role_by_name, supervisors):
     return project_ids
 
 
+def _commentable(session, task):
+    """A task the comment-save below may touch without side effects.
+
+    _add_comment goes through save_task, whose post-save field-completion
+    engine reconciles an AUTOMATED step's status with its stored field state.
+    Staking auto-matures (workflow/lifecycle.py): 'Well Site Location' is
+    Approved by the hook with its confirmations never ticked by the seeder,
+    so a comment-save would REOPEN it (FIELD_REOPEN) and drag a completed
+    lead back onto the maturation board. Skip any Approved automated step
+    whose predicate its stored fields do not satisfy.
+    """
+    if task["status"] != "Approved":
+        return True
+    if task["task_name"] not in workflow.constants.FIELD_COMPLETION_AUTOMATED_STEPS:
+        return True
+    fields = workflow.get_task_dynamic_fields(session, task["task_id"])
+    return workflow.field_completion_met(task["task_name"], fields)
+
+
 def _seed_comments(session, project_ids, users):
     """Scatter comments (and the priority-preserving save they trigger)
     across a sample of touched tasks so the Audit Trail is non-trivial."""
     for pid in random.sample(project_ids, k=min(15, len(project_ids))):
-        touched = [t for t in workflow.get_project_tasks(session, pid) if t["status"] != "Not Assigned"]
+        touched = [t for t in workflow.get_project_tasks(session, pid)
+                   if t["status"] != "Not Assigned" and _commentable(session, t)]
         if touched:
             _add_comment(session, random.choice(touched), random.choice(users))
 

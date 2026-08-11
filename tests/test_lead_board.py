@@ -235,6 +235,10 @@ def test_every_item_completes_from_checkpoints_and_approved_rows(client):
     # which the transition endpoint still honors.
     assert get_task_by_name(client, pid, "Lead Assessment")["status"] == "Approved"
     for step in PROSPECT_STEPS[1:]:
+        # Approving 'Approval to Stake' matures the prospect: the staking hook
+        # auto-approves the two post-stake steps, so refetch and skip them.
+        if get_task_by_name(client, pid, step)["status"] == "Approved":
+            continue
         _approve(client, pid, step)
 
     # A fully approved lead leaves the board for the Portfolio, so read the

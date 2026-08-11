@@ -10,13 +10,16 @@ The journey, in order:
   2. MOVING TOLERANCE (4A): a PARTIAL capture saves and leaves the dot open;
      then the full eight fields flip it green with no Submit/Approve click;
   3. STAKING LETTERS (4B): either rail row opens the SAME page. Tick boxes 1+2
-     and save -> Approval to Stake alone turns green. Tick box 3 -> the Staking
-     Location reveals; fill Staked X/Y and save -> Well Site Location turns
-     green too;
+     and save -> Approval to Stake turns green -- and the staking
+     auto-maturation hook (workflow/lifecycle.py) immediately flips Well Site
+     Location and Pre-Drilling GeoX Assessment green too. Tick box 3 -> the
+     Staking Location reveals; fill Staked X/Y and save -> Well Site Location
+     stays green with the coordinates captured;
   4. the reveal-persist promise: untick box 3, save, re-tick -- the coordinates
      are still there;
-  5. PRE-DRILLING GEOX (4C): the step renders the calculator and NO duplicate
-     PIIP grid, and still completes by the manual walk.
+  5. PRE-DRILLING GEOX (4C): the step renders the manual PIIP grid and no
+     in-app calculator (it is already green here -- auto-approved by the
+     staking hook in step 3).
 
 Screenshots (--out, default ./screenshots/card-4):
   01-moving-tolerance-light.png     the 4A page, filled, light theme
@@ -262,15 +265,23 @@ def run(out_dir: Path, headed: bool) -> int:
         page.wait_for_selector(".sl-workspace")
         check(page.locator(".sl-check").count() == 3, "either rail row opens the same page")
 
-        # --- boxes 1 + 2 -> Approval to Stake alone turns green -------------
+        # --- boxes 1 + 2 -> Approval to Stake turns green --------------------
+        # Staking auto-matures: approving Approval to Stake now fires the
+        # lifecycle hook that auto-approves the remaining prospect steps
+        # (Well Site Location + Pre-Drilling GeoX Assessment), so the old
+        # "leaves Well Site Location alone" expectation is inverted. The lead
+        # stays on the board here only because its Lead Assessment / Risk
+        # Analysis steps are still open.
         page.locator('[data-sl-field="staking_well_created"]').check()
         page.locator('[data-sl-field="approval_stake_letter_loaded"]').check()
         save(page)
         statuses = rail_statuses(page)
         check(statuses.get("Approval to Stake") == "approved",
               f"boxes 1+2 complete Approval to Stake (got {statuses.get('Approval to Stake')!r})")
-        check(statuses.get("Well Site Location") != "approved",
-              "and leave Well Site Location alone")
+        check(statuses.get("Well Site Location") == "approved",
+              "and the staking hook auto-approves Well Site Location")
+        check(statuses.get("Pre-Drilling GeoX Assessment") == "approved",
+              "and Pre-Drilling GeoX Assessment")
         check(portfolio_status(project_id) in (None, "Staked"),
               "the record reads Staked wherever the Portfolio can see it")
 

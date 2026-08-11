@@ -1228,6 +1228,20 @@ def transition_task(session, task_id, action, changed_by="Web User", expected_re
         from . import business_plan
         business_plan.activate_bpe_task(session, project_id, changed_by)
     elif action_key == "approve":
+        # Staking maturation: approving "Approval to Stake" IS the prospect's
+        # exit decision, so the two steps after it in the same Pre-Well
+        # Delivery column close automatically and the record derives Completed
+        # (leaves the maturation board). This hook must sit HERE -- outside
+        # the write transaction above -- because the maturation walk runs
+        # ensure_task_approved, and every leg of that walk opens its own write
+        # transaction. It runs BEFORE activate_next_task so the steps it is
+        # about to close are never activated first (their assignees would get
+        # a bell for a task approved a moment later). Every approval path
+        # funnels through transition_task (human route, field-completion
+        # engine, import/seed via ensure_task_approved), so this one call site
+        # covers them all.
+        if task["task_name"] == _STAKE_APPROVAL_STEP:
+            _auto_mature_after_stake(session, project_id, changed_by)
         activate_next_task(session, project_id, changed_by)
     return result
 
@@ -1306,6 +1320,65 @@ def ensure_task_approved(session, task_id, actor, changed_by=None, automated=Fal
     if status == "Ready":
         transition_task(session, task_id, "approve", changed_by=changed_by, automated=automated)
     return True
+
+
+# ---------------------------------------------------------------------------
+# Staking maturation (Approval to Stake approves -> prospect completes)
+# ---------------------------------------------------------------------------
+
+# The stake decision (step 7) and the two Pre-Well Delivery steps that trail
+# it (8 and 9). "Staked" is the business end-state of a prospect, so once the
+# stake step approves the trailing pair must not keep the record In Progress
+# on the maturation board.
+_STAKE_APPROVAL_STEP = "Approval to Stake"
+_POST_STAKE_STEPS = ("Well Site Location", "Pre-Drilling GeoX Assessment")
+_STAKE_MATURATION_EVENT = "Staking Maturation"
+_STAKE_MATURATION_COMMENT = "Auto-approved: staking approval matured the prospect."
+
+
+def _auto_mature_after_stake(session, project_id, changed_by):
+    """Approve the post-stake prospect steps once Approval to Stake approves.
+
+    Called by transition_task at the tail of its "approve" branch, OUTSIDE the
+    transition's write transaction: each inner walk (ensure_task_approved)
+    opens its own write transactions and must not nest. Recursion terminates
+    naturally -- the inner approvals are for the _POST_STAKE_STEPS, whose names
+    never match the hook's guard -- and replays are idempotent because
+    ensure_task_approved no-ops on Approved rows (so the importer's approve-all
+    prospect walk, which reaches steps 8/9 after this hook already closed them,
+    simply falls through).
+
+    Each step keeps its existing assignee when it has one; an unowned step is
+    assigned to the approver (or the SYSTEM_USER when that name is not an
+    active user) -- the same rule as the field-completion engine
+    (:func:`_field_completion_assignee`). One maturation history event is
+    logged per step it actually moved, mirroring the engine's post-walk
+    FIELD_COMPLETION_EVENT write (its own transaction, after the walk commits).
+
+    Deliberately one-way: REOPENING Approval to Stake does not reverse-walk
+    steps 8/9. The record then anchors back on the stake step (the first open
+    row), which is the coherent reading -- the maturation work done is not
+    undone by revisiting the stake decision. Likewise, saving an auto-approved
+    Well Site Location with incomplete fields may reopen it through the
+    engine's grandfather rule; that is the engine's normal contract.
+    """
+    rows = db.fetch_all(session, """
+        SELECT * FROM project_tasks
+        WHERE project_id = :project_id AND is_active = 1
+          AND task_name IN :steps AND status != 'Approved'
+        ORDER BY sequence_no
+    """, {"project_id": project_id, "steps": _POST_STAKE_STEPS})
+    for row in rows:
+        actor = _field_completion_assignee(session, row, changed_by)
+        if not actor:
+            continue
+        old_status = row.get("status") or "Not Assigned"
+        ensure_task_approved(session, row["task_id"], actor,
+                             changed_by=changed_by, automated=True)
+        with db.write_transaction(session):
+            log_task_event(session, row["task_id"], project_id, row["task_name"],
+                           _STAKE_MATURATION_EVENT, old_status, "Approved",
+                           changed_by, _STAKE_MATURATION_COMMENT)
 
 
 # ---------------------------------------------------------------------------

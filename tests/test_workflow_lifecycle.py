@@ -219,7 +219,13 @@ def test_approving_all_prospect_tasks_completes_project(client):
     _fill_assessment_checkpoints(client, pid)
     tasks = get_tasks(client, pid)
     for task in tasks:
-        if task["stage_group"] in PROSPECT_STAGES and task["status"] != "Approved":
+        if task["stage_group"] not in PROSPECT_STAGES:
+            continue
+        # Refetch: the staking-maturation hook approves steps 8/9 the moment
+        # step 7 ("Approval to Stake") approves, so the pre-loop snapshot goes
+        # stale mid-walk; skip rows the hook already closed.
+        task = client.get(f"/api/tasks/{task['task_id']}").get_json()
+        if task["status"] != "Approved":
             approve_task(client, task["task_id"])
             task = client.get(f"/api/tasks/{task['task_id']}").get_json()
             assert task["status"] == "Approved"
@@ -236,6 +242,62 @@ def test_approving_all_prospect_tasks_completes_project(client):
 
     completion = client.get(f"/api/projects/{pid}/completion").get_json()
     assert completion == {"percent": 100.0}
+
+
+def test_approving_stake_step_auto_matures_prospect(client):
+    # Staking maturation: approving "Approval to Stake" (step 7) IS the prospect's exit
+    # decision. The maturation hook must close the two trailing Pre-Well
+    # Delivery steps on its own -- nobody touches steps 8/9 here -- so the
+    # record derives Completed and leaves the maturation board.
+    pid = create_project(client, "STAKE-MATURE-1")
+    stake = reach_task(client, pid, "Approval to Stake")
+    assert get_task_by_name(client, pid, "Well Site Location")["status"] == "Not Assigned"
+    assert get_task_by_name(client, pid, "Pre-Drilling GeoX Assessment")["status"] == "Not Assigned"
+
+    approve_task(client, stake["task_id"])
+
+    assert get_task_by_name(client, pid, "Well Site Location")["status"] == "Approved"
+    assert get_task_by_name(client, pid, "Pre-Drilling GeoX Assessment")["status"] == "Approved"
+
+    project = client.get(f"/api/projects/{pid}").get_json()
+    assert project["overall_status"] == "Completed"
+    assert project["completed_at"]  # stamped by the hook's completing transition
+
+    # The maturation leaves an audit trail: one "Staking Maturation" event per
+    # step it closed, alongside the ordinary transition events of the walk.
+    rows = client.get(f"/api/activity?project_id={pid}").get_json()
+    matured = {row["task_name"] for row in rows
+               if row["action_type"] == "Staking Maturation"}
+    assert matured == {"Well Site Location", "Pre-Drilling GeoX Assessment"}
+
+
+def test_reopening_stake_step_does_not_reverse_the_maturation(client):
+    # The maturation walk is deliberately one-way: reopening "Approval to
+    # Stake" questions the staking decision, not the site work recorded after
+    # it, so steps 8/9 keep their Approved status and the record re-anchors on
+    # the stake step (first open task) as an ordinary In Progress lead.
+    import db as dbmod
+    import workflow
+    pid = create_project(client, "STAKE-REOPEN-1")
+    stake = reach_task(client, pid, "Approval to Stake")
+    approve_task(client, stake["task_id"])
+    assert client.get(f"/api/projects/{pid}").get_json()["overall_status"] == "Completed"
+
+    approved = client.get(f"/api/tasks/{stake['task_id']}").get_json()
+    session = dbmod.new_session()
+    try:
+        workflow.transition_task(
+            session, stake["task_id"], "reopen",
+            expected_revision=approved["revision"])
+    finally:
+        session.close()
+
+    assert get_task_by_name(client, pid, "Well Site Location")["status"] == "Approved"
+    assert get_task_by_name(client, pid, "Pre-Drilling GeoX Assessment")["status"] == "Approved"
+    project = client.get(f"/api/projects/{pid}").get_json()
+    assert project["overall_status"] == "In Progress"
+    assert project["completed_at"] is None
+    assert project["current_task"] == "Approval to Stake"
 
 
 def test_approving_all_bp_tasks_completes_bp_well_anchored_on_pda(client):
@@ -357,25 +419,25 @@ def test_auto_complete_steps_expose_no_public_submit(client):
 
 
 def test_transition_approve_completes_and_reopen_clears_completed_at(client):
-    # Approve steps 1-11 programmatically; walk the final prospect step through
-    # assign -> submit -> approve so transition_task performs the completing
-    # write. Then reopen and confirm completed_at clears.
+    # Approve the prospect steps programmatically. The staking-maturation
+    # hook closes the final two steps the moment "Approval to Stake" approves,
+    # so the completing write is the hook's inner GeoX approve -- still a real
+    # transition_task walk. Then reopen the final step and confirm
+    # completed_at clears.
     pid = create_project(client, "DERIVED-COMPLETE-1")
     tasks = get_tasks(client, pid)
     prospect = [t for t in tasks if t["stage_group"] in PROSPECT_STAGES]
     for task in prospect[:-1]:
-        approve_task(client, task["task_id"])
+        # Refetch: the hook approves step 8 mid-loop when step 7 approves.
+        current = client.get(f"/api/tasks/{task['task_id']}").get_json()
+        if current["status"] != "Approved":
+            approve_task(client, task["task_id"])
     last = get_tasks(client, pid)[prospect[-1]["sequence_no"] - 1]
     assert last["task_name"] == "Pre-Drilling GeoX Assessment"
+    assert last["status"] == "Approved"  # closed by the maturation hook
+
     import db as dbmod
     import workflow
-    session = dbmod.new_session()
-    try:
-        workflow.ensure_task_approved(
-            session, last["task_id"], "Employee", automated=True)
-    finally:
-        session.close()
-
     project = client.get(f"/api/projects/{pid}").get_json()
     assert project["overall_status"] == "Completed"
     assert project["completed_at"]  # stamped by the completing transition

@@ -1470,14 +1470,15 @@ def test_well_creation_alone_is_not_completion_either(client):
     assert task["status"] != "Approved"
 
 
-def test_both_boxes_complete_approval_to_stake_and_nothing_else(client):
+def test_both_boxes_complete_approval_to_stake_and_mature_the_prospect(client):
     login(client, SUPERVISOR)
     pid = create_project(client, "FC-4B-BOTH")
     task = save(client, get_task_by_name(client, pid, STAKE_STEP), STAKE_OK)
     assert task["status"] == "Approved"
     assert tracked_item(client, pid, STAKE_STEP) == "Completed"
-    # ...and its page-mate is untouched by this save.
-    assert tracked_item(client, pid, WELLSITE_STEP) != "Completed"
+    # Staking matures the prospect: the hook walks the remaining Pre-Well
+    # Delivery steps to Approved, so the page-mate completes with the stake.
+    assert tracked_item(client, pid, WELLSITE_STEP) == "Completed"
 
 
 def test_a_v5_backfilled_lead_only_has_to_file_the_letter(client):
