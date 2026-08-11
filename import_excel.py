@@ -338,10 +338,12 @@ def _analyze(row: Dict[str, str]) -> Tuple[Optional[str], List[str], Optional[in
     :func:`import_rows`.
 
     A drilled well (fluid status) with BP year < current year is classified as
-    'historical' and is placed in post-testing with everything marked complete.
-    Staked rows are graduated but not drilled, so even with a historical BP
-    year they enter BPE at the open gate. The current year is determined at
-    runtime, not hardcoded.
+    'historical'; drilled rows (historical or in-year 'bp') complete every BP
+    step, gate included -- the drilling already happened -- so they read
+    Post-Testing / Completed on the BPE dashboard. Staked rows are graduated
+    but not drilled, so even with a historical BP year they enter BPE with no
+    BP approvals at all. The current year is determined at runtime, not
+    hardcoded.
     """
     errors: List[str] = []
     name = _text(row, "Well Name")
@@ -851,18 +853,23 @@ def _import_record(session, row, record_type, year, fluid, pid, is_update):
                     changed_by=IMPORT_USER, source_task_id=tid("Final Log Analysis"))
                 data_bearing.add(tid("Final Log Analysis"))
 
-        # bp well: only data-bearing BP steps (stays on the BP board). A Staked
-        # row is deliberately held at the BP gate even when Classification was
-        # supplied in the sheet: staking graduates the prospect, but does not
-        # approve the execution gate. Historical drilled rows still complete
-        # ALL BP steps and leave the BP board under the completed-wells exit
-        # rule.
+        # Drilled rows (any fluid status, historical or in-year bp) pass all
+        # the way through: EVERY BP step Approved, gate included, so the well
+        # reads Post-Testing / Completed on the BPE dashboard -- the drilling
+        # already happened, there is nothing left to gate. A Staked row enters
+        # BPE with NO BP approvals at all, even when Classification was
+        # supplied in the sheet: staking graduates the prospect, it does not
+        # start BP execution. Blank-status bp rows keep the original rule --
+        # only data-bearing BP steps, with the gate never auto-approved.
+        is_staked = _text(row, "Status").lower() == "staked"
         for task in bp_tasks:
-            if (record_type == "bp" and not has_fluid
-                    and task["task_name"] == "BP Execution Gate"):
-                continue
-            if record_type == "bp" and task["task_id"] not in data_bearing:
-                continue
+            if not has_fluid:
+                if is_staked:      # staked + BP year: nothing approved BP-side
+                    continue
+                # blank-status bp rows: data-bearing only, gate never approved
+                if (task["task_name"] == "BP Execution Gate"
+                        or task["task_id"] not in data_bearing):
+                    continue
             _ensure_approved(session, task["task_id"])
 
     return warnings, notes

@@ -6,13 +6,13 @@ startrow=3 layout) to exercise the autodetect. Every test drives the pure
 functions (parse_workbook / classify_row / import_rows) against a session on the
 per-test sqlite DB the `client` fixture stands up.
 
-Two behaviors are owned by a parallel workstream and are RELIED ON here:
-  (a) get_projects(pipeline_filter='bp') excludes completed BP wells (all BP
-      steps Approved), and
-  (b) the business-plan year guard accepts 1990-2040 (so a historical well with
-      year 2019 promotes) -- imports pass allow_historical_year=True, the
-      escape hatch that skips the promotion-only current-year floor.
-Where a case depends on those, it is noted in a comment.
+One behavior is owned by a parallel workstream and is RELIED ON here: the
+business-plan year guard accepts 1990-2040 (so a historical well with year
+2019 promotes) -- imports pass allow_historical_year=True, the escape hatch
+that skips the promotion-only current-year floor. Where a case depends on
+that, it is noted in a comment. (Drilled imports complete every BP step, gate
+included, so they derive Completed at Post-Testing; only Staked rows enter the
+BP pipeline with the gate -- and everything else -- still open.)
 """
 from __future__ import annotations
 
@@ -120,24 +120,30 @@ def test_four_record_types_placed_correctly(client, app_modules, tmp_path):
         assert "MATR-3" in portfolio
         assert portfolio["MATR-3"]["status"] == "Staked"
 
-        # bp well -> on the BP board and in the Portfolio with fluid-derived status.
+        # bp well with a fluid -> drilled, so it passes all the way through
+        # like a historical: Completed (off the get_projects bp list), in the
+        # Portfolio with its fluid-derived status.
         bp_names = {p["project_name"] for p in workflow.get_projects(session, pipeline_filter="bp")}
-        assert "BPWL-2" in bp_names
+        assert "BPWL-2" not in bp_names
         assert portfolio["BPWL-2"]["status"] == "Gas"
 
-        # historical -> in the Portfolio, and OFF the BP board (all BP steps
-        # Approved -> completed; relies on the completed-wells-exit rule).
+        # historical -> in the Portfolio; a drilled import passes all the way
+        # through (every BP step Approved, gate included), so it derives
+        # Completed and reads Post-Testing on the BPE dashboard.
         assert "HIST-1" in portfolio
-        assert "HIST-1" not in bp_names
 
-        # Direct contract: EVERY BP_EXECUTION_STAGES task for HIST-1 is Approved.
-        # This is the explicit BPE auto-completion assertion (not just "off the board").
+        # Direct contract: every BP_EXECUTION_STAGES task for HIST-1 is
+        # Approved, the gate included -- the drilling already happened, there
+        # is nothing left to gate.
         hist_tasks = _tasks_by_name(session, "HIST-1")
         for task_name, task_data in hist_tasks.items():
-            if task_data["stage_group"] in BP_EXECUTION_STAGES:
-                assert task_data["status"] == "Approved", \
-                    f"HIST-1 task '{task_name}' ({task_data['stage_group']}) should be Approved"
-        assert workflow.get_project(session, _pid(session, "HIST-1"))["current_stage"] == "Post-Testing"
+            if task_data["stage_group"] not in BP_EXECUTION_STAGES:
+                continue
+            assert task_data["status"] == "Approved", \
+                f"HIST-1 task '{task_name}' ({task_data['stage_group']}) should be Approved"
+        hist_project = workflow.get_project(session, _pid(session, "HIST-1"))
+        assert hist_project["overall_status"] == "Completed"
+        assert hist_project["current_stage"] == "Post-Testing"
 
         # The escape hatch: HIST-1's 2019 year is well before today, yet the
         # import path (allow_historical_year=True) still enabled it -- a
@@ -226,7 +232,70 @@ def test_staked_bp_year_graduates_but_leaves_bp_gate_open(client, app_modules, t
             session, pipeline_filter="bp")}
         assert "STAKED-BP-1" not in prospect_names
         assert "STAKED-BP-1" in bp_names
-        assert _tasks_by_name(session, "STAKED-BP-1")["BP Execution Gate"]["status"] != "Approved"
+
+        # Staked + BP year: the prospect side is fully matured, the BP side is
+        # completely untouched -- NO BP step is auto-approved, not even the
+        # data-bearing gate (Classification was in the sheet).
+        from workflow.constants import BP_EXECUTION_STAGES
+        for task_name, task_data in _tasks_by_name(session, "STAKED-BP-1").items():
+            if task_data["stage_group"] in BP_EXECUTION_STAGES:
+                assert task_data["status"] != "Approved", \
+                    f"STAKED-BP-1 BP step '{task_name}' must not be auto-approved"
+            else:
+                assert task_data["status"] == "Approved", \
+                    f"STAKED-BP-1 prospect step '{task_name}' should be Approved"
+    finally:
+        session.close()
+
+
+def test_drilled_bp_well_passes_all_the_way_to_post_testing(client, app_modules, tmp_path):
+    """A drilled well (fluid status) with a current/future BP year passes all
+    the way through: every BP step Approved, the gate included, so it derives
+    Completed at Post-Testing."""
+    import import_excel
+    import workflow
+    from workflow.constants import BP_EXECUTION_STAGES
+
+    _write_sheet(tmp_path / "drilled-bp.xlsx", [{
+        "Well Name": "DRLD-BP-1", "Status": "Gas", "BP Year": datetime.now().year + 1,
+        "Classification": "Exploration", "P90 Area (km2)": 3, "OGIP Mean (BCF)": 10,
+        "SARH Formation Thickness (ft)": 120,
+    }], header_row=1)
+    session = _session(app_modules)
+    try:
+        result = import_excel.import_rows(
+            session, import_excel.parse_workbook(str(tmp_path / "drilled-bp.xlsx"))).results[0]
+        assert result.outcome == "created", result.reason
+
+        for task_name, task_data in _tasks_by_name(session, "DRLD-BP-1").items():
+            if task_data["stage_group"] not in BP_EXECUTION_STAGES:
+                continue
+            assert task_data["status"] == "Approved", \
+                f"DRLD-BP-1 BP step '{task_name}' should be Approved"
+
+        project = workflow.get_project(session, _pid(session, "DRLD-BP-1"))
+        assert project["overall_status"] == "Completed"
+        assert project["current_stage"] == "Post-Testing"
+
+        # And the BPE dashboard agrees: the approval fallback completes every
+        # item, so the well reads Post-Testing at 100% -- not stuck at
+        # Pre-Drilling behind confirmation boxes nobody can tick for a well
+        # that was drilled before the system existed.
+        from workflow import business_plan
+        wells = business_plan.get_dashboard(
+            session, {"year": datetime.now().year + 1})["wells"]
+        well = next(w for w in wells if w["project_name"] == "DRLD-BP-1")
+        assert well["stage_key"] == "post_testing"
+        assert all(state["status"] == "Completed"
+                   for state in well["all_states"].values())
+
+        # The final-phase SARH fluid classifies the well (no quicklook pay
+        # intervals exist for an import), so it counts in the success-rate
+        # KPI instead of dropping it to N/A.
+        assert well["successful"] is True
+        payload = business_plan.get_dashboard(
+            session, {"year": datetime.now().year + 1})
+        assert payload["kpis"]["success_rate_pct"] == 100
     finally:
         session.close()
 
@@ -492,9 +561,10 @@ def test_year_before_1990_is_row_error_with_no_project(client, app_modules, tmp_
 def test_historical_well_without_fluid_is_rejected(client, app_modules, tmp_path):
     """A well with BP year < current year must have a known fluid status.
 
-    Historical wells are drilled wells placed in post-testing with everything
-    complete. An undrilled well (no fluid) cannot be historical -- it has not
-    been drilled yet. The importer must reject such a row with a clear error."""
+    Historical wells are drilled wells parked at the open BP Execution Gate
+    with every other BP step approved. An undrilled well (no fluid) cannot be
+    historical -- it has not been drilled yet. The importer must reject such a
+    row with a clear error."""
     from datetime import datetime
     import import_excel
 
@@ -666,6 +736,14 @@ def test_fluidless_bp_well_trio_lands_in_pre_drill(client, app_modules, tmp_path
         assert float(exported["OGIP P90 (BCF)"]) == 5
         assert float(exported["OGIP Mean (BCF)"]) == 10
         assert float(exported["OGIP P10 (BCF)"]) == 18
+
+        # Blank-status bp rows keep the data-bearing rule: only the BP steps
+        # the sheet supplied data for are Approved, and the BP Execution Gate
+        # is never auto-approved (graduated but undrilled -- the gate is a
+        # human decision).
+        tasks = _tasks_by_name(session, "NOF-1")
+        assert tasks["BP Execution Gate"]["status"] != "Approved"
+        assert tasks["PDA"]["status"] != "Approved"  # no data supplied for it
     finally:
         session.close()
 
