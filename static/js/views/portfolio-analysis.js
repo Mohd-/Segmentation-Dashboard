@@ -189,8 +189,7 @@ export function renderResourceBar(rows, ytfConfig) {
   // explicit rather than positional and survives any proportion.
   var captions = shown.map(function (stage) {
     return '<div class="prb-caption">' +
-      '<small><span class="prb-swatch prb-' + stage.slug + '"></span>' + esc(stage.label) + '</small>' +
-      '<em>' + esc(stage.counts) + '</em></div>';
+      '<small><span class="prb-swatch prb-' + stage.slug + '"></span>' + esc(stage.label) + '</small></div>';
   }).join('');
   var overrun = summary.exceedsEstimate
     ? '<p class="prb-overrun" role="status">Discovered and undiscovered volumes exceed the ' +

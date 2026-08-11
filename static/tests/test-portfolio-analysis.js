@@ -151,9 +151,7 @@ test('portfolio-analysis.renderResourceBar renders the estimate + proportional s
   assert.deepEqual(Array.prototype.map.call(captions, function (caption) {
     return caption.querySelector('small').textContent;
   }), ['Discovered', 'Undiscovered: Staked', 'Undiscovered: Proposed', 'Undiscovered: YTF']);
-  assert.deepEqual(Array.prototype.map.call(captions, function (caption) {
-    return caption.querySelector('em').textContent;
-  }), ['1 segment · 2 wells', '1 well', '1 segment', '3 fields']);
+  assert.equal(root.querySelectorAll('.prb-caption em').length, 0);
   // Captions are EQUAL columns carrying their block's colour, not the block
   // weights: a caption under a 3px block would shred into single letters, and
   // text cannot be scaled the way a block can.

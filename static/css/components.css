@@ -1911,9 +1911,6 @@ button.ghost.success-outline:hover { background: var(--success-100); }
 .prb-caption { flex: 1 1 0%; min-width: 0; text-align: left; overflow-wrap: anywhere; }
 .prb-caption small { display: block; color: var(--text); font-size: var(--text-xs); font-weight: 700; }
 .prb-caption .prb-swatch { display: inline-block; width: 9px; height: 9px; margin-right: 5px; border-radius: 2px; vertical-align: baseline; }
-/* How MANY records make up the volume above -- the count the two deleted stat
-   boxes used to carry, now said per category. */
-.prb-caption em { display: block; color: var(--text-muted); font-size: var(--text-xs); font-style: normal; font-variant-numeric: tabular-nums; }
 
 /* Only appears when the selection has already accounted for more gas than the
    400 BCF/field assumption allows -- a fact about the assumption, not an error. */
