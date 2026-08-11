@@ -211,18 +211,6 @@ def ground_elevation_surface_file() -> Path:
     return Path(raw).expanduser().resolve()
 
 
-def sarh_thickness_surface_file() -> Path:
-    """The SARH formation-thickness grid used by the BP TD calculation.
-
-    This is deliberately separate from the TSQ (SARH-QWRH interval) surface:
-    the two measurements are not interchangeable even when a deployment
-    happens to receive them in the same delivery bundle.
-    """
-    raw = os.environ.get("SEGMENT_TRACKER_SARH_THICKNESS_SURFACE_FILE",
-                         str(map_surfaces_dir() / "sarh_thickness.dat"))
-    return Path(raw).expanduser().resolve()
-
-
 def bp_calculations_path() -> Path:
     """Path to the deployment-editable BP Gate calculation settings."""
     raw = os.environ.get("SEGMENT_TRACKER_BP_CALCULATIONS_PATH",

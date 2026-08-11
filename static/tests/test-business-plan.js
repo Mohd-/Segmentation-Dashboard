@@ -973,7 +973,7 @@ test('business-plan calculated BP values render as governed outputs, never edita
   detail.calculations = {
     bp_gate_calculated_td_ft_md: {
       status: 'calculated',
-      formula: 'TD base + SARH thickness at well X/Y + digital elevation at well X/Y'
+      formula: 'TD base + Lead Assessment.sarh_formation_prognosis_pre_drill + digital elevation at well X/Y'
     },
     bp_gate_calculated_drilling_days: {
       status: 'calculated',
@@ -989,14 +989,14 @@ test('business-plan calculated BP values render as governed outputs, never edita
   assert.equal(host.querySelector('[data-bpe-output="bp_gate_calculated_td_ft_md"]').textContent, '1351 ft MD');
   assert.equal(host.querySelector('[data-bpe-output="bp_gate_calculated_drilling_days"]').textContent, '137 days');
   assert.match(host.querySelector('.bpe-calculated-output .bpe-field-hint').textContent,
-    /SARH thickness/);
+    /Lead Assessment\.sarh_formation_prognosis_pre_drill/);
 });
 
 test('business-plan calculated BP outputs explain unavailable dependencies', async function () {
   var detail = detailPayload('business-plan-gate', {});
   detail.calculations = {
     bp_gate_calculated_td_ft_md: {
-      status: 'unavailable', unavailable_reason: 'SARH thickness surface'
+      status: 'unavailable', unavailable_reason: 'Lead Assessment SARH prognosis'
     },
     bp_gate_calculated_drilling_days: {
       status: 'unavailable', unavailable_reason: 'well classification'
@@ -1006,7 +1006,7 @@ test('business-plan calculated BP outputs explain unavailable dependencies', asy
   await openBusinessPlanDetail(7, 'business-plan-gate');
   assert.equal(host.querySelector('[data-bpe-output="bp_gate_calculated_td_ft_md"]').textContent,
     'Calculation unavailable');
-  assert.match(host.textContent, /Unavailable: SARH thickness surface/);
+  assert.match(host.textContent, /Unavailable: Lead Assessment SARH prognosis/);
   assert.match(host.textContent, /Unavailable: well classification/);
 });
 

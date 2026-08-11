@@ -59,6 +59,8 @@ TSQ_TASK_NAME = "Trap and Seal CoS"
 TSQ_FIELD_KEY = "sarah_quwarah_thickness_ft"
 
 BP_GATE_TASK_NAME = "BP Execution Gate"
+LEAD_ASSESSMENT_TASK_NAME = "Lead Assessment"
+BP_TD_PROGNOSIS_FIELD_KEY = "sarh_formation_prognosis_pre_drill"
 BP_TD_FIELD_KEY = "bp_gate_calculated_td_ft_md"
 BP_DAYS_FIELD_KEY = "bp_gate_calculated_drilling_days"
 BP_TD_SOURCE_KEY = "bp_gate_calculated_td_source"
@@ -219,6 +221,20 @@ def _bp_gate_task(session, project_id):
     """, {"project_id": project_id, "task_name": BP_GATE_TASK_NAME})
 
 
+def _lead_assessment_task(session, project_id):
+    return db.fetch_one(session, """
+        SELECT pt.task_id
+        FROM project_tasks pt
+        JOIN projects p ON p.project_id = pt.project_id
+        WHERE pt.project_id = :project_id
+          AND pt.task_name = :task_name
+          AND pt.is_active = 1
+          AND p.archived = 0
+        ORDER BY pt.task_id DESC
+        LIMIT 1
+    """, {"project_id": project_id, "task_name": LEAD_ASSESSMENT_TASK_NAME})
+
+
 def _task_fields(session, task_id):
     return {
         row["field_key"]: "" if row.get("field_value") is None else str(row["field_value"])
@@ -289,10 +305,11 @@ def _calculation_metadata(status, formula, inputs, unavailable_reason=None, lega
 def fill_bp_calculations(session, project_id):
     """Recompute both server-owned BP Gate outputs from current dependencies.
 
-    TD uses the dedicated SARH-thickness and DEM grids at the resolved well
-    coordinates. Drilling days uses the configured classification baseline and
-    coring uplift. Missing inputs/configuration clear the active governed value
-    so a stale legacy number can never masquerade as a current calculation.
+    TD uses the active Lead Assessment SARH prognosis and the DEM grid at the
+    resolved well coordinates. Drilling days uses the configured classification
+    baseline and coring uplift. Missing inputs/configuration clear the active
+    governed value so a stale legacy number can never masquerade as a current
+    calculation.
     Legacy/imported values are preserved once in the calculation metadata.
 
     The caller owns the write transaction. The return value is ``None`` for a
@@ -304,6 +321,18 @@ def fill_bp_calculations(session, project_id):
     fields = _task_fields(session, task["task_id"])
     settings = config.bp_calculations()
     position = _resolve_coordinates(session, project_id)
+    lead_assessment = _lead_assessment_task(session, project_id)
+    lead_fields = (_task_fields(session, lead_assessment["task_id"])
+                   if lead_assessment else {})
+    prognosis = None
+    prognosis_raw = lead_fields.get(BP_TD_PROGNOSIS_FIELD_KEY, "")
+    try:
+        if str(prognosis_raw).strip():
+            prognosis = float(prognosis_raw)
+        if prognosis is None or not math.isfinite(prognosis):
+            raise ValueError
+    except (TypeError, ValueError):
+        prognosis = None
 
     td_prior = _metadata(fields.get(BP_TD_METADATA_KEY))
     td_legacy = _legacy_snapshot(
@@ -312,37 +341,31 @@ def fill_bp_calculations(session, project_id):
         "base_ft": settings.get("td_base_ft") if settings else None,
         "x": position[0] if position else None,
         "y": position[1] if position else None,
-        "sarh_thickness_ft": None,
+        BP_TD_PROGNOSIS_FIELD_KEY: prognosis,
         "digital_elevation_ft": None,
     }
     td_missing = []
     if settings is None:
         td_missing.append("calculation configuration")
+    if prognosis is None:
+        td_missing.append("Lead Assessment SARH prognosis")
     if position is None:
         td_missing.append("well coordinates")
-    sarh_path = config.sarh_thickness_surface_file()
     elevation_path = config.ground_elevation_surface_file()
-    if not sarh_path.is_file():
-        td_missing.append("SARH thickness surface")
     if not elevation_path.is_file():
         td_missing.append("digital elevation surface")
     if not td_missing:
-        sarh = surfaces.sample_surface(sarh_path, position[0], position[1])
         elevation = surfaces.sample_surface(elevation_path, position[0], position[1])
-        td_inputs["sarh_thickness_ft"] = sarh
         td_inputs["digital_elevation_ft"] = elevation
-        if sarh is None or not math.isfinite(float(sarh)):
-            td_inputs["sarh_thickness_ft"] = None
-            td_missing.append("SARH thickness at well location")
         if elevation is None or not math.isfinite(float(elevation)):
             td_inputs["digital_elevation_ft"] = None
             td_missing.append("digital elevation at well location")
     td_value = ""
     if not td_missing:
-        td_value = _whole_number(settings["td_base_ft"] + sarh + elevation)
+        td_value = _whole_number(settings["td_base_ft"] + prognosis + elevation)
     td_meta = _calculation_metadata(
         "calculated" if td_value else "unavailable",
-        "TD base + SARH thickness at well X/Y + digital elevation at well X/Y",
+        "TD base + Lead Assessment.sarh_formation_prognosis_pre_drill + digital elevation at well X/Y",
         td_inputs, ", ".join(td_missing) if td_missing else None, td_legacy)
 
     days_prior = _metadata(fields.get(BP_DAYS_METADATA_KEY))
@@ -417,7 +440,7 @@ def bp_calculation_metadata(fields):
     result = {}
     for public_key, metadata_key, formula in (
         (BP_TD_FIELD_KEY, BP_TD_METADATA_KEY,
-         "TD base + SARH thickness at well X/Y + digital elevation at well X/Y"),
+         "TD base + Lead Assessment.sarh_formation_prognosis_pre_drill + digital elevation at well X/Y"),
         (BP_DAYS_FIELD_KEY, BP_DAYS_METADATA_KEY,
          "classification baseline + coring uplift when Coring Program is Yes"),
     ):

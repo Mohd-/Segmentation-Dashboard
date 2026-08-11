@@ -93,15 +93,12 @@ def run_backfill(db_path, apply_writes):
 
     tsq_path = config.tsq_surface_file()
     elevation_path = config.ground_elevation_surface_file()
-    sarh_path = config.sarh_thickness_surface_file()
     print("database             : {}".format(db_path))
     print("mode                 : {}".format("apply" if apply_writes else "DRY RUN (on a copy)"))
     print("TSQ surface          : {} ({})".format(
         tsq_path, "found" if tsq_path.exists() else "MISSING -- tsq skipped"))
     print("elevation surface    : {} ({})".format(
         elevation_path, "found" if elevation_path.exists() else "MISSING -- elevation skipped"))
-    print("BP SARH surface      : {} ({})".format(
-        sarh_path, "found" if sarh_path.exists() else "MISSING -- BP TD unavailable"))
     print("BP calculation config: {} ({})".format(
         config.bp_calculations_path(),
         "valid" if config.bp_calculations() is not None else "MISSING/INVALID -- BP outputs unavailable"))

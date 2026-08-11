@@ -276,18 +276,6 @@ def elevation_surface(tmp_path, monkeypatch):
     return configure
 
 
-@pytest.fixture()
-def sarh_surface(tmp_path, monkeypatch):
-    path = write_sample_grid(tmp_path / "sarh-thickness.dat")
-    monkeypatch.delenv("SEGMENT_TRACKER_SARH_THICKNESS_SURFACE_FILE", raising=False)
-
-    def configure():
-        monkeypatch.setenv("SEGMENT_TRACKER_SARH_THICKNESS_SURFACE_FILE", str(path))
-        return path
-
-    return configure
-
-
 def test_fill_tsq_fills_an_empty_field_and_logs_the_history_event(client, tsq_surface):
     from workflow import surfaces_fill
 
@@ -543,20 +531,28 @@ def _save_bp_field(client, project_id, key, value):
         json={"field_key": key, "value": value})
 
 
-def test_bp_calculations_use_dedicated_surfaces_configuration_and_half_up_rounding(
+def _save_lead_assessment_prognosis(client, project_id, value):
+    task = get_task_by_name(client, project_id, "Lead Assessment")
+    return client.patch(
+        f"/api/tasks/{task['task_id']}/dynamic-fields",
+        json={"fields": {"sarh_formation_prognosis_pre_drill": value}})
+
+
+def test_bp_calculations_use_lead_assessment_prognosis_and_half_up_rounding(
         client, tmp_path, monkeypatch):
     from workflow import surfaces_fill
 
-    sarh = write_zmap_grid(
-        tmp_path / "sarh.dat", [[30.25] * 3 for _ in range(3)],
-        GRID_XMIN, GRID_XMAX, GRID_YMIN, GRID_YMAX)
     elevation = write_zmap_grid(
         tmp_path / "elevation.dat", [[20.25] * 3 for _ in range(3)],
         GRID_XMIN, GRID_XMAX, GRID_YMIN, GRID_YMAX)
-    monkeypatch.setenv("SEGMENT_TRACKER_SARH_THICKNESS_SURFACE_FILE", str(sarh))
     monkeypatch.setenv("SEGMENT_TRACKER_GROUND_ELEVATION_SURFACE_FILE", str(elevation))
+    # The removed SARH-thickness setting must not be a hidden BP dependency.
+    monkeypatch.setenv("SEGMENT_TRACKER_SARH_THICKNESS_SURFACE_FILE",
+                       str(tmp_path / "obsolete-missing.dat"))
 
     pid = _bp_project(client, "BPE-CALC-1", lead_x="50", lead_y="150")
+    response = _save_lead_assessment_prognosis(client, pid, "30.25")
+    assert response.status_code == 200, response.get_json()
     response = _save_bp_field(client, pid, "bp_gate_classification", "Appraisal")
     assert response.status_code == 200, response.get_json()
     values = response.get_json()["detail"]["values"]
@@ -571,18 +567,22 @@ def test_bp_calculations_use_dedicated_surfaces_configuration_and_half_up_roundi
     assert metadata[surfaces_fill.BP_TD_FIELD_KEY]["status"] == "calculated"
     assert metadata[surfaces_fill.BP_TD_FIELD_KEY]["inputs"] == {
         "base_ft": 1200.0, "x": 50.0, "y": 150.0,
-        "sarh_thickness_ft": 30.25, "digital_elevation_ft": 20.25,
+        "sarh_formation_prognosis_pre_drill": 30.25,
+        "digital_elevation_ft": 20.25,
     }
+    assert metadata[surfaces_fill.BP_TD_FIELD_KEY]["formula"] == (
+        "TD base + Lead Assessment.sarh_formation_prognosis_pre_drill + "
+        "digital elevation at well X/Y")
 
 
 def test_bp_td_recomputes_with_staked_coordinate_precedence(
-        client, sarh_surface, elevation_surface):
+        client, elevation_surface):
     import db
     import workflow
 
-    sarh_surface()
     elevation_surface()
     pid = _bp_project(client, "BPE-CALC-STAKED", lead_x="50", lead_y="150")
+    assert _save_lead_assessment_prognosis(client, pid, "30").status_code == 200
     assert _save_bp_field(client, pid, "bp_gate_classification", "Development").status_code == 200
     assert _bp_calc_fields(client, pid)[1]["bp_gate_calculated_td_ft_md"] == "1260"
 
@@ -594,11 +594,39 @@ def test_bp_td_recomputes_with_staked_coordinate_precedence(
             changed_by="Test", reconcile=False)
     finally:
         session.close()
-    assert _bp_calc_fields(client, pid)[1]["bp_gate_calculated_td_ft_md"] == "1300"
+    assert _bp_calc_fields(client, pid)[1]["bp_gate_calculated_td_ft_md"] == "1280"
+
+
+@pytest.mark.parametrize("prognosis", [None, "", "not-a-number", "nan", "inf", "-inf"])
+def test_bp_td_requires_a_finite_lead_assessment_prognosis(
+        client, elevation_surface, prognosis):
+    from workflow import surfaces_fill
+
+    elevation_surface()
+    pid = _bp_project(client, "BPE-CALC-BAD-PROGNOSIS", lead_x="50", lead_y="150")
+    assert _save_bp_field(client, pid, "bp_gate_classification", "Development").status_code == 200
+
+    if prognosis is not None:
+        lead = get_task_by_name(client, pid, "Lead Assessment")
+        conn = raw_sqlite_connect(client.db_path)
+        with conn:
+            conn.execute(
+                "INSERT INTO task_dynamic_fields (task_id, field_key, field_value, updated_at) "
+                "VALUES (?, ?, ?, '2026-01-01') "
+                "ON CONFLICT(task_id, field_key) DO UPDATE SET field_value=excluded.field_value",
+                (lead["task_id"], "sarh_formation_prognosis_pre_drill", prognosis))
+        conn.close()
+
+    result = _run_fill(surfaces_fill.fill_bp_calculations, pid)
+    assert result["td"]["status"] == "unavailable"
+    assert result["td"]["unavailable_reason"] == "Lead Assessment SARH prognosis"
+    assert result["td"]["inputs"]["sarh_formation_prognosis_pre_drill"] is None
+    fields = _bp_calc_fields(client, pid)[1]
+    assert fields["bp_gate_calculated_td_ft_md"] == ""
 
 
 def test_bp_calculation_archives_legacy_value_and_clears_stale_active_output(
-        client, sarh_surface, elevation_surface, tmp_path, monkeypatch):
+        client, elevation_surface, tmp_path, monkeypatch):
     from workflow import surfaces_fill
 
     pid = _bp_project(client, "BPE-CALC-LEGACY", lead_x="50", lead_y="150")
@@ -617,7 +645,7 @@ def test_bp_calculation_archives_legacy_value_and_clears_stale_active_output(
                 (gate["task_id"], key, value))
     conn.close()
 
-    sarh_surface()
+    _save_lead_assessment_prognosis(client, pid, "30")
     elevation_surface()
     result = _run_fill(surfaces_fill.fill_bp_calculations, pid)
     assert result["td"]["legacy"] == {
@@ -630,7 +658,7 @@ def test_bp_calculation_archives_legacy_value_and_clears_stale_active_output(
     assert fields["bp_gate_calculated_td_override_reason"] == ""
     assert json.loads(fields["bp_gate_calculated_td_metadata"])["legacy"]["value"] == "9999"
 
-    monkeypatch.setenv("SEGMENT_TRACKER_SARH_THICKNESS_SURFACE_FILE",
+    monkeypatch.setenv("SEGMENT_TRACKER_GROUND_ELEVATION_SURFACE_FILE",
                        str(tmp_path / "missing.dat"))
     result = _run_fill(surfaces_fill.fill_bp_calculations, pid)
     assert result["td"]["status"] == "unavailable"
@@ -640,12 +668,12 @@ def test_bp_calculation_archives_legacy_value_and_clears_stale_active_output(
 
 
 def test_bp_calculation_invalid_configuration_makes_both_outputs_unavailable(
-        client, sarh_surface, elevation_surface, tmp_path, monkeypatch):
+        client, elevation_surface, tmp_path, monkeypatch):
     from workflow import surfaces_fill
 
-    sarh_surface()
     elevation_surface()
     pid = _bp_project(client, "BPE-CALC-BAD-CONFIG", lead_x="50", lead_y="150")
+    assert _save_lead_assessment_prognosis(client, pid, "30").status_code == 200
     assert _save_bp_field(client, pid, "bp_gate_classification", "Exploration").status_code == 200
     bad = tmp_path / "bad-bp-calculations.json"
     bad.write_text('{"td_base_ft": "not a number"}', encoding="utf-8")
@@ -659,10 +687,10 @@ def test_bp_calculation_invalid_configuration_makes_both_outputs_unavailable(
 
 
 def test_bp_promotion_recomputes_preloaded_gate_inputs(
-        client, sarh_surface, elevation_surface):
-    sarh_surface()
+        client, elevation_surface):
     elevation_surface()
     pid = create_project(client, "BPE-CALC-PROMOTE", lead_x="50", lead_y="150")
+    assert _save_lead_assessment_prognosis(client, pid, "30").status_code == 200
     gate = get_task_by_name(client, pid, "BP Execution Gate")
     conn = raw_sqlite_connect(client.db_path)
     with conn:

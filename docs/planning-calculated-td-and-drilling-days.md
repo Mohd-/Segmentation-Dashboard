@@ -6,9 +6,9 @@ an output unavailable and never block Gate submission.
 
 ## Formulas
 
-- **Calculated BP TD (ft MD)** = configured TD base + the dedicated SARH
-  thickness surface sampled at the well coordinates + the digital-elevation
-  surface sampled at the same point.
+- **Calculated BP TD (ft MD)** = configured TD base + the active Lead
+  Assessment `sarh_formation_prognosis_pre_drill` value + the digital-elevation
+  surface sampled at the well coordinates.
 - **Calculated Drilling Days** = the configured classification baseline plus
   the configured coring uplift when Coring Program is Yes.
 
@@ -16,11 +16,11 @@ The shipped values live in `config/bp_calculations.json`: a 1,200 ft TD base,
 50 days for Development, 127 days for Appraisal/Exploration, and a 10-day
 coring uplift. Both results round half-up to whole units.
 
-The SARH grid is deliberately separate from the TSQ SARH-QWRH grid. Its default
-path is `data/map/surfaces/sarh_thickness.dat`; deployments may override it
-with `SEGMENT_TRACKER_SARH_THICKNESS_SURFACE_FILE`. The existing DEM override
-continues to be `SEGMENT_TRACKER_GROUND_ELEVATION_SURFACE_FILE`. Staked X/Y
-wins when both values are usable; otherwise the lead X/Y pair is used.
+The Lead Assessment prognosis is the sole SARH prognosis source for BP TD. A
+missing, malformed, or non-finite value makes TD unavailable. The existing DEM
+override continues to be `SEGMENT_TRACKER_GROUND_ELEVATION_SURFACE_FILE`.
+Staked X/Y wins when both values are usable; otherwise the lead X/Y pair is
+used.
 
 ## Storage and provenance
 
