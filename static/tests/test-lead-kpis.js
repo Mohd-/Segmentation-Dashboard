@@ -8,8 +8,10 @@
 // Two things this file exists to pin above all others:
 //   1. Rounding happens ONCE, on the displayed number. Per-lead percentages
 //      are never rounded and never averaged.
-//   2. The KPI population is "filtered AND active", so the Status = Completed
-//      filter legitimately empties it and the tiles read 0% / 0 / 0 BCF.
+//   2. The KPI population is "filtered AND active". Completed leads should
+//      never reach the board payload any more (the server's exit rule sends
+//      them to the Portfolio), but isActiveLead keeps its Completed guard as
+//      a cheap invariant — a stray completed row must not inflate any tile.
 import { test, assert, fixture } from './harness.js';
 import {
   initLeadKpis, renderLeadKpis, leadKpisHtml, isActiveLead, activeLeads,
@@ -330,32 +332,4 @@ test('a filter that matches nothing zeroes all three tiles', function () {
   assert.equal(donutText(wired.kpis), '0%');
   assert.equal(arc(wired.kpis), null);
   assert.equal(tileValue(wired.kpis, 'ogip'), '0 BCF');
-});
-
-test('Status = Completed empties the KPI population: 0% / 0 / 0 BCF', function () {
-  // NOT a miscount. The Status filter can select completed leads (Card 1C
-  // ships that option and the board shows their cards), but a completed lead
-  // is by definition not active — so the intersection "filtered AND active" is
-  // empty and all three tiles honestly read zero while cards are still on
-  // screen. Changing this would mean either hiding those cards or counting
-  // records that have already left for Portfolio Analysis.
-  var rows = [
-    lead('GALV-1', { project_id: 1, completed: 12, overall_status: 'Completed', mean_gas_bcf: 900 }),
-    lead('GALV-2', { project_id: 2, completed: 4, mean_gas_bcf: 100 })
-  ];
-  var wired = mountWired(rows);
-  assert.equal(tileValue(wired.kpis, 'count'), '1');   // only the running lead
-
-  chooseFilter(wired.filters, 'status', 'Completed');
-  assert.equal(wired.boardRenders[wired.boardRenders.length - 1], 1);  // a card IS shown
-  assert.equal(tileValue(wired.kpis, 'count'), '0');
-  assert.equal(donutText(wired.kpis), '0%');
-  assert.equal(donutLabel(wired.kpis), 'Dashboard completion 0%');
-  assert.equal(tileValue(wired.kpis, 'ogip'), '0 BCF');
-
-  // Clearing the filter brings the running lead's numbers straight back.
-  wired.filters.querySelector('.lf-clear').click();
-  assert.equal(tileValue(wired.kpis, 'count'), '1');
-  assert.equal(donutText(wired.kpis), '33%');          // 4 of 12
-  assert.equal(tileValue(wired.kpis, 'ogip'), '100 BCF');
 });

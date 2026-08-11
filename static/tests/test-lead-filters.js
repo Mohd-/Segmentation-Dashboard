@@ -85,17 +85,16 @@ var USERS = [{ name: 'R. Khalid', role: 'staff' }, { name: 'S. Ali', role: 'empl
 // The per-lead rules (pure)
 // ---------------------------------------------------------------------------
 
-test('lead-filters leadStatus: Completed / Pending Approval / In Progress, nothing else', function () {
-  assert.equal(leadStatus(lead('A-1', { overall_status: 'Completed' })), 'Completed');
+test('lead-filters leadStatus: Pending Approval / In Progress, nothing else', function () {
   assert.equal(leadStatus(lead('B-1', { statuses: { 'Segmentation Slides': 'Pending Approval' } })),
     'Pending Approval');
   assert.equal(leadStatus(lead('C-1')), 'In Progress');
   // A stored task status the board has no vocabulary for is still In Progress —
   // there is no Not Assigned board status.
   assert.equal(leadStatus(lead('D-1', { statuses: { 'Area Definition': 'Not Assigned' } })), 'In Progress');
-  // Completed wins over any item state (a completed lead has nothing pending).
-  assert.equal(leadStatus(lead('E-1', { overall_status: 'Completed',
-    statuses: { 'Segmentation Slides': 'Pending Approval' } })), 'Completed');
+  // No Completed board status: a fully matured lead never reaches the board's
+  // payload (the server's exit rule sends it to the Portfolio), so leadStatus
+  // only ever maps running leads.
 });
 
 test('lead-filters leadField reads the server-derived field, never the name', function () {
@@ -156,31 +155,32 @@ test('lead-filters field options come from the DATA, not a hard-coded list', fun
   assert.deepEqual(optionLabels(host, 'field'), ['All Fields', 'GALV', 'LUNA']);
 });
 
-test('lead-filters status options are the three board statuses, each with its own glyph', function () {
+test('lead-filters status options are the two board statuses, each with its own glyph', function () {
   var host = mount([lead('GALV-2')], USERS);
   assert.deepEqual(optionLabels(host, 'status'),
-    ['All Statuses', 'Completed', 'Pending Approval', 'In Progress'],
-    'no Not Assigned / Unassigned option exists');
+    ['All Statuses', 'Pending Approval', 'In Progress'],
+    'no Completed option (matured leads never reach the board payload), ' +
+    'no Not Assigned / Unassigned option');
   var glyphs = options(host, 'status').slice(1).map(function (option) {
     return option.querySelector('.lf-option-icon svg').getAttribute('class');
   });
-  assert.ok(glyphs[0].indexOf('lucide-circle-check') >= 0, 'Completed = check');
-  assert.ok(glyphs[1].indexOf('lucide-circle-minus') >= 0, 'Pending Approval = dash');
-  assert.ok(glyphs[2].indexOf('lucide-circle') >= 0 && glyphs[2].indexOf('check') < 0, 'In Progress = empty ring');
+  assert.ok(glyphs[0].indexOf('lucide-circle-minus') >= 0, 'Pending Approval = dash');
+  assert.ok(glyphs[1].indexOf('lucide-circle') >= 0 && glyphs[1].indexOf('check') < 0, 'In Progress = empty ring');
   // Single-select semantics.
   assert.equal(options(host, 'status')[1].getAttribute('role'), 'radio');
 });
 
-test('lead-filters shows every lead by default, Completed leads included', function () {
-  // The behaviour change this card owns: the board used to be hard-filtered to
-  // In Progress, so matured leads were invisible. The default is now All.
+test('lead-filters shows every payload lead by default', function () {
+  // The default is All: nothing is hard-filtered client-side. Completed leads
+  // are absent from the PAYLOAD (the server's exit rule keeps them off the
+  // board), not hidden here -- see refreshProspect in views/pipeline.js.
   var host = mount([
-    lead('DONE-1', { project_id: 1, overall_status: 'Completed' }),
-    lead('OPEN-1', { project_id: 2 })
+    lead('OPEN-1', { project_id: 1 }),
+    lead('OPEN-2', { project_id: 2, statuses: { 'Segmentation Slides': 'Pending Approval' } })
   ], USERS);
-  assert.deepEqual(names(), ['DONE-1', 'OPEN-1']);
-  choose(host, 'status', 'Completed');
-  assert.deepEqual(names(), ['DONE-1']);
+  assert.deepEqual(names(), ['OPEN-1', 'OPEN-2']);
+  choose(host, 'status', 'Pending Approval');
+  assert.deepEqual(names(), ['OPEN-2']);
 });
 
 // ---------------------------------------------------------------------------

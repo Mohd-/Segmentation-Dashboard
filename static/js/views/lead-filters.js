@@ -37,9 +37,11 @@ var SYSTEM_USER = 'System';
 // Board-level status vocabulary. NOT the stored task lifecycle (Not Assigned /
 // In Progress / Ready / Approved) and NOT the same list as the card dots'
 // vocabulary by accident -- see leadStatus() for the mapping. Each option
-// carries its own GLYPH so the three never read by color alone.
+// carries its own GLYPH so the two never read by color alone. There is no
+// Completed option: the server's exit rule keeps fully matured leads off this
+// board's payload entirely (they live in the Portfolio), so a status no lead
+// can have must not be offered as a filter.
 var STATUS_OPTIONS = [
-  { value: 'Completed', icon: 'circle-check', slug: 'completed' },
   { value: 'Pending Approval', icon: 'circle-minus', slug: 'pending' },
   { value: 'In Progress', icon: 'circle', slug: 'in-progress' }
 ];
@@ -86,11 +88,12 @@ export function leadField(lead) {
 }
 
 // Board status of one lead:
-//   Completed        the whole applicable pipeline is approved (overall_status)
 //   Pending Approval at least one tracked item is waiting on a supervisor
 //   In Progress      everything else -- there is no "Not Assigned" board status
+// No Completed mapping: a lead whose whole applicable pipeline is approved
+// never reaches this board's payload (the server's exit rule sends it to the
+// Portfolio), so this function only ever sees running leads.
 export function leadStatus(lead) {
-  if (((lead && lead.overall_status) || '') === 'Completed') return 'Completed';
   var items = (lead && lead.tracked_items) || [];
   for (var i = 0; i < items.length; i += 1) {
     if (items[i] && items[i].status === 'Pending Approval') return 'Pending Approval';

@@ -10,12 +10,12 @@
    them. Everything is computed from LOCAL rows in the same handler chain the
    board renders from: no fetch, no stale-response race, no loading state.
 
-   The ACTIVE-vs-FILTERED subtlety, spelled out because it looks like a bug:
-   the Status filter offers "Completed", and a completed lead is by definition
-   NOT active (it has left the board for the Portfolio as a Proposed record).
-   So with Status = Completed the population is empty and the tiles honestly
-   read 0% / 0 / 0 BCF. That is the specified behaviour, not a miscount --
-   pinned by a test in static/tests/test-lead-kpis.js.
+   Why ACTIVE still exists on top of FILTERED: the board's payload should
+   never contain a Completed lead any more (the server's exit rule keeps a
+   fully matured lead off the board -- it lives in the Portfolio), so the
+   Completed check in isActiveLead is a cheap invariant, not a working filter.
+   If a completed row ever did slip through, it must not inflate any tile:
+   it is no longer part of the board's workload.
 
    Rounding happens EXACTLY ONCE, at the end, on the value being displayed.
    Per-lead percentages are never rounded and never averaged: five leads at

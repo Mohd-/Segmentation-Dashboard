@@ -518,7 +518,6 @@ function renderDashboard(payload, selected) {
   // the repopulation above -- never before it.
   renderFilterTriggers();
   renderKpis(payload.kpis || {});
-  renderDataNotice(payload);
   renderStageBoard(payload);
 }
 
@@ -562,20 +561,6 @@ function renderKpis(kpis) {
     successRateContent +
     kpiTileHtml((kpis.actual_mean_ogip_bcf || 0) + '/' + (kpis.simulated_mean_ogip_bcf || 0) + ' BCF',
       'Total Mean OGIP', 'kpi-tile-ogip', 'flame', 'Actual/Simulated');
-}
-
-function renderDataNotice(payload) {
-  var notice = byId('bpe-data-notice');
-  var missing = ((payload.data_quality || {}).missing_simulated_mean_project_ids || []).length;
-  var inconsistent = ((payload.data_quality || {}).unsuccessful_with_actual_project_ids || []).length;
-  var outside = payload.out_of_range_years || [];
-  var messages = [];
-  if (missing) messages.push(missing + ' visible well' + (missing === 1 ? '' : 's') + ' missing simulated Mean OGIP');
-  if (inconsistent) messages.push(inconsistent + ' unsuccessful well' + (inconsistent === 1 ? '' : 's') +
-    ' with stored Actual Mean OGIP excluded');
-  if (outside.length) messages.push('Historical Business Plan years outside 1999-2035: ' + outside.join(', '));
-  notice.textContent = messages.join(' | ');
-  notice.classList.toggle('hidden', !messages.length);
 }
 
 function statusIcon(item) {
